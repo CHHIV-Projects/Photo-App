@@ -109,30 +109,30 @@ def copy_unique_files_to_vault(
 
 
 def copy_unique_files_to_vault_as_dicts(
-	deduplication_result: DeduplicationResult,
-	destination_vault_path: str | Path,
+    deduplication_result: DeduplicationResult,
+    destination_vault_path: str | Path,
 ) -> dict[str, list[dict[str, Any]]]:
-	"""Return vault copy output in plain dict format for serialization."""
-	result = copy_unique_files_to_vault(deduplication_result, destination_vault_path)
-	return {
-		"copied_files": [
-			{
-				"hashed_file": {
-					"record": asdict(item.hashed_file.record),
-					"sha256": item.hashed_file.sha256,
-				},
-				"destination_path": item.destination_path,
-			}
-			for item in result.copied_files
-		],
-		"failed_files": [
-			{
-				"hashed_file": {
-					"record": asdict(item.hashed_file.record),
-					"sha256": item.hashed_file.sha256,
-				},
-				"reason": item.reason,
-			}
-			for item in result.failed_files
-		],
-	}
+    """Return vault copy output in plain dict format for serialization."""
+    result = copy_unique_files_to_vault(deduplication_result, destination_vault_path)
+    return {
+        "copied_files": [
+            {
+                "hashed_file": {
+                    "record": asdict(item.hashed_file.record),
+                    "sha256": item.hashed_file.sha256,
+                },
+                "destination_path": item.destination_path,
+            }
+            for item in result.copied_files
+        ],
+        "failed_files": [
+            {
+                "hashed_file": {
+                    "record": asdict(item.hashed_file.record),
+                    "sha256": item.hashed_file.sha256,
+                },
+                "reason": item.reason,
+            }
+            for item in result.failed_files
+        ],
+    }
