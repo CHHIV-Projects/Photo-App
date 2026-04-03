@@ -10,15 +10,23 @@ BACKEND_ROOT = CURRENT_FILE.parents[1]
 if str(BACKEND_ROOT) not in sys.path:
 	sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.db.session import create_all_tables, test_database_connection
+from app.db.session import create_all_tables, drop_all_tables, test_database_connection
 from app.models.asset import Asset
 
 
 def main() -> int:
 	_ = Asset
 	test_database_connection()
+
+	reset_requested = "--reset" in sys.argv
+	if reset_requested:
+		drop_all_tables()
+
 	create_all_tables()
-	print("Database connection successful. Tables created or already present.")
+	if reset_requested:
+		print("Database connection successful. Tables were reset and recreated.")
+	else:
+		print("Database connection successful. Tables created or already present.")
 	return 0
 
 

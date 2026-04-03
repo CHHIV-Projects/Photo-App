@@ -7,3 +7,4 @@ redis
 rq
 pydantic
 pydantic-settings
+pyexiftool

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, func
+from sqlalchemy import DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -27,3 +27,11 @@ class Asset(Base):
 		nullable=False,
 		server_default=func.now(),
 	)
+
+	exif_datetime_original: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+	exif_create_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+	gps_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+	gps_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+	camera_make: Mapped[str | None] = mapped_column(String(255), nullable=True)
+	camera_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+	lens_model: Mapped[str | None] = mapped_column(String(255), nullable=True)

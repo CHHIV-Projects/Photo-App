@@ -36,3 +36,8 @@ def test_database_connection() -> None:
 def create_all_tables() -> None:
 	"""Create all registered SQLAlchemy tables for local development."""
 	Base.metadata.create_all(bind=engine)
+
+
+def drop_all_tables() -> None:
+	"""Drop all registered SQLAlchemy tables for local development reset."""
+	Base.metadata.drop_all(bind=engine)
