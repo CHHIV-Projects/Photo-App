@@ -1,0 +1,26 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+main {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #f4f6f8;
+  color: #18212b;
+}
+
+section {
+  text-align: center;
+}
+
+h1 {
+  margin: 0 0 0.75rem;
+}
+
+p {
+  margin: 0;
+}
