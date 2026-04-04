@@ -14,7 +14,10 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.ingestion.deduplicator import deduplicate
-from app.services.ingestion.dropzone_manager import stage_source_folder_to_dropzone
+from app.services.ingestion.dropzone_manager import (
+    build_dropzone_processing_records,
+    stage_source_folder_to_dropzone,
+)
 from app.services.ingestion.filter import filter_records
 from app.services.ingestion.hasher import hash_records
 from app.services.ingestion.scanner import scan_folder
@@ -48,8 +51,12 @@ def main() -> int:
     )
 
     dropzone_scan_result = scan_folder(drop_zone_path)
-    filter_result = filter_records(
+    processing_records = build_dropzone_processing_records(
         dropzone_scan_result.files,
+        stage_result.staged_files,
+    )
+    filter_result = filter_records(
+        processing_records,
         approved_extensions=settings.approved_extensions,
         min_size_bytes=settings.minimum_file_size_bytes,
     )
@@ -83,6 +90,7 @@ def main() -> int:
         "source_files_scanned": len(source_scan_result.files),
         "files_copied_to_drop_zone": len(stage_result.staged_files),
         "drop_zone_scan_count": len(dropzone_scan_result.files),
+        "drop_zone_processed_count": len(processing_records),
         "accepted": len(filter_result.accepted),
         "rejected": len(filter_result.rejected),
         "unique": len(dedup_result.unique_files),

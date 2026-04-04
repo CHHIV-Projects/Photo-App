@@ -23,6 +23,7 @@ class ExtractedExifData:
 	camera_make: str | None
 	camera_model: str | None
 	lens_model: str | None
+	software: str | None
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ def _extract_single_metadata(metadata: dict[str, object], asset: Asset) -> Extra
 	camera_make = str(metadata.get("EXIF:Make")).strip() if metadata.get("EXIF:Make") else None
 	camera_model = str(metadata.get("EXIF:Model")).strip() if metadata.get("EXIF:Model") else None
 	lens_model = str(metadata.get("EXIF:LensModel")).strip() if metadata.get("EXIF:LensModel") else None
+	software = str(metadata.get("EXIF:Software")).strip() if metadata.get("EXIF:Software") else None
 
 	if not any(
 		[
@@ -92,6 +94,7 @@ def _extract_single_metadata(metadata: dict[str, object], asset: Asset) -> Extra
 			camera_make,
 			camera_model,
 			lens_model,
+			software,
 		]
 	):
 		return None
@@ -105,6 +108,7 @@ def _extract_single_metadata(metadata: dict[str, object], asset: Asset) -> Extra
 		camera_make=camera_make,
 		camera_model=camera_model,
 		lens_model=lens_model,
+		software=software,
 	)
 
 

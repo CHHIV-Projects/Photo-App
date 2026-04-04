@@ -18,6 +18,8 @@ class FileScanRecord:
     extension: str
     size_bytes: int
     modified_timestamp_utc: str
+    original_source_path: str
+    original_filename: str
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,8 @@ def _build_record(file_path: Path) -> FileScanRecord:
         extension=file_path.suffix.lower(),
         size_bytes=file_stat.st_size,
         modified_timestamp_utc=modified_utc.isoformat(),
+        original_source_path=str(file_path.resolve()),
+        original_filename=file_path.name,
     )
 
 

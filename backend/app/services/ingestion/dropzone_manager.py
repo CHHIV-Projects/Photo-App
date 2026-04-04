@@ -116,3 +116,41 @@ def stage_source_folder_to_dropzone(
     source_scan = scan_folder(source_folder)
     stage_result = stage_source_records_to_dropzone(source_scan.files, drop_zone_path, quarantine_path)
     return source_scan, stage_result
+
+
+def build_dropzone_processing_records(
+    dropzone_scan_records: list[FileScanRecord],
+    staged_files: list[StagedFile],
+) -> list[FileScanRecord]:
+    """Attach original source provenance to Drop Zone scan records.
+
+    Processing still uses Drop Zone paths, but original source path and
+    original filename are carried forward for database persistence.
+    """
+    provenance_by_dropzone_path = {
+        str(Path(staged_file.dropzone_path).resolve()): staged_file.source_record
+        for staged_file in staged_files
+    }
+
+    processed_records: list[FileScanRecord] = []
+    for dropzone_record in dropzone_scan_records:
+        dropzone_path = str(Path(dropzone_record.full_path).resolve())
+        source_record = provenance_by_dropzone_path.get(dropzone_path)
+
+        if source_record is None:
+            processed_records.append(dropzone_record)
+            continue
+
+        processed_records.append(
+            FileScanRecord(
+                full_path=dropzone_record.full_path,
+                file_name=dropzone_record.file_name,
+                extension=dropzone_record.extension,
+                size_bytes=dropzone_record.size_bytes,
+                modified_timestamp_utc=dropzone_record.modified_timestamp_utc,
+                original_source_path=source_record.original_source_path,
+                original_filename=source_record.original_filename,
+            )
+        )
+
+    return processed_records

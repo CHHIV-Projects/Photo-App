@@ -71,6 +71,7 @@ def persist_exif_updates(
 			asset.camera_make = item.camera_make
 			asset.camera_model = item.camera_model
 			asset.lens_model = item.lens_model
+			asset.software = item.software
 			db_session.commit()
 			updated_assets.append(UpdatedExifAsset(sha256=item.sha256))
 		except SQLAlchemyError as error:

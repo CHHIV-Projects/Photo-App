@@ -52,6 +52,10 @@ def _asset_to_dict(asset: Asset) -> dict[str, object]:
         "camera_make": asset.camera_make,
         "camera_model": asset.camera_model,
         "lens_model": asset.lens_model,
+        "captured_at": asset.captured_at.isoformat() if asset.captured_at else None,
+        "is_scan": asset.is_scan,
+        "needs_date_estimation": asset.needs_date_estimation,
+        "source_type": asset.source_type,
     }
 
 

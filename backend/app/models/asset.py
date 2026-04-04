@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -35,3 +35,9 @@ class Asset(Base):
 	camera_make: Mapped[str | None] = mapped_column(String(255), nullable=True)
 	camera_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
 	lens_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+	software: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+	captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+	is_scan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+	needs_date_estimation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+	source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
