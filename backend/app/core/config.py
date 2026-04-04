@@ -4,6 +4,9 @@ from dataclasses import dataclass
 import os
 
 
+DEFAULT_APPROVED_EXTENSIONS = ".jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.heic,.mp4,.mov,.avi,.mkv"
+
+
 @dataclass(frozen=True)
 class Settings:
 	"""Runtime settings loaded from environment variables."""
@@ -16,6 +19,12 @@ class Settings:
 	postgres_user: str = os.getenv("POSTGRES_USER", "photo_user")
 	postgres_password: str = os.getenv("POSTGRES_PASSWORD", "change_me")
 
+	approved_extensions_csv: str = os.getenv("APPROVED_EXTENSIONS", DEFAULT_APPROVED_EXTENSIONS)
+	minimum_file_size_bytes: int = int(os.getenv("MINIMUM_FILE_SIZE_BYTES", str(50 * 1024)))
+	drop_zone_path: str = os.getenv("DROP_ZONE_PATH", "../storage/drop_zone")
+	vault_path: str = os.getenv("VAULT_PATH", "../storage/vault")
+	quarantine_path: str = os.getenv("QUARANTINE_PATH", "../storage/quarantine")
+
 	@property
 	def database_url(self) -> str:
 		"""Build the SQLAlchemy connection URL for PostgreSQL."""
@@ -24,6 +33,20 @@ class Settings:
 			f"{self.postgres_user}:{self.postgres_password}"
 			f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
 		)
+
+	@property
+	def approved_extensions(self) -> frozenset[str]:
+		"""Return approved file extensions as a normalized set."""
+		normalized = {
+			extension.strip().lower()
+			for extension in self.approved_extensions_csv.split(",")
+			if extension.strip()
+		}
+		with_dot = {
+			extension if extension.startswith(".") else f".{extension}"
+			for extension in normalized
+		}
+		return frozenset(with_dot)
 
 
 settings = Settings()

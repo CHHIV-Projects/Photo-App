@@ -9,30 +9,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from app.core.config import settings
 from app.services.ingestion.scanner import FileScanRecord
 
 # ---------------------------------------------------------------------------
 # Default configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_APPROVED_EXTENSIONS: frozenset[str] = frozenset(
-    {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".gif",
-        ".bmp",
-        ".tif",
-        ".tiff",
-        ".heic",
-        ".mp4",
-        ".mov",
-        ".avi",
-        ".mkv",
-    }
-)
-
-DEFAULT_MIN_SIZE_BYTES: int = 50 * 1024  # 50 KB
+DEFAULT_APPROVED_EXTENSIONS: frozenset[str] = settings.approved_extensions
+DEFAULT_MIN_SIZE_BYTES: int = settings.minimum_file_size_bytes
 
 
 # ---------------------------------------------------------------------------
