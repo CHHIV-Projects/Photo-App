@@ -25,6 +25,12 @@ class Settings:
 	vault_path: str = os.getenv("VAULT_PATH", "../storage/vault")
 	quarantine_path: str = os.getenv("QUARANTINE_PATH", "../storage/quarantine")
 	event_cluster_gap_seconds: int = int(os.getenv("EVENT_CLUSTER_GAP_SECONDS", "14400"))
+	face_detector_model_path: str = os.getenv(
+		"FACE_MODEL_PATH",
+		"app/services/vision/models/face_detection_yunet_2023mar.onnx",
+	)
+	face_detection_confidence_threshold: float = float(os.getenv("FACE_DETECTION_CONFIDENCE_THRESHOLD", "0.7"))
+	face_detection_resize_longest_side: int = int(os.getenv("FACE_DETECTION_RESIZE_LONGEST_SIDE", "1024"))
 
 	@property
 	def database_url(self) -> str:
