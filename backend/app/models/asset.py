@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+from app.models import event as _event_model
 
 
 class Asset(Base):
@@ -41,3 +42,4 @@ class Asset(Base):
 	is_scan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 	needs_date_estimation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 	source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+	event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)

@@ -24,6 +24,7 @@ class Settings:
 	drop_zone_path: str = os.getenv("DROP_ZONE_PATH", "../storage/drop_zone")
 	vault_path: str = os.getenv("VAULT_PATH", "../storage/vault")
 	quarantine_path: str = os.getenv("QUARANTINE_PATH", "../storage/quarantine")
+	event_cluster_gap_seconds: int = int(os.getenv("EVENT_CLUSTER_GAP_SECONDS", "14400"))
 
 	@property
 	def database_url(self) -> str:

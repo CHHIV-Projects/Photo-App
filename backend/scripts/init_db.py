@@ -12,10 +12,11 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.db.session import create_all_tables, drop_all_tables, test_database_connection
 from app.models.asset import Asset
+from app.models.event import Event
 
 
 def main() -> int:
-	_ = Asset
+	_ = (Asset, Event)
 	test_database_connection()
 
 	reset_requested = "--reset" in sys.argv
