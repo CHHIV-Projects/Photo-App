@@ -31,6 +31,9 @@ class Settings:
 	)
 	face_detection_confidence_threshold: float = float(os.getenv("FACE_DETECTION_CONFIDENCE_THRESHOLD", "0.7"))
 	face_detection_resize_longest_side: int = int(os.getenv("FACE_DETECTION_RESIZE_LONGEST_SIDE", "1024"))
+	face_embedding_model: str = os.getenv("FACE_EMBEDDING_MODEL", "Facenet")
+	face_cluster_similarity_threshold: float = float(os.getenv("FACE_CLUSTER_SIMILARITY_THRESHOLD", "0.7"))
+	face_embedding_crop_margin_ratio: float = float(os.getenv("FACE_EMBEDDING_CROP_MARGIN_RATIO", "0.1"))
 
 	@property
 	def database_url(self) -> str:

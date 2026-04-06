@@ -14,10 +14,11 @@ from app.db.session import create_all_tables, drop_all_tables, test_database_con
 from app.models.asset import Asset
 from app.models.event import Event
 from app.models.face import Face
+from app.models.face_cluster import FaceCluster
 
 
 def main() -> int:
-	_ = (Asset, Event, Face)
+	_ = (Asset, Event, Face, FaceCluster)
 	test_database_connection()
 
 	reset_requested = "--reset" in sys.argv
