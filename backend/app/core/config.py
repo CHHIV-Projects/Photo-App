@@ -34,6 +34,10 @@ class Settings:
 	face_embedding_model: str = os.getenv("FACE_EMBEDDING_MODEL", "Facenet")
 	face_cluster_similarity_threshold: float = float(os.getenv("FACE_CLUSTER_SIMILARITY_THRESHOLD", "0.7"))
 	face_embedding_crop_margin_ratio: float = float(os.getenv("FACE_EMBEDDING_CROP_MARGIN_RATIO", "0.1"))
+	frontend_allowed_origins_csv: str = os.getenv(
+		"FRONTEND_ALLOWED_ORIGINS",
+		"http://localhost:3000,http://127.0.0.1:3000",
+	)
 
 	@property
 	def database_url(self) -> str:
@@ -57,6 +61,16 @@ class Settings:
 			for extension in normalized
 		}
 		return frozenset(with_dot)
+
+	@property
+	def frontend_allowed_origins(self) -> tuple[str, ...]:
+		"""Return allowed frontend origins for local-development CORS."""
+		origins = tuple(
+			origin.strip()
+			for origin in self.frontend_allowed_origins_csv.split(",")
+			if origin.strip()
+		)
+		return origins
 
 
 settings = Settings()
