@@ -15,10 +15,11 @@ from app.models.asset import Asset
 from app.models.event import Event
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
+from app.models.person import Person
 
 
 def main() -> int:
-	_ = (Asset, Event, Face, FaceCluster)
+	_ = (Asset, Event, Face, FaceCluster, Person)
 	test_database_connection()
 
 	reset_requested = "--reset" in sys.argv
