@@ -2,6 +2,7 @@ import type {
   CreatePersonResponse,
   ClusterDetail,
   ClusterSummary,
+  FaceSummary,
   ListResponse,
   PersonSummary,
   PersonWithClusters
@@ -52,6 +53,10 @@ export function getPeople(): Promise<ListResponse<PersonSummary>> {
 
 export function getPeopleWithClusters(): Promise<ListResponse<PersonWithClusters>> {
   return apiRequest<ListResponse<PersonWithClusters>>("/api/people-with-clusters");
+}
+
+export function getUnassignedFaces(): Promise<ListResponse<FaceSummary>> {
+  return apiRequest<ListResponse<FaceSummary>>("/api/faces/unassigned");
 }
 
 export function assignPerson(clusterId: number, personId: number): Promise<{ success: boolean }> {

@@ -284,3 +284,21 @@ def list_people_with_clusters(db: Session) -> list[dict]:
                 )
 
     return [people_map[person_id] for person_id in ordered_person_ids]
+
+
+def list_unassigned_faces(db: Session) -> list[dict]:
+    """Return unresolved faces (cluster_id is null), newest first."""
+    rows = db.execute(
+        select(Face.id, Face.asset_sha256)
+        .where(Face.cluster_id.is_(None))
+        .order_by(Face.created_at_utc.desc(), Face.id.desc())
+    ).all()
+
+    return [
+        {
+            "face_id": row.id,
+            "asset_sha256": row.asset_sha256,
+            "thumbnail_url": _resolve_face_thumbnail_url(row.id),
+        }
+        for row in rows
+    ]

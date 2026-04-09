@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
 import { PeopleView } from "@/components/PeopleView";
+import { UnassignedFacesView } from "@/components/UnassignedFacesView";
 import styles from "@/components/review-screen.module.css";
 import {
   assignPerson,
@@ -13,6 +14,7 @@ import {
   getClusters,
   getPeople,
   getPeopleWithClusters,
+  getUnassignedFaces,
   ignoreCluster,
   mergeClusters,
   moveFace,
@@ -21,22 +23,25 @@ import {
 import type {
   ClusterDetail as ClusterDetailType,
   ClusterSummary,
+  FaceSummary,
   PersonSummary,
   PersonWithClusters
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people";
+type ViewMode = "review" | "people" | "unassigned";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("review");
   const [clusters, setClusters] = useState<ClusterSummary[]>([]);
   const [people, setPeople] = useState<PersonSummary[]>([]);
   const [peopleWithClusters, setPeopleWithClusters] = useState<PersonWithClusters[]>([]);
+  const [unassignedFaces, setUnassignedFaces] = useState<FaceSummary[]>([]);
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
   const [clusterDetail, setClusterDetail] = useState<ClusterDetailType | null>(null);
   const [isLoadingClusters, setIsLoadingClusters] = useState(true);
   const [isLoadingPeople, setIsLoadingPeople] = useState(true);
   const [isLoadingPeopleView, setIsLoadingPeopleView] = useState(true);
+  const [isLoadingUnassignedFaces, setIsLoadingUnassignedFaces] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
   const [isIgnoringCluster, setIsIgnoringCluster] = useState(false);
@@ -45,15 +50,18 @@ export default function HomePage() {
   const [clusterErrorMessage, setClusterErrorMessage] = useState<string | null>(null);
   const [peopleErrorMessage, setPeopleErrorMessage] = useState<string | null>(null);
   const [peopleViewErrorMessage, setPeopleViewErrorMessage] = useState<string | null>(null);
+  const [unassignedFacesErrorMessage, setUnassignedFacesErrorMessage] = useState<string | null>(null);
   const [detailErrorMessage, setDetailErrorMessage] = useState<string | null>(null);
   const [assignErrorMessage, setAssignErrorMessage] = useState<string | null>(null);
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null);
+  const [unassignedActionErrorMessage, setUnassignedActionErrorMessage] = useState<string | null>(null);
   const [createPersonErrorMessage, setCreatePersonErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void loadClusters();
     void loadPeople();
     void loadPeopleWithClusters();
+    void loadUnassignedFaces();
   }, []);
 
   useEffect(() => {
@@ -137,6 +145,20 @@ export default function HomePage() {
       setClusterDetail(null);
     } finally {
       setIsLoadingDetail(false);
+    }
+  }
+
+  async function loadUnassignedFaces() {
+    setIsLoadingUnassignedFaces(true);
+    setUnassignedFacesErrorMessage(null);
+
+    try {
+      const response = await getUnassignedFaces();
+      setUnassignedFaces(response.items);
+    } catch (error) {
+      setUnassignedFacesErrorMessage(getErrorMessage(error, "Failed to load unassigned faces."));
+    } finally {
+      setIsLoadingUnassignedFaces(false);
     }
   }
 
@@ -251,16 +273,43 @@ export default function HomePage() {
 
     if (resolvedSelectedClusterId === null) {
       setClusterDetail(null);
-      await loadPeopleWithClusters();
+      await Promise.all([loadPeopleWithClusters(), loadUnassignedFaces()]);
       return;
     }
 
-    await Promise.all([loadClusterDetail(resolvedSelectedClusterId), loadPeopleWithClusters()]);
+    await Promise.all([
+      loadClusterDetail(resolvedSelectedClusterId),
+      loadPeopleWithClusters(),
+      loadUnassignedFaces(),
+    ]);
   }
 
   function handleSelectClusterFromPeople(clusterId: number) {
     setViewMode("review");
     setSelectedClusterId(clusterId);
+  }
+
+  async function handleMoveUnassignedFace(faceId: number, targetClusterId: number): Promise<boolean> {
+    setUnassignedActionErrorMessage(null);
+
+    try {
+      await moveFace(faceId, targetClusterId);
+
+      const preferredClusterId = selectedClusterId;
+      const resolvedSelectedClusterId = await loadClusters(preferredClusterId);
+
+      await Promise.all([loadUnassignedFaces(), loadPeopleWithClusters()]);
+
+      if (resolvedSelectedClusterId !== null && resolvedSelectedClusterId === targetClusterId) {
+        await loadClusterDetail(resolvedSelectedClusterId);
+      }
+
+      return true;
+    } catch (error) {
+      const detail = getErrorMessage(error, "Unknown error.");
+      setUnassignedActionErrorMessage(`Failed to move face: ${detail}`);
+      return false;
+    }
   }
 
   async function handleCreatePerson(displayName: string): Promise<boolean> {
@@ -304,6 +353,13 @@ export default function HomePage() {
             >
               People
             </button>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "unassigned" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("unassigned")}
+            >
+              Unassigned Faces
+            </button>
           </div>
         </header>
 
@@ -339,7 +395,7 @@ export default function HomePage() {
               onSelectCluster={setSelectedClusterId}
             />
           </div>
-        ) : (
+        ) : viewMode === "people" ? (
           <PeopleView
             people={peopleWithClusters}
             isLoadingPeople={isLoadingPeopleView}
@@ -348,6 +404,15 @@ export default function HomePage() {
             isCreatingPerson={isCreatingPerson}
             onCreatePerson={handleCreatePerson}
             onSelectCluster={handleSelectClusterFromPeople}
+          />
+        ) : (
+          <UnassignedFacesView
+            faces={unassignedFaces}
+            isLoading={isLoadingUnassignedFaces}
+            errorMessage={unassignedFacesErrorMessage}
+            actionErrorMessage={unassignedActionErrorMessage}
+            onMoveFace={handleMoveUnassignedFace}
+            onValidationError={setUnassignedActionErrorMessage}
           />
         )}
       </div>

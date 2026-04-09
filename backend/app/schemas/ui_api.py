@@ -113,3 +113,10 @@ class PeopleWithClustersResponse(BaseModel):
 
     count: int
     items: list[PersonWithClusters]
+
+
+class FaceListResponse(BaseModel):
+    """Response wrapper for face listing endpoints."""
+
+    count: int
+    items: list[FaceSummary]

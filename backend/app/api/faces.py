@@ -6,13 +6,23 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.schemas.ui_api import MoveFaceRequest, SuccessResponse
+from app.schemas.ui_api import FaceListResponse, MoveFaceRequest, SuccessResponse
 from app.services.identity.ui_api_service import (
+    list_unassigned_faces,
     move_face_to_cluster,
     remove_face_from_cluster,
 )
 
 router = APIRouter(prefix="/api/faces", tags=["faces"])
+
+
+@router.get("/unassigned", response_model=FaceListResponse)
+def get_unassigned_faces(
+    db: Session = Depends(get_db_session),
+) -> FaceListResponse:
+    """List unresolved faces that are not currently assigned to any cluster."""
+    items = list_unassigned_faces(db)
+    return FaceListResponse(count=len(items), items=items)
 
 
 @router.post("/{face_id}/remove-from-cluster", response_model=SuccessResponse)
