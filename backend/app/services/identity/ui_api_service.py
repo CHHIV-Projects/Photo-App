@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.person import Person
+from app.services.identity.person_service import create_person as identity_create_person
 from app.services.identity.person_service import list_people as identity_list_people
 from app.services.vision.face_cluster_corrections import (
     move_face_to_cluster as correction_move_face_to_cluster,
@@ -115,6 +116,15 @@ def list_people(db: Session) -> list[dict]:
         }
         for person in people
     ]
+
+
+def create_person(db: Session, display_name: str) -> dict:
+    """Create a person record and return a UI-facing summary payload."""
+    person = identity_create_person(db, display_name=display_name)
+    return {
+        "person_id": person.id,
+        "display_name": person.display_name,
+    }
 
 
 def assign_cluster_to_person(db: Session, cluster_id: int, person_id: int) -> dict:

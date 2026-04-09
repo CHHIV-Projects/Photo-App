@@ -26,6 +26,26 @@ export interface PersonSummary {
   display_name: string;
 }
 
+export interface ClusterAssignmentSummary {
+  cluster_id: number;
+  face_count: number;
+}
+
+export interface PersonWithClusters {
+  person_id: number;
+  display_name: string;
+  clusters: ClusterAssignmentSummary[];
+}
+
+export interface CreatePersonRequest {
+  display_name: string;
+}
+
+export interface CreatePersonResponse {
+  success: boolean;
+  person: PersonSummary;
+}
+
 export interface ListResponse<T> {
   count: number;
   items: T[];

@@ -38,6 +38,30 @@
   color: #526274;
 }
 
+.viewSwitch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.viewButton {
+  padding: 8px 14px;
+  border: 1px solid #b9c7d4;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #35536e;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.viewButtonActive {
+  border-color: #215d8f;
+  background: #eaf4fb;
+  color: #19496f;
+}
+
 .layout {
   display: grid;
   grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
@@ -154,6 +178,25 @@
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+}
+
+.peopleForm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+  align-items: center;
+}
+
+.peopleInput {
+  min-width: 280px;
+  max-width: 460px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #b9c7d4;
+  background: #ffffff;
+  font: inherit;
 }
 
 .select {
@@ -297,6 +340,60 @@
 .faceMoveInput:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+.peopleList {
+  display: grid;
+  gap: 12px;
+}
+
+.peopleCard {
+  border: 1px solid #dce3ea;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.peopleHeader {
+  display: grid;
+  gap: 4px;
+}
+
+.peopleName,
+.peopleMeta {
+  margin: 0;
+}
+
+.peopleName {
+  font-size: 1.02rem;
+}
+
+.peopleMeta {
+  color: #607181;
+  font-size: 0.9rem;
+}
+
+.clusterAssignmentsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.clusterAssignmentItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid #dce3ea;
+  border-radius: 10px;
+  background: #f7fafc;
+  padding: 8px 10px;
+  color: #35536e;
+  font-size: 0.9rem;
 }
 
 .message,

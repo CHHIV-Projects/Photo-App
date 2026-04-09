@@ -4,37 +4,54 @@ import { useEffect, useState } from "react";
 
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
+import { PeopleView } from "@/components/PeopleView";
 import styles from "@/components/review-screen.module.css";
 import {
   assignPerson,
+  createPerson,
   getCluster,
   getClusters,
   getPeople,
+  getPeopleWithClusters,
   ignoreCluster,
   moveFace,
   removeFaceFromCluster
 } from "@/lib/api";
-import type { ClusterDetail as ClusterDetailType, ClusterSummary, PersonSummary } from "@/types/ui-api";
+import type {
+  ClusterDetail as ClusterDetailType,
+  ClusterSummary,
+  PersonSummary,
+  PersonWithClusters
+} from "@/types/ui-api";
+
+type ViewMode = "review" | "people";
 
 export default function HomePage() {
+  const [viewMode, setViewMode] = useState<ViewMode>("review");
   const [clusters, setClusters] = useState<ClusterSummary[]>([]);
   const [people, setPeople] = useState<PersonSummary[]>([]);
+  const [peopleWithClusters, setPeopleWithClusters] = useState<PersonWithClusters[]>([]);
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
   const [clusterDetail, setClusterDetail] = useState<ClusterDetailType | null>(null);
   const [isLoadingClusters, setIsLoadingClusters] = useState(true);
   const [isLoadingPeople, setIsLoadingPeople] = useState(true);
+  const [isLoadingPeopleView, setIsLoadingPeopleView] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
   const [isIgnoringCluster, setIsIgnoringCluster] = useState(false);
+  const [isCreatingPerson, setIsCreatingPerson] = useState(false);
   const [clusterErrorMessage, setClusterErrorMessage] = useState<string | null>(null);
   const [peopleErrorMessage, setPeopleErrorMessage] = useState<string | null>(null);
+  const [peopleViewErrorMessage, setPeopleViewErrorMessage] = useState<string | null>(null);
   const [detailErrorMessage, setDetailErrorMessage] = useState<string | null>(null);
   const [assignErrorMessage, setAssignErrorMessage] = useState<string | null>(null);
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null);
+  const [createPersonErrorMessage, setCreatePersonErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void loadClusters();
     void loadPeople();
+    void loadPeopleWithClusters();
   }, []);
 
   useEffect(() => {
@@ -89,6 +106,20 @@ export default function HomePage() {
       setPeopleErrorMessage(getErrorMessage(error, "Failed to load people."));
     } finally {
       setIsLoadingPeople(false);
+    }
+  }
+
+  async function loadPeopleWithClusters() {
+    setIsLoadingPeopleView(true);
+    setPeopleViewErrorMessage(null);
+
+    try {
+      const response = await getPeopleWithClusters();
+      setPeopleWithClusters(response.items);
+    } catch (error) {
+      setPeopleViewErrorMessage(getErrorMessage(error, "Failed to load people."));
+    } finally {
+      setIsLoadingPeopleView(false);
     }
   }
 
@@ -194,42 +225,86 @@ export default function HomePage() {
     await loadClusterDetail(resolvedSelectedClusterId);
   }
 
+  async function handleCreatePerson(displayName: string): Promise<boolean> {
+    setIsCreatingPerson(true);
+    setCreatePersonErrorMessage(null);
+
+    try {
+      await createPerson(displayName);
+      await Promise.all([loadPeople(), loadPeopleWithClusters()]);
+      return true;
+    } catch (error) {
+      setCreatePersonErrorMessage(getErrorMessage(error, "Failed to create person."));
+      return false;
+    } finally {
+      setIsCreatingPerson(false);
+    }
+  }
+
   return (
     <main className={styles.page}>
       <div className={styles.shell}>
         <header className={styles.header}>
-          <p className={styles.kicker}>Milestone 10.3</p>
+          <p className={styles.kicker}>Milestone 10.4</p>
           <h1 className={styles.title}>Face Cluster Review</h1>
           <p className={styles.subtitle}>
-            Review clusters, assign people, and apply core correction actions directly from the same screen.
+            Switch between Review and People management to label clusters with a clean end-to-end workflow.
           </p>
+
+          <div className={styles.viewSwitch}>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "review" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("review")}
+            >
+              Review
+            </button>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "people" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("people")}
+            >
+              People
+            </button>
+          </div>
         </header>
 
-        <div className={styles.layout}>
-          <ClusterList
-            clusters={clusters}
-            selectedClusterId={selectedClusterId}
-            isLoading={isLoadingClusters}
-            errorMessage={clusterErrorMessage}
-            onSelectCluster={setSelectedClusterId}
-          />
+        {viewMode === "review" ? (
+          <div className={styles.layout}>
+            <ClusterList
+              clusters={clusters}
+              selectedClusterId={selectedClusterId}
+              isLoading={isLoadingClusters}
+              errorMessage={clusterErrorMessage}
+              onSelectCluster={setSelectedClusterId}
+            />
 
-          <ClusterDetail
-            clusterDetail={clusterDetail}
-            isLoadingDetail={isLoadingDetail}
-            detailErrorMessage={detailErrorMessage}
-            people={people}
-            isLoadingPeople={isLoadingPeople}
-            assignErrorMessage={assignErrorMessage ?? peopleErrorMessage}
-            actionErrorMessage={actionErrorMessage}
-            isAssigning={isAssigning}
-            isIgnoringCluster={isIgnoringCluster}
-            onAssign={handleAssign}
-            onIgnoreCluster={handleIgnoreCluster}
-            onRemoveFace={handleRemoveFace}
-            onMoveFace={handleMoveFace}
+            <ClusterDetail
+              clusterDetail={clusterDetail}
+              isLoadingDetail={isLoadingDetail}
+              detailErrorMessage={detailErrorMessage}
+              people={people}
+              isLoadingPeople={isLoadingPeople}
+              assignErrorMessage={assignErrorMessage ?? peopleErrorMessage}
+              actionErrorMessage={actionErrorMessage}
+              isAssigning={isAssigning}
+              isIgnoringCluster={isIgnoringCluster}
+              onAssign={handleAssign}
+              onIgnoreCluster={handleIgnoreCluster}
+              onRemoveFace={handleRemoveFace}
+              onMoveFace={handleMoveFace}
+            />
+          </div>
+        ) : (
+          <PeopleView
+            people={peopleWithClusters}
+            isLoadingPeople={isLoadingPeopleView}
+            peopleErrorMessage={peopleViewErrorMessage}
+            createErrorMessage={createPersonErrorMessage}
+            isCreatingPerson={isCreatingPerson}
+            onCreatePerson={handleCreatePerson}
           />
-        </div>
+        )}
       </div>
     </main>
   );

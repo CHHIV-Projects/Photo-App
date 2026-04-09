@@ -41,6 +41,19 @@ class PersonSummary(BaseModel):
     display_name: str
 
 
+class CreatePersonRequest(BaseModel):
+    """Request body for creating a person from the UI."""
+
+    display_name: str
+
+
+class CreatePersonResponse(BaseModel):
+    """Response body for successful person creation."""
+
+    success: bool
+    person: PersonSummary
+
+
 class ClusterAssignmentSummary(BaseModel):
     """Cluster assignment summary used in people-with-clusters output."""
 
