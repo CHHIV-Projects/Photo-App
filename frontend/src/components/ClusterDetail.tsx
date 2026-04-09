@@ -1,5 +1,5 @@
 import styles from "@/components/review-screen.module.css";
-import type { ClusterDetail as ClusterDetailType, PersonSummary } from "@/types/ui-api";
+import type { ClusterDetail as ClusterDetailType, ClusterSummary, PersonSummary } from "@/types/ui-api";
 import { useState } from "react";
 
 import { FaceGrid } from "@/components/FaceGrid";
@@ -16,12 +16,15 @@ interface ClusterDetailProps {
   isAssigning: boolean;
   isIgnoringCluster: boolean;
   isMergingCluster: boolean;
+  clusters: ClusterSummary[];
+  selectedClusterId: number | null;
   onAssign: (personId: number) => Promise<void>;
   onIgnoreCluster: () => Promise<void>;
   onMergeClusters: (targetClusterId: number) => Promise<boolean>;
   onMergeValidationError: (message: string) => void;
   onRemoveFace: (faceId: number) => Promise<boolean>;
   onMoveFace: (faceId: number, targetClusterId: number) => Promise<boolean>;
+  onSelectCluster: (clusterId: number) => void;
 }
 
 export function ClusterDetail({
@@ -35,14 +38,24 @@ export function ClusterDetail({
   isAssigning,
   isIgnoringCluster,
   isMergingCluster,
+  clusters,
+  selectedClusterId,
   onAssign,
   onIgnoreCluster,
   onMergeClusters,
   onMergeValidationError,
   onRemoveFace,
-  onMoveFace
+  onMoveFace,
+  onSelectCluster
 }: ClusterDetailProps) {
   const [targetClusterInput, setTargetClusterInput] = useState<string>("");
+
+  const currentIndex = clusters.findIndex((c) => c.cluster_id === selectedClusterId);
+  const prevClusterId = currentIndex > 0 ? clusters[currentIndex - 1].cluster_id : null;
+  const nextClusterId =
+    currentIndex >= 0 && currentIndex < clusters.length - 1
+      ? clusters[currentIndex + 1].cluster_id
+      : null;
 
   const handleIgnoreClick = async () => {
     if (!clusterDetail) {
@@ -102,6 +115,27 @@ export function ClusterDetail({
           </span>
         </div>
       </header>
+      <div className={styles.clusterNavControls}>
+        <button
+          type="button"
+          className={styles.clusterNavButton}
+          onClick={() => prevClusterId !== null && onSelectCluster(prevClusterId)}
+          disabled={prevClusterId === null}
+        >
+          ← Previous
+        </button>
+        <span className={styles.clusterNavMeta}>
+          {currentIndex >= 0 ? `${currentIndex + 1} of ${clusters.length}` : ""}
+        </span>
+        <button
+          type="button"
+          className={styles.clusterNavButton}
+          onClick={() => nextClusterId !== null && onSelectCluster(nextClusterId)}
+          disabled={nextClusterId === null}
+        >
+          Next →
+        </button>
+      </div>
       <div className={styles.panelBody}>
         {isLoadingDetail ? <div className={styles.message}>Loading cluster detail...</div> : null}
         {detailErrorMessage ? <div className={styles.errorMessage}>{detailErrorMessage}</div> : null}

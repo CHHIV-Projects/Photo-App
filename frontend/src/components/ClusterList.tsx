@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+
 import styles from "@/components/review-screen.module.css";
 import type { ClusterSummary } from "@/types/ui-api";
 
@@ -16,6 +18,15 @@ export function ClusterList({
   errorMessage,
   onSelectCluster
 }: ClusterListProps) {
+  const clusterRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+
+  useEffect(() => {
+    if (selectedClusterId !== null) {
+      const el = clusterRefs.current.get(selectedClusterId);
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [selectedClusterId]);
+
   return (
     <section className={styles.panel}>
       <header className={styles.panelHeader}>
@@ -38,6 +49,13 @@ export function ClusterList({
                 <button
                   key={cluster.cluster_id}
                   type="button"
+                  ref={(el) => {
+                    if (el) {
+                      clusterRefs.current.set(cluster.cluster_id, el);
+                    } else {
+                      clusterRefs.current.delete(cluster.cluster_id);
+                    }
+                  }}
                   className={`${styles.clusterButton} ${isSelected ? styles.clusterButtonActive : ""}`.trim()}
                   onClick={() => onSelectCluster(cluster.cluster_id)}
                 >

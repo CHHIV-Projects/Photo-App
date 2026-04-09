@@ -10,6 +10,7 @@ interface PeopleViewProps {
   createErrorMessage: string | null;
   isCreatingPerson: boolean;
   onCreatePerson: (displayName: string) => Promise<boolean>;
+  onSelectCluster: (clusterId: number) => void;
 }
 
 export function PeopleView({
@@ -18,7 +19,8 @@ export function PeopleView({
   peopleErrorMessage,
   createErrorMessage,
   isCreatingPerson,
-  onCreatePerson
+  onCreatePerson,
+  onSelectCluster
 }: PeopleViewProps) {
   const [draftDisplayName, setDraftDisplayName] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -86,8 +88,14 @@ export function PeopleView({
                   <ul className={styles.clusterAssignmentsList}>
                     {person.clusters.map((cluster) => (
                       <li key={cluster.cluster_id} className={styles.clusterAssignmentItem}>
-                        <span>Cluster #{cluster.cluster_id}</span>
-                        <span>{cluster.face_count} faces</span>
+                        <button
+                          type="button"
+                          className={styles.clusterAssignmentButton}
+                          onClick={() => onSelectCluster(cluster.cluster_id)}
+                        >
+                          <span>Cluster #{cluster.cluster_id}</span>
+                          <span>{cluster.face_count} faces</span>
+                        </button>
                       </li>
                     ))}
                   </ul>

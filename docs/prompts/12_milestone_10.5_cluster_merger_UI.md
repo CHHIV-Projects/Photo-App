@@ -331,3 +331,18 @@ This will:
 **Suggested Commit**
 
 git commit -m "Milestone 10.5: Add cluster merge UI with validation and safe merge flow"
+
+
+1. If the backend endpoint is missing, implement it now as `POST /api/clusters/merge` with `source_cluster_id` and `target_cluster_id`, returning `{ "success": true }`.
+
+2. Use the same shared action error area already used by ignore/remove/move for merge validation and merge errors.
+
+3. Clear the target cluster input after a successful merge only. Do not clear it on failure.
+
+4. Block merges when the target cluster is ignored. Please return/show a clear error such as `Cannot merge into an ignored cluster`.
+
+5. If backend returns a conflict or other useful detail, surface it to the user prefixed by `Failed to merge clusters:`.
+
+6. After a successful merge, refresh both the Review data and the People-view data so switching tabs remains current.
+
+Please proceed with that approach.

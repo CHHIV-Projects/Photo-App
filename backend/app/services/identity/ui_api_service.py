@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import re
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +21,68 @@ from app.services.vision.face_cluster_corrections import (
     set_cluster_ignored,
     unassign_face_from_cluster,
 )
+
+
+REVIEW_OUTPUT_ROOT = (Path(__file__).resolve().parents[4] / "storage" / "review").resolve()
+SUPPORTED_REVIEW_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+FACE_FILENAME_PATTERN = re.compile(r"^face_(\d+)__", re.IGNORECASE)
+
+# Lazy, in-memory index built on first thumbnail lookup.
+_FACE_THUMBNAIL_INDEX: dict[int, str] | None = None
+
+
+def _build_face_thumbnail_index() -> dict[int, str]:
+    """Index available review thumbnails by face ID with newest-file-wins semantics."""
+    if not REVIEW_OUTPUT_ROOT.exists():
+        return {}
+
+    latest_file_by_face_id: dict[int, Path] = {}
+    latest_mtime_by_face_id: dict[int, float] = {}
+
+    for candidate in REVIEW_OUTPUT_ROOT.rglob("*"):
+        if not candidate.is_file():
+            continue
+        if candidate.suffix.lower() not in SUPPORTED_REVIEW_IMAGE_EXTENSIONS:
+            continue
+
+        match = FACE_FILENAME_PATTERN.match(candidate.name)
+        if not match:
+            continue
+
+        face_id = int(match.group(1))
+        try:
+            candidate_mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+
+        existing_mtime = latest_mtime_by_face_id.get(face_id)
+        if existing_mtime is None or candidate_mtime > existing_mtime:
+            latest_mtime_by_face_id[face_id] = candidate_mtime
+            latest_file_by_face_id[face_id] = candidate
+
+    index: dict[int, str] = {}
+    for face_id, file_path in latest_file_by_face_id.items():
+        try:
+            relative_path = file_path.relative_to(REVIEW_OUTPUT_ROOT)
+        except ValueError:
+            continue
+
+        index[face_id] = f"/media/review/{relative_path.as_posix()}"
+
+    return index
+
+
+def _get_face_thumbnail_index() -> dict[int, str]:
+    """Return a cached face thumbnail index, building it on first use."""
+    global _FACE_THUMBNAIL_INDEX
+    if _FACE_THUMBNAIL_INDEX is None:
+        _FACE_THUMBNAIL_INDEX = _build_face_thumbnail_index()
+    return _FACE_THUMBNAIL_INDEX
+
+
+def _resolve_face_thumbnail_url(face_id: int) -> str | None:
+    """Resolve thumbnail URL for one face from pre-generated review crops."""
+    return _get_face_thumbnail_index().get(face_id)
 
 
 def list_clusters_for_review(
@@ -49,6 +114,7 @@ def list_clusters_for_review(
             Person.display_name,
             FaceCluster.is_ignored,
         )
+        .having(func.count(Face.id) > 0)
         .order_by(func.count(Face.id).desc(), FaceCluster.id.asc())
         .offset(offset)
         .limit(limit)
@@ -100,7 +166,7 @@ def get_cluster_detail(db: Session, cluster_id: int) -> dict:
             {
                 "face_id": row.id,
                 "asset_sha256": row.asset_sha256,
-                "thumbnail_url": None,
+                "thumbnail_url": _resolve_face_thumbnail_url(row.id),
             }
             for row in face_rows
         ],
@@ -208,11 +274,13 @@ def list_people_with_clusters(db: Session) -> list[dict]:
             ordered_person_ids.append(row.id)
 
         if row.cluster_id is not None:
-            people_map[row.id]["clusters"].append(
-                {
-                    "cluster_id": row.cluster_id,
-                    "face_count": int(row.face_count or 0),
-                }
-            )
+            face_count = int(row.face_count or 0)
+            if face_count > 0:
+                people_map[row.id]["clusters"].append(
+                    {
+                        "cluster_id": row.cluster_id,
+                        "face_count": face_count,
+                    }
+                )
 
     return [people_map[person_id] for person_id in ordered_person_ids]

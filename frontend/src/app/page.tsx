@@ -251,10 +251,16 @@ export default function HomePage() {
 
     if (resolvedSelectedClusterId === null) {
       setClusterDetail(null);
+      await loadPeopleWithClusters();
       return;
     }
 
-    await loadClusterDetail(resolvedSelectedClusterId);
+    await Promise.all([loadClusterDetail(resolvedSelectedClusterId), loadPeopleWithClusters()]);
+  }
+
+  function handleSelectClusterFromPeople(clusterId: number) {
+    setViewMode("review");
+    setSelectedClusterId(clusterId);
   }
 
   async function handleCreatePerson(displayName: string): Promise<boolean> {
@@ -277,7 +283,7 @@ export default function HomePage() {
     <main className={styles.page}>
       <div className={styles.shell}>
         <header className={styles.header}>
-          <p className={styles.kicker}>Milestone 10.5</p>
+          <p className={styles.kicker}>Milestone 10.8</p>
           <h1 className={styles.title}>Face Cluster Review</h1>
           <p className={styles.subtitle}>
             Review, correct, and merge clusters while keeping people assignments in sync.
@@ -328,6 +334,9 @@ export default function HomePage() {
               onMergeValidationError={setActionErrorMessage}
               onRemoveFace={handleRemoveFace}
               onMoveFace={handleMoveFace}
+              clusters={clusters}
+              selectedClusterId={selectedClusterId}
+              onSelectCluster={setSelectedClusterId}
             />
           </div>
         ) : (
@@ -338,6 +347,7 @@ export default function HomePage() {
             createErrorMessage={createPersonErrorMessage}
             isCreatingPerson={isCreatingPerson}
             onCreatePerson={handleCreatePerson}
+            onSelectCluster={handleSelectClusterFromPeople}
           />
         )}
       </div>
