@@ -1,5 +1,6 @@
 import styles from "@/components/review-screen.module.css";
 import type { ClusterDetail as ClusterDetailType, PersonSummary } from "@/types/ui-api";
+import { useState } from "react";
 
 import { FaceGrid } from "@/components/FaceGrid";
 import { PersonAssignForm } from "@/components/PersonAssignForm";
@@ -14,8 +15,11 @@ interface ClusterDetailProps {
   actionErrorMessage: string | null;
   isAssigning: boolean;
   isIgnoringCluster: boolean;
+  isMergingCluster: boolean;
   onAssign: (personId: number) => Promise<void>;
   onIgnoreCluster: () => Promise<void>;
+  onMergeClusters: (targetClusterId: number) => Promise<boolean>;
+  onMergeValidationError: (message: string) => void;
   onRemoveFace: (faceId: number) => Promise<boolean>;
   onMoveFace: (faceId: number, targetClusterId: number) => Promise<boolean>;
 }
@@ -30,11 +34,16 @@ export function ClusterDetail({
   actionErrorMessage,
   isAssigning,
   isIgnoringCluster,
+  isMergingCluster,
   onAssign,
   onIgnoreCluster,
+  onMergeClusters,
+  onMergeValidationError,
   onRemoveFace,
   onMoveFace
 }: ClusterDetailProps) {
+  const [targetClusterInput, setTargetClusterInput] = useState<string>("");
+
   const handleIgnoreClick = async () => {
     if (!clusterDetail) {
       return;
@@ -45,6 +54,42 @@ export function ClusterDetail({
     }
 
     await onIgnoreCluster();
+  };
+
+  const handleMergeClick = async () => {
+    if (!clusterDetail) {
+      return;
+    }
+
+    const normalizedTargetClusterId = targetClusterInput.trim();
+    if (!normalizedTargetClusterId) {
+      onMergeValidationError("Target cluster is required.");
+      return;
+    }
+
+    const targetClusterId = Number(normalizedTargetClusterId);
+    if (!Number.isInteger(targetClusterId) || targetClusterId <= 0) {
+      onMergeValidationError("Target cluster must be a positive number.");
+      return;
+    }
+
+    if (targetClusterId === clusterDetail.cluster_id) {
+      onMergeValidationError("Cannot merge a cluster into itself.");
+      return;
+    }
+
+    if (
+      !window.confirm(
+        "Are you sure you want to merge this cluster into the target cluster? This cannot be undone."
+      )
+    ) {
+      return;
+    }
+
+    const didMerge = await onMergeClusters(targetClusterId);
+    if (didMerge) {
+      setTargetClusterInput("");
+    }
   };
 
   return (
@@ -83,6 +128,33 @@ export function ClusterDetail({
                 >
                   {isIgnoringCluster ? "Ignoring..." : "Ignore Cluster"}
                 </button>
+              </div>
+
+              <div className={styles.mergeSection}>
+                <p className={styles.mergeTitle}>Merge Cluster</p>
+                <label className={styles.mergeLabel} htmlFor="target-cluster-id">
+                  Target Cluster ID
+                </label>
+                <div className={styles.mergeControls}>
+                  <input
+                    id="target-cluster-id"
+                    className={styles.mergeInput}
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={targetClusterInput}
+                    onChange={(event) => setTargetClusterInput(event.target.value)}
+                    disabled={isMergingCluster}
+                  />
+                  <button
+                    type="button"
+                    className={styles.assignButton}
+                    onClick={handleMergeClick}
+                    disabled={isMergingCluster}
+                  >
+                    {isMergingCluster ? "Merging..." : "Merge Into Target"}
+                  </button>
+                </div>
               </div>
             </div>
 

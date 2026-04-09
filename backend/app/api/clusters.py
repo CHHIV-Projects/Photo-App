@@ -10,6 +10,7 @@ from app.schemas.ui_api import (
     AssignPersonRequest,
     ClusterDetail,
     ClusterListResponse,
+    MergeClustersRequest,
     SuccessResponse,
 )
 from app.services.identity.ui_api_service import (
@@ -17,6 +18,7 @@ from app.services.identity.ui_api_service import (
     get_cluster_detail,
     ignore_cluster,
     list_clusters_for_review,
+    merge_clusters,
 )
 
 router = APIRouter(prefix="/api/clusters", tags=["clusters"])
@@ -74,5 +76,21 @@ def post_ignore_cluster(cluster_id: int, db: Session = Depends(get_db_session)) 
         ignore_cluster(db, cluster_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return SuccessResponse(success=True)
+
+
+@router.post("/merge", response_model=SuccessResponse)
+def post_merge_clusters(
+    request: MergeClustersRequest,
+    db: Session = Depends(get_db_session),
+) -> SuccessResponse:
+    """Merge one source cluster into a target cluster."""
+    try:
+        merge_clusters(db, request.source_cluster_id, request.target_cluster_id)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
     return SuccessResponse(success=True)

@@ -81,6 +81,13 @@ class MoveFaceRequest(BaseModel):
     target_cluster_id: int = Field(gt=0)
 
 
+class MergeClustersRequest(BaseModel):
+    """Request body for merging one source cluster into a target cluster."""
+
+    source_cluster_id: int = Field(gt=0)
+    target_cluster_id: int = Field(gt=0)
+
+
 class SuccessResponse(BaseModel):
     """Simple success envelope for mutation endpoints."""
 

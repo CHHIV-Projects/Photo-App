@@ -87,4 +87,17 @@ export function moveFace(faceId: number, targetClusterId: number): Promise<{ suc
   });
 }
 
+export function mergeClusters(
+  sourceClusterId: number,
+  targetClusterId: number
+): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>("/api/clusters/merge", {
+    method: "POST",
+    body: JSON.stringify({
+      source_cluster_id: sourceClusterId,
+      target_cluster_id: targetClusterId
+    })
+  });
+}
+
 export { API_BASE_URL };

@@ -11,6 +11,7 @@ from app.models.person import Person
 from app.services.identity.person_service import create_person as identity_create_person
 from app.services.identity.person_service import list_people as identity_list_people
 from app.services.vision.face_cluster_corrections import (
+    merge_face_clusters as correction_merge_face_clusters,
     move_face_to_cluster as correction_move_face_to_cluster,
 )
 from app.services.vision.face_cluster_corrections import (
@@ -165,6 +166,12 @@ def move_face_to_cluster(db: Session, face_id: int, target_cluster_id: int) -> d
         "success": True,
         "changed": bool(result.get("changed", False)),
     }
+
+
+def merge_clusters(db: Session, source_cluster_id: int, target_cluster_id: int) -> dict:
+    """Merge one source cluster into a target cluster."""
+    correction_merge_face_clusters(db, source_cluster_id, target_cluster_id)
+    return {"success": True}
 
 
 def ignore_cluster(db: Session, cluster_id: int) -> dict:

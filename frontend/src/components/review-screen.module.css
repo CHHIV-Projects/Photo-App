@@ -173,6 +173,45 @@
   margin-top: 6px;
 }
 
+.mergeSection {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #dce3ea;
+}
+
+.mergeTitle {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #35536e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mergeLabel {
+  font-size: 0.85rem;
+  color: #526274;
+}
+
+.mergeControls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mergeInput {
+  min-width: 0;
+  width: 170px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #b9c7d4;
+  background: #ffffff;
+  font: inherit;
+}
+
 .assignForm {
   display: flex;
   flex-wrap: wrap;
@@ -337,7 +376,8 @@
 
 .faceDangerButton:disabled,
 .faceMoveButton:disabled,
-.faceMoveInput:disabled {
+.faceMoveInput:disabled,
+.mergeInput:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }

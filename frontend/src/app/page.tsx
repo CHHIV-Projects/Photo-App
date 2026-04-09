@@ -14,6 +14,7 @@ import {
   getPeople,
   getPeopleWithClusters,
   ignoreCluster,
+  mergeClusters,
   moveFace,
   removeFaceFromCluster
 } from "@/lib/api";
@@ -39,6 +40,7 @@ export default function HomePage() {
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isAssigning, setIsAssigning] = useState(false);
   const [isIgnoringCluster, setIsIgnoringCluster] = useState(false);
+  const [isMergingCluster, setIsMergingCluster] = useState(false);
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
   const [clusterErrorMessage, setClusterErrorMessage] = useState<string | null>(null);
   const [peopleErrorMessage, setPeopleErrorMessage] = useState<string | null>(null);
@@ -214,6 +216,36 @@ export default function HomePage() {
     }
   }
 
+  async function handleMergeClusters(targetClusterId: number): Promise<boolean> {
+    if (selectedClusterId === null) {
+      return false;
+    }
+
+    if (targetClusterId === selectedClusterId) {
+      setActionErrorMessage("Cannot merge a cluster into itself.");
+      return false;
+    }
+
+    setIsMergingCluster(true);
+    setActionErrorMessage(null);
+
+    try {
+      await mergeClusters(selectedClusterId, targetClusterId);
+      await Promise.all([
+        refreshAfterClusterMutation(targetClusterId),
+        loadPeople(),
+        loadPeopleWithClusters()
+      ]);
+      return true;
+    } catch (error) {
+      const detail = getErrorMessage(error, "Unknown error.");
+      setActionErrorMessage(`Failed to merge clusters: ${detail}`);
+      return false;
+    } finally {
+      setIsMergingCluster(false);
+    }
+  }
+
   async function refreshAfterClusterMutation(previousClusterId: number) {
     const resolvedSelectedClusterId = await loadClusters(previousClusterId);
 
@@ -245,10 +277,10 @@ export default function HomePage() {
     <main className={styles.page}>
       <div className={styles.shell}>
         <header className={styles.header}>
-          <p className={styles.kicker}>Milestone 10.4</p>
+          <p className={styles.kicker}>Milestone 10.5</p>
           <h1 className={styles.title}>Face Cluster Review</h1>
           <p className={styles.subtitle}>
-            Switch between Review and People management to label clusters with a clean end-to-end workflow.
+            Review, correct, and merge clusters while keeping people assignments in sync.
           </p>
 
           <div className={styles.viewSwitch}>
@@ -289,8 +321,11 @@ export default function HomePage() {
               actionErrorMessage={actionErrorMessage}
               isAssigning={isAssigning}
               isIgnoringCluster={isIgnoringCluster}
+              isMergingCluster={isMergingCluster}
               onAssign={handleAssign}
               onIgnoreCluster={handleIgnoreCluster}
+              onMergeClusters={handleMergeClusters}
+              onMergeValidationError={setActionErrorMessage}
               onRemoveFace={handleRemoveFace}
               onMoveFace={handleMoveFace}
             />

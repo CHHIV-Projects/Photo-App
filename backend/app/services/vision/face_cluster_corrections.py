@@ -96,6 +96,8 @@ def merge_face_clusters(db: Session, source_cluster_id: int, target_cluster_id: 
     target = db.get(FaceCluster, target_cluster_id)
     if target is None:
         raise ValueError(f"Target cluster ID {target_cluster_id} does not exist.")
+    if target.is_ignored:
+        raise ValueError("Cannot merge into an ignored cluster.")
 
     if (
         source.person_id is not None
