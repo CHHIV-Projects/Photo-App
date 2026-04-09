@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import styles from "@/components/review-screen.module.css";
+import { resolveApiUrl } from "@/lib/api";
 import type { FaceSummary } from "@/types/ui-api";
 
 interface FaceGridProps {
@@ -19,6 +20,7 @@ export function FaceGrid({
   const [moveTargetByFaceId, setMoveTargetByFaceId] = useState<Record<number, string>>({});
   const [pendingRemoveFaceId, setPendingRemoveFaceId] = useState<number | null>(null);
   const [pendingMoveFaceId, setPendingMoveFaceId] = useState<number | null>(null);
+  const [failedImageByFaceId, setFailedImageByFaceId] = useState<Record<number, boolean>>({});
 
   const updateMoveTarget = (faceId: number, nextValue: string) => {
     setMoveTargetByFaceId((current) => ({
@@ -77,11 +79,17 @@ export function FaceGrid({
     <div className={styles.faceGrid}>
       {faces.map((face) => (
         <article key={face.face_id} className={styles.faceTile}>
-          {face.thumbnail_url ? (
+          {resolveApiUrl(face.thumbnail_url) && !failedImageByFaceId[face.face_id] ? (
             <img
               className={styles.faceImage}
-              src={face.thumbnail_url}
+              src={resolveApiUrl(face.thumbnail_url) ?? ""}
               alt={`Face ${face.face_id}`}
+              onError={() =>
+                setFailedImageByFaceId((current) => ({
+                  ...current,
+                  [face.face_id]: true
+                }))
+              }
             />
           ) : (
             <div className={styles.facePlaceholder}>
