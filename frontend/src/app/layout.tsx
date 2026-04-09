@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Photo Organizer v1",
-  description: "Minimal frontend skeleton for Photo Organizer v1"
+  description: "Face cluster review screen for Photo Organizer v1"
 };
 
 export default function RootLayout({

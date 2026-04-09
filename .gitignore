@@ -20,4 +20,11 @@ Thumbs.db
 *.log
 
 # vault
-storage/vault
+storage/
+backend/storage/
+
+# face detection model binaries
+backend/app/services/vision/models/*.onnx
+
+# vision models
+backend/app/services/vision/models/

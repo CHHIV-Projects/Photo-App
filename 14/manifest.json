@@ -1,0 +1,129 @@
+{
+  "cluster_id": 11,
+  "output_dir": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\14",
+  "total_faces_found": 6,
+  "crops_saved": 6,
+  "failures": [],
+  "faces": [
+    {
+      "face_id": 13,
+      "cluster_id": 11,
+      "asset_sha256": "c76217e9143f57af9322800a05a99d8953203ce90181498941ac106eb662f73e",
+      "vault_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\vault\\c7\\c76217e9143f57af9322800a05a99d8953203ce90181498941ac106eb662f73e.jpg",
+      "original_filename": "IMG_0727(1).JPG",
+      "original_source_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\drop_zone\\IMG_0727(1).JPG",
+      "bbox_x": 185,
+      "bbox_y": 237,
+      "bbox_width": 162,
+      "bbox_height": 242,
+      "confidence_score": 0.9437482953071594,
+      "crop_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\14\\face_13__asset_c76217e9143f__IMG_0727(1).jpg",
+      "clamped_bbox": {
+        "left": 185,
+        "top": 237,
+        "right": 347,
+        "bottom": 479
+      }
+    },
+    {
+      "face_id": 16,
+      "cluster_id": 11,
+      "asset_sha256": "9328a21c93a2f46c8df60c7fe87dd35512947f47785c2a97de0c04fe69ece645",
+      "vault_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\vault\\93\\9328a21c93a2f46c8df60c7fe87dd35512947f47785c2a97de0c04fe69ece645.jpg",
+      "original_filename": "IMG_0873(1).JPG",
+      "original_source_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\drop_zone\\IMG_0873(1).JPG",
+      "bbox_x": 586,
+      "bbox_y": 92,
+      "bbox_width": 82,
+      "bbox_height": 113,
+      "confidence_score": 0.9145771265029907,
+      "crop_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\14\\face_16__asset_9328a21c93a2__IMG_0873(1).jpg",
+      "clamped_bbox": {
+        "left": 586,
+        "top": 92,
+        "right": 668,
+        "bottom": 205
+      }
+    },
+    {
+      "face_id": 27,
+      "cluster_id": 11,
+      "asset_sha256": "f6319a85403ada5ad12ab30d6b53ee4d508f43fec8efb44979f393dce889c806",
+      "vault_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\vault\\f6\\f6319a85403ada5ad12ab30d6b53ee4d508f43fec8efb44979f393dce889c806.jpg",
+      "original_filename": "Portraits-387 low(1).jpg",
+      "original_source_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\drop_zone\\Portraits-387 low(1).jpg",
+      "bbox_x": 1501,
+      "bbox_y": 618,
+      "bbox_width": 614,
+      "bbox_height": 897,
+      "confidence_score": 0.950654923915863,
+      "crop_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\14\\face_27__asset_f6319a85403a__Portraits-387_low(1).jpg",
+      "clamped_bbox": {
+        "left": 1501,
+        "top": 618,
+        "right": 2115,
+        "bottom": 1515
+      }
+    },
+    {
+      "face_id": 29,
+      "cluster_id": 11,
+      "asset_sha256": "7a361a4ba64ede6c3a950e3c4c060ae740a3086d800354f7ba8308f56e5adb70",
+      "vault_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\vault\\7a\\7a361a4ba64ede6c3a950e3c4c060ae740a3086d800354f7ba8308f56e5adb70.jpg",
+      "original_filename": "Portraits-387(1).jpg",
+      "original_source_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\drop_zone\\Portraits-387(1).jpg",
+      "bbox_x": 1510,
+      "bbox_y": 623,
+      "bbox_width": 609,
+      "bbox_height": 890,
+      "confidence_score": 0.9521781206130981,
+      "crop_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\14\\face_29__asset_7a361a4ba64e__Portraits-387(1).jpg",
+      "clamped_bbox": {
+        "left": 1510,
+        "top": 623,
+        "right": 2119,
+        "bottom": 1513
+      }
+    },
+    {
+      "face_id": 30,
+      "cluster_id": 11,
+      "asset_sha256": "52df2153e980c385ec95ed6056334013bd45f2939bd7166ee15aff236fbf025a",
+      "vault_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\vault\\52\\52df2153e980c385ec95ed6056334013bd45f2939bd7166ee15aff236fbf025a.jpg",
+      "original_filename": "Portraits-crop(1).jpg",
+      "original_source_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\drop_zone\\Portraits-crop(1).jpg",
+      "bbox_x": 553,
+      "bbox_y": 367,
+      "bbox_width": 584,
+      "bbox_height": 862,
+      "confidence_score": 0.9180951714515686,
+      "crop_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\14\\face_30__asset_52df2153e980__Portraits-crop(1).jpg",
+      "clamped_bbox": {
+        "left": 553,
+        "top": 367,
+        "right": 1137,
+        "bottom": 1229
+      }
+    },
+    {
+      "face_id": 44,
+      "cluster_id": 11,
+      "asset_sha256": "96c620fb1c8fb8e1b8886dc6f33bff72f1bf6a6b51a77bd09eb138b501fd734b",
+      "vault_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\vault\\96\\96c620fb1c8fb8e1b8886dc6f33bff72f1bf6a6b51a77bd09eb138b501fd734b.jpg",
+      "original_filename": "010101e9b7df5b3af24311adbf554b92e464c425af(1).jpg",
+      "original_source_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\storage\\drop_zone\\010101e9b7df5b3af24311adbf554b92e464c425af(1).jpg",
+      "bbox_x": 980,
+      "bbox_y": 487,
+      "bbox_width": 135,
+      "bbox_height": 189,
+      "confidence_score": 0.9334787726402283,
+      "crop_path": "C:\\Users\\chhen\\My Drive\\AI Photo Organizer\\Photo Organizer_v1\\14\\face_44__asset_96c620fb1c8f__010101e9b7df5b3af24311adbf554b92e464c425af(1).jpg",
+      "clamped_bbox": {
+        "left": 980,
+        "top": 487,
+        "right": 1115,
+        "bottom": 676
+      }
+    }
+  ]
+}
