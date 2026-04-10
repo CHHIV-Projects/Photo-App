@@ -373,3 +373,16 @@ Focus shifts to:
 **Suggested Commit**
 
 git commit -m "Milestone 10.12: Add places/location view with GPS-based photo grouping"
+
+
+1. For 10.12, use grouping by rounded latitude/longitude at **2 decimal places**.
+
+2. Do **not** add reverse geocoding in this milestone. Raw coordinates are fine for MVP.
+
+3. Sort the Places list by **photo count descending**.
+
+4. In the place detail panel, show actual image thumbnails so the UX stays consistent with Photos and Events.
+
+5. Yes, please do a quick database check first to confirm how many assets have valid GPS data before building.
+
+Please proceed with that approach.

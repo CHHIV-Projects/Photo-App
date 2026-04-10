@@ -793,3 +793,235 @@ For scans:
 > Trust human-created structure (folders/albums) over inferred signals (timestamps)
 
 ---
+# Addendum — Drop Zone Cleanup & Post-Ingest File Management
+
+## Purpose
+
+Define future enhancements for handling files in the **drop zone after ingestion**, including safe cleanup, archival strategies, and automation options.
+
+This addresses current behavior where files remain in the drop zone after successful ingestion.
+
+---
+
+# 🔵 Current Behavior (Baseline)
+
+## Status
+
+* Files are ingested from drop zone
+* Files are processed and stored in vault
+* Files remain in drop zone after processing
+
+## Implication
+
+* Safe for development and debugging
+* Requires manual cleanup during testing
+* Can lead to clutter over time
+
+---
+
+# 🟢 Short-Term Practice (Current Phase)
+
+## Manual Cleanup
+
+**Recommended current workflow:**
+
+* After successful ingestion:
+
+  * verify assets appear in UI (Photos, Events, etc.)
+  * confirm no ingestion errors
+* manually delete files from drop zone
+
+This is acceptable and expected for Milestone 11 phase.
+
+---
+
+# 🟡 Future Enhancements
+
+## 41. Optional Drop Zone Cleanup Flag
+
+**Priority: High**
+
+### Enhancement
+
+Add an optional flag to orchestration script:
+
+```bash
+--cleanup-dropzone
+```
+
+### Behavior
+
+* after successful ingestion + vault storage:
+
+  * delete original files from drop zone
+* only execute if:
+
+  * pipeline completes successfully
+
+### Safety Requirement
+
+* do NOT delete files if any critical stage fails
+
+---
+
+## 42. Move to Processed / Archive Folder
+
+**Priority: High**
+
+### Enhancement
+
+Instead of deleting, move files to:
+
+```text
+dropzone/processed/
+```
+
+or
+
+```text
+dropzone/archive/
+```
+
+### Benefits
+
+* retains original files for backup
+* enables audit and reprocessing
+* safer than deletion
+
+---
+
+## 43. Idempotent Drop Zone Handling
+
+**Priority: Medium**
+
+### Enhancement
+
+Allow drop zone to persist without manual cleanup by:
+
+* tracking processed files via hash
+* skipping already-ingested files
+
+### Behavior
+
+* files can remain in drop zone
+* system ignores duplicates automatically
+
+---
+
+## 44. Ingestion State Tracking
+
+**Priority: Medium**
+
+### Enhancement
+
+Track ingestion status per file:
+
+* pending
+* processed
+* failed
+
+### Benefit
+
+* enables smarter cleanup
+* supports retry logic
+
+---
+
+## 45. Partial Failure Handling
+
+**Priority: Medium**
+
+### Enhancement
+
+If pipeline fails mid-run:
+
+* only keep unprocessed or failed files
+* optionally move successful ones to processed/
+
+---
+
+# 🟠 Advanced Enhancements
+
+## 46. Configurable Cleanup Policy
+
+**Priority: Low**
+
+### Enhancement
+
+Allow configurable modes:
+
+* keep (default)
+* delete
+* archive
+
+Example:
+
+```bash
+--cleanup-mode delete
+--cleanup-mode archive
+```
+
+---
+
+## 47. Scheduled Cleanup
+
+**Priority: Low**
+
+### Enhancement
+
+Periodic cleanup job:
+
+* remove files older than X days
+* archive old drop zone contents
+
+---
+
+# 🔴 Risks & Safety Considerations
+
+* accidental deletion of unprocessed files
+* partial pipeline failures leaving inconsistent state
+* user confusion about file lifecycle
+
+---
+
+# 🧠 Guiding Principle
+
+> Never delete source files unless ingestion and storage are confirmed successful.
+
+---
+
+# ✔️ Strategic Value
+
+Improving drop zone handling will:
+
+* reduce manual cleanup effort
+* support large-scale ingestion
+* make pipeline safer and more repeatable
+* enable production-like workflows
+
+---
+
+# 🧭 Position in Roadmap
+
+These enhancements should be implemented after:
+
+* Milestone 11.1 (Pipeline orchestration) ✅
+* Initial batch testing workflows
+
+Then:
+
+👉 Introduce controlled cleanup and archival behavior
+
+---
+
+# 🔑 Summary
+
+Current state:
+
+* manual cleanup is correct and expected
+
+Future direction:
+
+* controlled, optional, and safe automation of drop zone cleanup
+
+---
