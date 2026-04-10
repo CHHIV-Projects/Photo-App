@@ -392,3 +392,15 @@ After 10.9, likely next candidates are:
 4.  search/filter improvements
 
 But 10.9 should focus only on the unresolved-face workflow.
+
+1. For 10.9, return all unassigned faces for now. No paging yet.
+
+2. Prefer newest-first ordering by `created_at_utc desc` if that is available cleanly. If not, use `face_id desc` as the fallback.
+
+3. Reuse the existing face-based thumbnail resolver exactly for unassigned faces.
+
+4. After a successful move, stay on the Unassigned Faces view and refresh the relevant data rather than auto-switching to Review.
+
+5. The empty state message `No unassigned faces found.` is good.
+
+Please proceed with that approach.

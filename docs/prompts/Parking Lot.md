@@ -282,3 +282,240 @@ Core system now supports:
 Next major phase:
 
 👉 **Full Photo Review → Events → Places**
+
+# Addendum — Photo Review Enhancements (Post Milestone 10.10)
+
+## Purpose
+
+This section captures **photo-level usability improvements** identified after implementing Full Photo Review (Milestone 10.10).
+
+These are **not required for initial functionality**, but will significantly improve usability and workflow efficiency.
+
+---
+
+# 🔵 Photo View Filtering
+
+## 21. Filter Photos to Only Those With Faces
+
+**Priority: Medium**
+
+### Problem
+
+* Photos with zero detected faces appear in the Photos view
+* These are not useful for identity/face review workflows
+* They add noise and reduce efficiency
+
+### Enhancement
+
+* Default behavior:
+
+  * show only photos where `face_count > 0`
+
+### Future Option
+
+* allow toggle:
+
+  * “Show all photos”
+  * “Show only photos with faces”
+
+---
+
+# 🟢 Photo Interaction Improvements
+
+## 22. Face Box ↔ Face List Highlighting
+
+**Priority: Medium–High**
+
+### Problem
+
+* No visual linkage between:
+
+  * face boxes on image
+  * face entries in the list
+
+### Enhancement
+
+* clicking a face row highlights corresponding box
+* clicking a face box highlights corresponding row
+
+### Benefit
+
+* easier identification of faces in crowded photos
+* reduces confusion during review
+
+---
+
+## 23. Click Face → Jump to Cluster Review
+
+**Priority: High**
+
+### Problem
+
+* user sees a face in photo but cannot easily jump to cluster context
+
+### Enhancement
+
+* clicking a face (box or row) provides:
+
+  * “Open in Review”
+* switches to Review tab
+* selects corresponding cluster
+* loads cluster detail
+
+### Benefit
+
+* tight integration between photo view and cluster workflow
+* faster correction loop
+
+---
+
+## 24. Click Face → Jump to Unassigned Workflow
+
+**Priority: Medium**
+
+### Problem
+
+* unassigned faces in photo require manual navigation to Unassigned Faces tab
+
+### Enhancement
+
+* clicking unassigned face provides:
+
+  * “Open in Unassigned Faces”
+
+### Benefit
+
+* faster cleanup of unresolved identities
+
+---
+
+# 🟡 Photo Context Editing (Future Phase)
+
+## 25. Basic Face Actions in Photo View
+
+**Priority: Medium (later)**
+
+### Enhancement
+
+Allow limited editing directly from photo:
+
+* assign to cluster
+* remove from cluster
+* move to cluster
+
+### Note
+
+* must reuse existing backend endpoints
+* should not duplicate logic
+
+---
+
+## 26. Assign Person from Photo View
+
+**Priority: Medium (later)**
+
+### Enhancement
+
+* assign person directly from face in photo
+
+### Benefit
+
+* reduces need to switch to cluster view for simple assignments
+
+---
+
+# 🟠 Visual Improvements
+
+## 27. Improved Face Box Styling
+
+**Priority: Low**
+
+### Enhancement
+
+* color-code boxes:
+
+  * green → assigned person
+  * yellow → cluster but no person
+  * red → unassigned
+
+### Benefit
+
+* quick visual scanning of photo identity state
+
+---
+
+## 28. Hover Details for Face Boxes
+
+**Priority: Low**
+
+### Enhancement
+
+* hover over face box shows:
+
+  * face id
+  * cluster id
+  * person name
+
+---
+
+# 🔴 Navigation Enhancements
+
+## 29. Auto-Advance Through Photos
+
+**Priority: Medium**
+
+### Enhancement
+
+* next/previous photo controls
+* optional “review mode”:
+
+  * auto-advance after action
+
+---
+
+## 30. Jump Between Photos with Same Person
+
+**Priority: Medium–High**
+
+### Enhancement
+
+* from a face/person:
+
+  * jump to next photo containing that person
+
+---
+
+# 🧠 Notes
+
+* Photo view is the **final integration layer** of the system
+* Clusters and faces feed into this experience
+* Improvements here have **high user impact**
+
+---
+
+# ✔️ Position in Roadmap
+
+These enhancements should be considered **after**:
+
+1. Full Photo Review (10.10) ✅
+2. Events / timeline UI
+3. Places / location UI
+
+Then:
+
+* return to photo UX improvements
+* refine interaction and speed
+
+---
+
+# 🧭 Guiding Principle
+
+Keep photo view:
+
+* simple
+* fast
+* contextual
+
+Avoid turning it into a complex editing surface too early.
+
+---

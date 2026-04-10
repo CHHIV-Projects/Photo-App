@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
 import { PeopleView } from "@/components/PeopleView";
+import { PhotosView } from "@/components/PhotosView";
 import { UnassignedFacesView } from "@/components/UnassignedFacesView";
 import styles from "@/components/review-screen.module.css";
 import {
@@ -14,6 +15,8 @@ import {
   getClusters,
   getPeople,
   getPeopleWithClusters,
+  getPhotoDetail,
+  getPhotos,
   getUnassignedFaces,
   ignoreCluster,
   mergeClusters,
@@ -25,10 +28,12 @@ import type {
   ClusterSummary,
   FaceSummary,
   PersonSummary,
-  PersonWithClusters
+  PersonWithClusters,
+  PhotoDetail,
+  PhotoSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people" | "unassigned";
+type ViewMode = "review" | "people" | "unassigned" | "photos";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("review");
@@ -56,12 +61,20 @@ export default function HomePage() {
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null);
   const [unassignedActionErrorMessage, setUnassignedActionErrorMessage] = useState<string | null>(null);
   const [createPersonErrorMessage, setCreatePersonErrorMessage] = useState<string | null>(null);
+  const [photos, setPhotos] = useState<PhotoSummary[]>([]);
+  const [selectedPhotoSha256, setSelectedPhotoSha256] = useState<string | null>(null);
+  const [photoDetail, setPhotoDetail] = useState<PhotoDetail | null>(null);
+  const [isLoadingPhotos, setIsLoadingPhotos] = useState(true);
+  const [isLoadingPhotoDetail, setIsLoadingPhotoDetail] = useState(false);
+  const [photosErrorMessage, setPhotosErrorMessage] = useState<string | null>(null);
+  const [photoDetailErrorMessage, setPhotoDetailErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void loadClusters();
     void loadPeople();
     void loadPeopleWithClusters();
     void loadUnassignedFaces();
+    void loadPhotos();
   }, []);
 
   useEffect(() => {
@@ -160,6 +173,40 @@ export default function HomePage() {
     } finally {
       setIsLoadingUnassignedFaces(false);
     }
+  }
+
+  async function loadPhotos() {
+    setIsLoadingPhotos(true);
+    setPhotosErrorMessage(null);
+
+    try {
+      const response = await getPhotos();
+      setPhotos(response.items);
+    } catch (error) {
+      setPhotosErrorMessage(getErrorMessage(error, "Failed to load photos."));
+    } finally {
+      setIsLoadingPhotos(false);
+    }
+  }
+
+  async function loadPhotoDetail(sha256: string) {
+    setIsLoadingPhotoDetail(true);
+    setPhotoDetailErrorMessage(null);
+
+    try {
+      const response = await getPhotoDetail(sha256);
+      setPhotoDetail(response);
+    } catch (error) {
+      setPhotoDetailErrorMessage(getErrorMessage(error, "Failed to load photo detail."));
+      setPhotoDetail(null);
+    } finally {
+      setIsLoadingPhotoDetail(false);
+    }
+  }
+
+  function handleSelectPhoto(sha256: string) {
+    setSelectedPhotoSha256(sha256);
+    void loadPhotoDetail(sha256);
   }
 
   async function handleAssign(personId: number) {
@@ -269,19 +316,33 @@ export default function HomePage() {
   }
 
   async function refreshAfterClusterMutation(previousClusterId: number) {
+    const selectedPhoto = selectedPhotoSha256;
     const resolvedSelectedClusterId = await loadClusters(previousClusterId);
 
     if (resolvedSelectedClusterId === null) {
       setClusterDetail(null);
-      await Promise.all([loadPeopleWithClusters(), loadUnassignedFaces()]);
+      const refreshTasks: Promise<unknown>[] = [
+        loadPeopleWithClusters(),
+        loadUnassignedFaces(),
+        loadPhotos(),
+      ];
+      if (selectedPhoto) {
+        refreshTasks.push(loadPhotoDetail(selectedPhoto));
+      }
+      await Promise.all(refreshTasks);
       return;
     }
 
-    await Promise.all([
+    const refreshTasks: Promise<unknown>[] = [
       loadClusterDetail(resolvedSelectedClusterId),
       loadPeopleWithClusters(),
       loadUnassignedFaces(),
-    ]);
+      loadPhotos(),
+    ];
+    if (selectedPhoto) {
+      refreshTasks.push(loadPhotoDetail(selectedPhoto));
+    }
+    await Promise.all(refreshTasks);
   }
 
   function handleSelectClusterFromPeople(clusterId: number) {
@@ -290,6 +351,7 @@ export default function HomePage() {
   }
 
   async function handleMoveUnassignedFace(faceId: number, targetClusterId: number): Promise<boolean> {
+    const selectedPhoto = selectedPhotoSha256;
     setUnassignedActionErrorMessage(null);
 
     try {
@@ -298,7 +360,15 @@ export default function HomePage() {
       const preferredClusterId = selectedClusterId;
       const resolvedSelectedClusterId = await loadClusters(preferredClusterId);
 
-      await Promise.all([loadUnassignedFaces(), loadPeopleWithClusters()]);
+      const refreshTasks: Promise<unknown>[] = [
+        loadUnassignedFaces(),
+        loadPeopleWithClusters(),
+        loadPhotos(),
+      ];
+      if (selectedPhoto) {
+        refreshTasks.push(loadPhotoDetail(selectedPhoto));
+      }
+      await Promise.all(refreshTasks);
 
       if (resolvedSelectedClusterId !== null && resolvedSelectedClusterId === targetClusterId) {
         await loadClusterDetail(resolvedSelectedClusterId);
@@ -332,7 +402,7 @@ export default function HomePage() {
     <main className={styles.page}>
       <div className={styles.shell}>
         <header className={styles.header}>
-          <p className={styles.kicker}>Milestone 10.8</p>
+          <p className={styles.kicker}>Milestone 10.10</p>
           <h1 className={styles.title}>Face Cluster Review</h1>
           <p className={styles.subtitle}>
             Review, correct, and merge clusters while keeping people assignments in sync.
@@ -359,6 +429,13 @@ export default function HomePage() {
               onClick={() => setViewMode("unassigned")}
             >
               Unassigned Faces
+            </button>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "photos" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("photos")}
+            >
+              Photos
             </button>
           </div>
         </header>
@@ -405,7 +482,7 @@ export default function HomePage() {
             onCreatePerson={handleCreatePerson}
             onSelectCluster={handleSelectClusterFromPeople}
           />
-        ) : (
+        ) : viewMode === "unassigned" ? (
           <UnassignedFacesView
             faces={unassignedFaces}
             isLoading={isLoadingUnassignedFaces}
@@ -413,6 +490,17 @@ export default function HomePage() {
             actionErrorMessage={unassignedActionErrorMessage}
             onMoveFace={handleMoveUnassignedFace}
             onValidationError={setUnassignedActionErrorMessage}
+          />
+        ) : (
+          <PhotosView
+            photos={photos}
+            isLoading={isLoadingPhotos}
+            errorMessage={photosErrorMessage}
+            selectedPhotoSha256={selectedPhotoSha256}
+            photoDetail={photoDetail}
+            isLoadingDetail={isLoadingPhotoDetail}
+            photoDetailErrorMessage={photoDetailErrorMessage}
+            onSelectPhoto={handleSelectPhoto}
           />
         )}
       </div>

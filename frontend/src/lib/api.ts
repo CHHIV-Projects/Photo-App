@@ -5,7 +5,9 @@ import type {
   FaceSummary,
   ListResponse,
   PersonSummary,
-  PersonWithClusters
+  PersonWithClusters,
+  PhotoDetail,
+  PhotoSummary
 } from "@/types/ui-api";
 
 const API_BASE_URL =
@@ -120,3 +122,11 @@ export function resolveApiUrl(path: string | null | undefined): string | null {
 }
 
 export { API_BASE_URL };
+
+export function getPhotos(): Promise<ListResponse<PhotoSummary>> {
+  return apiRequest<ListResponse<PhotoSummary>>("/api/photos");
+}
+
+export function getPhotoDetail(sha256: string): Promise<PhotoDetail> {
+  return apiRequest<PhotoDetail>(`/api/photos/${sha256}`);
+}

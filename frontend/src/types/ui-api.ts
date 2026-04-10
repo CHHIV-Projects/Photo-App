@@ -50,3 +50,32 @@ export interface ListResponse<T> {
   count: number;
   items: T[];
 }
+
+export interface BBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface FaceInPhoto {
+  face_id: number;
+  bbox: BBox;
+  cluster_id: number | null;
+  person_id: number | null;
+  person_name: string | null;
+}
+
+export interface PhotoSummary {
+  asset_sha256: string;
+  filename: string;
+  image_url: string;
+  face_count: number;
+}
+
+export interface PhotoDetail {
+  asset_sha256: string;
+  filename: string;
+  image_url: string;
+  faces: FaceInPhoto[];
+}

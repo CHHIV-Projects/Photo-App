@@ -1,0 +1,240 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #d9e0e7;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(24, 33, 43, 0.08);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #e8edf2;
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #18212b;
+}
+
+.panelCount {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #526274;
+  background: #eaf4fb;
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+/* ── Photo list ─────────────────────────────────────────────────── */
+
+.photoList {
+  overflow-y: auto;
+  max-height: calc(100vh - 240px);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.photoItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.photoItem:hover {
+  background: #f4f6f8;
+}
+
+.photoItemActive {
+  background: #eaf4fb;
+  border-color: #b3d4ec;
+}
+
+.photoThumb {
+  flex-shrink: 0;
+  width: 56px;
+  height: 42px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #e8edf2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.photoThumbImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.photoMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.photoFilename {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #18212b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.photoFaceCount {
+  font-size: 0.76rem;
+  color: #526274;
+}
+
+/* ── Detail area ────────────────────────────────────────────────── */
+
+.detailArea {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── Full image with overlays ───────────────────────────────────── */
+
+.imageWrapper {
+  padding: 16px;
+}
+
+.imageContainer {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.fullImage {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.imagePlaceholder {
+  padding: 48px 24px;
+  text-align: center;
+  color: #526274;
+  font-size: 0.9rem;
+}
+
+.imageFilename {
+  margin: 4px 16px 14px;
+  font-size: 0.78rem;
+  color: #526274;
+}
+
+.faceBox {
+  position: absolute;
+  border: 2px solid rgba(33, 93, 143, 0.75);
+  border-radius: 3px;
+  cursor: pointer;
+  background: rgba(33, 93, 143, 0.06);
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.faceBox:hover {
+  border-color: #215d8f;
+  background: rgba(33, 93, 143, 0.18);
+}
+
+.faceBoxActive {
+  border-color: #d07b00;
+  background: rgba(208, 123, 0, 0.15);
+}
+
+/* ── Face list ──────────────────────────────────────────────────── */
+
+.faceList {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.faceRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.faceRow:hover {
+  background: #f4f6f8;
+}
+
+.faceRowActive {
+  background: #eaf4fb;
+  border-color: #b3d4ec;
+}
+
+.faceId {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #18212b;
+  white-space: nowrap;
+}
+
+.faceSep {
+  color: #b9c7d4;
+  font-size: 0.82rem;
+}
+
+.faceIdentity {
+  font-size: 0.82rem;
+  color: #35536e;
+}
+
+/* ── Shared status messages ─────────────────────────────────────── */
+
+.statusMessage {
+  margin: 0;
+  padding: 24px 20px;
+  font-size: 0.87rem;
+  color: #526274;
+}
+
+.errorMessage {
+  margin: 0;
+  padding: 20px;
+  font-size: 0.87rem;
+  color: #c0392b;
+}
