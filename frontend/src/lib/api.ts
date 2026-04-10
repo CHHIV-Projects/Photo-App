@@ -9,7 +9,9 @@ import type {
   PersonSummary,
   PersonWithClusters,
   PhotoDetail,
-  PhotoSummary
+  PhotoSummary,
+  PlaceDetail,
+  PlaceSummary
 } from "@/types/ui-api";
 
 const API_BASE_URL =
@@ -139,4 +141,12 @@ export function getEvents(): Promise<ListResponse<EventSummary>> {
 
 export function getEventDetail(eventId: number): Promise<EventDetail> {
   return apiRequest<EventDetail>(`/api/events/${eventId}`);
+}
+
+export function getPlaces(): Promise<ListResponse<PlaceSummary>> {
+  return apiRequest<ListResponse<PlaceSummary>>("/api/places");
+}
+
+export function getPlaceDetail(placeId: string): Promise<PlaceDetail> {
+  return apiRequest<PlaceDetail>(`/api/places/${placeId}`);
 }

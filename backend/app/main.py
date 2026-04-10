@@ -12,6 +12,7 @@ from app.api.faces import router as faces_router
 from app.api.health import router as health_router
 from app.api.people import router as people_router
 from app.api.photos import router as photos_router
+from app.api.places import router as places_router
 from app.core.config import settings
 
 
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
 	app.include_router(faces_router)
 	app.include_router(people_router)
 	app.include_router(photos_router)
+	app.include_router(places_router)
 	return app
 
 

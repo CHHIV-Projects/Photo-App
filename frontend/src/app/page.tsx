@@ -7,6 +7,7 @@ import { ClusterList } from "@/components/ClusterList";
 import { EventsView } from "@/components/EventsView";
 import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
+import PlacesView from "@/components/PlacesView";
 import { UnassignedFacesView } from "@/components/UnassignedFacesView";
 import styles from "@/components/review-screen.module.css";
 import {
@@ -20,6 +21,8 @@ import {
   getPeopleWithClusters,
   getPhotoDetail,
   getPhotos,
+  getPlaceDetail,
+  getPlaces,
   getUnassignedFaces,
   ignoreCluster,
   mergeClusters,
@@ -35,10 +38,12 @@ import type {
   PersonSummary,
   PersonWithClusters,
   PhotoDetail,
-  PhotoSummary
+  PhotoSummary,
+  PlaceDetail,
+  PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people" | "unassigned" | "photos" | "events";
+type ViewMode = "review" | "people" | "unassigned" | "photos" | "events" | "places";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("review");
@@ -80,6 +85,13 @@ export default function HomePage() {
   const [isLoadingEventDetail, setIsLoadingEventDetail] = useState(false);
   const [eventsErrorMessage, setEventsErrorMessage] = useState<string | null>(null);
   const [eventDetailErrorMessage, setEventDetailErrorMessage] = useState<string | null>(null);
+  const [places, setPlaces] = useState<PlaceSummary[]>([]);
+  const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
+  const [placeDetail, setPlaceDetail] = useState<PlaceDetail | null>(null);
+  const [isLoadingPlaces, setIsLoadingPlaces] = useState(true);
+  const [isLoadingPlaceDetail, setIsLoadingPlaceDetail] = useState(false);
+  const [placesErrorMessage, setPlacesErrorMessage] = useState<string | null>(null);
+  const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void loadClusters();
@@ -88,6 +100,7 @@ export default function HomePage() {
     void loadUnassignedFaces();
     void loadPhotos();
     void loadEvents();
+    void loadPlaces();
   }, []);
 
   useEffect(() => {
@@ -257,6 +270,45 @@ export default function HomePage() {
   }
 
   function handleOpenPhotoFromEvents(sha256: string) {
+    setViewMode("photos");
+    handleSelectPhoto(sha256);
+  }
+
+  async function loadPlaces() {
+    setIsLoadingPlaces(true);
+    setPlacesErrorMessage(null);
+
+    try {
+      const response = await getPlaces();
+      setPlaces(response.items);
+    } catch (error) {
+      setPlacesErrorMessage(getErrorMessage(error, "Failed to load places."));
+    } finally {
+      setIsLoadingPlaces(false);
+    }
+  }
+
+  async function loadPlaceDetail(placeId: string) {
+    setIsLoadingPlaceDetail(true);
+    setPlaceDetailErrorMessage(null);
+
+    try {
+      const response = await getPlaceDetail(placeId);
+      setPlaceDetail(response);
+    } catch (error) {
+      setPlaceDetailErrorMessage(getErrorMessage(error, "Failed to load place detail."));
+      setPlaceDetail(null);
+    } finally {
+      setIsLoadingPlaceDetail(false);
+    }
+  }
+
+  function handleSelectPlace(placeId: string) {
+    setSelectedPlaceId(placeId);
+    void loadPlaceDetail(placeId);
+  }
+
+  function handleOpenPhotoFromPlaces(sha256: string) {
     setViewMode("photos");
     handleSelectPhoto(sha256);
   }
@@ -454,7 +506,7 @@ export default function HomePage() {
     <main className={styles.page}>
       <div className={styles.shell}>
         <header className={styles.header}>
-          <p className={styles.kicker}>Milestone 10.10</p>
+          <p className={styles.kicker}>Milestone 10.12</p>
           <h1 className={styles.title}>Face Cluster Review</h1>
           <p className={styles.subtitle}>
             Review, correct, and merge clusters while keeping people assignments in sync.
@@ -495,6 +547,13 @@ export default function HomePage() {
               onClick={() => setViewMode("events")}
             >
               Events
+            </button>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "places" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("places")}
+            >
+              Places
             </button>
           </div>
         </header>
@@ -560,6 +619,10 @@ export default function HomePage() {
             isLoadingDetail={isLoadingPhotoDetail}
             photoDetailErrorMessage={photoDetailErrorMessage}
             onSelectPhoto={handleSelectPhoto}
+          />
+        ) : viewMode === "places" ? (
+          <PlacesView
+            onOpenPhoto={handleOpenPhotoFromPlaces}
           />
         ) : (
           <EventsView

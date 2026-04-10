@@ -94,3 +94,17 @@ export interface EventDetail {
   end_time: string;
   photos: PhotoSummary[];
 }
+
+export interface PlaceSummary {
+  place_id: string;
+  latitude: number;
+  longitude: number;
+  photo_count: number;
+}
+
+export interface PlaceDetail {
+  place_id: string;
+  latitude: number;
+  longitude: number;
+  photos: PhotoSummary[];
+}
