@@ -79,3 +79,18 @@ export interface PhotoDetail {
   image_url: string;
   faces: FaceInPhoto[];
 }
+
+export interface EventSummary {
+  event_id: number;
+  start_time: string;
+  end_time: string;
+  photo_count: number;
+  face_count: number;
+}
+
+export interface EventDetail {
+  event_id: number;
+  start_time: string;
+  end_time: string;
+  photos: PhotoSummary[];
+}

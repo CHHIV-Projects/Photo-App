@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
+import { EventsView } from "@/components/EventsView";
 import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
 import { UnassignedFacesView } from "@/components/UnassignedFacesView";
@@ -13,6 +14,8 @@ import {
   createPerson,
   getCluster,
   getClusters,
+  getEventDetail,
+  getEvents,
   getPeople,
   getPeopleWithClusters,
   getPhotoDetail,
@@ -26,6 +29,8 @@ import {
 import type {
   ClusterDetail as ClusterDetailType,
   ClusterSummary,
+  EventDetail,
+  EventSummary,
   FaceSummary,
   PersonSummary,
   PersonWithClusters,
@@ -33,7 +38,7 @@ import type {
   PhotoSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people" | "unassigned" | "photos";
+type ViewMode = "review" | "people" | "unassigned" | "photos" | "events";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("review");
@@ -68,6 +73,13 @@ export default function HomePage() {
   const [isLoadingPhotoDetail, setIsLoadingPhotoDetail] = useState(false);
   const [photosErrorMessage, setPhotosErrorMessage] = useState<string | null>(null);
   const [photoDetailErrorMessage, setPhotoDetailErrorMessage] = useState<string | null>(null);
+  const [events, setEvents] = useState<EventSummary[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+  const [eventDetail, setEventDetail] = useState<EventDetail | null>(null);
+  const [isLoadingEvents, setIsLoadingEvents] = useState(true);
+  const [isLoadingEventDetail, setIsLoadingEventDetail] = useState(false);
+  const [eventsErrorMessage, setEventsErrorMessage] = useState<string | null>(null);
+  const [eventDetailErrorMessage, setEventDetailErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     void loadClusters();
@@ -75,6 +87,7 @@ export default function HomePage() {
     void loadPeopleWithClusters();
     void loadUnassignedFaces();
     void loadPhotos();
+    void loadEvents();
   }, []);
 
   useEffect(() => {
@@ -207,6 +220,45 @@ export default function HomePage() {
   function handleSelectPhoto(sha256: string) {
     setSelectedPhotoSha256(sha256);
     void loadPhotoDetail(sha256);
+  }
+
+  async function loadEvents() {
+    setIsLoadingEvents(true);
+    setEventsErrorMessage(null);
+
+    try {
+      const response = await getEvents();
+      setEvents(response.items);
+    } catch (error) {
+      setEventsErrorMessage(getErrorMessage(error, "Failed to load events."));
+    } finally {
+      setIsLoadingEvents(false);
+    }
+  }
+
+  async function loadEventDetail(eventId: number) {
+    setIsLoadingEventDetail(true);
+    setEventDetailErrorMessage(null);
+
+    try {
+      const response = await getEventDetail(eventId);
+      setEventDetail(response);
+    } catch (error) {
+      setEventDetailErrorMessage(getErrorMessage(error, "Failed to load event detail."));
+      setEventDetail(null);
+    } finally {
+      setIsLoadingEventDetail(false);
+    }
+  }
+
+  function handleSelectEvent(eventId: number) {
+    setSelectedEventId(eventId);
+    void loadEventDetail(eventId);
+  }
+
+  function handleOpenPhotoFromEvents(sha256: string) {
+    setViewMode("photos");
+    handleSelectPhoto(sha256);
   }
 
   async function handleAssign(personId: number) {
@@ -437,6 +489,13 @@ export default function HomePage() {
             >
               Photos
             </button>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "events" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("events")}
+            >
+              Events
+            </button>
           </div>
         </header>
 
@@ -491,7 +550,7 @@ export default function HomePage() {
             onMoveFace={handleMoveUnassignedFace}
             onValidationError={setUnassignedActionErrorMessage}
           />
-        ) : (
+        ) : viewMode === "photos" ? (
           <PhotosView
             photos={photos}
             isLoading={isLoadingPhotos}
@@ -501,6 +560,18 @@ export default function HomePage() {
             isLoadingDetail={isLoadingPhotoDetail}
             photoDetailErrorMessage={photoDetailErrorMessage}
             onSelectPhoto={handleSelectPhoto}
+          />
+        ) : (
+          <EventsView
+            events={events}
+            isLoading={isLoadingEvents}
+            errorMessage={eventsErrorMessage}
+            selectedEventId={selectedEventId}
+            eventDetail={eventDetail}
+            isLoadingDetail={isLoadingEventDetail}
+            eventDetailErrorMessage={eventDetailErrorMessage}
+            onSelectEvent={handleSelectEvent}
+            onOpenPhoto={handleOpenPhotoFromEvents}
           />
         )}
       </div>

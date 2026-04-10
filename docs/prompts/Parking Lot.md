@@ -519,3 +519,277 @@ Keep photo view:
 Avoid turning it into a complex editing surface too early.
 
 ---
+# Addendum — Scan-Aware Event Grouping & Provenance Utilization
+
+## Purpose
+
+Enhance event grouping and photo organization by leveraging **scan provenance metadata**, especially original folder/album structure, which is often more reliable than timestamps for scanned images.
+
+This applies specifically to:
+
+* scanned photos
+* digitized albums
+* legacy archives with weak or missing EXIF time data
+
+---
+
+# 🔵 Scan Event Challenges
+
+## Problem
+
+Scanned images often have unreliable or misleading timestamps:
+
+* scan/import time replaces original capture time
+* EXIF metadata may be missing or incorrect
+* multiple decades of photos may appear grouped into a single “event”
+
+This breaks time-based event clustering.
+
+---
+
+# 🟢 Provenance as a Primary Signal
+
+## 31. Use Source Folder as Event Anchor
+
+**Priority: High**
+
+### Insight
+
+Original folder structure often represents:
+
+* physical albums
+* labeled batches
+* meaningful human groupings
+
+Example:
+
+```text
+Scans/
+  1985 Birthday Party/
+  Hawaii Trip 1992/
+  Christmas 2001/
+```
+
+These are effectively **pre-labeled events**.
+
+---
+
+### Enhancement
+
+For scanned images:
+
+* treat source folder as a **strong event grouping signal**
+* optionally override time-based clustering
+
+### Behavior
+
+* all images from same source folder:
+  → default to same event
+* timestamps become secondary signal
+
+---
+
+## 32. Provenance-Based Event Creation
+
+**Priority: High**
+
+### Enhancement
+
+During ingestion or post-processing:
+
+* create events directly from folder groupings
+* assign all assets in folder to same event
+
+Optional:
+
+* derive event name from folder name
+
+---
+
+## 33. Hybrid Event Logic (Scans vs Digital)
+
+**Priority: High**
+
+### Enhancement
+
+Use different strategies depending on asset type:
+
+### For digital photos:
+
+* primary: timestamp clustering
+* secondary: location / people overlap
+
+### For scans:
+
+* primary: provenance (folder/batch)
+* secondary: optional approximate date
+* ignore strict time-gap rules
+
+---
+
+# 🟡 Advanced Provenance Enhancements
+
+## 34. Multi-Level Provenance Hierarchy
+
+**Priority: Medium**
+
+### Enhancement
+
+Use nested folder structure:
+
+```text
+Scans/
+  Family Albums/
+    1980s/
+      Vacation Italy/
+```
+
+To derive:
+
+* top-level grouping (collection)
+* mid-level grouping (era)
+* event-level grouping (album/event)
+
+---
+
+## 35. Combine Provenance with People Overlap
+
+**Priority: Medium**
+
+### Enhancement
+
+If two scan folders:
+
+* share many of the same people
+* and have similar time estimates
+
+→ suggest merging into a single event or trip
+
+---
+
+## 36. Provenance Confidence Weighting
+
+**Priority: Medium**
+
+### Enhancement
+
+Assign confidence to grouping signals:
+
+* folder grouping → high confidence
+* timestamp → low confidence (for scans)
+* people overlap → medium confidence
+
+Use weighting to influence future event logic.
+
+---
+
+# 🟠 User Interaction Enhancements
+
+## 37. Display Provenance in UI
+
+**Priority: Medium**
+
+### Enhancement
+
+Show source folder in:
+
+* photo detail
+* event view
+* metadata panel
+
+Example:
+
+```text
+Source: "Hawaii Trip 1992"
+```
+
+---
+
+## 38. Manual Event Override for Scans
+
+**Priority: Medium**
+
+### Enhancement
+
+Allow user to:
+
+* merge scan-based events
+* split incorrectly grouped folders
+* rename events
+
+---
+
+# 🔴 Data & System Enhancements
+
+## 39. Store Provenance Metadata Explicitly
+
+**Priority: Medium**
+
+### Enhancement
+
+Ensure database tracks:
+
+* original folder path
+* import batch id
+* scan source
+
+This enables:
+
+* reproducibility
+* smarter grouping later
+
+---
+
+## 40. Scan-Specific Event Pipeline
+
+**Priority: Low (future)**
+
+### Enhancement
+
+Separate pipeline for scans:
+
+* detect scan vs digital
+* apply different clustering logic
+* optionally skip time-based clustering entirely
+
+---
+
+# 🧠 Notes
+
+* Provenance is often **more accurate than timestamps for scans**
+* This is a **major advantage** in your dataset
+* Systems without provenance must rely on weaker heuristics
+
+---
+
+# ✔️ Strategic Value
+
+Leveraging provenance allows:
+
+* near-perfect event grouping for scanned archives
+* less manual correction
+* more human-aligned organization
+
+---
+
+# 🧭 Position in Roadmap
+
+These enhancements should be implemented after:
+
+1. Events / Timeline UI (10.11) ✅
+2. Places / Location View (10.12)
+3. Basic event refinement tools
+
+Then:
+
+👉 Introduce scan-aware event logic
+
+---
+
+# 🔑 Guiding Principle
+
+For scans:
+
+> Trust human-created structure (folders/albums) over inferred signals (timestamps)
+
+---

@@ -2,6 +2,8 @@ import type {
   CreatePersonResponse,
   ClusterDetail,
   ClusterSummary,
+  EventDetail,
+  EventSummary,
   FaceSummary,
   ListResponse,
   PersonSummary,
@@ -129,4 +131,12 @@ export function getPhotos(): Promise<ListResponse<PhotoSummary>> {
 
 export function getPhotoDetail(sha256: string): Promise<PhotoDetail> {
   return apiRequest<PhotoDetail>(`/api/photos/${sha256}`);
+}
+
+export function getEvents(): Promise<ListResponse<EventSummary>> {
+  return apiRequest<ListResponse<EventSummary>>("/api/events");
+}
+
+export function getEventDetail(eventId: number): Promise<EventDetail> {
+  return apiRequest<EventDetail>(`/api/events/${eventId}`);
 }

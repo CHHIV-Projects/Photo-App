@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.clusters import router as clusters_router
+from app.api.events import router as events_router
 from app.api.faces import router as faces_router
 from app.api.health import router as health_router
 from app.api.people import router as people_router
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
 	)
 	app.include_router(health_router)
 	app.include_router(clusters_router)
+	app.include_router(events_router)
 	app.include_router(faces_router)
 	app.include_router(people_router)
 	app.include_router(photos_router)

@@ -385,3 +385,17 @@ This will introduce geographic grouping using EXIF GPS data.
 **Suggested Commit**
 
 git commit -m "Milestone 10.11: Add events/timeline view with photo grouping and navigation"
+
+1. For 10.11, treat existing `assets.event_id` links as the source of truth only. Do not auto-run event clustering from the API.
+
+2. Exclude events with `photo_count = 0` at query level, even if stale rows exist.
+
+3. Render event dates/times in the browser’s local timezone for readability.
+
+4. For event photo click behavior, switch to Photos view and auto-load the selected photo detail only. Do not add extra scroll/select synchronization in the Photos list for this milestone unless it is already trivial.
+
+5. Hide scans (`asset.is_scan = true`) from the Events view.
+
+6. A per-photo `Image unavailable` placeholder is acceptable if an image fails to load, and it should still allow click-through to Photos when possible.
+
+Please proceed with that approach.
