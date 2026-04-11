@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import time
@@ -70,6 +71,20 @@ class StageOutcome:
     skip_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class RuntimeArgs:
+    """Normalized runtime options for interactive and CLI execution."""
+
+    dry_run: bool
+    from_path: Path | None
+    skip_exif_extraction: bool
+    skip_metadata_normalization: bool
+    skip_event_clustering: bool
+    skip_face_detection: bool
+    skip_face_clustering: bool
+    skip_crop_generation: bool
+
+
 def _resolve_runtime_path(path_setting: str) -> Path:
     return (BACKEND_ROOT / path_setting).resolve()
 
@@ -109,6 +124,144 @@ def _print_stage_failed(elapsed_seconds: float, error: str) -> None:
     print()
 
 
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run the AI Photo Organizer pipeline in the correct order.",
+    )
+    parser.add_argument(
+        "--from-path",
+        type=Path,
+        help="Optional source folder to stage into the Drop Zone before processing.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the stage plan without executing it.",
+    )
+    parser.add_argument(
+        "--skip-exif-extraction",
+        action="store_true",
+        help="Skip EXIF extraction stage.",
+    )
+    parser.add_argument(
+        "--skip-metadata-normalization",
+        action="store_true",
+        help="Skip metadata normalization stage.",
+    )
+    parser.add_argument(
+        "--skip-event-clustering",
+        action="store_true",
+        help="Skip event clustering stage.",
+    )
+    parser.add_argument(
+        "--run-face-detection-rebuild",
+        action="store_true",
+        help="Run global destructive face detection rebuild.",
+    )
+    parser.add_argument(
+        "--run-face-clustering-rebuild",
+        action="store_true",
+        help="Run global destructive face embedding + clustering rebuild.",
+    )
+    parser.add_argument(
+        "--run-crop-generation",
+        action="store_true",
+        help="Run review crop generation (default aligns to face rebuild stages).",
+    )
+    parser.add_argument(
+        "--confirm-rebuild",
+        type=str,
+        default="",
+        help="Required value REBUILD when running destructive face rebuild stages.",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Force interactive prompts even when CLI flags are provided.",
+    )
+    return parser
+
+
+def _has_non_interactive_flags(parsed: argparse.Namespace) -> bool:
+    return any(
+        [
+            parsed.from_path is not None,
+            parsed.dry_run,
+            parsed.skip_exif_extraction,
+            parsed.skip_metadata_normalization,
+            parsed.skip_event_clustering,
+            parsed.run_face_detection_rebuild,
+            parsed.run_face_clustering_rebuild,
+            parsed.run_crop_generation,
+            bool(parsed.confirm_rebuild),
+        ]
+    )
+
+
+def _prompt_yes_no_default_no(question: str) -> bool:
+    """Prompt user for yes/no with default no."""
+    while True:
+        response = input(f"{question} (y/n, default n): ").strip().lower()
+        if response == "":
+            return False
+        if response in ("y", "yes"):
+            return True
+        if response in ("n", "no"):
+            return False
+        print("  Please enter 'y' or 'n'.")
+
+
+def _maybe_confirm_rebuild_interactive(rebuild_requested: bool) -> str:
+    if not rebuild_requested:
+        return ""
+
+    print("WARNING: Global face rebuild can reset reviewed identity work.")
+    return input("Type REBUILD to confirm destructive face stages: ").strip()
+
+
+def _build_runtime_args(
+    *,
+    dry_run: bool,
+    from_path: Path | None,
+    skip_exif_extraction: bool,
+    skip_metadata_normalization: bool,
+    skip_event_clustering: bool,
+    run_face_detection_rebuild: bool,
+    run_face_clustering_rebuild: bool,
+    run_crop_generation_override: bool,
+) -> RuntimeArgs:
+    any_face_rebuild = run_face_detection_rebuild or run_face_clustering_rebuild
+    run_crop_generation = run_crop_generation_override or any_face_rebuild
+
+    return RuntimeArgs(
+        dry_run=dry_run,
+        from_path=from_path,
+        skip_exif_extraction=skip_exif_extraction,
+        skip_metadata_normalization=skip_metadata_normalization,
+        skip_event_clustering=skip_event_clustering,
+        skip_face_detection=not run_face_detection_rebuild,
+        skip_face_clustering=not run_face_clustering_rebuild,
+        skip_crop_generation=not run_crop_generation,
+    )
+
+
+def _validate_rebuild_confirmation(
+    *,
+    run_face_detection_rebuild: bool,
+    run_face_clustering_rebuild: bool,
+    confirmation_value: str,
+) -> None:
+    if not (run_face_detection_rebuild or run_face_clustering_rebuild):
+        return
+
+    if confirmation_value != "REBUILD":
+        raise ValueError(
+            "Destructive face rebuild requested. Provide REBUILD confirmation. "
+            "Interactive mode: type REBUILD when prompted. "
+            "CLI mode: pass --confirm-rebuild REBUILD."
+        )
+
+
 def _prompt_yes_no(question: str) -> bool:
     """Prompt user for yes/no input."""
     while True:
@@ -132,12 +285,12 @@ def _get_user_input() -> Any:
     dry_run = _prompt_yes_no("Run in dry-run mode (plan only, no changes)?")
     print()
 
-    # Prompt 2: Skip face detection?
-    skip_face_detection = _prompt_yes_no("Skip face detection?")
+    # Prompt 2: destructive face detection rebuild
+    run_face_detection_rebuild = _prompt_yes_no_default_no("Run global face detection rebuild?")
     print()
 
-    # Prompt 3: Skip face clustering?
-    skip_face_clustering = _prompt_yes_no("Skip face embedding + clustering?")
+    # Prompt 3: destructive face clustering rebuild
+    run_face_clustering_rebuild = _prompt_yes_no_default_no("Run global face clustering rebuild?")
     print()
 
     # Prompt 4: Source folder to ingest
@@ -149,21 +302,47 @@ def _get_user_input() -> Any:
             print(f"  Warning: Path does not exist: {from_path}")
     print()
 
-    # Create namespace-like object with all expected attributes
-    class Args:
-        pass
+    confirmation_value = _maybe_confirm_rebuild_interactive(
+        run_face_detection_rebuild or run_face_clustering_rebuild
+    )
+    _validate_rebuild_confirmation(
+        run_face_detection_rebuild=run_face_detection_rebuild,
+        run_face_clustering_rebuild=run_face_clustering_rebuild,
+        confirmation_value=confirmation_value,
+    )
 
-    args = Args()
-    args.dry_run = dry_run
-    args.from_path = from_path
-    args.skip_exif_extraction = False
-    args.skip_metadata_normalization = False
-    args.skip_event_clustering = False
-    args.skip_face_detection = skip_face_detection
-    args.skip_face_clustering = skip_face_clustering
-    args.skip_crop_generation = False
+    return _build_runtime_args(
+        dry_run=dry_run,
+        from_path=from_path,
+        skip_exif_extraction=False,
+        skip_metadata_normalization=False,
+        skip_event_clustering=False,
+        run_face_detection_rebuild=run_face_detection_rebuild,
+        run_face_clustering_rebuild=run_face_clustering_rebuild,
+        run_crop_generation_override=False,
+    )
 
-    return args
+
+def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
+    """Build runtime args from CLI flags."""
+    from_path = parsed.from_path.expanduser().resolve() if parsed.from_path else None
+
+    _validate_rebuild_confirmation(
+        run_face_detection_rebuild=parsed.run_face_detection_rebuild,
+        run_face_clustering_rebuild=parsed.run_face_clustering_rebuild,
+        confirmation_value=parsed.confirm_rebuild,
+    )
+
+    return _build_runtime_args(
+        dry_run=parsed.dry_run,
+        from_path=from_path,
+        skip_exif_extraction=parsed.skip_exif_extraction,
+        skip_metadata_normalization=parsed.skip_metadata_normalization,
+        skip_event_clustering=parsed.skip_event_clustering,
+        run_face_detection_rebuild=parsed.run_face_detection_rebuild,
+        run_face_clustering_rebuild=parsed.run_face_clustering_rebuild,
+        run_crop_generation_override=parsed.run_crop_generation,
+    )
 
 
 def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
@@ -454,21 +633,21 @@ def _build_stage_plan() -> list[StageDefinition]:
             label="face detection",
             runner=_face_detection_stage,
             skip_flag="skip_face_detection",
-            skip_reason="--skip-face-detection",
+            skip_reason="safe default (use face rebuild prompt/flag)",
         ),
         StageDefinition(
             key="face_clustering",
             label="face embedding + clustering",
             runner=_face_clustering_stage,
             skip_flag="skip_face_clustering",
-            skip_reason="--skip-face-clustering",
+            skip_reason="safe default (use face rebuild prompt/flag)",
         ),
         StageDefinition(
             key="crop_generation",
             label="review crop generation",
             runner=_crop_generation_stage,
             skip_flag="skip_crop_generation",
-            skip_reason="--skip-crop-generation",
+            skip_reason="aligned safe default (runs with face rebuild)",
         ),
     ]
 
@@ -562,7 +741,16 @@ def _print_summary(outcomes: list[StageOutcome], total_elapsed_seconds: float) -
 
 
 def main() -> int:
-    args = _get_user_input()
+    parser = _build_parser()
+    parsed = parser.parse_args()
+
+    use_interactive = parsed.interactive or (not _has_non_interactive_flags(parsed) and sys.stdin.isatty())
+
+    try:
+        args = _get_user_input() if use_interactive else _get_cli_input(parsed)
+    except ValueError as exc:
+        print(f"Configuration error: {exc}")
+        return 2
 
     from_path = args.from_path
     ctx = PipelineContext(

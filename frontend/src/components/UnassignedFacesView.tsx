@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import styles from "@/components/review-screen.module.css";
 import { resolveApiUrl } from "@/lib/api";
@@ -24,6 +24,17 @@ export function UnassignedFacesView({
   const [moveTargetByFaceId, setMoveTargetByFaceId] = useState<Record<number, string>>({});
   const [pendingMoveFaceId, setPendingMoveFaceId] = useState<number | null>(null);
   const [failedImageByFaceId, setFailedImageByFaceId] = useState<Record<number, boolean>>({});
+  const [faceSearch, setFaceSearch] = useState("");
+
+  const visibleFaces = useMemo(() => {
+    const q = faceSearch.trim().toLowerCase();
+    if (!q) return faces;
+    return faces.filter(
+      (f) =>
+        String(f.face_id).includes(q) ||
+        f.asset_sha256.slice(0, 12).toLowerCase().includes(q)
+    );
+  }, [faces, faceSearch]);
 
   const updateMoveTarget = (faceId: number, nextValue: string) => {
     setMoveTargetByFaceId((current) => ({
@@ -80,13 +91,26 @@ export function UnassignedFacesView({
         {errorMessage ? <div className={styles.errorMessage}>{errorMessage}</div> : null}
         {actionErrorMessage ? <div className={styles.errorMessage}>{actionErrorMessage}</div> : null}
 
+        {!isLoading && !errorMessage && faces.length > 0 ? (
+          <input
+            type="search"
+            className={styles.searchInput}
+            placeholder="Search by face ID or asset hash..."
+            value={faceSearch}
+            onChange={(e) => setFaceSearch(e.target.value)}
+          />
+        ) : null}
+
+        {!isLoading && !errorMessage && visibleFaces.length === 0 && faces.length > 0 ? (
+          <div className={styles.emptyState}>No faces match your search.</div>
+        ) : null}
         {!isLoading && !errorMessage && faces.length === 0 ? (
           <div className={styles.emptyState}>No unassigned faces found.</div>
         ) : null}
 
-        {!isLoading && !errorMessage && faces.length > 0 ? (
+        {!isLoading && !errorMessage && visibleFaces.length > 0 ? (
           <div className={styles.faceGrid}>
-            {faces.map((face) => (
+            {visibleFaces.map((face) => (
               <article key={face.face_id} className={styles.faceTile}>
                 {resolveApiUrl(face.thumbnail_url) && !failedImageByFaceId[face.face_id] ? (
                   <img

@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import type { ForwardedRef } from "react";
 import type { PlaceSummary, PlaceDetail, PhotoSummary } from "@/types/ui-api";
 import { getPlaces, getPlaceDetail, resolveApiUrl } from "@/lib/api";
@@ -19,8 +19,17 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
   const [placesErrorMessage, setPlacesErrorMessage] = useState("");
   const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState("");
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+  const [placeSearch, setPlaceSearch] = useState("");
   const placeListRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const photoListRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  const visiblePlaces = useMemo(() => {
+    const q = placeSearch.trim().toLowerCase();
+    if (!q) return places;
+    return places.filter((p) =>
+      formatCoordinates(p.latitude, p.longitude).includes(q)
+    );
+  }, [places, placeSearch]);
 
   // Load places list
   const loadPlaces = async () => {
@@ -102,8 +111,22 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
         {places.length === 0 && !isLoadingPlaces && (
           <div className={styles.noData}>No places found</div>
         )}
+        {places.length > 0 && (
+          <div className={styles.searchWrapper}>
+            <input
+              type="search"
+              className={styles.searchInput}
+              placeholder="Filter by coordinates..."
+              value={placeSearch}
+              onChange={(e) => setPlaceSearch(e.target.value)}
+            />
+          </div>
+        )}
+        {visiblePlaces.length === 0 && places.length > 0 && (
+          <div className={styles.noData}>No places match your filter.</div>
+        )}
         <div className={styles.list}>
-          {places.map((place) => (
+          {visiblePlaces.map((place) => (
             <div
               key={place.place_id}
               ref={(el) => {

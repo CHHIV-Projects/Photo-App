@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import styles from "@/components/review-screen.module.css";
 import type { PersonWithClusters } from "@/types/ui-api";
@@ -24,6 +24,13 @@ export function PeopleView({
 }: PeopleViewProps) {
   const [draftDisplayName, setDraftDisplayName] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const visiblePeople = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return people;
+    return people.filter((p) => p.display_name.toLowerCase().includes(q));
+  }, [people, searchQuery]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -70,13 +77,26 @@ export function PeopleView({
         {isLoadingPeople ? <div className={styles.message}>Loading people...</div> : null}
         {peopleErrorMessage ? <div className={styles.errorMessage}>{peopleErrorMessage}</div> : null}
 
+        {!isLoadingPeople && !peopleErrorMessage && people.length > 0 ? (
+          <input
+            type="search"
+            className={styles.searchInput}
+            placeholder="Search people..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        ) : null}
+
+        {!isLoadingPeople && !peopleErrorMessage && visiblePeople.length === 0 && people.length > 0 ? (
+          <div className={styles.emptyState}>No people match your search.</div>
+        ) : null}
         {!isLoadingPeople && !peopleErrorMessage && people.length === 0 ? (
           <div className={styles.emptyState}>No people found.</div>
         ) : null}
 
-        {!isLoadingPeople && !peopleErrorMessage && people.length > 0 ? (
+        {!isLoadingPeople && !peopleErrorMessage && visiblePeople.length > 0 ? (
           <div className={styles.peopleList}>
-            {people.map((person) => (
+            {visiblePeople.map((person) => (
               <article key={person.person_id} className={styles.peopleCard}>
                 <div className={styles.peopleHeader}>
                   <h3 className={styles.peopleName}>{person.display_name}</h3>

@@ -1025,3 +1025,228 @@ Future direction:
 * controlled, optional, and safe automation of drop zone cleanup
 
 ---
+# Addendum — Incremental Face Processing vs Global Rebuild
+
+## Purpose
+
+Define the current behavior and future improvements for **face detection and clustering during ingestion**, specifically addressing the distinction between:
+
+* safe (non-destructive) ingest
+* global (destructive) rebuild
+
+This ensures clarity in operator workflows and prevents accidental loss of reviewed identity data.
+
+---
+
+# 🔵 Current System Behavior
+
+## 48. Face Pipeline is Globally Destructive
+
+**Priority: Critical Understanding**
+
+### Current Implementation
+
+* Face detection:
+
+  * replaces or rebuilds face records globally
+* Face clustering:
+
+  * clears all cluster assignments
+  * deletes and recreates clusters
+* Person assignments:
+
+  * tied to clusters, and therefore lost when clusters are rebuilt
+
+### Implication
+
+Running face detection/clustering in the current pipeline:
+
+* **affects the entire dataset**
+* is **not limited to newly ingested images**
+* can reset previously reviewed identity work
+
+---
+
+# 🟢 Current Operator Modes
+
+## 49. Safe Ingest Mode (Default)
+
+**Priority: High**
+
+### Behavior
+
+* runs ingestion pipeline
+* processes metadata, events, etc.
+* **skips face detection and clustering**
+
+### Result
+
+* existing clusters and person assignments are preserved
+* new images:
+
+  * are ingested
+  * but **do not receive face detection or clustering**
+
+---
+
+## 50. Global Rebuild Mode (Destructive)
+
+**Priority: High**
+
+### Behavior
+
+* runs face detection and clustering across entire dataset
+
+### Result
+
+* new images:
+
+  * get face detection and clustering
+* existing images:
+
+  * are reprocessed
+  * cluster structure is rebuilt
+  * person assignments may be lost or reset
+
+---
+
+## 51. Tradeoff in Current Design
+
+| Mode           | Preserves Existing Work | Processes New Faces |
+| -------------- | ----------------------- | ------------------- |
+| Safe Ingest    | Yes                     | No                  |
+| Global Rebuild | No                      | Yes                 |
+
+This is a temporary limitation of the current architecture.
+
+---
+
+# 🟡 Desired Future Behavior
+
+## 52. Incremental Face Processing
+
+**Priority: High**
+
+### Goal
+
+Enable processing of **newly ingested images only**, without affecting existing reviewed data.
+
+### Desired Behavior
+
+* run face detection only on new assets
+* generate embeddings only for new faces
+* assign new faces into existing clusters
+* preserve:
+
+  * cluster IDs
+  * person assignments
+  * reviewed corrections
+
+---
+
+## 53. Non-Destructive Clustering Updates
+
+**Priority: High**
+
+### Goal
+
+Allow clustering to evolve without resetting prior work.
+
+### Possible Approaches
+
+* incremental clustering:
+
+  * assign new faces into existing clusters
+* cluster merge/split heuristics:
+
+  * applied selectively
+* preserve cluster IDs where possible
+
+---
+
+## 54. Separation of Concerns
+
+Future pipeline should distinguish:
+
+* ingest pipeline (safe, repeatable)
+* face processing pipeline (incremental)
+* full rebuild pipeline (explicit and rare)
+
+---
+
+# 🟠 Operator Workflow (Future Target)
+
+## Ideal Workflow
+
+1. import new batch
+2. run pipeline
+3. new images:
+
+   * automatically get faces detected
+   * get clustered into existing structure
+4. existing reviewed work remains intact
+
+---
+
+## Rebuild Workflow (Advanced)
+
+* explicit action
+* used for:
+
+  * model upgrades
+  * clustering improvements
+  * major corrections
+
+---
+
+# 🔴 Safety Considerations
+
+* accidental global rebuild can destroy review work
+* operator must clearly understand difference between modes
+* destructive actions must require confirmation
+
+---
+
+# 🧠 Guiding Principle
+
+> Normal ingestion should be safe and preserve user-reviewed identity data.
+
+> Destructive rebuilds should be explicit, rare, and clearly communicated.
+
+---
+
+# ✔️ Strategic Value
+
+Implementing incremental face processing will:
+
+* remove need for tradeoff between safety and completeness
+* enable continuous ingestion workflows
+* preserve user effort in identity labeling
+* improve system scalability and usability
+
+---
+
+# 🧭 Position in Roadmap
+
+This enhancement should be addressed after:
+
+* Milestone 11.2 (Search & Filtering)
+* additional usability improvements
+
+Then:
+
+👉 Introduce incremental face processing and non-destructive clustering
+
+---
+
+# 🔑 Summary
+
+Current state:
+
+* safe ingest OR full rebuild (mutually exclusive tradeoff)
+
+Future goal:
+
+* safe ingest WITH incremental face processing
+
+---

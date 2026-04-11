@@ -238,3 +238,24 @@
   font-size: 0.87rem;
   color: #c0392b;
 }
+
+/* ── Search input ───────────────────────────────────────────── */
+
+.searchWrapper {
+  padding: 8px 8px 4px;
+}
+
+.searchInput {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d8dfe6;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  background: #f8fafc;
+  box-sizing: border-box;
+}
+
+.searchInput::placeholder {
+  color: #9aaab8;
+}

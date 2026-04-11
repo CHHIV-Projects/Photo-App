@@ -1,7 +1,33 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import styles from "@/components/review-screen.module.css";
 import type { ClusterSummary } from "@/types/ui-api";
+
+type FilterMode = "all" | "unassigned" | "min1" | "min2" | "min5";
+
+const FILTER_OPTIONS: { mode: FilterMode; label: string }[] = [
+  { mode: "all", label: "All" },
+  { mode: "unassigned", label: "Unassigned" },
+  { mode: "min1", label: "1+" },
+  { mode: "min2", label: "2+" },
+  { mode: "min5", label: "5+" }
+];
+
+const MIN_FACE_COUNT: Record<FilterMode, number> = {
+  all: 0,
+  unassigned: 0,
+  min1: 1,
+  min2: 2,
+  min5: 5
+};
+
+function applyFilter(clusters: ClusterSummary[], mode: FilterMode): ClusterSummary[] {
+  return clusters.filter((cluster) => {
+    if (mode === "unassigned" && cluster.person_id !== null) return false;
+    if (cluster.face_count < MIN_FACE_COUNT[mode]) return false;
+    return true;
+  });
+}
 
 interface ClusterListProps {
   clusters: ClusterSummary[];
@@ -19,6 +45,9 @@ export function ClusterList({
   onSelectCluster
 }: ClusterListProps) {
   const clusterRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const [filterMode, setFilterMode] = useState<FilterMode>("all");
+
+  const visibleClusters = applyFilter(clusters, filterMode);
 
   useEffect(() => {
     if (selectedClusterId !== null) {
@@ -27,23 +56,53 @@ export function ClusterList({
     }
   }, [selectedClusterId]);
 
+  useEffect(() => {
+    if (selectedClusterId === null) return;
+    const stillVisible = visibleClusters.some(
+      (cluster) => cluster.cluster_id === selectedClusterId
+    );
+    if (!stillVisible && visibleClusters.length > 0) {
+      onSelectCluster(visibleClusters[0].cluster_id);
+    }
+  }, [selectedClusterId, visibleClusters, onSelectCluster]);
+
   return (
     <section className={styles.panel}>
       <header className={styles.panelHeader}>
         <div className={styles.panelTitleRow}>
           <h2 className={styles.panelTitle}>Clusters</h2>
-          <span className={styles.panelMeta}>{clusters.length} loaded</span>
+          <span className={styles.panelMeta}>{visibleClusters.length} visible</span>
         </div>
       </header>
+
       <div className={styles.panelBody}>
+        <div className={styles.filterBar}>
+          {FILTER_OPTIONS.map(({ mode, label }) => (
+            <button
+              key={mode}
+              type="button"
+              className={`${styles.filterButton} ${
+                filterMode === mode ? styles.filterButtonActive : ""
+              }`.trim()}
+              onClick={() => setFilterMode(mode)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         {isLoading ? <div className={styles.message}>Loading clusters...</div> : null}
         {errorMessage ? <div className={styles.errorMessage}>{errorMessage}</div> : null}
-        {!isLoading && !errorMessage && clusters.length === 0 ? (
-          <div className={styles.emptyState}>No clusters found.</div>
+
+        {!isLoading && !errorMessage && visibleClusters.length === 0 ? (
+          <div className={styles.emptyState}>
+            {clusters.length === 0 ? "No clusters found." : "No clusters match this filter."}
+          </div>
         ) : null}
-        {!isLoading && !errorMessage && clusters.length > 0 ? (
+
+        {!isLoading && !errorMessage && visibleClusters.length > 0 ? (
           <div className={styles.clusterList}>
-            {clusters.map((cluster) => {
+            {visibleClusters.map((cluster) => {
               const isSelected = cluster.cluster_id === selectedClusterId;
               return (
                 <button
@@ -56,7 +115,9 @@ export function ClusterList({
                       clusterRefs.current.delete(cluster.cluster_id);
                     }
                   }}
-                  className={`${styles.clusterButton} ${isSelected ? styles.clusterButtonActive : ""}`.trim()}
+                  className={`${styles.clusterButton} ${
+                    isSelected ? styles.clusterButtonActive : ""
+                  }`.trim()}
                   onClick={() => onSelectCluster(cluster.cluster_id)}
                 >
                   <h3 className={styles.clusterButtonTitle}>Cluster #{cluster.cluster_id}</h3>

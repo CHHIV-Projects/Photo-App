@@ -36,7 +36,7 @@ class Settings:
 	face_embedding_crop_margin_ratio: float = float(os.getenv("FACE_EMBEDDING_CROP_MARGIN_RATIO", "0.1"))
 	frontend_allowed_origins_csv: str = os.getenv(
 		"FRONTEND_ALLOWED_ORIGINS",
-		"http://localhost:3000,http://127.0.0.1:3000",
+		"http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
 	)
 
 	@property

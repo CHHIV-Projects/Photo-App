@@ -481,6 +481,55 @@
   }
 }
 
+/* ── Search and filter controls ──────────────────────────────── */
+
+.searchInput {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #b9c7d4;
+  background: #ffffff;
+  font: inherit;
+  font-size: 0.9rem;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+}
+
+.searchInput::placeholder {
+  color: #9aaab8;
+}
+
+.filterBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.filterButton {
+  padding: 5px 12px;
+  border: 1px solid #b9c7d4;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #35536e;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filterButton:hover {
+  background: #f4f6f8;
+  border-color: #8ea5bc;
+}
+
+.filterButtonActive {
+  border-color: #215d8f;
+  background: #eaf4fb;
+  color: #19496f;
+}
+
 .clusterNavControls {
   display: flex;
   gap: 10px;

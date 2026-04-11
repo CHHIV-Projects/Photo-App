@@ -40,6 +40,25 @@
 
 /* ── Event list ──────────────────────────────────────────────────── */
 
+.searchWrapper {
+  padding: 8px 8px 0;
+}
+
+.searchInput {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #d8dfe6;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  background: #f8fafc;
+  box-sizing: border-box;
+}
+
+.searchInput::placeholder {
+  color: #9aaab8;
+}
+
 .eventList {
   overflow-y: auto;
   max-height: calc(100vh - 240px);

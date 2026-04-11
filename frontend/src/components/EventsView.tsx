@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { resolveApiUrl } from "@/lib/api";
 import type { EventDetail, EventSummary, PhotoSummary } from "@/types/ui-api";
@@ -63,6 +63,13 @@ export function EventsView({
   onOpenPhoto,
 }: Props) {
   const eventRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const [eventSearch, setEventSearch] = useState("");
+
+  const visibleEvents = useMemo(() => {
+    const q = eventSearch.trim().toLowerCase();
+    if (!q) return events;
+    return events.filter((ev) => formatDate(ev.start_time).toLowerCase().includes(q));
+  }, [events, eventSearch]);
 
   // Auto-scroll selected event into view in the list.
   useEffect(() => {
@@ -79,15 +86,27 @@ export function EventsView({
           <span className={styles.panelCount}>{events.length}</span>
         </div>
 
+        <div className={styles.searchWrapper}>
+          <input
+            type="search"
+            className={styles.searchInput}
+            placeholder="Filter events by date..."
+            value={eventSearch}
+            onChange={(e) => setEventSearch(e.target.value)}
+          />
+        </div>
+
         <div className={styles.eventList}>
           {isLoading ? (
             <p className={styles.statusMessage}>Loading events…</p>
           ) : errorMessage ? (
             <p className={styles.errorMessage}>{errorMessage}</p>
+          ) : visibleEvents.length === 0 && events.length > 0 ? (
+            <p className={styles.statusMessage}>No events match your filter.</p>
           ) : events.length === 0 ? (
             <p className={styles.statusMessage}>No events found.</p>
           ) : (
-            events.map((ev) => (
+            visibleEvents.map((ev) => (
               <button
                 key={ev.event_id}
                 type="button"

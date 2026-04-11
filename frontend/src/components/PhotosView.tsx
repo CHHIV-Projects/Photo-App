@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { resolveApiUrl } from "@/lib/api";
 import type { FaceInPhoto, PhotoDetail, PhotoSummary } from "@/types/ui-api";
@@ -30,7 +30,26 @@ export function PhotosView({
   const [selectedFaceId, setSelectedFaceId] = useState<number | null>(null);
   const [naturalDims, setNaturalDims] = useState<{ w: number; h: number } | null>(null);
   const [imageLoadError, setImageLoadError] = useState(false);
+  const [photoSearch, setPhotoSearch] = useState("");
   const faceRowRefs = useRef<Map<number, HTMLLIElement>>(new Map());
+
+  const visiblePhotos = useMemo(() => {
+    const q = photoSearch.trim().toLowerCase();
+    if (!q) return photos;
+    return photos.filter((p) => p.filename.toLowerCase().includes(q));
+  }, [photos, photoSearch]);
+
+  // Selection stability: if the selected photo is filtered out, move to first visible.
+  useEffect(() => {
+    if (!selectedPhotoSha256) return;
+    const visible = photos.filter((p) =>
+      p.filename.toLowerCase().includes(photoSearch.trim().toLowerCase())
+    );
+    if (visible.some((p) => p.asset_sha256 === selectedPhotoSha256)) return;
+    if (visible.length > 0) {
+      onSelectPhoto(visible[0].asset_sha256);
+    }
+  }, [photoSearch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset face selection and image state when the selected photo changes.
   useEffect(() => {
@@ -65,15 +84,27 @@ export function PhotosView({
           <span className={styles.panelCount}>{photos.length}</span>
         </div>
 
+        <div className={styles.searchWrapper}>
+          <input
+            type="search"
+            className={styles.searchInput}
+            placeholder="Search photos..."
+            value={photoSearch}
+            onChange={(e) => setPhotoSearch(e.target.value)}
+          />
+        </div>
+
         <div className={styles.photoList}>
           {isLoading ? (
             <p className={styles.statusMessage}>Loading photos…</p>
           ) : errorMessage ? (
             <p className={styles.errorMessage}>{errorMessage}</p>
+          ) : visiblePhotos.length === 0 && photos.length > 0 ? (
+            <p className={styles.statusMessage}>No photos match your search.</p>
           ) : photos.length === 0 ? (
             <p className={styles.statusMessage}>No photos found.</p>
           ) : (
-            photos.map((photo) => (
+            visiblePhotos.map((photo) => (
               <button
                 key={photo.asset_sha256}
                 type="button"
