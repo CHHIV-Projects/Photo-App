@@ -156,3 +156,26 @@ def set_cluster_ignored(db: Session, cluster_id: int, ignored: bool) -> dict:
         "new_is_ignored": cluster.is_ignored,
         "changed": previous != cluster.is_ignored,
     }
+
+
+def create_cluster_from_face(db: Session, face_id: int) -> dict:
+    """Create a new cluster and move a face (usually unassigned) into it."""
+    face = db.get(Face, face_id)
+    if face is None:
+        raise ValueError(f"Face ID {face_id} does not exist.")
+
+    # Create new cluster without person_id yet
+    new_cluster = FaceCluster(person_id=None, is_ignored=False)
+    db.add(new_cluster)
+    db.flush()  # Get the ID
+
+    previous_cluster_id = face.cluster_id
+    face.cluster_id = new_cluster.id
+    db.commit()
+
+    return {
+        "face_id": face_id,
+        "new_cluster_id": new_cluster.id,
+        "previous_cluster_id": previous_cluster_id,
+        "message": f"Created cluster #{new_cluster.id} and moved face into it.",
+    }

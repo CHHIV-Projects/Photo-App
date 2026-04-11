@@ -13,6 +13,7 @@ import styles from "@/components/review-screen.module.css";
 import {
   assignPerson,
   createPerson,
+  createClusterFromFace,
   getCluster,
   getClusters,
   getEventDetail,
@@ -486,6 +487,28 @@ export default function HomePage() {
     }
   }
 
+  async function handleCreateClusterFromFace(faceId: number): Promise<boolean> {
+    setUnassignedActionErrorMessage(null);
+
+    try {
+      await createClusterFromFace(faceId);
+
+      const refreshTasks: Promise<unknown>[] = [
+        loadUnassignedFaces(),
+        loadClusters(),
+        loadPeopleWithClusters(),
+        loadPhotos(),
+      ];
+      await Promise.all(refreshTasks);
+
+      return true;
+    } catch (error) {
+      const detail = getErrorMessage(error, "Unknown error.");
+      setUnassignedActionErrorMessage(`Failed to create cluster: ${detail}`);
+      return false;
+    }
+  }
+
   async function handleCreatePerson(displayName: string): Promise<boolean> {
     setIsCreatingPerson(true);
     setCreatePersonErrorMessage(null);
@@ -603,10 +626,13 @@ export default function HomePage() {
         ) : viewMode === "unassigned" ? (
           <UnassignedFacesView
             faces={unassignedFaces}
+            clusters={clusters}
+            peopleWithClusters={peopleWithClusters}
             isLoading={isLoadingUnassignedFaces}
             errorMessage={unassignedFacesErrorMessage}
             actionErrorMessage={unassignedActionErrorMessage}
             onMoveFace={handleMoveUnassignedFace}
+            onCreateCluster={handleCreateClusterFromFace}
             onValidationError={setUnassignedActionErrorMessage}
           />
         ) : viewMode === "photos" ? (

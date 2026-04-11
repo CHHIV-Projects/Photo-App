@@ -1507,3 +1507,549 @@ Collections/Albums will provide:
 * **why / meaning / personal organization**
 
 ---
+# Addendum — Full Provenance Display and Source History
+
+## Purpose
+
+Introduce a future **provenance visibility layer** so the user can inspect where a photo came from, how it entered the system, and what original source structure is associated with it.
+
+This is especially valuable for:
+
+* scanned photos
+* imported archives
+* folder-based event grouping
+* trust/debugging of automated organization
+
+---
+
+# 🧠 Concept Overview
+
+Provenance is not just metadata — it is part of the meaning of the photo.
+
+Examples of useful provenance:
+
+* original source folder
+* full original relative path
+* import batch / source folder
+* scan/archive origin
+* whether the asset came from:
+
+  * scan source
+  * iPhone export
+  * camera folder
+  * shared album export
+  * manual import batch
+
+This information can help the user understand:
+
+* where a photo came from
+* why it was grouped the way it was
+* how scanned materials relate to physical albums or archive structure
+
+---
+
+# 🔵 Core Provenance Display Features
+
+## 61. Show Full Original Source Path in Photo Detail
+
+**Priority: High**
+
+### Enhancement
+
+In photo detail / photo review UI, display:
+
+* full original source path
+* or a clearly readable source path section
+
+Example:
+
+```text id="0mjm5z"
+Original Source Path:
+Scans/Family Albums/1992/Hawaii Trip/IMG_001.jpg
+```
+
+### Benefit
+
+* helps verify scan grouping
+* makes folder-based provenance visible to the user
+* improves trust and debugging
+
+---
+
+## 62. Show Immediate Provenance Folder Separately
+
+**Priority: Medium**
+
+### Enhancement
+
+Display the immediate source folder as a simpler label, for example:
+
+```text id="yrh6l5"
+Source Folder: Hawaii Trip
+```
+
+This is especially helpful when full paths are long.
+
+---
+
+## 63. Provenance Section in Photo Metadata Panel
+
+**Priority: High**
+
+### Enhancement
+
+Add a dedicated **Provenance** section in photo detail showing available fields such as:
+
+* original source path
+* source folder
+* import path
+* scan vs digital
+* import batch id (if available later)
+
+---
+
+# 🟢 Event and Grouping Transparency
+
+## 64. Explain Why a Scan Event Exists
+
+**Priority: Medium**
+
+### Enhancement
+
+In event detail or photo metadata, show when a scan-derived event came from provenance rather than timestamp logic.
+
+Example:
+
+```text id="w6dgqb"
+Event Grouping Basis: Source Folder
+Derived From: Hawaii Trip
+```
+
+### Benefit
+
+* helps explain system decisions
+* useful for scan-heavy archives
+
+---
+
+## 65. Show Provenance in Events View
+
+**Priority: Medium**
+
+### Enhancement
+
+When viewing scan-derived events, show folder/source label in the event detail panel.
+
+---
+
+# 🟡 Advanced Provenance Features
+
+## 66. Provenance Breadcrumb UI
+
+**Priority: Medium**
+
+### Enhancement
+
+Render path as breadcrumbs instead of plain text:
+
+```text id="drx9e0"
+Scans > Family Albums > 1992 > Hawaii Trip
+```
+
+This is more readable than long raw paths.
+
+---
+
+## 67. Copy Provenance Path
+
+**Priority: Low**
+
+### Enhancement
+
+Add a simple copy button so the user can copy the original source path.
+
+Useful for:
+
+* debugging
+* finding originals
+* referencing folder structure
+
+---
+
+## 68. Search / Filter by Provenance
+
+**Priority: Medium–High**
+
+### Enhancement
+
+Allow future search/filter features to use provenance fields:
+
+* folder names
+* path fragments
+* import source
+
+Example:
+
+* search for `Hawaii Trip`
+* search for `Family Albums`
+
+---
+
+# 🟠 Data & System Extensions
+
+## 69. Provenance History / Import History
+
+**Priority: Medium**
+
+### Enhancement
+
+Track not just original source path, but also:
+
+* when imported
+* which batch imported it
+* whether moved/reimported
+* possible duplicate origin
+
+This would provide a richer source-history model.
+
+---
+
+## 70. Display All Available Provenance Fields
+
+**Priority: Medium**
+
+### Enhancement
+
+Show multiple provenance-related fields when available, not just one.
+
+Examples:
+
+* original source path
+* normalized source path
+* import batch source
+* vault path reference
+* scan flag
+
+---
+
+# 🔴 Risks & Considerations
+
+* long paths can clutter UI
+* some paths may be inconsistent or messy
+* provenance should aid understanding, not overwhelm the user
+
+---
+
+# 🧠 Guiding Principle
+
+> Provenance should be visible enough to support trust, debugging, and archival understanding — but not so noisy that it overwhelms the main photo experience.
+
+---
+
+# ✔️ Strategic Value
+
+Full provenance display will:
+
+* improve confidence in scan-aware grouping
+* help explain why events/collections exist
+* support archive-oriented workflows
+* make imported folder structure visible and useful
+
+---
+
+# 🧭 Position in Roadmap
+
+This should be implemented after:
+
+* stable photo review
+* event and place context
+* search/filter improvements
+
+Then:
+
+👉 add provenance visibility to photo detail and event context
+
+---
+
+# 🔑 Summary
+
+Current system uses provenance internally.
+
+Future enhancement:
+
+* make provenance visible and explorable in the UI.
+
+---
+# Addendum — Full Provenance Display and Source History
+
+## Purpose
+
+Introduce a future **provenance visibility layer** so the user can inspect where a photo came from, how it entered the system, and what original source structure is associated with it.
+
+This is especially valuable for:
+
+* scanned photos
+* imported archives
+* folder-based event grouping
+* trust/debugging of automated organization
+
+---
+
+# 🧠 Concept Overview
+
+Provenance is not just metadata — it is part of the meaning of the photo.
+
+Examples of useful provenance:
+
+* original source folder
+* full original relative path
+* import batch / source folder
+* scan/archive origin
+* whether the asset came from:
+
+  * scan source
+  * iPhone export
+  * camera folder
+  * shared album export
+  * manual import batch
+
+This information can help the user understand:
+
+* where a photo came from
+* why it was grouped the way it was
+* how scanned materials relate to physical albums or archive structure
+
+---
+
+# 🔵 Core Provenance Display Features
+
+## 61. Show Full Original Source Path in Photo Detail
+
+**Priority: High**
+
+### Enhancement
+
+In photo detail / photo review UI, display:
+
+* full original source path
+* or a clearly readable source path section
+
+Example:
+
+```text id="0mjm5z"
+Original Source Path:
+Scans/Family Albums/1992/Hawaii Trip/IMG_001.jpg
+```
+
+### Benefit
+
+* helps verify scan grouping
+* makes folder-based provenance visible to the user
+* improves trust and debugging
+
+---
+
+## 62. Show Immediate Provenance Folder Separately
+
+**Priority: Medium**
+
+### Enhancement
+
+Display the immediate source folder as a simpler label, for example:
+
+```text id="yrh6l5"
+Source Folder: Hawaii Trip
+```
+
+This is especially helpful when full paths are long.
+
+---
+
+## 63. Provenance Section in Photo Metadata Panel
+
+**Priority: High**
+
+### Enhancement
+
+Add a dedicated **Provenance** section in photo detail showing available fields such as:
+
+* original source path
+* source folder
+* import path
+* scan vs digital
+* import batch id (if available later)
+
+---
+
+# 🟢 Event and Grouping Transparency
+
+## 64. Explain Why a Scan Event Exists
+
+**Priority: Medium**
+
+### Enhancement
+
+In event detail or photo metadata, show when a scan-derived event came from provenance rather than timestamp logic.
+
+Example:
+
+```text id="w6dgqb"
+Event Grouping Basis: Source Folder
+Derived From: Hawaii Trip
+```
+
+### Benefit
+
+* helps explain system decisions
+* useful for scan-heavy archives
+
+---
+
+## 65. Show Provenance in Events View
+
+**Priority: Medium**
+
+### Enhancement
+
+When viewing scan-derived events, show folder/source label in the event detail panel.
+
+---
+
+# 🟡 Advanced Provenance Features
+
+## 66. Provenance Breadcrumb UI
+
+**Priority: Medium**
+
+### Enhancement
+
+Render path as breadcrumbs instead of plain text:
+
+```text id="drx9e0"
+Scans > Family Albums > 1992 > Hawaii Trip
+```
+
+This is more readable than long raw paths.
+
+---
+
+## 67. Copy Provenance Path
+
+**Priority: Low**
+
+### Enhancement
+
+Add a simple copy button so the user can copy the original source path.
+
+Useful for:
+
+* debugging
+* finding originals
+* referencing folder structure
+
+---
+
+## 68. Search / Filter by Provenance
+
+**Priority: Medium–High**
+
+### Enhancement
+
+Allow future search/filter features to use provenance fields:
+
+* folder names
+* path fragments
+* import source
+
+Example:
+
+* search for `Hawaii Trip`
+* search for `Family Albums`
+
+---
+
+# 🟠 Data & System Extensions
+
+## 69. Provenance History / Import History
+
+**Priority: Medium**
+
+### Enhancement
+
+Track not just original source path, but also:
+
+* when imported
+* which batch imported it
+* whether moved/reimported
+* possible duplicate origin
+
+This would provide a richer source-history model.
+
+---
+
+## 70. Display All Available Provenance Fields
+
+**Priority: Medium**
+
+### Enhancement
+
+Show multiple provenance-related fields when available, not just one.
+
+Examples:
+
+* original source path
+* normalized source path
+* import batch source
+* vault path reference
+* scan flag
+
+---
+
+# 🔴 Risks & Considerations
+
+* long paths can clutter UI
+* some paths may be inconsistent or messy
+* provenance should aid understanding, not overwhelm the user
+
+---
+
+# 🧠 Guiding Principle
+
+> Provenance should be visible enough to support trust, debugging, and archival understanding — but not so noisy that it overwhelms the main photo experience.
+
+---
+
+# ✔️ Strategic Value
+
+Full provenance display will:
+
+* improve confidence in scan-aware grouping
+* help explain why events/collections exist
+* support archive-oriented workflows
+* make imported folder structure visible and useful
+
+---
+
+# 🧭 Position in Roadmap
+
+This should be implemented after:
+
+* stable photo review
+* event and place context
+* search/filter improvements
+
+Then:
+
+👉 add provenance visibility to photo detail and event context
+
+---
+
+# 🔑 Summary
+
+Current system uses provenance internally.
+
+Future enhancement:
+
+* make provenance visible and explorable in the UI.
+
+---

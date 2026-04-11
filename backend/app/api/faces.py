@@ -12,6 +12,7 @@ from app.services.identity.ui_api_service import (
     move_face_to_cluster,
     remove_face_from_cluster,
 )
+from app.services.vision.face_cluster_corrections import create_cluster_from_face
 
 router = APIRouter(prefix="/api/faces", tags=["faces"])
 
@@ -57,5 +58,19 @@ def post_move_face(
         else:
             status_code = 400
         raise HTTPException(status_code=status_code, detail=message) from exc
+
+    return SuccessResponse(success=True)
+
+
+@router.post("/{face_id}/create-cluster", response_model=SuccessResponse)
+def post_create_cluster_from_face(
+    face_id: int,
+    db: Session = Depends(get_db_session),
+) -> SuccessResponse:
+    """Create a new cluster and move the face into it."""
+    try:
+        create_cluster_from_face(db, face_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return SuccessResponse(success=True)

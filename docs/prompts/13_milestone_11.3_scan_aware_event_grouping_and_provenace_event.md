@@ -278,3 +278,17 @@ But 11.3 should focus only on scan-aware event grouping.
 **Suggested Commit**
 
 git commit -m "Milestone 11.3: Add scan-aware event grouping using provenance-based assignment"
+
+
+
+1. For scan event grouping, use the immediate parent folder of `original_source_path` as the default provenance grouping unit.
+
+2. Keep scans from different provenance folders separate even if timestamps are close.
+
+3. Yes, scan-derived events should appear in the existing Events view alongside digital events.
+
+4. Please enable the optional enhancement now: when a scan-derived event has a usable provenance folder name, set `Event.label` from that folder name in a simple/lightweight way.
+
+5. Yes, you can keep the current full-rebuild event assignment approach for 11.3, as long as the grouping logic remains deterministic and idempotent per run.
+
+Please proceed with that approach.

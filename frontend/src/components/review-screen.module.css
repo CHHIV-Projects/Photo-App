@@ -285,13 +285,22 @@
   gap: 12px;
 }
 
+.unassignedFaceGrid {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+}
+
 .faceTile {
   display: grid;
   gap: 10px;
+  align-content: start;
   padding: 14px;
   border-radius: 14px;
   border: 1px solid #dce3ea;
   background: #ffffff;
+}
+
+.unassignedFaceGrid .faceTile {
+  min-height: 340px;
 }
 
 .faceImage {
@@ -352,6 +361,54 @@
   gap: 8px;
 }
 
+.unassignedMoveSection {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.destinationSearchWrap {
+  position: relative;
+}
+
+.destinationResults {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  background: #ffffff;
+  border: 1px solid #b9c7d4;
+  border-radius: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 10;
+  box-shadow: 0 8px 24px rgba(24, 33, 43, 0.14);
+}
+
+.destinationOption {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: 0;
+  background: #ffffff;
+  color: #35536e;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.destinationOption:hover {
+  background: #eef5fb;
+}
+
+.unassignedActionButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: stretch;
+}
+
 .faceMoveInput {
   min-width: 0;
   width: 100%;
@@ -363,15 +420,18 @@
 }
 
 .faceMoveButton {
-  padding: 8px 12px;
+  padding: 8px 8px;
   border: 0;
   border-radius: 9px;
   background: #215d8f;
   color: #ffffff;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
+  min-height: 34px;
+  width: 100%;
 }
 
 .faceDangerButton:disabled,

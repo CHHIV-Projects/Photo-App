@@ -98,6 +98,12 @@ export function moveFace(faceId: number, targetClusterId: number): Promise<{ suc
   });
 }
 
+export function createClusterFromFace(faceId: number): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/faces/${faceId}/create-cluster`, {
+    method: "POST"
+  });
+}
+
 export function mergeClusters(
   sourceClusterId: number,
   targetClusterId: number
