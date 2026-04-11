@@ -1250,3 +1250,260 @@ Future goal:
 * safe ingest WITH incremental face processing
 
 ---
+# Addendum — Collections and Albums (User-Defined Grouping Layer)
+
+## Purpose
+
+Introduce a future **user-defined grouping layer** that allows flexible organization of photos beyond system-generated structures.
+
+This layer will enable:
+
+* personal organization
+* storytelling
+* curation
+* grouping based on any combination of available data
+
+It is especially important because many source systems (e.g., iPhone albums) do not preserve album structure on export.
+
+---
+
+# 🧠 Concept Overview
+
+## Collections vs Albums
+
+### Collections (Primary Layer)
+
+Collections are:
+
+* broad, durable groupings
+* often based on rules or themes
+* cross-cutting across people, time, and location
+
+Examples:
+
+* Dad’s Photos
+* Henderson Family
+* Childhood
+* All Scans
+* Photos to Review
+
+Collections can be:
+
+* rule-based (smart)
+* manually curated
+* or a hybrid
+
+---
+
+### Albums (Secondary Layer)
+
+Albums are:
+
+* more specific or curated groupings
+* often subsets of collections or standalone
+
+Examples:
+
+* Henderson Family → Christmases
+* Dad’s Photos → Fishing Trips
+* Childhood → School Pictures
+
+Albums are typically:
+
+* manually curated
+* presentation-focused
+* smaller and more intentional
+
+---
+
+# 🔵 Core Capabilities
+
+## 55. Smart Collections (Rule-Based)
+
+**Priority: High**
+
+### Behavior
+
+User defines rules such as:
+
+* person = Audrey
+* date range = 1985–1995
+* place = San Diego
+* is_scan = true
+* filename contains "IMG_"
+
+System dynamically includes matching photos.
+
+### Notes
+
+* built on top of search/filter system (Milestone 11.2)
+* updates automatically as new photos are ingested
+
+---
+
+## 56. Manual Collections
+
+**Priority: High**
+
+### Behavior
+
+User can:
+
+* create a collection
+* add/remove photos manually
+* override or supplement smart rules
+
+---
+
+## 57. Hybrid Collections
+
+**Priority: Medium**
+
+### Behavior
+
+* start with a rule-based collection
+* allow manual additions/removals
+
+Example:
+
+* “All Dad photos” + manually include exceptions
+
+---
+
+# 🟢 Albums
+
+## 58. Album Creation
+
+**Priority: Medium**
+
+### Behavior
+
+* create albums independently or within a collection
+* manually add/remove photos
+
+---
+
+## 59. Albums as Subsets of Collections
+
+**Priority: Medium**
+
+### Behavior
+
+* albums can live inside a collection
+* represent curated subsets
+
+Example:
+
+```text
+Henderson Family (Collection)
+  ├── Christmases (Album)
+  ├── Beach Trips (Album)
+```
+
+---
+
+## 60. Standalone Albums
+
+**Priority: Medium**
+
+### Behavior
+
+* albums can exist outside collections if needed
+* useful for ad-hoc grouping
+
+---
+
+# 🟡 Data Sources for Grouping
+
+Collections should be able to use:
+
+* people (person assignments)
+* clusters (indirectly)
+* events (time-based)
+* places (GPS grouping)
+* provenance (folder/source)
+* scan vs digital flag
+* filenames / metadata
+* manual selection
+
+This leverages all existing system intelligence.
+
+---
+
+# 🟠 UI Considerations (Future)
+
+## Collections View
+
+* list of collections
+* create/edit/delete
+* show photo count
+* optional preview
+
+## Collection Detail
+
+* photo grid
+* rule summary (for smart collections)
+* manual add/remove controls
+
+## Album View
+
+* nested under collections or standalone
+* simple grid + edit controls
+
+---
+
+# 🔴 Constraints & Risks
+
+* complexity of rule builder UI
+* performance for large datasets
+* syncing smart collections with new ingestion
+* avoiding duplication of system-generated structures
+
+---
+
+# 🧠 Guiding Principles
+
+1. **User control complements AI, not replaces it**
+2. **Collections should feel natural and flexible**
+3. **Do not depend on external album metadata (e.g., iPhone albums)**
+4. **Build on top of existing search/filter capabilities**
+
+---
+
+# ✔️ Strategic Value
+
+Adding Collections and Albums will:
+
+* enable personal organization beyond system defaults
+* allow storytelling and curation
+* replace missing album data from source systems
+* significantly improve user experience
+
+---
+
+# 🧭 Position in Roadmap
+
+Should be implemented after:
+
+* Milestone 11.2 (Search & Filtering) ✅
+* additional usability improvements
+* stable ingestion and identity workflows
+
+Then:
+
+👉 Introduce Collections (smart + manual)
+👉 Followed by Albums layer
+
+---
+
+# 🔑 Summary
+
+Current system provides:
+
+* who, what, when, where
+
+Collections/Albums will provide:
+
+* **why / meaning / personal organization**
+
+---

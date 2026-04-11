@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from collections import defaultdict
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -20,6 +21,7 @@ class EventCluster:
     start_at: datetime
     end_at: datetime
     asset_sha256_list: list[str]
+    label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,26 +93,72 @@ def _cluster_sorted_assets(assets: list[Asset], gap_seconds: int) -> list[EventC
     return clusters
 
 
+def _scan_group_name(original_source_path: str) -> str:
+    """Extract immediate parent folder from an asset source path."""
+    normalized = (original_source_path or "").strip().replace("\\", "/")
+    segments = [segment for segment in normalized.split("/") if segment]
+
+    if len(segments) >= 2:
+        return segments[-2]
+    if len(segments) == 1:
+        return segments[0]
+    return "Unknown Scan Group"
+
+
+def _effective_event_timestamp(asset: Asset) -> datetime:
+    """Choose a stable timestamp for event range computation."""
+    return asset.captured_at or asset.modified_timestamp_utc
+
+
+def _build_scan_clusters(scan_assets: list[Asset]) -> list[EventCluster]:
+    """Group scans by provenance parent folder and build event clusters."""
+    grouped_assets: dict[str, list[Asset]] = defaultdict(list)
+    for asset in scan_assets:
+        grouped_assets[_scan_group_name(asset.original_source_path)].append(asset)
+
+    clusters: list[EventCluster] = []
+    for group_name in sorted(grouped_assets.keys(), key=str.casefold):
+        assets_in_group = sorted(grouped_assets[group_name], key=lambda item: item.sha256)
+        timestamps = sorted(_effective_event_timestamp(item) for item in assets_in_group)
+        clusters.append(
+            EventCluster(
+                start_at=timestamps[0],
+                end_at=timestamps[-1],
+                asset_sha256_list=[item.sha256 for item in assets_in_group],
+                label=group_name,
+            )
+        )
+
+    return clusters
+
+
 def cluster_assets_into_events(db_session: Session, gap_seconds: int) -> EventClusteringResult:
-    """Load assets from DB and cluster non-scan assets by captured_at."""
+    """Load assets and build digital time clusters plus scan provenance clusters."""
     all_assets = list(db_session.scalars(select(Asset).order_by(Asset.captured_at, Asset.sha256)).all())
 
-    skipped_missing_captured_at = sum(1 for asset in all_assets if asset.captured_at is None)
-    skipped_scans = sum(1 for asset in all_assets if asset.is_scan)
+    skipped_missing_captured_at = sum(
+        1 for asset in all_assets if asset.captured_at is None and not asset.is_scan
+    )
 
-    candidate_assets = [
+    digital_assets = [
         asset
         for asset in all_assets
         if asset.captured_at is not None and not asset.is_scan
     ]
+    scan_assets = [asset for asset in all_assets if asset.is_scan]
 
-    clusters = _cluster_sorted_assets(candidate_assets, gap_seconds)
+    digital_clusters = _cluster_sorted_assets(digital_assets, gap_seconds)
+    scan_clusters = _build_scan_clusters(scan_assets)
+    combined_clusters = sorted(
+        [*digital_clusters, *scan_clusters],
+        key=lambda cluster: (cluster.start_at, cluster.end_at, cluster.asset_sha256_list[0]),
+    )
 
     return EventClusteringResult(
-        considered_assets=len(candidate_assets),
+        considered_assets=len(digital_assets) + len(scan_assets),
         skipped_missing_captured_at=skipped_missing_captured_at,
-        skipped_scans=skipped_scans,
-        clusters=clusters,
+        skipped_scans=0,
+        clusters=combined_clusters,
     )
 
 
@@ -134,7 +182,7 @@ def persist_event_clusters(
                 start_at=cluster.start_at,
                 end_at=cluster.end_at,
                 asset_count=len(cluster.asset_sha256_list),
-                label=None,
+                label=cluster.label,
             )
             db_session.add(event)
             db_session.flush()

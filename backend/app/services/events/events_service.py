@@ -12,14 +12,13 @@ from app.services.photos.photos_service import _build_asset_url
 
 
 def list_events(db: Session) -> list[dict]:
-    """Return events that have at least one non-scan photo, newest first.
+    """Return events that have at least one photo, newest first.
 
-    photo_count: number of non-scan assets linked to the event.
+    photo_count: number of assets linked to the event.
     face_count:  number of detected faces across those assets.
     """
     photo_count_subq = (
         select(Asset.event_id, func.count(Asset.sha256).label("photo_count"))
-        .where(Asset.is_scan.is_(False))
         .where(Asset.event_id.isnot(None))
         .group_by(Asset.event_id)
         .subquery()
@@ -28,7 +27,6 @@ def list_events(db: Session) -> list[dict]:
     face_count_subq = (
         select(Asset.event_id, func.count(Face.id).label("face_count"))
         .join(Face, Face.asset_sha256 == Asset.sha256)
-        .where(Asset.is_scan.is_(False))
         .where(Asset.event_id.isnot(None))
         .group_by(Asset.event_id)
         .subquery()
@@ -60,7 +58,7 @@ def list_events(db: Session) -> list[dict]:
 
 
 def get_event_detail(db: Session, event_id: int) -> dict | None:
-    """Return event detail with all non-scan photos, ordered chronologically."""
+    """Return event detail with all photos, ordered chronologically."""
     event = db.get(Event, event_id)
     if event is None:
         return None
@@ -80,7 +78,6 @@ def get_event_detail(db: Session, event_id: int) -> dict | None:
         )
         .outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
         .where(Asset.event_id == event_id)
-        .where(Asset.is_scan.is_(False))
         .order_by(Asset.captured_at.asc(), Asset.sha256.asc())
     ).all()
 
