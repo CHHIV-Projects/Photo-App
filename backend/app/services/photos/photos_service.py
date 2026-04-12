@@ -6,9 +6,11 @@ from sqlalchemy import func, nullslast, select
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
+from app.models.event import Event
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.person import Person
+from app.services.metadata.metadata_normalizer import get_effective_capture_classification
 
 
 def _build_asset_url(sha256: str, extension: str) -> str:
@@ -97,9 +99,58 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
         for row in face_rows
     ]
 
+    capture_type, capture_time_trust = get_effective_capture_classification(asset)
+
+    event_summary: dict | None = None
+    if asset.event_id is not None:
+        event = db.get(Event, asset.event_id)
+        if event is not None:
+            event_summary = {
+                "event_id": event.id,
+                "label": event.label,
+                "start_at": event.start_at.isoformat() if event.start_at else None,
+                "end_at": event.end_at.isoformat() if event.end_at else None,
+            }
+
+    location_summary: dict | None = None
+    if asset.gps_latitude is not None or asset.gps_longitude is not None:
+        location_summary = {
+            "latitude": asset.gps_latitude,
+            "longitude": asset.gps_longitude,
+        }
+
+    provenance_summary: dict | None = None
+    if asset.original_source_path:
+        provenance_summary = {
+            "original_source_path": asset.original_source_path,
+        }
+
     return {
         "asset_sha256": sha256,
         "filename": asset.original_filename,
         "image_url": _build_asset_url(asset.sha256, asset.extension),
+        "is_scan": capture_type == "scan",
+        "capture_type": capture_type,
+        "capture_time_trust": capture_time_trust,
+        "event": event_summary,
+        "location": location_summary,
+        "provenance": provenance_summary,
         "faces": faces,
     }
+
+
+def set_capture_classification_override(
+    db: Session,
+    asset_sha256: str,
+    capture_type: str,
+    capture_time_trust: str,
+) -> bool:
+    """Persist manual capture classification overrides for one asset."""
+    asset = db.get(Asset, asset_sha256)
+    if asset is None:
+        return False
+
+    asset.capture_type_override = capture_type
+    asset.capture_time_trust_override = capture_time_trust
+    db.commit()
+    return True

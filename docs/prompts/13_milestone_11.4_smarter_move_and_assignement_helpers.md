@@ -369,3 +369,16 @@ But 11.4 should focus only on making face correction workflows easier and more n
 **Suggested Commit**
 
 git commit -m "Milestone 11.4: Add smarter face move helpers and create-new-cluster workflow"
+
+Q1: Use an enhanced text input with matching clusters shown below (autocomplete-style). No modal or complex dropdown.
+
+Q2: Use clusters and peopleWithClusters passed as props from the parent. Do not fetch separately.
+
+Q3: Place "Create New Cluster" as a per-face button alongside the move controls.
+
+Q4: After creating a new cluster, stay in Unassigned Faces, refresh the lists, and optionally show a simple success message. Do not auto-navigate.
+
+Q5: Destination search should support both cluster ID and person name. Always display results with full context like:
+Cluster #11 — Audrey Henderson — 6 faces.
+
+Please proceed with that approach.

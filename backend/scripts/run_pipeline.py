@@ -488,14 +488,14 @@ def _metadata_normalization_stage(_: PipelineContext) -> dict[str, Any]:
     finally:
         db_session.close()
 
-    scans_detected = sum(1 for item in normalization_result.updated_records if item.is_scan)
-    missing_dates = sum(1 for item in normalization_result.updated_records if item.needs_date_estimation)
+    scans_detected = sum(1 for item in normalization_result.updated_records if item.capture_type == "scan")
+    low_trust_dates = sum(1 for item in normalization_result.updated_records if item.capture_time_trust == "low")
 
     return {
         "assets_processed": len(assets),
         "updated_records": len(persistence_result.updated_records),
         "scans_detected": scans_detected,
-        "missing_dates": missing_dates,
+        "low_trust_dates": low_trust_dates,
         "failed": len(normalization_result.failed_records) + len(persistence_result.failed_records),
     }
 

@@ -2053,3 +2053,256 @@ Future enhancement:
 * make provenance visible and explorable in the UI.
 
 ---
+# Addendum — Scaling Intelligence: Person Auto-Labeling, Time Layer, and Scan Date Estimation
+
+## Purpose
+
+Define future enhancements required for scaling the system to **5K–10K+ photos**, focusing on:
+
+* person auto-labeling and suggestions
+* time as a first-class layer
+* scan date estimation and temporal inference
+
+These features enable the system to move from manual-heavy workflows to intelligent, scalable organization.
+
+---
+
+# 🧠 Core Concept
+
+At scale, the system must evolve from:
+
+> “User organizes photos”
+
+to:
+
+> “System organizes photos, user corrects and curates”
+
+---
+
+# 🔵 Person Auto-Labeling and Identity Scaling
+
+## 71. Person Suggestion System
+
+**Priority: High**
+
+### Behavior
+
+When a new cluster is created:
+
+* compare its embeddings against clusters already assigned to known people
+* suggest likely matches:
+
+```text
+Likely: Audrey Henderson (92% confidence)
+```
+
+User can:
+
+* accept
+* reject
+* ignore
+
+---
+
+## 72. Confidence-Based Auto Assignment
+
+**Priority: Medium**
+
+### Behavior
+
+If confidence exceeds a threshold:
+
+* auto-assign person
+* optionally flag as “auto-assigned”
+
+### Safety
+
+* must be reversible
+* must not overwrite manual assignments
+
+---
+
+## 73. Preserve Manual Identity Work
+
+**Priority: Critical**
+
+### Requirement
+
+* manual cluster-to-person assignments must always override automation
+* no automatic process should silently erase or override confirmed identity work
+
+---
+
+# 🟢 Time as a First-Class Layer
+
+## 74. Explicit Time Layer
+
+**Priority: High**
+
+### Enhancement
+
+Elevate time from EXIF metadata into a visible and usable layer:
+
+* browse by year
+* browse by month
+* timeline navigation
+* filter by date range
+
+---
+
+## 75. Multiple Time Types per Photo
+
+**Priority: High**
+
+### Model
+
+Each photo may have:
+
+* `captured_at_exact` (EXIF)
+* `captured_at_estimated`
+* `captured_at_range`
+* `imported_at`
+* `date_source`:
+
+  * EXIF
+  * scan
+  * inferred
+  * user-entered
+
+---
+
+## 76. Timeline UI (Future)
+
+**Priority: Medium**
+
+### Enhancement
+
+* visual timeline browsing
+* group by decade/year
+* combine with people/events/places
+
+---
+
+# 🟡 Scan Date Estimation
+
+## 77. Provenance-Based Time Estimation
+
+**Priority: High**
+
+### Behavior
+
+Use:
+
+* folder names (e.g., “1992 Hawaii Trip”)
+* album structure
+* batch context
+
+to infer approximate date.
+
+---
+
+## 78. Visual Clue Extraction (Advanced)
+
+**Priority: Medium–Low**
+
+### Potential Signals
+
+* printed dates in image (OCR)
+* clothing, objects, vehicles
+* image quality / film characteristics
+* known people ages
+
+---
+
+## 79. Estimated Date Confidence
+
+**Priority: Medium**
+
+### Model
+
+Each inferred date should include:
+
+* estimated date or range
+* confidence level
+* source of inference
+
+---
+
+# 🟠 System Behavior at Scale
+
+## 80. Automatic vs Manual Responsibilities
+
+### Automatic
+
+* face clustering
+* event grouping
+* place grouping
+* time grouping
+* object/scene detection (future)
+
+### Semi-Automatic
+
+* person assignment suggestions
+* scan date estimation
+
+### Manual (User Authority)
+
+* identity corrections
+* collections/albums
+* special case adjustments
+
+---
+
+# 🔴 Risks & Constraints
+
+* incorrect auto-labeling of people
+* over-reliance on weak signals for scan dates
+* user trust degradation if automation is not transparent
+
+---
+
+# 🧠 Guiding Principles
+
+1. Automation should assist, not override
+2. Identity (people) must remain user-controlled
+3. Time should be flexible and multi-source
+4. Provenance is a strong signal for scans
+5. All automated decisions should be explainable where possible
+
+---
+
+# ✔️ Strategic Value
+
+These features will:
+
+* make large imports manageable
+* reduce manual workload dramatically
+* improve search and retrieval
+* enable future semantic and narrative capabilities
+
+---
+
+# 🧭 Position in Roadmap
+
+Implement after:
+
+* Milestone 11 core usability and detail improvements
+* stable ingestion and identity workflows
+
+Then:
+
+👉 add person suggestions
+👉 add time layer UI
+👉 introduce scan date estimation
+
+---
+
+# 🔑 Summary
+
+Scaling requires:
+
+* smarter identity handling
+* richer time understanding
+* better handling of imperfect scan metadata
+
+---

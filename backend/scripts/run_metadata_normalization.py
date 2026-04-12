@@ -27,13 +27,17 @@ def main() -> int:
     finally:
         db_session.close()
 
-    scans_detected = sum(1 for item in normalization_result.updated_records if item.is_scan)
-    missing_dates = sum(1 for item in normalization_result.updated_records if item.needs_date_estimation)
+    scans_detected = sum(1 for item in normalization_result.updated_records if item.capture_type == "scan")
+    digital_detected = sum(1 for item in normalization_result.updated_records if item.capture_type == "digital")
+    unknown_capture_type = sum(1 for item in normalization_result.updated_records if item.capture_type == "unknown")
+    low_trust_dates = sum(1 for item in normalization_result.updated_records if item.capture_time_trust == "low")
 
     output = {
         "total_processed": len(assets),
         "scans_detected": scans_detected,
-        "missing_dates": missing_dates,
+        "digital_detected": digital_detected,
+        "unknown_capture_type": unknown_capture_type,
+        "low_trust_dates": low_trust_dates,
         "updated_records": len(persistence_result.updated_records),
         "failed": len(normalization_result.failed_records) + len(persistence_result.failed_records),
         "normalization_failures": [item.reason for item in normalization_result.failed_records],

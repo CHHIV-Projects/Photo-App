@@ -75,6 +75,68 @@ export function PhotosView({
     setSelectedFaceId((prev) => (prev === faceId ? null : faceId));
   }
 
+  function formatEventSummary(event: PhotoDetail["event"]): string {
+    if (!event) {
+      return "No event assigned";
+    }
+
+    if (event.label) {
+      return `Event #${event.event_id} — ${event.label}`;
+    }
+
+    if (event.start_at || event.end_at) {
+      const start = event.start_at ? formatDateTime(event.start_at) : "Unknown start";
+      const end = event.end_at ? formatDateTime(event.end_at) : "Unknown end";
+      return `Event #${event.event_id} — ${start} to ${end}`;
+    }
+
+    return `Event #${event.event_id}`;
+  }
+
+  function formatDateTime(value: string): string {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleString();
+  }
+
+  function formatCoordinate(value: number | null | undefined): string {
+    if (value === null || value === undefined) {
+      return "—";
+    }
+    return value.toFixed(5);
+  }
+
+  function formatLocationSummary(location: PhotoDetail["location"]): string {
+    if (!location || (location.latitude === null && location.longitude === null)) {
+      return "No location data";
+    }
+
+    return `${formatCoordinate(location.latitude)}, ${formatCoordinate(location.longitude)}`;
+  }
+
+  function getProvenanceSummary(provenance: PhotoDetail["provenance"]): string {
+    if (!provenance?.original_source_path) {
+      return "No provenance available";
+    }
+
+    return provenance.original_source_path;
+  }
+
+  function getCaptureTypeLabel(captureType: PhotoDetail["capture_type"]): string {
+    if (captureType === "digital") return "Digital";
+    if (captureType === "scan") return "Scan";
+    return "Unknown";
+  }
+
+  function getCaptureTrustLabel(captureTimeTrust: PhotoDetail["capture_time_trust"]): string {
+    if (captureTimeTrust === "high") return "High Confidence";
+    if (captureTimeTrust === "low") return "Low Confidence";
+    return "Unknown";
+  }
+
   return (
     <div className={styles.layout}>
       {/* ── Photo list ────────────────────────────────────────────── */}
@@ -151,50 +213,103 @@ export function PhotosView({
           </div>
         ) : (
           <>
-            {/* Full image with face overlays */}
-            <div className={styles.panel}>
-              <div className={styles.imageWrapper}>
-                {imageLoadError ? (
-                  <div className={styles.imagePlaceholder}>Image unavailable</div>
-                ) : (
-                  <div className={styles.imageContainer}>
-                    <img
-                      src={resolveApiUrl(photoDetail.image_url) ?? ""}
-                      alt={photoDetail.filename}
-                      className={styles.fullImage}
-                      onLoad={(e) => {
-                        const img = e.currentTarget as HTMLImageElement;
-                        setNaturalDims({ w: img.naturalWidth, h: img.naturalHeight });
-                      }}
-                      onError={() => setImageLoadError(true)}
-                    />
-                    {naturalDims &&
-                      photoDetail.faces.map((face) => (
-                        <div
-                          key={face.face_id}
-                          role="button"
-                          tabIndex={0}
-                          aria-label={getFaceLabel(face)}
-                          className={
-                            `${styles.faceBox} ${selectedFaceId === face.face_id ? styles.faceBoxActive : ""}`.trim()
-                          }
-                          style={{
-                            left: `${(face.bbox.x / naturalDims.w) * 100}%`,
-                            top: `${(face.bbox.y / naturalDims.h) * 100}%`,
-                            width: `${(face.bbox.w / naturalDims.w) * 100}%`,
-                            height: `${(face.bbox.h / naturalDims.h) * 100}%`,
-                          }}
-                          onClick={() => toggleFace(face.face_id)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") toggleFace(face.face_id);
-                          }}
-                          title={getFaceLabel(face)}
-                        />
-                      ))}
-                  </div>
-                )}
+            <div className={styles.detailTopGrid}>
+              {/* Full image with face overlays */}
+              <div className={styles.panel}>
+                <div className={styles.imageWrapper}>
+                  {imageLoadError ? (
+                    <div className={styles.imagePlaceholder}>Image unavailable</div>
+                  ) : (
+                    <div className={styles.imageContainer}>
+                      <img
+                        src={resolveApiUrl(photoDetail.image_url) ?? ""}
+                        alt={photoDetail.filename}
+                        className={styles.fullImage}
+                        onLoad={(e) => {
+                          const img = e.currentTarget as HTMLImageElement;
+                          setNaturalDims({ w: img.naturalWidth, h: img.naturalHeight });
+                        }}
+                        onError={() => setImageLoadError(true)}
+                      />
+                      {naturalDims &&
+                        photoDetail.faces.map((face) => (
+                          <div
+                            key={face.face_id}
+                            role="button"
+                            tabIndex={0}
+                            aria-label={getFaceLabel(face)}
+                            className={
+                              `${styles.faceBox} ${selectedFaceId === face.face_id ? styles.faceBoxActive : ""}`.trim()
+                            }
+                            style={{
+                              left: `${(face.bbox.x / naturalDims.w) * 100}%`,
+                              top: `${(face.bbox.y / naturalDims.h) * 100}%`,
+                              width: `${(face.bbox.w / naturalDims.w) * 100}%`,
+                              height: `${(face.bbox.h / naturalDims.h) * 100}%`,
+                            }}
+                            onClick={() => toggleFace(face.face_id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") toggleFace(face.face_id);
+                            }}
+                            title={getFaceLabel(face)}
+                          />
+                        ))}
+                    </div>
+                  )}
+                </div>
+                <p className={styles.imageFilename}>{photoDetail.filename}</p>
               </div>
-              <p className={styles.imageFilename}>{photoDetail.filename}</p>
+
+              <div className={styles.panel}>
+                <div className={styles.panelHeader}>
+                  <h2 className={styles.panelTitle}>Photo Details</h2>
+                </div>
+                <div className={styles.metadataBody}>
+                  <section className={styles.metadataSection}>
+                    <h3 className={styles.metadataSectionTitle}>Photo</h3>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Filename</span>
+                      <span className={styles.metadataValue}>{photoDetail.filename}</span>
+                    </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Asset SHA</span>
+                      <span className={`${styles.metadataValue} ${styles.metadataWrap}`}>
+                        {photoDetail.asset_sha256}
+                      </span>
+                    </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Type</span>
+                      <span className={styles.metadataValue}>{getCaptureTypeLabel(photoDetail.capture_type)}</span>
+                    </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Capture Time</span>
+                      <span className={styles.metadataValue}>{getCaptureTrustLabel(photoDetail.capture_time_trust)}</span>
+                    </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Face Count</span>
+                      <span className={styles.metadataValue}>{photoDetail.faces.length}</span>
+                    </div>
+                  </section>
+
+                  <section className={styles.metadataSection}>
+                    <h3 className={styles.metadataSectionTitle}>Context</h3>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Event</span>
+                      <span className={styles.metadataValue}>{formatEventSummary(photoDetail.event)}</span>
+                    </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Location</span>
+                      <span className={styles.metadataValue}>{formatLocationSummary(photoDetail.location)}</span>
+                    </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Provenance</span>
+                      <span className={`${styles.metadataValue} ${styles.metadataWrap}`}>
+                        {getProvenanceSummary(photoDetail.provenance)}
+                      </span>
+                    </div>
+                  </section>
+                </div>
+              </div>
             </div>
 
             {/* Face list */}

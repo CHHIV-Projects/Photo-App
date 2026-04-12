@@ -120,6 +120,13 @@
   gap: 20px;
 }
 
+.detailTopGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 20px;
+  align-items: start;
+}
+
 /* ── Full image with overlays ───────────────────────────────────── */
 
 .imageWrapper {
@@ -150,6 +157,53 @@
   margin: 4px 16px 14px;
   font-size: 0.78rem;
   color: #526274;
+}
+
+.metadataBody {
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.metadataSection {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #dfe6ec;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.metadataSectionTitle {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #35536e;
+}
+
+.metadataRow {
+  display: grid;
+  gap: 3px;
+}
+
+.metadataLabel {
+  font-size: 0.74rem;
+  color: #6a7888;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.metadataValue {
+  font-size: 0.84rem;
+  color: #18212b;
+}
+
+.metadataWrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .faceBox {
@@ -258,4 +312,16 @@
 
 .searchInput::placeholder {
   color: #9aaab8;
+}
+
+@media (max-width: 1200px) {
+  .detailTopGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
 }

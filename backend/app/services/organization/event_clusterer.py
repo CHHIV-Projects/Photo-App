@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
 from app.models.event import Event
+from app.services.metadata.metadata_normalizer import get_effective_capture_classification
 
 
 @dataclass(frozen=True)
@@ -136,16 +137,25 @@ def cluster_assets_into_events(db_session: Session, gap_seconds: int) -> EventCl
     """Load assets and build digital time clusters plus scan provenance clusters."""
     all_assets = list(db_session.scalars(select(Asset).order_by(Asset.captured_at, Asset.sha256)).all())
 
-    skipped_missing_captured_at = sum(
-        1 for asset in all_assets if asset.captured_at is None and not asset.is_scan
-    )
+    digital_assets: list[Asset] = []
+    scan_assets: list[Asset] = []
+    skipped_missing_captured_at = 0
 
-    digital_assets = [
-        asset
-        for asset in all_assets
-        if asset.captured_at is not None and not asset.is_scan
-    ]
-    scan_assets = [asset for asset in all_assets if asset.is_scan]
+    for asset in all_assets:
+        capture_type, capture_time_trust = get_effective_capture_classification(asset)
+        if capture_type == "scan":
+            scan_assets.append(asset)
+            continue
+
+        # Unknown trust is intentionally treated as low trust in 11.6.
+        if capture_time_trust != "high":
+            continue
+
+        if asset.captured_at is None:
+            skipped_missing_captured_at += 1
+            continue
+
+        digital_assets.append(asset)
 
     digital_clusters = _cluster_sorted_assets(digital_assets, gap_seconds)
     scan_clusters = _build_scan_clusters(scan_assets)

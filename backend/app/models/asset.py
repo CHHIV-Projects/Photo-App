@@ -39,6 +39,10 @@ class Asset(Base):
 	software: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 	captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+	capture_type: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+	capture_time_trust: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+	capture_type_override: Mapped[str | None] = mapped_column(String(32), nullable=True)
+	capture_time_trust_override: Mapped[str | None] = mapped_column(String(32), nullable=True)
 	is_scan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 	needs_date_estimation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 	source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -73,10 +73,32 @@ export interface PhotoSummary {
   face_count: number;
 }
 
+export interface PhotoEventSummary {
+  event_id: number;
+  label: string | null;
+  start_at: string | null;
+  end_at: string | null;
+}
+
+export interface PhotoLocation {
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export interface PhotoProvenance {
+  original_source_path: string | null;
+}
+
 export interface PhotoDetail {
   asset_sha256: string;
   filename: string;
   image_url: string;
+  is_scan: boolean;
+  capture_type: "digital" | "scan" | "unknown";
+  capture_time_trust: "high" | "low" | "unknown";
+  event: PhotoEventSummary | null;
+  location: PhotoLocation | null;
+  provenance: PhotoProvenance | null;
   faces: FaceInPhoto[];
 }
 
