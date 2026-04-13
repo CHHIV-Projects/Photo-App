@@ -28,6 +28,7 @@ export function PhotosView({
   onSelectPhoto,
 }: Props) {
   const [selectedFaceId, setSelectedFaceId] = useState<number | null>(null);
+  const [showAllProvenance, setShowAllProvenance] = useState(false);
   const [naturalDims, setNaturalDims] = useState<{ w: number; h: number } | null>(null);
   const [imageLoadError, setImageLoadError] = useState(false);
   const [photoSearch, setPhotoSearch] = useState("");
@@ -54,6 +55,7 @@ export function PhotosView({
   // Reset face selection and image state when the selected photo changes.
   useEffect(() => {
     setSelectedFaceId(null);
+    setShowAllProvenance(false);
     setNaturalDims(null);
     setImageLoadError(false);
   }, [selectedPhotoSha256]);
@@ -117,14 +119,6 @@ export function PhotosView({
     return `${formatCoordinate(location.latitude)}, ${formatCoordinate(location.longitude)}`;
   }
 
-  function getProvenanceSummary(provenance: PhotoDetail["provenance"]): string {
-    if (!provenance?.original_source_path) {
-      return "No provenance available";
-    }
-
-    return provenance.original_source_path;
-  }
-
   function getCaptureTypeLabel(captureType: PhotoDetail["capture_type"]): string {
     if (captureType === "digital") return "Digital";
     if (captureType === "scan") return "Scan";
@@ -135,6 +129,18 @@ export function PhotosView({
     if (captureTimeTrust === "high") return "High Confidence";
     if (captureTimeTrust === "low") return "Low Confidence";
     return "Unknown";
+  }
+
+  function getQualityLabel(score: number | null): string {
+    if (score === null) return "Unknown";
+    if (score >= 80) return "High";
+    if (score >= 50) return "Medium";
+    return "Low";
+  }
+
+  function formatProvenanceDate(value: string | null): string {
+    if (!value) return "Unknown ingestion time";
+    return formatDateTime(value);
   }
 
   return (
@@ -289,6 +295,19 @@ export function PhotosView({
                       <span className={styles.metadataLabel}>Face Count</span>
                       <span className={styles.metadataValue}>{photoDetail.faces.length}</span>
                     </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Canonical</span>
+                      <span className={styles.metadataValue}>
+                        {photoDetail.is_canonical ? "Canonical asset" : "Duplicate of canonical"}
+                      </span>
+                    </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Quality</span>
+                      <span className={styles.metadataValue}>
+                        {getQualityLabel(photoDetail.quality_score)}
+                        {photoDetail.quality_score !== null ? ` (${photoDetail.quality_score.toFixed(2)})` : ""}
+                      </span>
+                    </div>
                   </section>
 
                   <section className={styles.metadataSection}>
@@ -302,11 +321,50 @@ export function PhotosView({
                       <span className={styles.metadataValue}>{formatLocationSummary(photoDetail.location)}</span>
                     </div>
                     <div className={styles.metadataRow}>
-                      <span className={styles.metadataLabel}>Provenance</span>
-                      <span className={`${styles.metadataValue} ${styles.metadataWrap}`}>
-                        {getProvenanceSummary(photoDetail.provenance)}
+                      <span className={styles.metadataLabel}>Duplicate Group</span>
+                      <span className={styles.metadataValue}>
+                        {photoDetail.duplicate_group_id
+                          ? `#${photoDetail.duplicate_group_id} (${photoDetail.duplicate_group_type ?? "near"})`
+                          : "None"}
                       </span>
                     </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Duplicates</span>
+                      <span className={styles.metadataValue}>{photoDetail.duplicate_count}</span>
+                    </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Canonical Asset SHA</span>
+                      <span className={`${styles.metadataValue} ${styles.metadataWrap}`}>
+                        {photoDetail.canonical_asset_sha256 ?? "Unknown"}
+                      </span>
+                    </div>
+                  </section>
+
+                  <section className={styles.metadataSection}>
+                    <h3 className={styles.metadataSectionTitle}>Provenance</h3>
+                    {photoDetail.provenance.length === 0 ? (
+                      <p className={styles.metadataValue}>No provenance available</p>
+                    ) : (
+                      <>
+                        <ul className={styles.provenanceList}>
+                          {(showAllProvenance ? photoDetail.provenance : photoDetail.provenance.slice(0, 3)).map((item, index) => (
+                            <li key={`${item.source_path}-${index}`} className={styles.provenanceItem}>
+                              <span className={`${styles.metadataValue} ${styles.metadataWrap}`}>{item.source_path}</span>
+                              <span className={styles.metadataSubtle}>{formatProvenanceDate(item.ingested_at)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        {photoDetail.provenance.length > 3 ? (
+                          <button
+                            type="button"
+                            className={styles.provenanceToggle}
+                            onClick={() => setShowAllProvenance((prev) => !prev)}
+                          >
+                            {showAllProvenance ? "Show fewer" : `Show all (${photoDetail.provenance.length})`}
+                          </button>
+                        ) : null}
+                      </>
+                    )}
                   </section>
                 </div>
               </div>

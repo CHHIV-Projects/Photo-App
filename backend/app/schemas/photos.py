@@ -35,13 +35,17 @@ class PhotoLocation(BaseModel):
 
 
 class PhotoProvenance(BaseModel):
-    original_source_path: str | None = None
+    source_path: str
+    ingested_at: str | None = None
+    source_hash: str | None = None
 
 
 class PhotoSummary(BaseModel):
     asset_sha256: str
     filename: str
     image_url: str
+    captured_at: str | None = None
+    capture_time_trust: Literal["high", "low", "unknown"] = "unknown"
     face_count: int
 
 
@@ -59,8 +63,32 @@ class PhotoDetail(BaseModel):
     capture_time_trust: Literal["high", "low", "unknown"]
     event: PhotoEventSummary | None = None
     location: PhotoLocation | None = None
-    provenance: PhotoProvenance | None = None
+    provenance: list[PhotoProvenance]
+    duplicate_group_id: int | None = None
+    duplicate_group_type: Literal["near"] | None = None
+    is_canonical: bool
+    quality_score: float | None = None
+    duplicate_count: int
+    canonical_asset_sha256: str | None = None
     faces: list[FaceInPhoto]
+
+
+class DuplicateGroupAssetSummary(BaseModel):
+    asset_sha256: str
+    filename: str
+    image_url: str
+    is_canonical: bool
+    quality_score: float | None = None
+    capture_type: Literal["digital", "scan", "unknown"]
+    capture_time_trust: Literal["high", "low", "unknown"]
+
+
+class DuplicateGroupDetail(BaseModel):
+    group_id: int
+    group_type: Literal["near"]
+    canonical_asset_sha256: str | None = None
+    duplicate_count: int
+    assets: list[DuplicateGroupAssetSummary]
 
 
 class CaptureClassificationOverrideRequest(BaseModel):

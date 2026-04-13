@@ -2,11 +2,42 @@
 
 from __future__ import annotations
 
+import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
+from app.services.vision.face_embedder import embedding_from_json, embedding_to_json
+
+
+def _refresh_cluster_centroid(db: Session, cluster_id: int | None) -> None:
+    """Recompute centroid from member face embeddings for one cluster."""
+    if cluster_id is None:
+        return
+
+    cluster = db.get(FaceCluster, cluster_id)
+    if cluster is None:
+        return
+
+    embedding_rows = db.execute(
+        select(Face.embedding_json)
+        .where(Face.cluster_id == cluster_id, Face.embedding_json.is_not(None))
+        .order_by(Face.id.asc())
+    ).all()
+
+    embeddings = []
+    for row in embedding_rows:
+        parsed = embedding_from_json(row.embedding_json)
+        if parsed is not None:
+            embeddings.append(parsed)
+
+    if not embeddings:
+        cluster.centroid_json = None
+        return
+
+    centroid = np.mean(np.stack(embeddings), axis=0).astype(np.float32)
+    cluster.centroid_json = embedding_to_json(centroid)
 
 
 def unassign_face_from_cluster(db: Session, face_id: int, cluster_id: int | None = None) -> dict:
@@ -39,6 +70,10 @@ def unassign_face_from_cluster(db: Session, face_id: int, cluster_id: int | None
         }
 
     face.cluster_id = None
+    previous_cluster = db.get(FaceCluster, previous_cluster_id)
+    if previous_cluster is not None:
+        previous_cluster.is_reviewed = True
+    _refresh_cluster_centroid(db, previous_cluster_id)
     db.commit()
     return {
         "face_id": face.id,
@@ -74,6 +109,13 @@ def move_face_to_cluster(db: Session, face_id: int, target_cluster_id: int) -> d
         }
 
     face.cluster_id = target_cluster_id
+    target_cluster.is_reviewed = True
+    if previous_cluster_id is not None:
+        previous_cluster = db.get(FaceCluster, previous_cluster_id)
+        if previous_cluster is not None:
+            previous_cluster.is_reviewed = True
+    _refresh_cluster_centroid(db, previous_cluster_id)
+    _refresh_cluster_centroid(db, target_cluster_id)
     db.commit()
     return {
         "face_id": face.id,
@@ -118,6 +160,7 @@ def merge_face_clusters(db: Session, source_cluster_id: int, target_cluster_id: 
 
     # Preserve caution state after merge.
     target.is_ignored = bool(target.is_ignored or source.is_ignored)
+    target.is_reviewed = True
 
     faces_moved = 0
     if source_face_ids:
@@ -128,6 +171,7 @@ def merge_face_clusters(db: Session, source_cluster_id: int, target_cluster_id: 
                 faces_moved += 1
 
     db.delete(source)
+    _refresh_cluster_centroid(db, target_cluster_id)
     db.commit()
 
     return {
@@ -148,6 +192,7 @@ def set_cluster_ignored(db: Session, cluster_id: int, ignored: bool) -> dict:
 
     previous = cluster.is_ignored
     cluster.is_ignored = ignored
+    cluster.is_reviewed = True
     db.commit()
 
     return {
@@ -165,12 +210,14 @@ def create_cluster_from_face(db: Session, face_id: int) -> dict:
         raise ValueError(f"Face ID {face_id} does not exist.")
 
     # Create new cluster without person_id yet
-    new_cluster = FaceCluster(person_id=None, is_ignored=False)
+    new_cluster = FaceCluster(person_id=None, is_ignored=False, is_reviewed=True)
     db.add(new_cluster)
     db.flush()  # Get the ID
 
     previous_cluster_id = face.cluster_id
     face.cluster_id = new_cluster.id
+    _refresh_cluster_centroid(db, previous_cluster_id)
+    _refresh_cluster_centroid(db, new_cluster.id)
     db.commit()
 
     return {

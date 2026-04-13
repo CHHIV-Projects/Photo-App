@@ -8,6 +8,7 @@ import { EventsView } from "@/components/EventsView";
 import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
 import PlacesView from "@/components/PlacesView";
+import { TimelineView } from "@/components/TimelineView";
 import { UnassignedFacesView } from "@/components/UnassignedFacesView";
 import styles from "@/components/review-screen.module.css";
 import {
@@ -44,7 +45,7 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people" | "unassigned" | "photos" | "events" | "places";
+type ViewMode = "review" | "people" | "unassigned" | "photos" | "timeline" | "events" | "places";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("review");
@@ -566,6 +567,13 @@ export default function HomePage() {
             </button>
             <button
               type="button"
+              className={`${styles.viewButton} ${viewMode === "timeline" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("timeline")}
+            >
+              Timeline
+            </button>
+            <button
+              type="button"
               className={`${styles.viewButton} ${viewMode === "events" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("events")}
             >
@@ -646,6 +654,8 @@ export default function HomePage() {
             photoDetailErrorMessage={photoDetailErrorMessage}
             onSelectPhoto={handleSelectPhoto}
           />
+        ) : viewMode === "timeline" ? (
+          <TimelineView />
         ) : viewMode === "places" ? (
           <PlacesView
             onOpenPhoto={handleOpenPhotoFromPlaces}

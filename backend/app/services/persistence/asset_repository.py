@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
+from app.services.duplicates.lineage import upsert_provenance
+from app.services.ingestion.deduplicator import DuplicateFile
 from app.services.ingestion.storage_manager import CopiedFile
 
 
@@ -45,6 +47,15 @@ class PersistenceResult:
     failed_inserts: list[FailedAssetInsert]
 
 
+@dataclass(frozen=True)
+class DuplicateProvenanceResult:
+    """Outcome of applying provenance for duplicate files detected in batch dedup."""
+
+    added: int
+    already_present: int
+    failed: int
+
+
 def _build_asset(copied_file: CopiedFile) -> Asset:
     """Convert one copied file result into an Asset ORM instance."""
     record = copied_file.hashed_file.record
@@ -68,18 +79,29 @@ def persist_copied_files(db_session: Session, copied_files: list[CopiedFile]) ->
     failed_inserts: list[FailedAssetInsert] = []
 
     for copied_file in copied_files:
+        source_path = copied_file.hashed_file.record.original_source_path
         existing_asset = db_session.get(Asset, copied_file.hashed_file.sha256)
         if existing_asset is not None:
-            skipped_existing_records.append(
-                SkippedExistingAsset(
-                    copied_file=copied_file,
-                    reason="Asset with this SHA-256 already exists.",
+            try:
+                provenance_added = upsert_provenance(db_session, existing_asset.sha256, source_path)
+                db_session.commit()
+                reason = "Asset already exists; provenance recorded." if provenance_added else "Asset already exists; provenance already present."
+                skipped_existing_records.append(
+                    SkippedExistingAsset(
+                        copied_file=copied_file,
+                        reason=reason,
+                    )
                 )
-            )
+            except SQLAlchemyError as error:
+                db_session.rollback()
+                failed_inserts.append(FailedAssetInsert(copied_file=copied_file, reason=str(error)))
             continue
 
         try:
-            db_session.add(_build_asset(copied_file))
+            asset = _build_asset(copied_file)
+            db_session.add(asset)
+            db_session.flush()
+            upsert_provenance(db_session, asset.sha256, source_path)
             db_session.commit()
             inserted_records.append(InsertedAsset(copied_file=copied_file))
         except IntegrityError:
@@ -147,3 +169,28 @@ def persist_copied_files_as_dicts(
             for item in result.failed_inserts
         ],
     }
+
+
+def persist_duplicate_provenance(
+    db_session: Session,
+    duplicate_files: list[DuplicateFile],
+) -> DuplicateProvenanceResult:
+    """Persist provenance rows for duplicate files eliminated inside one ingest batch."""
+    added = 0
+    already_present = 0
+    failed = 0
+
+    for duplicate_file in duplicate_files:
+        source_path = duplicate_file.duplicate.record.original_source_path
+        try:
+            was_added = upsert_provenance(db_session, duplicate_file.duplicate.sha256, source_path)
+            db_session.commit()
+            if was_added:
+                added += 1
+            else:
+                already_present += 1
+        except SQLAlchemyError:
+            db_session.rollback()
+            failed += 1
+
+    return DuplicateProvenanceResult(added=added, already_present=already_present, failed=failed)

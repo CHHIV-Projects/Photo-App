@@ -1,0 +1,539 @@
+{
+  "config": {
+    "hamming_threshold": 10,
+    "resolution_band_ratio": 0.25,
+    "capture_window_enabled": true,
+    "capture_window_hours": 24,
+    "chunk_size_used": 100
+  },
+  "counts_current": {
+    "assets": 465,
+    "provenance_rows": 1269,
+    "duplicate_groups": 45,
+    "grouped_assets": 104,
+    "assets_without_provenance": 0,
+    "duplicate_provenance_key_rows": 0
+  },
+  "sample_groups": [
+    {
+      "group_id": 391,
+      "group_type": "near",
+      "canonical_asset": "08585b6a3c9ca1f981f30cd2b86575058b4f6d5aa6555df9e8a0732536d2faee",
+      "assets": [
+        {
+          "sha256": "08585b6a3c9ca1f981f30cd2b86575058b4f6d5aa6555df9e8a0732536d2faee",
+          "filename": "IMG_1744.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2655513,
+          "quality_score": 83.2985,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:09.661200+00:00"
+        },
+        {
+          "sha256": "866e7570c997172f51f172a897ab69f3a31325faaa8a8bf108d68299afc7a9dd",
+          "filename": "IMG_1743.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2615142,
+          "quality_score": 83.1723,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:09.653491+00:00"
+        },
+        {
+          "sha256": "942025031b880c70bedddc5426963a05883014891a943a2e1d1fd613a1295abb",
+          "filename": "IMG_1745.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2578497,
+          "quality_score": 83.0578,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:09.678144+00:00"
+        },
+        {
+          "sha256": "f31c8c980f41d151e0a55b74e3c349197608b234586c84303e06c0ffb151a522",
+          "filename": "IMG_1746.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2606206,
+          "quality_score": 83.1444,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:09.685648+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 392,
+      "group_type": "near",
+      "canonical_asset": "944c31d4760ec7a78f8b803031cc210af97bc30b89f26fb3326dacc803e133a4",
+      "assets": [
+        {
+          "sha256": "0941a4cd07cb568e32c2a3b857af59b69043c13a0b064246de065a23e3d293a0",
+          "filename": "IMG_1589.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 1724747,
+          "quality_score": 80.3898,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:08.592734+00:00"
+        },
+        {
+          "sha256": "944c31d4760ec7a78f8b803031cc210af97bc30b89f26fb3326dacc803e133a4",
+          "filename": "IMG_1588.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 1732370,
+          "quality_score": 80.4137,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:08.577041+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 393,
+      "group_type": "near",
+      "canonical_asset": "0a102e50711bba74e1e14ea90118120ba20b77f4330fbadccb2e037122f510b2",
+      "assets": [
+        {
+          "sha256": "0a102e50711bba74e1e14ea90118120ba20b77f4330fbadccb2e037122f510b2",
+          "filename": "IMG_1482.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 3355537,
+          "quality_score": 85.4861,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:07.706745+00:00"
+        },
+        {
+          "sha256": "99167b0882e5496ed78d41adc306376e7d90a75b918b0e50c00ea1ff6b6d689b",
+          "filename": "IMG_1481.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 3258072,
+          "quality_score": 85.1815,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:07.699284+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 394,
+      "group_type": "near",
+      "canonical_asset": "0bfac37f168c29a74bb5b8d6c7ade715392fd3523407a05d45c111744e29a9e9",
+      "assets": [
+        {
+          "sha256": "0bfac37f168c29a74bb5b8d6c7ade715392fd3523407a05d45c111744e29a9e9",
+          "filename": "IMG_1615.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2473853,
+          "quality_score": 82.7308,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:08.738831+00:00"
+        },
+        {
+          "sha256": "b50cb22bf6bf99989e2d18a85f9140bbd61ee91658c5f3870dc211b9a79093fa",
+          "filename": "IMG_1616.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2297178,
+          "quality_score": 82.1787,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:08.744455+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 395,
+      "group_type": "near",
+      "canonical_asset": "cc0fe145a0b28687ed16763740df6c19a5a6a36dc70181075cfb35af2af41612",
+      "assets": [
+        {
+          "sha256": "0d8fd8dd8a19e13d207cb10a3dd90cb991d9b9689c0d8d9a5e92daecb338ab56",
+          "filename": "IMG_4305.JPG",
+          "resolution": [
+            3888,
+            2592
+          ],
+          "file_size": 3034734,
+          "quality_score": 71.122,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:10.431481+00:00"
+        },
+        {
+          "sha256": "cc0fe145a0b28687ed16763740df6c19a5a6a36dc70181075cfb35af2af41612",
+          "filename": "san francisco 153.JPG",
+          "resolution": [
+            3888,
+            2592
+          ],
+          "file_size": 3038877,
+          "quality_score": 71.135,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:11.185482+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 396,
+      "group_type": "near",
+      "canonical_asset": "634b8257445e798ffea180b9a7610e4fc67dc6f25f72f30a63495329b35d530c",
+      "assets": [
+        {
+          "sha256": "11dbd26762b89709b05f0dc02c47cd8ab56f6cb89186d9985421962685f911b1",
+          "filename": "IMG_1716.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 4358198,
+          "quality_score": 88.6194,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:09.383330+00:00"
+        },
+        {
+          "sha256": "634b8257445e798ffea180b9a7610e4fc67dc6f25f72f30a63495329b35d530c",
+          "filename": "IMG_1719.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 4656242,
+          "quality_score": 89.5508,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:09.415477+00:00"
+        },
+        {
+          "sha256": "67a376eeb884413b8bd6de257dec4c545ce9a46a36acdf556c1eb4950eb86299",
+          "filename": "IMG_1720.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 4412741,
+          "quality_score": 88.7898,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:09.424411+00:00"
+        },
+        {
+          "sha256": "c09caaf84fe0e5ec3153fd6e36025b694184c5d38bbe01b4a058b258bce20845",
+          "filename": "IMG_1717.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 3855520,
+          "quality_score": 87.0485,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:09.393883+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 397,
+      "group_type": "near",
+      "canonical_asset": "17167501b97c7ddc8e62a044f23aa833701d1185a1f6fdda94604906ee89619f",
+      "assets": [
+        {
+          "sha256": "17167501b97c7ddc8e62a044f23aa833701d1185a1f6fdda94604906ee89619f",
+          "filename": "IMG_1736.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 3461033,
+          "quality_score": 85.8157,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:09.586098+00:00"
+        },
+        {
+          "sha256": "e3a1d2c2176450dffb311927a4d5fe2271a6958908b99d1c4ea17ddfd60f05a4",
+          "filename": "IMG_1737.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 3154057,
+          "quality_score": 84.8564,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:09.594432+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 398,
+      "group_type": "near",
+      "canonical_asset": "1a4fbd1b5ee8e78d0cdb23c67fbd428b47dff1065c21430190ace16a7b649bd5",
+      "assets": [
+        {
+          "sha256": "1a4fbd1b5ee8e78d0cdb23c67fbd428b47dff1065c21430190ace16a7b649bd5",
+          "filename": "san francisco 118.JPG",
+          "resolution": [
+            3888,
+            2592
+          ],
+          "file_size": 3512627,
+          "quality_score": 72.6154,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:11.165626+00:00"
+        },
+        {
+          "sha256": "b738d40887043713747ce68ffd6f621d92eede9b2e8222337f12f1f120824ab1",
+          "filename": "IMG_4270.JPG",
+          "resolution": [
+            3888,
+            2592
+          ],
+          "file_size": 3508819,
+          "quality_score": 72.6035,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:10.079839+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 399,
+      "group_type": "near",
+      "canonical_asset": "68b725436cffab139d43dd0570e4977ec0c67d51c190f1abba554cb8b14d9a9c",
+      "assets": [
+        {
+          "sha256": "212c5d2434f0ddd766c3588d2bbde27d83036b84f86819907cf4710896bc1a3f",
+          "filename": "IMG_1595.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2484367,
+          "quality_score": 82.7636,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:08.648798+00:00"
+        },
+        {
+          "sha256": "68b725436cffab139d43dd0570e4977ec0c67d51c190f1abba554cb8b14d9a9c",
+          "filename": "IMG_1594.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2489425,
+          "quality_score": 82.7795,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:08.637446+00:00"
+        },
+        {
+          "sha256": "d8598ea3ef93d61b0f6bd0966901c9b28c22956b193d94b405aaf97a3645fd71",
+          "filename": "IMG_1597.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2398583,
+          "quality_score": 82.4956,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:08.666094+00:00"
+        },
+        {
+          "sha256": "edbeaafb692ca1cda67908e4339ca299c54bbb72b2ea2f21e98f89c476267bbe",
+          "filename": "IMG_1596.JPG",
+          "resolution": [
+            4032,
+            3024
+          ],
+          "file_size": 2412063,
+          "quality_score": 82.5377,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:08.657171+00:00"
+        }
+      ]
+    },
+    {
+      "group_id": 400,
+      "group_type": "near",
+      "canonical_asset": "971817a9a5e5daccfd24ed6e297021e47828f6f0137c61be13d677ef3a51c991",
+      "assets": [
+        {
+          "sha256": "21a5714768989a30bead958b3e5f4f57aa01b13ac0b89f53c520343235bc9026",
+          "filename": "IMG_4284.JPG",
+          "resolution": [
+            3888,
+            2592
+          ],
+          "file_size": 2740376,
+          "quality_score": 70.2022,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:10.221090+00:00"
+        },
+        {
+          "sha256": "62b2a413c87acf5092140a3db54bb91266deb83a10cf56082c4c9adbe5149f88",
+          "filename": "san francisco 132.JPG",
+          "resolution": [
+            3888,
+            2592
+          ],
+          "file_size": 2745145,
+          "quality_score": 70.2171,
+          "is_canonical": false,
+          "created_at": "2026-04-10T21:52:11.177390+00:00"
+        },
+        {
+          "sha256": "971817a9a5e5daccfd24ed6e297021e47828f6f0137c61be13d677ef3a51c991",
+          "filename": "IMG_4285.JPG",
+          "resolution": [
+            3888,
+            2592
+          ],
+          "file_size": 3071360,
+          "quality_score": 71.2365,
+          "is_canonical": true,
+          "created_at": "2026-04-10T21:52:10.231354+00:00"
+        }
+      ]
+    }
+  ],
+  "canonical_edge_cases": [
+    {
+      "group_id": 432,
+      "winner_sha": "fbe5f61212ce9aa8a9f57fe4e983da85fc50d32aa67c70ee623e92c428f20701",
+      "winner_score": 80.2493,
+      "runner_up_sha": "ab493b7e2a2f7a8a945d4b1a6e15691ff3b184c0c8d5644972a67f79f648d5c3",
+      "runner_up_score": 80.2426,
+      "score_delta": 0.0067,
+      "winner_pixels": 10077696,
+      "runner_up_pixels": 10077696,
+      "winner_size": 5955451,
+      "runner_up_size": 5953308,
+      "winner_created": "2026-04-10T21:52:11.126516+00:00",
+      "runner_up_created": "2026-04-10T21:52:09.908072+00:00"
+    },
+    {
+      "group_id": 425,
+      "winner_sha": "d96954fa27884beabb21bbaa70be43d59886cc8334f1be66d57bb7e367d47a7c",
+      "winner_score": 73.2944,
+      "runner_up_sha": "8c65566519c4c8e18a9e493233f54f36e1f9f65f0050b1a69a35a5b42d07ce5a",
+      "runner_up_score": 73.2848,
+      "score_delta": 0.0096,
+      "winner_pixels": 10077696,
+      "runner_up_pixels": 10077696,
+      "winner_size": 3729893,
+      "runner_up_size": 3726823,
+      "winner_created": "2026-04-10T21:52:11.149355+00:00",
+      "runner_up_created": "2026-04-10T21:52:10.022293+00:00"
+    },
+    {
+      "group_id": 417,
+      "winner_sha": "701c3866fb997b704d5584554594e5869087597e5f649b9724c2ac6cf27993d3",
+      "winner_score": 86.4275,
+      "runner_up_sha": "829751edebf75c0dd47d69ec2268cd79a5cee9c8192f9dfa0ad98d6b365d4f51",
+      "runner_up_score": 86.4177,
+      "score_delta": 0.0098,
+      "winner_pixels": 12192768,
+      "runner_up_pixels": 12192768,
+      "winner_size": 3656786,
+      "runner_up_size": 3653655,
+      "winner_created": "2026-04-10T21:52:08.891202+00:00",
+      "runner_up_created": "2026-04-10T21:52:08.899714+00:00"
+    }
+  ],
+  "potential_false_positives": [
+    {
+      "group_id": 391,
+      "a": "08585b6a3c9ca1f981f30cd2b86575058b4f6d5aa6555df9e8a0732536d2faee",
+      "b": "f31c8c980f41d151e0a55b74e3c349197608b234586c84303e06c0ffb151a522",
+      "distance": 10,
+      "threshold": 10,
+      "orientation_match": true,
+      "resolution_band_pass": true,
+      "capture_window_pass": true
+    },
+    {
+      "group_id": 392,
+      "a": "0941a4cd07cb568e32c2a3b857af59b69043c13a0b064246de065a23e3d293a0",
+      "b": "944c31d4760ec7a78f8b803031cc210af97bc30b89f26fb3326dacc803e133a4",
+      "distance": 8,
+      "threshold": 10,
+      "orientation_match": true,
+      "resolution_band_pass": true,
+      "capture_window_pass": true
+    },
+    {
+      "group_id": 393,
+      "a": "0a102e50711bba74e1e14ea90118120ba20b77f4330fbadccb2e037122f510b2",
+      "b": "99167b0882e5496ed78d41adc306376e7d90a75b918b0e50c00ea1ff6b6d689b",
+      "distance": 10,
+      "threshold": 10,
+      "orientation_match": true,
+      "resolution_band_pass": true,
+      "capture_window_pass": true
+    },
+    {
+      "group_id": 394,
+      "a": "0bfac37f168c29a74bb5b8d6c7ade715392fd3523407a05d45c111744e29a9e9",
+      "b": "b50cb22bf6bf99989e2d18a85f9140bbd61ee91658c5f3870dc211b9a79093fa",
+      "distance": 2,
+      "threshold": 10,
+      "orientation_match": true,
+      "resolution_band_pass": true,
+      "capture_window_pass": true
+    },
+    {
+      "group_id": 395,
+      "a": "0d8fd8dd8a19e13d207cb10a3dd90cb991d9b9689c0d8d9a5e92daecb338ab56",
+      "b": "cc0fe145a0b28687ed16763740df6c19a5a6a36dc70181075cfb35af2af41612",
+      "distance": 0,
+      "threshold": 10,
+      "orientation_match": true,
+      "resolution_band_pass": true,
+      "capture_window_pass": true
+    }
+  ],
+  "potential_missed_matches": [],
+  "multi_provenance_examples": [
+    {
+      "sha256": "001bccfe770dd74c567bfdf0d5ab2c993d1eef6d7a39df607bbdcc18c53e6816",
+      "filename": "IMG_4313.JPG",
+      "provenance_count": 3
+    },
+    {
+      "sha256": "00465ff315bf351d2227fe48d9853585af1413088807db512a233110a4c4d240",
+      "filename": "IMG_1666.JPG",
+      "provenance_count": 3
+    },
+    {
+      "sha256": "00bf8b9ed8d78feed997af23cebf3aa79abc6493c095844e29d415b5e3dff75a",
+      "filename": "IMG_4329.JPG",
+      "provenance_count": 3
+    }
+  ],
+  "phash_determinism": {
+    "sha256": "001bccfe770dd74c567bfdf0d5ab2c993d1eef6d7a39df607bbdcc18c53e6816",
+    "stored": "b3d9a20dce844d5d",
+    "run1": "b3d9a20dce844d5d",
+    "run2": "b3d9a20dce844d5d",
+    "matches": true
+  },
+  "performance": {
+    "phash_benchmark_seconds": 56.922,
+    "phash_assets_attempted": 465,
+    "phash_assets_hashed": 465
+  }
+}

@@ -11,8 +11,20 @@ import type {
   PhotoDetail,
   PhotoSummary,
   PlaceDetail,
-  PlaceSummary
+  PlaceSummary,
+  TimelineSummaryResponse
 } from "@/types/ui-api";
+
+export interface PhotoQueryOptions {
+  decade?: number;
+  year?: number;
+  month?: string;
+  date?: string;
+  undated?: boolean;
+  trust?: Array<"high" | "low" | "unknown">;
+}
+
+export interface TimelineQueryOptions extends PhotoQueryOptions {}
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || "http://127.0.0.1:8001";
@@ -133,12 +145,34 @@ export function resolveApiUrl(path: string | null | undefined): string | null {
 
 export { API_BASE_URL };
 
-export function getPhotos(): Promise<ListResponse<PhotoSummary>> {
-  return apiRequest<ListResponse<PhotoSummary>>("/api/photos");
+function buildQueryString(options: PhotoQueryOptions = {}): string {
+  const params = new URLSearchParams();
+
+  if (options.decade !== undefined) params.set("decade", String(options.decade));
+  if (options.year !== undefined) params.set("year", String(options.year));
+  if (options.month) params.set("month", options.month);
+  if (options.date) params.set("date", options.date);
+  if (options.undated) params.set("undated", "true");
+  for (const trust of options.trust ?? []) {
+    params.append("trust", trust);
+  }
+
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export function getPhotos(options: PhotoQueryOptions = {}): Promise<ListResponse<PhotoSummary>> {
+  return apiRequest<ListResponse<PhotoSummary>>(`/api/photos${buildQueryString(options)}`);
 }
 
 export function getPhotoDetail(sha256: string): Promise<PhotoDetail> {
   return apiRequest<PhotoDetail>(`/api/photos/${sha256}`);
+}
+
+export function getTimelineSummary(
+  options: TimelineQueryOptions = {}
+): Promise<TimelineSummaryResponse> {
+  return apiRequest<TimelineSummaryResponse>(`/api/timeline${buildQueryString(options)}`);
 }
 
 export function getEvents(): Promise<ListResponse<EventSummary>> {

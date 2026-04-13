@@ -70,7 +70,30 @@ export interface PhotoSummary {
   asset_sha256: string;
   filename: string;
   image_url: string;
+  captured_at: string | null;
+  capture_time_trust: "high" | "low" | "unknown";
   face_count: number;
+}
+
+export interface TimelineBucketSummary {
+  period_key: string;
+  label: string;
+  level: "decade" | "year" | "month" | "date" | "undated";
+  total_assets: number;
+  high_trust_count: number;
+  low_trust_count: number;
+  unknown_trust_count: number;
+}
+
+export interface TimelineSummaryResponse {
+  level: "decade" | "year" | "month" | "date";
+  selected_decade: number | null;
+  selected_year: number | null;
+  selected_month: string | null;
+  selected_date: string | null;
+  trust_filter: Array<"high" | "low" | "unknown">;
+  items: TimelineBucketSummary[];
+  undated_bucket: TimelineBucketSummary | null;
 }
 
 export interface PhotoEventSummary {
@@ -86,7 +109,9 @@ export interface PhotoLocation {
 }
 
 export interface PhotoProvenance {
-  original_source_path: string | null;
+  source_path: string;
+  ingested_at: string | null;
+  source_hash: string | null;
 }
 
 export interface PhotoDetail {
@@ -98,7 +123,13 @@ export interface PhotoDetail {
   capture_time_trust: "high" | "low" | "unknown";
   event: PhotoEventSummary | null;
   location: PhotoLocation | null;
-  provenance: PhotoProvenance | null;
+  provenance: PhotoProvenance[];
+  duplicate_group_id: number | null;
+  duplicate_group_type: "near" | null;
+  is_canonical: boolean;
+  quality_score: number | null;
+  duplicate_count: number;
+  canonical_asset_sha256: string | null;
   faces: FaceInPhoto[];
 }
 

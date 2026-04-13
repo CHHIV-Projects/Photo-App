@@ -6,11 +6,18 @@ from sqlalchemy import func, nullslast, select
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
+from app.models.duplicate_group import DuplicateGroup
 from app.models.event import Event
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.person import Person
+from app.models.provenance import Provenance
 from app.services.metadata.metadata_normalizer import get_effective_capture_classification
+from app.services.timeline.timeline_service import (
+    TimelineFilter,
+    apply_asset_time_filters,
+    effective_capture_time_trust_expr,
+)
 
 
 def _build_asset_url(sha256: str, extension: str) -> str:
@@ -27,24 +34,32 @@ def _build_asset_url(sha256: str, extension: str) -> str:
     return f"/media/assets/{prefix}/{filename}"
 
 
-def list_photos(db: Session) -> list[dict]:
-    """Return all assets sorted by EXIF capture date (newest first)."""
+def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[dict]:
+    """Return asset summaries with optional time/trust filtering."""
     face_count_subq = (
         select(Face.asset_sha256, func.count(Face.id).label("face_count"))
         .group_by(Face.asset_sha256)
         .subquery()
     )
 
+    active_filters = filters or TimelineFilter()
+    trust_expr = effective_capture_time_trust_expr()
+
+    query = select(
+        Asset.sha256,
+        Asset.original_filename,
+        Asset.extension,
+        Asset.captured_at,
+        trust_expr.label("capture_time_trust"),
+        func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
+    ).outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
+
+    query = apply_asset_time_filters(query, active_filters)
+
     rows = db.execute(
-        select(
-            Asset.sha256,
-            Asset.original_filename,
-            Asset.extension,
-            func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
-        )
-        .outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
+        query
         .order_by(
-            nullslast(Asset.exif_datetime_original.desc()),
+            nullslast(Asset.captured_at.desc()),
             Asset.created_at_utc.desc(),
         )
     ).all()
@@ -54,6 +69,8 @@ def list_photos(db: Session) -> list[dict]:
             "asset_sha256": row.sha256,
             "filename": row.original_filename,
             "image_url": _build_asset_url(row.sha256, row.extension),
+            "captured_at": row.captured_at.isoformat() if row.captured_at else None,
+            "capture_time_trust": row.capture_time_trust,
             "face_count": row.face_count,
         }
         for row in rows
@@ -119,11 +136,39 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
             "longitude": asset.gps_longitude,
         }
 
-    provenance_summary: dict | None = None
-    if asset.original_source_path:
-        provenance_summary = {
-            "original_source_path": asset.original_source_path,
+    provenance_rows = list(
+        db.scalars(
+            select(Provenance)
+            .where(Provenance.asset_sha256 == sha256)
+            .order_by(Provenance.ingested_at.asc(), Provenance.id.asc())
+        ).all()
+    )
+    provenance_summary = [
+        {
+            "source_path": row.source_path,
+            "ingested_at": row.ingested_at.isoformat() if row.ingested_at else None,
+            "source_hash": row.source_hash,
         }
+        for row in provenance_rows
+    ]
+
+    duplicate_group_type: str | None = None
+    duplicate_count = 1
+    canonical_asset_sha256: str | None = asset.sha256
+    if asset.duplicate_group_id is not None:
+        group = db.get(DuplicateGroup, asset.duplicate_group_id)
+        duplicate_group_type = group.group_type if group is not None else "near"
+        duplicate_count = int(
+            db.scalar(select(func.count(Asset.sha256)).where(Asset.duplicate_group_id == asset.duplicate_group_id)) or 1
+        )
+        canonical_asset_sha256 = db.scalar(
+            select(Asset.sha256)
+            .where(
+                Asset.duplicate_group_id == asset.duplicate_group_id,
+                Asset.is_canonical.is_(True),
+            )
+            .limit(1)
+        )
 
     return {
         "asset_sha256": sha256,
@@ -135,7 +180,60 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
         "event": event_summary,
         "location": location_summary,
         "provenance": provenance_summary,
+        "duplicate_group_id": asset.duplicate_group_id,
+        "duplicate_group_type": duplicate_group_type,
+        "is_canonical": asset.is_canonical,
+        "quality_score": asset.quality_score,
+        "duplicate_count": duplicate_count,
+        "canonical_asset_sha256": canonical_asset_sha256,
         "faces": faces,
+    }
+
+
+def get_duplicate_group_detail(db: Session, group_id: int) -> dict | None:
+    """Return duplicate-group details and canonical member."""
+    group = db.get(DuplicateGroup, group_id)
+    if group is None:
+        return None
+
+    assets = list(
+        db.scalars(
+            select(Asset)
+            .where(Asset.duplicate_group_id == group_id)
+            .order_by(Asset.is_canonical.desc(), nullslast(Asset.quality_score.desc()), Asset.sha256.asc())
+        ).all()
+    )
+    if not assets:
+        return {
+            "group_id": group.id,
+            "group_type": group.group_type,
+            "canonical_asset_sha256": None,
+            "duplicate_count": 0,
+            "assets": [],
+        }
+
+    canonical = next((asset for asset in assets if asset.is_canonical), None)
+    items: list[dict] = []
+    for asset in assets:
+        capture_type, capture_time_trust = get_effective_capture_classification(asset)
+        items.append(
+            {
+                "asset_sha256": asset.sha256,
+                "filename": asset.original_filename,
+                "image_url": _build_asset_url(asset.sha256, asset.extension),
+                "is_canonical": asset.is_canonical,
+                "quality_score": asset.quality_score,
+                "capture_type": capture_type,
+                "capture_time_trust": capture_time_trust,
+            }
+        )
+
+    return {
+        "group_id": group.id,
+        "group_type": group.group_type,
+        "canonical_asset_sha256": canonical.sha256 if canonical is not None else None,
+        "duplicate_count": len(items),
+        "assets": items,
     }
 
 

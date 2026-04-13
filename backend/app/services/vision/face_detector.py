@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
-from sqlalchemy import delete
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -46,6 +47,8 @@ class FaceDetectionResult:
     total_faces_detected: int
     detections: list[FaceDetection]
     failures: list[FaceDetectionFailure]
+    successful_asset_sha256: list[str]
+    failed_asset_sha256: list[str]
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,19 @@ class FacePersistenceSummary:
     """Database write summary for detected faces."""
 
     inserted_faces: int
+    assets_marked_detection_complete: int
     failed: int
+
+
+def load_assets_for_incremental_face_detection(db_session: Session) -> list[Asset]:
+    """Load assets that still need face detection completion."""
+    return list(
+        db_session.scalars(
+            select(Asset)
+            .where(Asset.face_detection_completed_at.is_(None))
+            .order_by(Asset.created_at_utc.asc(), Asset.sha256.asc())
+        ).all()
+    )
 
 
 class YuNetFaceDetector:
@@ -186,6 +201,8 @@ def run_face_detection(
     assets_with_faces = 0
     assets_without_faces = 0
     processed_assets = 0
+    successful_assets: set[str] = set()
+    failed_assets: set[str] = set()
 
     for asset in assets:
         if not _is_image_asset(asset):
@@ -202,6 +219,7 @@ def run_face_detection(
                         reason=f"Could not open image: {asset.vault_path}",
                     )
                 )
+                failed_assets.add(asset.sha256)
                 continue
 
             detected_faces, invalid_bbox_count = detector.detect_faces(image, target_longest_side)
@@ -216,9 +234,11 @@ def run_face_detection(
 
             if not detected_faces:
                 assets_without_faces += 1
+                successful_assets.add(asset.sha256)
                 continue
 
             assets_with_faces += 1
+            successful_assets.add(asset.sha256)
             for bbox_x, bbox_y, bbox_width, bbox_height, confidence in detected_faces:
                 detections.append(
                     FaceDetection(
@@ -232,6 +252,7 @@ def run_face_detection(
                 )
         except Exception as error:  # noqa: BLE001
             failures.append(FaceDetectionFailure(asset_sha256=asset.sha256, reason=str(error)))
+            failed_assets.add(asset.sha256)
 
     return FaceDetectionResult(
         total_assets_processed=processed_assets,
@@ -240,11 +261,13 @@ def run_face_detection(
         total_faces_detected=len(detections),
         detections=detections,
         failures=failures,
+        successful_asset_sha256=sorted(successful_assets),
+        failed_asset_sha256=sorted(failed_assets),
     )
 
 
 def persist_face_detections(db_session: Session, detections: list[FaceDetection]) -> FacePersistenceSummary:
-    """Replace existing face rows and insert a new detection set."""
+    """Replace all face rows and insert a new detection set (destructive rebuild mode)."""
     try:
         db_session.execute(delete(Face))
 
@@ -261,7 +284,92 @@ def persist_face_detections(db_session: Session, detections: list[FaceDetection]
             )
 
         db_session.commit()
-        return FacePersistenceSummary(inserted_faces=len(detections), failed=0)
+        return FacePersistenceSummary(
+            inserted_faces=len(detections),
+            assets_marked_detection_complete=0,
+            failed=0,
+        )
     except SQLAlchemyError:
         db_session.rollback()
-        return FacePersistenceSummary(inserted_faces=0, failed=1)
+        return FacePersistenceSummary(inserted_faces=0, assets_marked_detection_complete=0, failed=1)
+
+
+def persist_face_detections_rebuild(
+    db_session: Session,
+    detections: list[FaceDetection],
+    successful_asset_sha256: list[str],
+) -> FacePersistenceSummary:
+    """Rebuild detections globally and mark successfully processed assets complete."""
+    try:
+        db_session.execute(delete(Face))
+
+        for item in detections:
+            db_session.add(
+                Face(
+                    asset_sha256=item.asset_sha256,
+                    bbox_x=item.bbox_x,
+                    bbox_y=item.bbox_y,
+                    bbox_width=item.bbox_width,
+                    bbox_height=item.bbox_height,
+                    confidence_score=item.confidence_score,
+                )
+            )
+
+        db_session.execute(update(Asset).values(face_detection_completed_at=None))
+        marked_assets = 0
+        if successful_asset_sha256:
+            detection_completed_at = datetime.now(timezone.utc)
+            marked_assets = db_session.execute(
+                update(Asset)
+                .where(Asset.sha256.in_(successful_asset_sha256))
+                .values(face_detection_completed_at=detection_completed_at)
+            ).rowcount or 0
+
+        db_session.commit()
+        return FacePersistenceSummary(
+            inserted_faces=len(detections),
+            assets_marked_detection_complete=marked_assets,
+            failed=0,
+        )
+    except SQLAlchemyError:
+        db_session.rollback()
+        return FacePersistenceSummary(inserted_faces=0, assets_marked_detection_complete=0, failed=1)
+
+
+def persist_incremental_face_detections(
+    db_session: Session,
+    detections: list[FaceDetection],
+    successful_asset_sha256: list[str],
+) -> FacePersistenceSummary:
+    """Insert detections and mark successfully processed assets as completed."""
+    try:
+        for item in detections:
+            db_session.add(
+                Face(
+                    asset_sha256=item.asset_sha256,
+                    bbox_x=item.bbox_x,
+                    bbox_y=item.bbox_y,
+                    bbox_width=item.bbox_width,
+                    bbox_height=item.bbox_height,
+                    confidence_score=item.confidence_score,
+                )
+            )
+
+        marked_assets = 0
+        if successful_asset_sha256:
+            detection_completed_at = datetime.now(timezone.utc)
+            marked_assets = db_session.execute(
+                update(Asset)
+                .where(Asset.sha256.in_(successful_asset_sha256))
+                .values(face_detection_completed_at=detection_completed_at)
+            ).rowcount or 0
+
+        db_session.commit()
+        return FacePersistenceSummary(
+            inserted_faces=len(detections),
+            assets_marked_detection_complete=marked_assets,
+            failed=0,
+        )
+    except SQLAlchemyError:
+        db_session.rollback()
+        return FacePersistenceSummary(inserted_faces=0, assets_marked_detection_complete=0, failed=1)

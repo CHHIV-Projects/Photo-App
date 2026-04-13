@@ -80,9 +80,22 @@ def _get_face_thumbnail_index() -> dict[int, str]:
     return _FACE_THUMBNAIL_INDEX
 
 
+def _refresh_face_thumbnail_index() -> dict[int, str]:
+    """Force a full thumbnail index rebuild for newly generated crops."""
+    global _FACE_THUMBNAIL_INDEX
+    _FACE_THUMBNAIL_INDEX = _build_face_thumbnail_index()
+    return _FACE_THUMBNAIL_INDEX
+
+
 def _resolve_face_thumbnail_url(face_id: int) -> str | None:
     """Resolve thumbnail URL for one face from pre-generated review crops."""
-    return _get_face_thumbnail_index().get(face_id)
+    index = _get_face_thumbnail_index()
+    thumbnail_url = index.get(face_id)
+    if thumbnail_url is not None:
+        return thumbnail_url
+
+    # New crops can appear while the API process is already running.
+    return _refresh_face_thumbnail_index().get(face_id)
 
 
 def list_clusters_for_review(
@@ -206,6 +219,7 @@ def assign_cluster_to_person(db: Session, cluster_id: int, person_id: int) -> di
 
     previous_person_id = cluster.person_id
     cluster.person_id = person.id
+    cluster.is_reviewed = True
     db.commit()
 
     return {

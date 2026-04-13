@@ -61,8 +61,8 @@ export function UnassignedFacesView({
         clusterId: cluster.cluster_id,
         personName,
         displayText: personName
-          ? `Cluster #${cluster.cluster_id} — ${personName} — ${cluster.member_count} faces`
-          : `Cluster #${cluster.cluster_id} — ${cluster.member_count} faces`
+          ? `Cluster #${cluster.cluster_id} — ${personName} — ${cluster.face_count} faces`
+          : `Cluster #${cluster.cluster_id} — ${cluster.face_count} faces`
       });
     });
 

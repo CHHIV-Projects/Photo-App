@@ -1,0 +1,36 @@
+{
+  "after_ingest": {
+    "counts": {
+      "assets": 465,
+      "provenance_rows": 1269,
+      "duplicate_groups": 45,
+      "grouped_assets": 104,
+      "faces": 558,
+      "face_clusters": 163,
+      "face_clusters_with_person": 6,
+      "faces_with_cluster": 557,
+      "people": 13,
+      "events": 47,
+      "event_asset_total": 461,
+      "assets_without_provenance": 0,
+      "duplicate_provenance_key_rows": 0
+    },
+    "membership_signature": "9cdbf692857887673684b39bffe65826ae97be2020854606b36d8c2379a2e490"
+  },
+  "deltas_vs_baseline": {
+    "assets": 0,
+    "provenance_rows": 1,
+    "duplicate_groups": 0,
+    "grouped_assets": 0,
+    "faces": 0,
+    "face_clusters": 0,
+    "face_clusters_with_person": 0,
+    "faces_with_cluster": 0,
+    "people": 0,
+    "events": 0,
+    "event_asset_total": 0,
+    "assets_without_provenance": 0,
+    "duplicate_provenance_key_rows": 0
+  },
+  "membership_signature_changed": true
+}

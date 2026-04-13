@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 import cv2
 import numpy as np
 from deepface import DeepFace
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
 from app.models.face import Face
@@ -38,6 +41,30 @@ class FaceEmbeddingResult:
     embedded_faces: int
     embedding_items: list[FaceEmbeddingItem]
     failures: list[FaceEmbeddingFailure]
+
+
+def embedding_to_json(embedding: np.ndarray) -> str:
+    """Serialize one embedding vector as compact JSON."""
+    return json.dumps([float(value) for value in embedding.tolist()], separators=(",", ":"))
+
+
+def embedding_from_json(embedding_json: str | None) -> np.ndarray | None:
+    """Deserialize one embedding vector from stored JSON text."""
+    if not embedding_json:
+        return None
+
+    try:
+        values = json.loads(embedding_json)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(values, list) or not values:
+        return None
+
+    try:
+        return np.asarray(values, dtype=np.float32)
+    except (TypeError, ValueError):
+        return None
 
 
 def _crop_face_with_margin(image, face: Face, margin_ratio: float):
@@ -149,3 +176,33 @@ def generate_face_embeddings(
         embedding_items=embedding_items,
         failures=failures,
     )
+
+
+def load_faces_missing_embeddings(db_session: Session) -> list[tuple[Face, Asset]]:
+    """Load only faces that still require embedding generation."""
+    rows = db_session.execute(
+        select(Face, Asset)
+        .join(Asset, Asset.sha256 == Face.asset_sha256)
+        .where(Face.embedding_json.is_(None))
+        .order_by(Face.id.asc())
+    ).all()
+    return [(row[0], row[1]) for row in rows]
+
+
+def persist_generated_embeddings(
+    db_session: Session,
+    embedding_items: list[FaceEmbeddingItem],
+) -> int:
+    """Persist embedding_json for generated embeddings only."""
+    updated = 0
+
+    for item in embedding_items:
+        db_session.execute(
+            update(Face)
+            .where(Face.id == item.face_id)
+            .values(embedding_json=embedding_to_json(item.embedding))
+        )
+        updated += 1
+
+    db_session.commit()
+    return updated

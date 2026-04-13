@@ -24,6 +24,7 @@ class Face(Base):
     bbox_width: Mapped[int] = mapped_column(Integer, nullable=False)
     bbox_height: Mapped[int] = mapped_column(Integer, nullable=False)
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
+    embedding_json: Mapped[str | None] = mapped_column(String, nullable=True)
     cluster_id: Mapped[int | None] = mapped_column(ForeignKey("face_clusters.id"), nullable=True, index=True)
     created_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

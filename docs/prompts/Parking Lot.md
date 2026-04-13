@@ -2306,3 +2306,374 @@ Scaling requires:
 * better handling of imperfect scan metadata
 
 ---
+# Parking Lot — Drop Zone Lifecycle and Processing Scope Control
+
+## Problem
+
+The current pipeline treats the drop zone as a **persistent working set**, resulting in:
+
+* Previously staged files being reprocessed on subsequent runs
+* “Single file” ingestion unintentionally triggering multi-file processing
+* Confusion around pipeline scope (batch vs global)
+* Potential performance degradation as drop zone grows
+
+---
+
+## Goal
+
+Introduce a clear and deterministic **drop zone lifecycle model** that:
+
+* ensures each pipeline run operates on an explicit batch
+* prevents unintended reprocessing of already handled files
+* supports both:
+
+  * one-off ingestion runs
+  * future automated/scheduled ingestion
+
+---
+
+## Desired Behavior
+
+### Batch Semantics
+
+Define drop zone behavior as one of:
+
+* **Ephemeral batch mode (preferred)**
+
+  * files are staged → processed → cleared
+  * drop zone is empty after successful run
+
+* **Persistent queue mode (alternative)**
+
+  * files marked with processing state
+  * processed files excluded from future runs
+
+---
+
+### Processing Scope Control
+
+Pipeline should clearly distinguish:
+
+* **Newly staged assets (delta set)**
+* **Existing assets (global set)**
+
+Each stage must explicitly declare:
+
+* operates on:
+
+  * new assets only
+  * changed assets only
+  * all assets (global)
+
+---
+
+### Failure Handling
+
+* failed files remain in drop zone (or flagged)
+* successful files are:
+
+  * removed (batch mode), or
+  * marked processed (queue mode)
+
+---
+
+### Observability
+
+Pipeline output should clearly show:
+
+* number of newly staged files
+* number of previously staged files (if any)
+* whether run is:
+
+  * batch-only
+  * mixed (batch + global stages)
+
+---
+
+## Constraints
+
+* Must NOT break existing ingestion or deduplication logic
+* Must preserve provenance tracking
+* Must remain deterministic and rerunnable
+* Must not introduce destructive behavior without explicit confirmation
+
+---
+
+## Future Integration
+
+This system will support:
+
+* incremental processing (11.8)
+* admin workflows (11.13)
+* scheduled ingestion
+* large archive scaling
+
+---
+
+## Notes
+
+This is a **pipeline orchestration concern**, not a data model change.
+
+Implementation should be simple and explicit, not overly abstract.
+# Parking Lot — Duplicate Lineage Re-evaluation on Config Change
+
+## Problem
+
+Duplicate grouping and canonical selection currently depend on:
+
+* Hamming distance threshold
+* Quality scoring weights
+* Pre-filter parameters (resolution band, time window, etc.)
+
+These are **config-driven**, but:
+
+* existing assets are only evaluated at ingestion or backfill
+* changes to config do NOT automatically trigger re-evaluation
+* system may become inconsistent with updated rules over time
+
+---
+
+## Goal
+
+Introduce a controlled mechanism to **re-evaluate duplicate lineage and canonical selection** when configuration changes.
+
+---
+
+## Desired Behavior
+
+### Re-evaluation Trigger
+
+System should support:
+
+* manual trigger:
+
+  * e.g., script or admin action
+* optional future:
+
+  * automatic trigger when config version changes
+
+---
+
+### Re-evaluation Scope
+
+Configurable scope:
+
+* full system (all assets)
+* subset:
+
+  * specific time range
+  * specific asset groups
+  * newly ingested assets only
+
+---
+
+### Re-evaluation Actions
+
+* recompute pHash comparisons if needed (optional)
+* re-run grouping logic
+* recompute canonical selection
+* preserve:
+
+  * provenance
+  * asset identity
+  * lineage continuity where possible
+
+---
+
+### Stability Requirements
+
+* deterministic results
+* minimal unnecessary churn
+* avoid group ID changes where composition unchanged (future improvement)
+
+---
+
+### Observability
+
+Output should include:
+
+* groups changed
+* canonical switches
+* assets reassigned
+* summary before/after stats
+
+---
+
+## Constraints
+
+* Must NOT run automatically in normal ingestion flow
+* Must be explicitly invoked
+* Must not impact identity system (faces, people)
+* Must remain safe and reversible
+
+---
+
+## Future Integration
+
+This feature supports:
+
+* tuning near-duplicate detection
+* improving canonical selection logic
+* scaling to larger archives
+* admin workflows (11.13)
+
+---
+
+## Notes
+
+This is an **administrative reprocessing capability**, not part of normal ingestion.
+
+Should be implemented as a controlled script or admin tool.
+# Parking Lot — Event Clustering Stability and Non-Destructive Behavior
+
+## Problem
+
+The current event clustering system operates as a **full rebuild on every pipeline run**, which:
+
+* deletes all existing events
+* clears all asset-to-event assignments
+* recreates events and reassigns assets
+
+This results in:
+
+* **event ID churn** on every run
+* potential changes in asset-to-event grouping when inputs change
+* loss of any future manual edits (labels, merges, splits)
+* instability for any UI or feature relying on persistent event identity
+
+---
+
+## Current State (Accepted Behavior)
+
+* Event clustering is **global and destructive by design**
+* Events are currently:
+
+  * system-generated
+  * not user-edited
+  * deterministic based on metadata (time + provenance)
+
+This makes rebuild behavior acceptable **at this stage**
+
+---
+
+## Goal
+
+Evolve event clustering toward a **non-destructive, identity-stable model** that:
+
+* preserves event identity where possible
+* minimizes unnecessary churn on reruns
+* supports future user interaction with events
+
+---
+
+## Desired Behavior (Future)
+
+### 1. Stable Event Identity
+
+* Preserve event IDs when:
+
+  * asset membership is unchanged
+  * event boundaries are unchanged
+
+* Avoid delete/recreate when no meaningful change occurred
+
+---
+
+### 2. Incremental Update Capability (Partial)
+
+Support limited incremental behavior:
+
+* new assets can be assigned to:
+
+  * existing events
+  * new events if needed
+
+* only affected events are recalculated when:
+
+  * time gaps are impacted
+  * capture-time trust changes
+
+---
+
+### 3. Controlled Rebuild
+
+Retain ability to:
+
+* perform full rebuild when explicitly requested
+* compare before/after results for validation
+
+---
+
+### 4. Separation of System vs User Data
+
+Prepare for future event editing by separating:
+
+* system-generated properties:
+
+  * time boundaries
+  * inferred grouping
+* user-controlled properties:
+
+  * labels
+  * notes
+  * manual merges/splits
+
+User-controlled data must **not be lost on recompute**
+
+---
+
+### 5. Observability
+
+Future system should be able to report:
+
+* events unchanged
+* events modified
+* events merged/split
+* assets reassigned
+
+---
+
+## Constraints
+
+* Must preserve correctness of time-based grouping
+* Must not introduce inconsistent event boundaries
+* Must remain deterministic and explainable
+* Must not compromise ingestion pipeline safety
+
+---
+
+## Complexity Note
+
+Event clustering is inherently more complex than face clustering because:
+
+* boundaries depend on time gaps
+* inserting a single asset may:
+
+  * merge adjacent events
+  * split an existing event
+  * shift boundaries non-locally
+
+A fully incremental solution may not always be feasible; hybrid approaches are acceptable.
+
+---
+
+## Future Integration
+
+This work should align with:
+
+* **11.9 — Timeline and Time Layer**
+* future event editing capabilities
+* collections/albums (11.10)
+* sharing (11.14)
+
+---
+
+## Notes
+
+This is a **known and accepted limitation** at the current stage.
+
+Do not implement changes prematurely. Address when:
+
+* events become user-editable
+* timeline becomes a primary navigation layer
+* event identity stability becomes important to UX

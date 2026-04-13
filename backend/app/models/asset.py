@@ -45,5 +45,14 @@ class Asset(Base):
 	capture_time_trust_override: Mapped[str | None] = mapped_column(String(32), nullable=True)
 	is_scan: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 	needs_date_estimation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+	face_detection_completed_at: Mapped[datetime | None] = mapped_column(
+		DateTime(timezone=True),
+		nullable=True,
+		index=True,
+	)
 	source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
 	event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)
+	duplicate_group_id: Mapped[int | None] = mapped_column(ForeignKey("duplicate_groups.id"), nullable=True, index=True)
+	is_canonical: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+	quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+	phash: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
