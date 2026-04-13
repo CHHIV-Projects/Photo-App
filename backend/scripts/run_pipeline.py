@@ -31,7 +31,11 @@ from app.services.ingestion.filter import FilterResult, filter_records
 from app.services.ingestion.hasher import HashResult, hash_records
 from app.services.ingestion.scanner import FileScanRecord, ScanResult, scan_folder
 from app.services.ingestion.storage_manager import StorageResult, copy_unique_files_to_vault
-from app.services.persistence.asset_repository import PersistenceResult, persist_copied_files
+from app.services.persistence.asset_repository import (
+    PersistenceResult,
+    persist_copied_files,
+    persist_duplicate_provenance,
+)
 
 
 @dataclass
@@ -49,6 +53,8 @@ class PipelineContext:
     dedup_result: DeduplicationResult | None = None
     storage_result: StorageResult | None = None
     persistence_result: PersistenceResult | None = None
+    run_face_detection_rebuild: bool = False
+    run_face_clustering_rebuild: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,9 +85,11 @@ class RuntimeArgs:
     from_path: Path | None
     skip_exif_extraction: bool
     skip_metadata_normalization: bool
+    skip_duplicate_lineage: bool
     skip_event_clustering: bool
-    skip_face_detection: bool
-    skip_face_clustering: bool
+    skip_face_processing: bool
+    run_face_detection_rebuild: bool
+    run_face_clustering_rebuild: bool
     skip_crop_generation: bool
 
 
@@ -149,6 +157,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip metadata normalization stage.",
     )
     parser.add_argument(
+        "--skip-duplicate-lineage",
+        action="store_true",
+        help="Skip duplicate-lineage backfill/grouping stage.",
+    )
+    parser.add_argument(
         "--skip-event-clustering",
         action="store_true",
         help="Skip event clustering stage.",
@@ -164,9 +177,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run global destructive face embedding + clustering rebuild.",
     )
     parser.add_argument(
+        "--skip-face-processing",
+        action="store_true",
+        help="Skip incremental face detection/embedding/clustering stages.",
+    )
+    parser.add_argument(
+        "--skip-crop-generation",
+        action="store_true",
+        help="Skip review crop generation stage.",
+    )
+    parser.add_argument(
         "--run-crop-generation",
         action="store_true",
-        help="Run review crop generation (default aligns to face rebuild stages).",
+        help="Force crop generation even when face processing is skipped.",
     )
     parser.add_argument(
         "--confirm-rebuild",
@@ -189,7 +212,10 @@ def _has_non_interactive_flags(parsed: argparse.Namespace) -> bool:
             parsed.dry_run,
             parsed.skip_exif_extraction,
             parsed.skip_metadata_normalization,
+            parsed.skip_duplicate_lineage,
             parsed.skip_event_clustering,
+            parsed.skip_face_processing,
+            parsed.skip_crop_generation,
             parsed.run_face_detection_rebuild,
             parsed.run_face_clustering_rebuild,
             parsed.run_crop_generation,
@@ -225,23 +251,29 @@ def _build_runtime_args(
     from_path: Path | None,
     skip_exif_extraction: bool,
     skip_metadata_normalization: bool,
+    skip_duplicate_lineage: bool,
     skip_event_clustering: bool,
+    skip_face_processing: bool,
+    skip_crop_generation: bool,
     run_face_detection_rebuild: bool,
     run_face_clustering_rebuild: bool,
     run_crop_generation_override: bool,
 ) -> RuntimeArgs:
     any_face_rebuild = run_face_detection_rebuild or run_face_clustering_rebuild
-    run_crop_generation = run_crop_generation_override or any_face_rebuild
+    run_crop_generation = run_crop_generation_override or (not skip_face_processing)
+    effective_skip_crop_generation = not run_crop_generation or skip_crop_generation
 
     return RuntimeArgs(
         dry_run=dry_run,
         from_path=from_path,
         skip_exif_extraction=skip_exif_extraction,
         skip_metadata_normalization=skip_metadata_normalization,
+        skip_duplicate_lineage=skip_duplicate_lineage,
         skip_event_clustering=skip_event_clustering,
-        skip_face_detection=not run_face_detection_rebuild,
-        skip_face_clustering=not run_face_clustering_rebuild,
-        skip_crop_generation=not run_crop_generation,
+        skip_face_processing=skip_face_processing or any_face_rebuild,
+        run_face_detection_rebuild=run_face_detection_rebuild,
+        run_face_clustering_rebuild=run_face_clustering_rebuild,
+        skip_crop_generation=effective_skip_crop_generation,
     )
 
 
@@ -293,7 +325,11 @@ def _get_user_input() -> Any:
     run_face_clustering_rebuild = _prompt_yes_no_default_no("Run global face clustering rebuild?")
     print()
 
-    # Prompt 4: Source folder to ingest
+    # Prompt 4: skip incremental face processing
+    skip_face_processing = _prompt_yes_no_default_no("Skip incremental face processing stages?")
+    print()
+
+    # Prompt 5: Source folder to ingest
     source_path = input("Source folder to ingest (leave blank for existing drop zone): ").strip()
     from_path = None
     if source_path:
@@ -316,7 +352,10 @@ def _get_user_input() -> Any:
         from_path=from_path,
         skip_exif_extraction=False,
         skip_metadata_normalization=False,
+        skip_duplicate_lineage=False,
         skip_event_clustering=False,
+        skip_face_processing=skip_face_processing,
+        skip_crop_generation=False,
         run_face_detection_rebuild=run_face_detection_rebuild,
         run_face_clustering_rebuild=run_face_clustering_rebuild,
         run_crop_generation_override=False,
@@ -338,7 +377,10 @@ def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
         from_path=from_path,
         skip_exif_extraction=parsed.skip_exif_extraction,
         skip_metadata_normalization=parsed.skip_metadata_normalization,
+        skip_duplicate_lineage=parsed.skip_duplicate_lineage,
         skip_event_clustering=parsed.skip_event_clustering,
+        skip_face_processing=parsed.skip_face_processing,
+        skip_crop_generation=parsed.skip_crop_generation,
         run_face_detection_rebuild=parsed.run_face_detection_rebuild,
         run_face_clustering_rebuild=parsed.run_face_clustering_rebuild,
         run_crop_generation_override=parsed.run_crop_generation,
@@ -446,6 +488,11 @@ def _ingest_to_db_stage(ctx: PipelineContext) -> dict[str, Any]:
     db_session = SessionLocal()
     try:
         result = persist_copied_files(db_session, ctx.storage_result.copied_files)
+        duplicate_provenance_result = (
+            persist_duplicate_provenance(db_session, ctx.dedup_result.duplicate_files)
+            if ctx.dedup_result is not None
+            else None
+        )
     finally:
         db_session.close()
 
@@ -454,6 +501,9 @@ def _ingest_to_db_stage(ctx: PipelineContext) -> dict[str, Any]:
         "inserted": len(result.inserted_records),
         "skipped_existing": len(result.skipped_existing_records),
         "db_failures": len(result.failed_inserts),
+        "duplicate_provenance_added": duplicate_provenance_result.added if duplicate_provenance_result else 0,
+        "duplicate_provenance_existing": duplicate_provenance_result.already_present if duplicate_provenance_result else 0,
+        "duplicate_provenance_failed": duplicate_provenance_result.failed if duplicate_provenance_result else 0,
     }
 
 
@@ -521,8 +571,54 @@ def _event_clustering_stage(_: PipelineContext) -> dict[str, Any]:
     }
 
 
-def _face_detection_stage(_: PipelineContext) -> dict[str, Any]:
-    from app.services.vision.face_detector import YuNetFaceDetector, persist_face_detections, run_face_detection
+def _duplicate_lineage_stage(_: PipelineContext) -> dict[str, Any]:
+    from app.services.duplicates.lineage import (
+        backfill_missing_lineage_fields,
+        recompute_near_duplicate_groups,
+    )
+
+    db_session = SessionLocal()
+    try:
+        backfill_summary = backfill_missing_lineage_fields(db_session, chunk_size=100, dry_run=False)
+        grouping_summary = recompute_near_duplicate_groups(db_session, dry_run=False)
+    finally:
+        db_session.close()
+
+    return {
+        "field_backfill_processed": backfill_summary.processed,
+        "field_backfill_updated": backfill_summary.updated,
+        "field_backfill_failed": backfill_summary.failed,
+        "grouping_assets_considered": grouping_summary.processed,
+        "near_groups_created": grouping_summary.updated,
+        "grouping_failed": grouping_summary.failed,
+    }
+
+
+def _face_schema_sync_stage(_: PipelineContext) -> dict[str, Any]:
+    from app.services.vision.face_incremental_schema import ensure_face_incremental_schema
+
+    db_session = SessionLocal()
+    try:
+        summary = ensure_face_incremental_schema(db_session)
+    finally:
+        db_session.close()
+
+    return {
+        "added_columns": len(summary.added_columns),
+        "added_indexes": len(summary.added_indexes),
+        "backfilled_detection_completed": summary.backfilled_asset_detection_completed,
+        "backfilled_reviewed_clusters": summary.backfilled_reviewed_clusters,
+    }
+
+
+def _face_detection_stage(ctx: PipelineContext) -> dict[str, Any]:
+    from app.services.vision.face_detector import (
+        YuNetFaceDetector,
+        load_assets_for_incremental_face_detection,
+        persist_face_detections_rebuild,
+        persist_incremental_face_detections,
+        run_face_detection,
+    )
 
     # Resolve model path relative to BACKEND_ROOT if it's relative
     model_path = settings.face_detector_model_path
@@ -536,54 +632,109 @@ def _face_detection_stage(_: PipelineContext) -> dict[str, Any]:
 
     db_session = SessionLocal()
     try:
-        assets = list(db_session.scalars(select(Asset)).all())
+        if ctx.run_face_detection_rebuild:
+            assets = list(db_session.scalars(select(Asset)).all())
+        else:
+            assets = load_assets_for_incremental_face_detection(db_session)
+
         detection_result = run_face_detection(
             assets=assets,
             detector=detector,
             target_longest_side=settings.face_detection_resize_longest_side,
         )
-        persistence_result = persist_face_detections(db_session, detection_result.detections)
+
+        if ctx.run_face_detection_rebuild:
+            persistence_result = persist_face_detections_rebuild(
+                db_session,
+                detection_result.detections,
+                detection_result.successful_asset_sha256,
+            )
+        else:
+            persistence_result = persist_incremental_face_detections(
+                db_session,
+                detection_result.detections,
+                detection_result.successful_asset_sha256,
+            )
     finally:
         db_session.close()
 
     return {
+        "mode": "rebuild" if ctx.run_face_detection_rebuild else "incremental",
         "assets_processed": detection_result.total_assets_processed,
+        "assets_failed": len(detection_result.failed_asset_sha256),
         "faces_detected": detection_result.total_faces_detected,
         "inserted_faces": persistence_result.inserted_faces,
+        "assets_marked_detection_complete": persistence_result.assets_marked_detection_complete,
         "failed": persistence_result.failed,
     }
 
 
-def _face_clustering_stage(_: PipelineContext) -> dict[str, Any]:
+def _face_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.vision.face_clusterer import (
+        assign_faces_incrementally,
         cluster_face_embeddings,
         load_faces_for_embedding,
         persist_face_clusters,
     )
-    from app.services.vision.face_embedder import generate_face_embeddings
+    from app.services.vision.face_embedder import (
+        generate_face_embeddings,
+        load_faces_missing_embeddings,
+        persist_generated_embeddings,
+    )
 
     db_session = SessionLocal()
     try:
-        face_asset_rows = load_faces_for_embedding(db_session)
+        if ctx.run_face_clustering_rebuild:
+            face_asset_rows = load_faces_for_embedding(db_session)
+        else:
+            face_asset_rows = load_faces_missing_embeddings(db_session)
+
         embedding_result = generate_face_embeddings(
             face_asset_rows=face_asset_rows,
             model_name=settings.face_embedding_model,
             margin_ratio=settings.face_embedding_crop_margin_ratio,
         )
-        clustering_result = cluster_face_embeddings(
-            embedding_items=embedding_result.embedding_items,
-            similarity_threshold=settings.face_cluster_similarity_threshold,
-        )
-        persistence_result = persist_face_clusters(db_session, clustering_result)
+        embeddings_persisted = persist_generated_embeddings(db_session, embedding_result.embedding_items)
+
+        if ctx.run_face_clustering_rebuild:
+            clustering_result = cluster_face_embeddings(
+                embedding_items=embedding_result.embedding_items,
+                similarity_threshold=settings.face_cluster_similarity_threshold,
+            )
+            persistence_result = persist_face_clusters(db_session, clustering_result)
+            assignment_summary = None
+        else:
+            assignment_summary = assign_faces_incrementally(
+                db_session,
+                similarity_threshold=settings.face_cluster_similarity_threshold,
+                ambiguity_margin=settings.face_cluster_ambiguity_margin,
+            )
+            clustering_result = None
+            persistence_result = None
     finally:
         db_session.close()
 
+    if ctx.run_face_clustering_rebuild:
+        return {
+            "mode": "rebuild",
+            "faces_in_db": len(face_asset_rows),
+            "embeddings_generated": embedding_result.embedded_faces,
+            "embeddings_persisted": embeddings_persisted,
+            "clusters_created": clustering_result.clusters_created,
+            "faces_assigned": persistence_result.faces_assigned,
+            "failed": persistence_result.failed,
+        }
+
     return {
-        "faces_in_db": len(face_asset_rows),
+        "mode": "incremental",
+        "faces_needing_embeddings": len(face_asset_rows),
         "embeddings_generated": embedding_result.embedded_faces,
-        "clusters_created": clustering_result.clusters_created,
-        "faces_assigned": persistence_result.faces_assigned,
-        "failed": persistence_result.failed,
+        "embeddings_persisted": embeddings_persisted,
+        "faces_considered_for_assignment": assignment_summary.faces_considered if assignment_summary else 0,
+        "assigned_to_existing_clusters": assignment_summary.assigned_to_existing_clusters if assignment_summary else 0,
+        "new_clusters_created": assignment_summary.new_clusters_created if assignment_summary else 0,
+        "invalid_embeddings_skipped": assignment_summary.invalid_embeddings_skipped if assignment_summary else 0,
+        "failed": assignment_summary.failed if assignment_summary else 1,
     }
 
 
@@ -608,6 +759,11 @@ def _build_stage_plan() -> list[StageDefinition]:
         StageDefinition(key="storage", label="store to vault", runner=_storage_stage),
         StageDefinition(key="ingest_db", label="ingest to database", runner=_ingest_to_db_stage),
         StageDefinition(
+            key="face_schema_sync",
+            label="face schema sync",
+            runner=_face_schema_sync_stage,
+        ),
+        StageDefinition(
             key="exif_extraction",
             label="EXIF extraction",
             runner=_exif_extraction_stage,
@@ -622,6 +778,13 @@ def _build_stage_plan() -> list[StageDefinition]:
             skip_reason="--skip-metadata-normalization",
         ),
         StageDefinition(
+            key="duplicate_lineage",
+            label="duplicate lineage",
+            runner=_duplicate_lineage_stage,
+            skip_flag="skip_duplicate_lineage",
+            skip_reason="--skip-duplicate-lineage",
+        ),
+        StageDefinition(
             key="event_clustering",
             label="event clustering",
             runner=_event_clustering_stage,
@@ -632,22 +795,22 @@ def _build_stage_plan() -> list[StageDefinition]:
             key="face_detection",
             label="face detection",
             runner=_face_detection_stage,
-            skip_flag="skip_face_detection",
-            skip_reason="safe default (use face rebuild prompt/flag)",
+            skip_flag="skip_face_processing",
+            skip_reason="--skip-face-processing",
         ),
         StageDefinition(
             key="face_clustering",
             label="face embedding + clustering",
             runner=_face_clustering_stage,
-            skip_flag="skip_face_clustering",
-            skip_reason="safe default (use face rebuild prompt/flag)",
+            skip_flag="skip_face_processing",
+            skip_reason="--skip-face-processing",
         ),
         StageDefinition(
             key="crop_generation",
             label="review crop generation",
             runner=_crop_generation_stage,
             skip_flag="skip_crop_generation",
-            skip_reason="aligned safe default (runs with face rebuild)",
+            skip_reason="--skip-crop-generation",
         ),
     ]
 
@@ -758,6 +921,8 @@ def main() -> int:
         drop_zone_path=_resolve_runtime_path(settings.drop_zone_path),
         vault_path=_resolve_runtime_path(settings.vault_path),
         quarantine_path=_resolve_runtime_path(settings.quarantine_path),
+        run_face_detection_rebuild=args.run_face_detection_rebuild,
+        run_face_clustering_rebuild=args.run_face_clustering_rebuild,
     )
     stage_plan = _build_stage_plan()
 
