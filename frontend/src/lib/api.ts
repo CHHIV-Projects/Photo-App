@@ -1,4 +1,7 @@
 import type {
+  AlbumDetail,
+  AlbumMembershipSummary,
+  AlbumSummary,
   CreatePersonResponse,
   ClusterDetail,
   ClusterSummary,
@@ -189,4 +192,62 @@ export function getPlaces(): Promise<ListResponse<PlaceSummary>> {
 
 export function getPlaceDetail(placeId: string): Promise<PlaceDetail> {
   return apiRequest<PlaceDetail>(`/api/places/${placeId}`);
+}
+
+export function getAlbums(): Promise<ListResponse<AlbumSummary>> {
+  return apiRequest<ListResponse<AlbumSummary>>("/api/albums");
+}
+
+export function getAlbumDetail(albumId: number): Promise<AlbumDetail> {
+  return apiRequest<AlbumDetail>(`/api/albums/${albumId}`);
+}
+
+export function getAlbumsForAsset(sha256: string): Promise<ListResponse<AlbumMembershipSummary>> {
+  return apiRequest<ListResponse<AlbumMembershipSummary>>(`/api/albums/by-asset/${sha256}`);
+}
+
+export function createAlbum(
+  name: string,
+  description: string | null = null
+): Promise<AlbumSummary> {
+  return apiRequest<AlbumSummary>("/api/albums", {
+    method: "POST",
+    body: JSON.stringify({ name, description })
+  });
+}
+
+export function updateAlbum(
+  albumId: number,
+  payload: { name?: string; description?: string | null }
+): Promise<AlbumSummary> {
+  return apiRequest<AlbumSummary>(`/api/albums/${albumId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function deleteAlbum(albumId: number): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/albums/${albumId}`, {
+    method: "DELETE"
+  });
+}
+
+export function addAssetsToAlbum(
+  albumId: number,
+  assetSha256List: string[]
+): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/albums/${albumId}/assets`, {
+    method: "POST",
+    body: JSON.stringify({ asset_sha256_list: assetSha256List })
+  });
+}
+
+export function removeAssetsFromAlbum(
+  albumId: number,
+  assetSha256List: string[]
+): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/albums/${albumId}/assets`, {
+    method: "DELETE",
+    body: JSON.stringify({ asset_sha256_list: assetSha256List })
+  });
 }

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
 import { EventsView } from "@/components/EventsView";
+import { AlbumsView } from "@/components/AlbumsView";
 import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
 import PlacesView from "@/components/PlacesView";
@@ -45,7 +46,7 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people" | "unassigned" | "photos" | "timeline" | "events" | "places";
+type ViewMode = "review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("review");
@@ -315,6 +316,11 @@ export default function HomePage() {
     handleSelectPhoto(sha256);
   }
 
+  function handleOpenPhotoFromAlbums(sha256: string) {
+    setViewMode("photos");
+    handleSelectPhoto(sha256);
+  }
+
   async function handleAssign(personId: number) {
     if (selectedClusterId === null) {
       return;
@@ -567,6 +573,13 @@ export default function HomePage() {
             </button>
             <button
               type="button"
+              className={`${styles.viewButton} ${viewMode === "albums" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("albums")}
+            >
+              Albums
+            </button>
+            <button
+              type="button"
               className={`${styles.viewButton} ${viewMode === "timeline" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("timeline")}
             >
@@ -654,6 +667,8 @@ export default function HomePage() {
             photoDetailErrorMessage={photoDetailErrorMessage}
             onSelectPhoto={handleSelectPhoto}
           />
+        ) : viewMode === "albums" ? (
+          <AlbumsView onOpenPhoto={handleOpenPhotoFromAlbums} />
         ) : viewMode === "timeline" ? (
           <TimelineView />
         ) : viewMode === "places" ? (

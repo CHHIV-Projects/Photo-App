@@ -2,8 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { resolveApiUrl } from "@/lib/api";
-import type { FaceInPhoto, PhotoDetail, PhotoSummary } from "@/types/ui-api";
+import {
+  addAssetsToAlbum,
+  getAlbums,
+  getAlbumsForAsset,
+  removeAssetsFromAlbum,
+  resolveApiUrl,
+} from "@/lib/api";
+import type {
+  AlbumMembershipSummary,
+  AlbumSummary,
+  FaceInPhoto,
+  PhotoDetail,
+  PhotoSummary,
+} from "@/types/ui-api";
 import styles from "./photos-view.module.css";
 
 interface Props {
@@ -32,6 +44,12 @@ export function PhotosView({
   const [naturalDims, setNaturalDims] = useState<{ w: number; h: number } | null>(null);
   const [imageLoadError, setImageLoadError] = useState(false);
   const [photoSearch, setPhotoSearch] = useState("");
+  const [albums, setAlbums] = useState<AlbumSummary[]>([]);
+  const [photoAlbums, setPhotoAlbums] = useState<AlbumMembershipSummary[]>([]);
+  const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
+  const [albumsErrorMessage, setAlbumsErrorMessage] = useState<string | null>(null);
+  const [albumsSuccessMessage, setAlbumsSuccessMessage] = useState<string | null>(null);
+  const [isUpdatingAlbums, setIsUpdatingAlbums] = useState(false);
   const faceRowRefs = useRef<Map<number, HTMLLIElement>>(new Map());
 
   const visiblePhotos = useMemo(() => {
@@ -66,6 +84,52 @@ export function PhotosView({
     const el = faceRowRefs.current.get(selectedFaceId);
     el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [selectedFaceId]);
+
+  useEffect(() => {
+    async function loadAlbums() {
+      try {
+        const response = await getAlbums();
+        setAlbums(response.items);
+      } catch {
+        // Keep Photos view functional if album list fails.
+      }
+    }
+
+    void loadAlbums();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedPhotoSha256) {
+      setPhotoAlbums([]);
+      setAlbumsSuccessMessage(null);
+      return;
+    }
+
+    const photoSha256 = selectedPhotoSha256;
+
+    async function loadPhotoAlbumMembership() {
+      setAlbumsErrorMessage(null);
+      try {
+        const response = await getAlbumsForAsset(photoSha256);
+        setPhotoAlbums(response.items);
+      } catch (error) {
+        setAlbumsErrorMessage(getErrorMessage(error, "Failed to load album memberships."));
+      }
+    }
+
+    void loadPhotoAlbumMembership();
+  }, [selectedPhotoSha256]);
+
+  useEffect(() => {
+    if (albums.length === 0) {
+      setSelectedAlbumId(null);
+      return;
+    }
+    if (selectedAlbumId !== null && albums.some((album) => album.album_id === selectedAlbumId)) {
+      return;
+    }
+    setSelectedAlbumId(albums[0].album_id);
+  }, [albums, selectedAlbumId]);
 
   function getFaceLabel(face: FaceInPhoto): string {
     if (face.person_name) return face.person_name;
@@ -141,6 +205,70 @@ export function PhotosView({
   function formatProvenanceDate(value: string | null): string {
     if (!value) return "Unknown ingestion time";
     return formatDateTime(value);
+  }
+
+  function getErrorMessage(error: unknown, fallbackMessage: string): string {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+    return fallbackMessage;
+  }
+
+  async function refreshAlbumStateForPhoto(assetSha256: string) {
+    const [albumListResponse, membershipResponse] = await Promise.all([
+      getAlbums(),
+      getAlbumsForAsset(assetSha256),
+    ]);
+    setAlbums(albumListResponse.items);
+    setPhotoAlbums(membershipResponse.items);
+  }
+
+  async function handleAddPhotoToAlbum() {
+    if (!photoDetail || selectedAlbumId === null) {
+      setAlbumsErrorMessage("Select an album first.");
+      return;
+    }
+
+    setIsUpdatingAlbums(true);
+    setAlbumsErrorMessage(null);
+    setAlbumsSuccessMessage(null);
+
+    try {
+      await addAssetsToAlbum(selectedAlbumId, [photoDetail.asset_sha256]);
+      await refreshAlbumStateForPhoto(photoDetail.asset_sha256);
+      const selectedAlbum = albums.find((album) => album.album_id === selectedAlbumId);
+      setAlbumsSuccessMessage(
+        selectedAlbum ? `Added to album: ${selectedAlbum.name}` : "Photo added to album."
+      );
+    } catch (error) {
+      setAlbumsErrorMessage(getErrorMessage(error, "Failed to add photo to album."));
+    } finally {
+      setIsUpdatingAlbums(false);
+    }
+  }
+
+  async function handleRemovePhotoFromAlbum() {
+    if (!photoDetail || selectedAlbumId === null) {
+      setAlbumsErrorMessage("Select an album first.");
+      return;
+    }
+
+    setIsUpdatingAlbums(true);
+    setAlbumsErrorMessage(null);
+    setAlbumsSuccessMessage(null);
+
+    try {
+      await removeAssetsFromAlbum(selectedAlbumId, [photoDetail.asset_sha256]);
+      await refreshAlbumStateForPhoto(photoDetail.asset_sha256);
+      const selectedAlbum = albums.find((album) => album.album_id === selectedAlbumId);
+      setAlbumsSuccessMessage(
+        selectedAlbum ? `Removed from album: ${selectedAlbum.name}` : "Photo removed from album."
+      );
+    } catch (error) {
+      setAlbumsErrorMessage(getErrorMessage(error, "Failed to remove photo from album."));
+    } finally {
+      setIsUpdatingAlbums(false);
+    }
   }
 
   return (
@@ -338,6 +466,58 @@ export function PhotosView({
                         {photoDetail.canonical_asset_sha256 ?? "Unknown"}
                       </span>
                     </div>
+                  </section>
+
+                  <section className={styles.metadataSection}>
+                    <h3 className={styles.metadataSectionTitle}>Albums</h3>
+                    {albums.length === 0 ? (
+                      <p className={styles.metadataValue}>No albums yet. Create one in the Albums view.</p>
+                    ) : (
+                      <>
+                        <div className={styles.albumActionRow}>
+                          <select
+                            className={styles.albumSelect}
+                            value={selectedAlbumId ?? ""}
+                            onChange={(event) => setSelectedAlbumId(Number(event.target.value))}
+                          >
+                            {albums.map((album) => (
+                              <option key={album.album_id} value={album.album_id}>
+                                {album.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className={styles.albumButton}
+                            onClick={handleAddPhotoToAlbum}
+                            disabled={isUpdatingAlbums}
+                          >
+                            Add
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.albumButton}
+                            onClick={handleRemovePhotoFromAlbum}
+                            disabled={isUpdatingAlbums}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        {photoAlbums.length > 0 ? (
+                          <ul className={styles.albumMembershipList}>
+                            {photoAlbums.map((album) => (
+                              <li key={album.album_id} className={styles.albumMembershipItem}>
+                                {album.name}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className={styles.metadataValue}>This photo is not in any album yet.</p>
+                        )}
+                      </>
+                    )}
+                    {albumsErrorMessage ? <p className={styles.errorInline}>{albumsErrorMessage}</p> : null}
+                    {albumsSuccessMessage ? <p className={styles.successInline}>{albumsSuccessMessage}</p> : null}
                   </section>
 
                   <section className={styles.metadataSection}>

@@ -96,6 +96,31 @@ export interface TimelineSummaryResponse {
   undated_bucket: TimelineBucketSummary | null;
 }
 
+export interface AlbumSummary {
+  album_id: number;
+  name: string;
+  description: string | null;
+  asset_count: number;
+  cover_image_url: string | null;
+  updated_at: string;
+}
+
+export interface AlbumMembershipSummary {
+  album_id: number;
+  name: string;
+}
+
+export interface AlbumDetail {
+  album_id: number;
+  name: string;
+  description: string | null;
+  asset_count: number;
+  cover_image_url: string | null;
+  created_at: string;
+  updated_at: string;
+  items: PhotoSummary[];
+}
+
 export interface PhotoEventSummary {
   event_id: number;
   label: string | null;

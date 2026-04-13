@@ -352,6 +352,58 @@
   color: #9aaab8;
 }
 
+.albumActionRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.albumSelect {
+  min-width: 140px;
+  border: 1px solid #d8dfe6;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.albumButton {
+  border: 1px solid #c8d8e5;
+  background: #edf4fa;
+  color: #214f73;
+  border-radius: 8px;
+  padding: 6px 9px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.albumMembershipList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.albumMembershipItem {
+  font-size: 0.82rem;
+  color: #1e3345;
+}
+
+.errorInline {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #c0392b;
+}
+
+.successInline {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #2f7a32;
+}
+
 @media (max-width: 1200px) {
   .detailTopGrid {
     grid-template-columns: 1fr;
