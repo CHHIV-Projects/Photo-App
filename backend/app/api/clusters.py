@@ -10,11 +10,13 @@ from app.schemas.ui_api import (
     AssignPersonRequest,
     ClusterDetail,
     ClusterListResponse,
+    ClusterSuggestionResponse,
     MergeClustersRequest,
     SuccessResponse,
 )
 from app.services.identity.ui_api_service import (
     assign_cluster_to_person,
+    get_cluster_suggestions,
     get_cluster_detail,
     ignore_cluster,
     list_clusters_for_review,
@@ -50,6 +52,20 @@ def get_cluster(cluster_id: int, db: Session = Depends(get_db_session)) -> Clust
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return ClusterDetail(**detail)
+
+
+@router.get("/{cluster_id}/suggestions", response_model=ClusterSuggestionResponse)
+def get_cluster_person_suggestions(
+    cluster_id: int,
+    db: Session = Depends(get_db_session),
+) -> ClusterSuggestionResponse:
+    """Return deterministic person suggestions for one unresolved cluster."""
+    try:
+        payload = get_cluster_suggestions(db, cluster_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return ClusterSuggestionResponse(**payload)
 
 
 @router.post("/{cluster_id}/assign-person", response_model=SuccessResponse)

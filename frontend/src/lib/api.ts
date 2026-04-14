@@ -4,6 +4,7 @@ import type {
   AlbumSummary,
   CreatePersonResponse,
   ClusterDetail,
+  ClusterSuggestionResponse,
   ClusterSummary,
   EventDetail,
   EventSummary,
@@ -66,6 +67,10 @@ export function getClusters(): Promise<ListResponse<ClusterSummary>> {
 
 export function getCluster(clusterId: number): Promise<ClusterDetail> {
   return apiRequest<ClusterDetail>(`/api/clusters/${clusterId}`);
+}
+
+export function getClusterSuggestions(clusterId: number): Promise<ClusterSuggestionResponse> {
+  return apiRequest<ClusterSuggestionResponse>(`/api/clusters/${clusterId}/suggestions`);
 }
 
 export function getPeople(): Promise<ListResponse<PersonSummary>> {

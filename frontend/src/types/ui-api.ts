@@ -21,6 +21,20 @@ export interface ClusterDetail {
   faces: FaceSummary[];
 }
 
+export interface ClusterSuggestionCandidate {
+  person_id: number;
+  person_name: string;
+  confidence_score: number;
+  rank: number;
+}
+
+export interface ClusterSuggestionResponse {
+  cluster_id: number;
+  suggestion_state: "high_confidence" | "tentative" | "none" | "ambiguous";
+  explanation: string;
+  suggested_people: ClusterSuggestionCandidate[];
+}
+
 export interface PersonSummary {
   person_id: number;
   display_name: string;

@@ -13,6 +13,7 @@ from app.models.face_cluster import FaceCluster
 from app.models.person import Person
 from app.services.identity.person_service import create_person as identity_create_person
 from app.services.identity.person_service import list_people as identity_list_people
+from app.services.identity.person_suggestion_service import get_cluster_person_suggestion
 from app.services.vision.face_cluster_corrections import (
     merge_face_clusters as correction_merge_face_clusters,
     move_face_to_cluster as correction_move_face_to_cluster,
@@ -316,3 +317,8 @@ def list_unassigned_faces(db: Session) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def get_cluster_suggestions(db: Session, cluster_id: int) -> dict:
+    """Return suggestion-only person recommendations for one cluster."""
+    return get_cluster_person_suggestion(db, cluster_id)

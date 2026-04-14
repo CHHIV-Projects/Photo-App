@@ -1,9 +1,15 @@
 import styles from "@/components/review-screen.module.css";
-import type { ClusterDetail as ClusterDetailType, ClusterSummary, PersonSummary } from "@/types/ui-api";
-import { useState } from "react";
+import type {
+  ClusterDetail as ClusterDetailType,
+  ClusterSuggestionResponse,
+  ClusterSummary,
+  PersonSummary,
+} from "@/types/ui-api";
+import { useEffect, useState } from "react";
 
 import { FaceGrid } from "@/components/FaceGrid";
 import { PersonAssignForm } from "@/components/PersonAssignForm";
+import { getClusterSuggestions } from "@/lib/api";
 
 interface ClusterDetailProps {
   clusterDetail: ClusterDetailType | null;
@@ -49,6 +55,34 @@ export function ClusterDetail({
   onSelectCluster
 }: ClusterDetailProps) {
   const [targetClusterInput, setTargetClusterInput] = useState<string>("");
+  const [suggestions, setSuggestions] = useState<ClusterSuggestionResponse | null>(null);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [suggestionsErrorMessage, setSuggestionsErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!clusterDetail) {
+      setSuggestions(null);
+      return;
+    }
+
+    const clusterId = clusterDetail.cluster_id;
+
+    async function loadSuggestions() {
+      setIsLoadingSuggestions(true);
+      setSuggestionsErrorMessage(null);
+      try {
+        const response = await getClusterSuggestions(clusterId);
+        setSuggestions(response);
+      } catch (error) {
+        setSuggestionsErrorMessage(getErrorMessage(error, "Failed to load suggestions."));
+        setSuggestions(null);
+      } finally {
+        setIsLoadingSuggestions(false);
+      }
+    }
+
+    void loadSuggestions();
+  }, [clusterDetail?.cluster_id]);
 
   const currentIndex = clusters.findIndex((c) => c.cluster_id === selectedClusterId);
   const prevClusterId = currentIndex > 0 ? clusters[currentIndex - 1].cluster_id : null;
@@ -104,6 +138,19 @@ export function ClusterDetail({
       setTargetClusterInput("");
     }
   };
+
+  const topSuggestion = suggestions?.suggested_people[0] ?? null;
+  const alternateSuggestions =
+    suggestions && suggestions.suggestion_state !== "high_confidence"
+      ? suggestions.suggested_people.slice(1, 3)
+      : [];
+
+  const suggestionLabel =
+    suggestions?.suggestion_state === "high_confidence"
+      ? "Strong suggestion"
+      : suggestions?.suggestion_state === "tentative"
+        ? "Tentative suggestion"
+        : "No strong suggestion";
 
   return (
     <section className={styles.panel}>
@@ -201,6 +248,63 @@ export function ClusterDetail({
               onAssign={onAssign}
             />
 
+            <div className={styles.infoCard}>
+              <div className={styles.infoRow}>
+                <span className={styles.infoLabel}>Suggestions</span>
+                <span className={styles.suggestionStateBadge}>{suggestionLabel}</span>
+              </div>
+
+              {isLoadingSuggestions ? <p className={styles.clusterButtonMeta}>Loading suggestions...</p> : null}
+              {suggestionsErrorMessage ? (
+                <div className={styles.errorMessage}>{suggestionsErrorMessage}</div>
+              ) : null}
+
+              {!isLoadingSuggestions && !suggestionsErrorMessage && suggestions ? (
+                <>
+                  <p className={styles.clusterButtonMeta}>{suggestions.explanation}</p>
+
+                  {topSuggestion ? (
+                    <div className={styles.suggestionTopRow}>
+                      <div className={styles.suggestionTextBlock}>
+                        <p className={styles.suggestionName}>{topSuggestion.person_name}</p>
+                        <p className={styles.suggestionMeta}>
+                          Score {topSuggestion.confidence_score.toFixed(3)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.assignButton}
+                        disabled={isAssigning}
+                        onClick={() => onAssign(topSuggestion.person_id)}
+                      >
+                        Assign
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {alternateSuggestions.length > 0 ? (
+                    <ul className={styles.suggestionList}>
+                      {alternateSuggestions.map((candidate) => (
+                        <li key={candidate.person_id} className={styles.suggestionItem}>
+                          <span>
+                            {candidate.person_name} ({candidate.confidence_score.toFixed(3)})
+                          </span>
+                          <button
+                            type="button"
+                            className={styles.suggestionAssignButton}
+                            disabled={isAssigning}
+                            onClick={() => onAssign(candidate.person_id)}
+                          >
+                            Assign
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+
             {actionErrorMessage ? (
               <div className={styles.errorMessage}>{actionErrorMessage}</div>
             ) : null}
@@ -221,4 +325,11 @@ export function ClusterDetail({
       </div>
     </section>
   );
+}
+
+function getErrorMessage(error: unknown, fallbackMessage: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallbackMessage;
 }

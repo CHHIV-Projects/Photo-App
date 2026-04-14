@@ -40,6 +40,10 @@ class Settings:
 	face_embedding_model: str = os.getenv("FACE_EMBEDDING_MODEL", "Facenet")
 	face_cluster_similarity_threshold: float = float(os.getenv("FACE_CLUSTER_SIMILARITY_THRESHOLD", "0.7"))
 	face_cluster_ambiguity_margin: float = float(os.getenv("FACE_CLUSTER_AMBIGUITY_MARGIN", "0.02"))
+	person_suggestion_high_threshold: float = float(os.getenv("PERSON_SUGGESTION_HIGH_THRESHOLD", "0.75"))
+	person_suggestion_tentative_threshold: float = float(os.getenv("PERSON_SUGGESTION_TENTATIVE_THRESHOLD", "0.60"))
+	person_suggestion_ambiguity_margin: float = float(os.getenv("PERSON_SUGGESTION_AMBIGUITY_MARGIN", "0.05"))
+	person_suggestion_max_candidates: int = int(os.getenv("PERSON_SUGGESTION_MAX_CANDIDATES", "3"))
 	face_embedding_crop_margin_ratio: float = float(os.getenv("FACE_EMBEDDING_CROP_MARGIN_RATIO", "0.1"))
 	frontend_allowed_origins_csv: str = os.getenv(
 		"FRONTEND_ALLOWED_ORIGINS",

@@ -342,3 +342,19 @@ Do not break existing Photos / Timeline / Events / People / Review flows
 -   user can browse album contents
 -   albums persist independently of automatic system groupings
 -   implementation is non-destructive and stable
+
+11.10 decisions:
+
+- UI term = Albums
+- Backend/internal model may remain Collection
+- Album names do not need to be unique
+- Cover behavior = automatic only for 11.10, use first-added asset
+- Add-to-album flow = single-photo add from photo detail + add/remove from album detail only
+- Membership API should be batch-capable now (accept list of asset hashes)
+- Delete album = hard delete of album + membership links only
+- Album list ordering = updated_at desc
+- Album contents ordering = added_at desc
+- Scope stays narrow: top-level Albums view + Photos detail integration only
+- No add/remove actions yet in Timeline, Events, Places, or People
+- Use safe startup/schema-sync approach plus migration/script if needed
+- Include lightweight regression validation proving album operations do not affect events, faces, people, provenance, or duplicate lineage

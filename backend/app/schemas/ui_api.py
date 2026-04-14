@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -120,3 +122,21 @@ class FaceListResponse(BaseModel):
 
     count: int
     items: list[FaceSummary]
+
+
+class ClusterSuggestionCandidate(BaseModel):
+    """One ranked person suggestion for a target cluster."""
+
+    person_id: int
+    person_name: str
+    confidence_score: float
+    rank: int
+
+
+class ClusterSuggestionResponse(BaseModel):
+    """Suggestion-only response for one cluster."""
+
+    cluster_id: int
+    suggestion_state: Literal["high_confidence", "tentative", "none", "ambiguous"]
+    explanation: str
+    suggested_people: list[ClusterSuggestionCandidate] = Field(default_factory=list)
