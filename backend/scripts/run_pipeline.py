@@ -21,7 +21,10 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.face import Face
+from app.services.duplicates.lineage import ProvenanceContext
 from app.services.ingestion.deduplicator import DeduplicationResult, DuplicateFile
+from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
+from app.services.ingestion.ingestion_context_service import ResolvedIngestionContext, resolve_ingestion_context
 from app.services.ingestion.dropzone_manager import (
     DropzoneStageResult,
     build_dropzone_processing_records,
@@ -47,6 +50,8 @@ class PipelineContext:
     quarantine_path: Path
     ingest_batch_size: int
     ingest_total_limit: int | None
+    source_label: str | None
+    source_type: str | None
     source_scan_result: ScanResult | None = None
     stage_result: DropzoneStageResult | None = None
     dropzone_scan_result: ScanResult | None = None
@@ -67,6 +72,7 @@ class PipelineContext:
     total_dropzone_files_cleaned: int = 0
     run_face_detection_rebuild: bool = False
     run_face_clustering_rebuild: bool = False
+    resolved_ingestion_context: ResolvedIngestionContext | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +102,8 @@ class RuntimeArgs:
     skip_crop_generation: bool
     ingest_batch_size: int
     ingest_total_limit: int | None
+    source_label: str | None
+    source_type: str | None
 
 
 @dataclass(frozen=True)
@@ -164,6 +172,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--from-path",
         type=Path,
         help="Optional source folder to stage into the Drop Zone before processing.",
+    )
+    parser.add_argument(
+        "--source-label",
+        type=str,
+        help="Optional human-readable source label for this ingestion run.",
+    )
+    parser.add_argument(
+        "--source-type",
+        type=str,
+        choices=["local_folder", "external_drive", "cloud_export", "scan_batch", "other"],
+        help="Optional source type label for this ingestion run.",
     )
     parser.add_argument(
         "--dry-run",
@@ -235,6 +254,8 @@ def _has_non_interactive_flags(parsed: argparse.Namespace) -> bool:
             parsed.ingest_batch_size is not None,
             parsed.ingest_total_limit is not None,
             parsed.from_path is not None,
+            bool(parsed.source_label),
+            bool(parsed.source_type),
             parsed.dry_run,
             parsed.skip_exif_extraction,
             parsed.skip_metadata_normalization,
@@ -286,6 +307,8 @@ def _build_runtime_args(
     run_crop_generation_override: bool,
     ingest_batch_size: int,
     ingest_total_limit: int | None,
+    source_label: str | None,
+    source_type: str | None,
 ) -> RuntimeArgs:
     any_face_rebuild = run_face_detection_rebuild or run_face_clustering_rebuild
     run_crop_generation = run_crop_generation_override or (not skip_face_processing)
@@ -304,6 +327,8 @@ def _build_runtime_args(
         skip_crop_generation=effective_skip_crop_generation,
         ingest_batch_size=ingest_batch_size,
         ingest_total_limit=ingest_total_limit,
+        source_label=source_label,
+        source_type=source_type,
     )
 
 
@@ -401,10 +426,16 @@ def _get_user_input() -> Any:
     # Prompt 5: Source folder to ingest
     source_path = input("Source folder to ingest (leave blank for existing drop zone): ").strip()
     from_path = None
+    source_label = None
+    source_type = None
     if source_path:
         from_path = Path(source_path).expanduser().resolve()
         if not from_path.exists():
             print(f"  Warning: Path does not exist: {from_path}")
+        source_label = input(
+            "Source label for this ingestion run? (examples: Chuck PC, External Drive 1, iCloud Export): "
+        ).strip()
+        source_type = "local_folder"
     print()
 
     ingest_batch_size = _prompt_int_default(
@@ -440,6 +471,8 @@ def _get_user_input() -> Any:
         run_crop_generation_override=False,
         ingest_batch_size=ingest_batch_size,
         ingest_total_limit=ingest_total_limit,
+        source_label=source_label,
+        source_type=source_type,
     )
 
 
@@ -454,6 +487,8 @@ def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
     )
     ingest_batch_size = parsed.ingest_batch_size or settings.ingest_batch_size
     ingest_total_limit = parsed.ingest_total_limit if parsed.ingest_total_limit is not None else settings.ingest_total_limit
+    if from_path is None and parsed.source_type and not parsed.source_label:
+        raise ValueError("--source-type requires --source-label when --from-path is not provided.")
     _validate_ingest_controls(ingest_batch_size, ingest_total_limit)
 
     return _build_runtime_args(
@@ -470,6 +505,8 @@ def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
         run_crop_generation_override=parsed.run_crop_generation,
         ingest_batch_size=ingest_batch_size,
         ingest_total_limit=ingest_total_limit,
+        source_label=parsed.source_label,
+        source_type=parsed.source_type,
     )
 
 
@@ -680,11 +717,29 @@ def _ingest_to_db_stage(ctx: PipelineContext) -> dict[str, Any]:
     if ctx.storage_result is None:
         raise RuntimeError("Storage stage must run before DB ingestion.")
 
+    provenance_context = None
+    if ctx.resolved_ingestion_context is not None:
+        provenance_context = ProvenanceContext(
+            ingestion_source_id=ctx.resolved_ingestion_context.ingestion_source_id,
+            ingestion_run_id=ctx.resolved_ingestion_context.ingestion_run_id,
+            source_label=ctx.resolved_ingestion_context.source_label,
+            source_type=ctx.resolved_ingestion_context.source_type,
+            source_root_path=ctx.resolved_ingestion_context.source_root_path,
+        )
+
     db_session = SessionLocal()
     try:
-        result = persist_copied_files(db_session, ctx.storage_result.copied_files)
+        result = persist_copied_files(
+            db_session,
+            ctx.storage_result.copied_files,
+            provenance_context=provenance_context,
+        )
         duplicate_provenance_result = (
-            persist_duplicate_provenance(db_session, ctx.dedup_result.duplicate_files)
+            persist_duplicate_provenance(
+                db_session,
+                ctx.dedup_result.duplicate_files,
+                provenance_context=provenance_context,
+            )
             if ctx.dedup_result is not None
             else None
         )
@@ -884,6 +939,53 @@ def _face_schema_sync_stage(_: PipelineContext) -> dict[str, Any]:
     }
 
 
+def _ingestion_context_schema_sync_stage(_: PipelineContext) -> dict[str, Any]:
+    db_session = SessionLocal()
+    try:
+        summary = ensure_ingestion_context_schema(db_session)
+    finally:
+        db_session.close()
+
+    return {
+        "scope": "global",
+        "added_tables": len(summary.added_tables),
+        "added_columns": len(summary.added_columns),
+        "added_indexes": len(summary.added_indexes),
+        "constraints_added": len(summary.added_constraints),
+        "constraints_dropped": len(summary.dropped_constraints),
+    }
+
+
+def _resolve_ingestion_context_stage(ctx: PipelineContext) -> dict[str, Any]:
+    db_session = SessionLocal()
+    try:
+        resolved = resolve_ingestion_context(
+            db_session,
+            from_path=ctx.from_path,
+            source_label=ctx.source_label,
+            source_type=ctx.source_type,
+        )
+    finally:
+        db_session.close()
+
+    ctx.resolved_ingestion_context = resolved
+    if resolved is None:
+        return {
+            "scope": "global",
+            "status": "not_set",
+            "reason": "no_source_context_requested",
+        }
+
+    return {
+        "scope": "global",
+        "ingestion_source_id": resolved.ingestion_source_id,
+        "ingestion_run_id": resolved.ingestion_run_id,
+        "source_label": resolved.source_label,
+        "source_type": resolved.source_type,
+        "source_root_path": resolved.source_root_path,
+    }
+
+
 def _face_detection_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.vision.face_detector import (
         YuNetFaceDetector,
@@ -1059,6 +1161,10 @@ def _print_dry_run(args: RuntimeArgs, ctx: PipelineContext) -> None:
     print(f"  Source mode: {'from-path' if ctx.from_path else 'existing drop zone'}")
     if ctx.from_path is not None:
         print(f"  Source path: {ctx.from_path}")
+    if args.source_label:
+        print(f"  Source label: {args.source_label}")
+    if args.source_type:
+        print(f"  Source type: {args.source_type}")
     print(f"  Drop zone path: {ctx.drop_zone_path}")
     print(f"  Vault path: {ctx.vault_path}")
     print(f"  Ingest batch size: {args.ingest_batch_size}")
@@ -1066,14 +1172,16 @@ def _print_dry_run(args: RuntimeArgs, ctx: PipelineContext) -> None:
     print()
     print("Planned stages:")
     print("  [1] RUN - collect input (scope=batch)")
-    print("  [2] RUN - ingestion batches: filter, hash, deduplicate, storage, ingest, cleanup (scope=batch)")
-    print("  [3] RUN - face schema sync (scope=global)")
-    print(f"  [4] {'SKIP (--skip-exif-extraction)' if args.skip_exif_extraction else 'RUN'} - EXIF extraction (scope=batch)")
-    print(f"  [5] {'SKIP (--skip-metadata-normalization)' if args.skip_metadata_normalization else 'RUN'} - metadata normalization (scope=batch)")
-    print(f"  [6] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
-    print(f"  [7] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
-    print(f"  [8] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
-    print(f"  [9] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
+    print("  [2] RUN - ingestion context schema sync (scope=global)")
+    print("  [3] RUN - ingestion context resolve (scope=global)")
+    print("  [4] RUN - face schema sync (scope=global)")
+    print("  [5] RUN - ingestion batches: filter, hash, deduplicate, storage, ingest, cleanup (scope=batch)")
+    print(f"  [6] {'SKIP (--skip-exif-extraction)' if args.skip_exif_extraction else 'RUN'} - EXIF extraction (scope=batch)")
+    print(f"  [7] {'SKIP (--skip-metadata-normalization)' if args.skip_metadata_normalization else 'RUN'} - metadata normalization (scope=batch)")
+    print(f"  [8] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
+    print(f"  [9] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
+    print(f"  [10] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
+    print(f"  [11] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
     print()
     print("Status: DRY RUN")
 
@@ -1295,6 +1403,22 @@ def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]
             runner=lambda: _collect_input(ctx),
             outcomes=outcomes,
         )
+        _execute_stage(
+            key="ingestion_context_schema_sync",
+            index=1,
+            total=1,
+            label="ingestion context schema sync",
+            runner=lambda: _ingestion_context_schema_sync_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key="ingestion_context_resolve",
+            index=1,
+            total=1,
+            label="ingestion context resolve",
+            runner=lambda: _resolve_ingestion_context_stage(ctx),
+            outcomes=outcomes,
+        )
         _load_known_asset_sha256(ctx)
 
         _execute_stage(
@@ -1369,6 +1493,13 @@ def _print_summary(ctx: PipelineContext, outcomes: list[StageOutcome], total_ela
     print(f"  Batches run: {ctx.total_batches_run}")
     print(f"  Drop zone files cleaned: {ctx.total_dropzone_files_cleaned}")
     print(f"  Drop zone files remaining: {remaining_dropzone_files}")
+    if ctx.resolved_ingestion_context is not None:
+        print(f"  Source label: {ctx.resolved_ingestion_context.source_label}")
+        print(f"  Source type: {ctx.resolved_ingestion_context.source_type}")
+        if ctx.resolved_ingestion_context.source_root_path:
+            print(f"  Source root path: {ctx.resolved_ingestion_context.source_root_path}")
+        print(f"  Ingestion source ID: {ctx.resolved_ingestion_context.ingestion_source_id}")
+        print(f"  Ingestion run ID: {ctx.resolved_ingestion_context.ingestion_run_id}")
 
     if failed is None:
         print("  Status: SUCCESS")
@@ -1399,6 +1530,8 @@ def main() -> int:
         quarantine_path=_resolve_runtime_path(settings.quarantine_path),
         ingest_batch_size=args.ingest_batch_size,
         ingest_total_limit=args.ingest_total_limit,
+        source_label=args.source_label,
+        source_type=args.source_type,
         run_face_detection_rebuild=args.run_face_detection_rebuild,
         run_face_clustering_rebuild=args.run_face_clustering_rebuild,
     )
@@ -1411,6 +1544,10 @@ def main() -> int:
     print(f"  Source mode: {'from-path' if ctx.from_path else 'existing drop zone'}")
     if ctx.from_path is not None:
         print(f"  Source path: {ctx.from_path}")
+    if args.source_label:
+        print(f"  Source label: {args.source_label.strip()}")
+    if args.source_type:
+        print(f"  Source type: {args.source_type}")
     print(f"  Drop zone path: {ctx.drop_zone_path}")
     print(f"  Vault path: {ctx.vault_path}")
     print(f"  Ingest batch size: {ctx.ingest_batch_size}")

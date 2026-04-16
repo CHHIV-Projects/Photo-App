@@ -157,6 +157,12 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
     provenance_summary = [
         {
             "source_path": row.source_path,
+            "source_label": row.source_label,
+            "source_type": row.source_type,
+            "source_root_path": row.source_root_path,
+            "source_relative_path": row.source_relative_path,
+            "ingestion_source_id": row.ingestion_source_id,
+            "ingestion_run_id": row.ingestion_run_id,
             "ingested_at": row.ingested_at.isoformat() if row.ingested_at else None,
             "source_hash": row.source_hash,
         }

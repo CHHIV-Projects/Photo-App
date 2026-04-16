@@ -36,6 +36,12 @@ class PhotoLocation(BaseModel):
 
 class PhotoProvenance(BaseModel):
     source_path: str
+    source_label: str | None = None
+    source_type: str | None = None
+    source_root_path: str | None = None
+    source_relative_path: str | None = None
+    ingestion_source_id: int | None = None
+    ingestion_run_id: int | None = None
     ingested_at: str | None = None
     source_hash: str | None = None
 

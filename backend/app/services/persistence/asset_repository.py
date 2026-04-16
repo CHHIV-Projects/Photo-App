@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
-from app.services.duplicates.lineage import upsert_provenance
+from app.services.duplicates.lineage import ProvenanceContext, upsert_provenance
 from app.services.ingestion.deduplicator import DuplicateFile
 from app.services.ingestion.storage_manager import CopiedFile
 
@@ -74,7 +74,11 @@ def _build_asset(copied_file: CopiedFile) -> Asset:
     )
 
 
-def persist_copied_files(db_session: Session, copied_files: list[CopiedFile]) -> PersistenceResult:
+def persist_copied_files(
+    db_session: Session,
+    copied_files: list[CopiedFile],
+    provenance_context: ProvenanceContext | None = None,
+) -> PersistenceResult:
     """Persist copied files into PostgreSQL, skipping duplicate SHA-256 rows."""
     inserted_records: list[InsertedAsset] = []
     skipped_existing_records: list[SkippedExistingAsset] = []
@@ -85,7 +89,12 @@ def persist_copied_files(db_session: Session, copied_files: list[CopiedFile]) ->
         existing_asset = db_session.get(Asset, copied_file.hashed_file.sha256)
         if existing_asset is not None:
             try:
-                provenance_added = upsert_provenance(db_session, existing_asset.sha256, source_path)
+                provenance_added = upsert_provenance(
+                    db_session,
+                    existing_asset.sha256,
+                    source_path,
+                    context=provenance_context,
+                )
                 db_session.commit()
                 reason = "Asset already exists; provenance recorded." if provenance_added else "Asset already exists; provenance already present."
                 skipped_existing_records.append(
@@ -103,7 +112,12 @@ def persist_copied_files(db_session: Session, copied_files: list[CopiedFile]) ->
             asset = _build_asset(copied_file)
             db_session.add(asset)
             db_session.flush()
-            upsert_provenance(db_session, asset.sha256, source_path)
+            upsert_provenance(
+                db_session,
+                asset.sha256,
+                source_path,
+                context=provenance_context,
+            )
             db_session.commit()
             inserted_records.append(InsertedAsset(copied_file=copied_file))
         except IntegrityError:
@@ -128,9 +142,14 @@ def persist_copied_files(db_session: Session, copied_files: list[CopiedFile]) ->
 def persist_copied_files_as_dicts(
     db_session: Session,
     copied_files: list[CopiedFile],
+    provenance_context: ProvenanceContext | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Return persistence result in plain dict form for scripts."""
-    result = persist_copied_files(db_session, copied_files)
+    result = persist_copied_files(
+        db_session,
+        copied_files,
+        provenance_context=provenance_context,
+    )
     return {
         "inserted_records": [
             {
@@ -176,6 +195,7 @@ def persist_copied_files_as_dicts(
 def persist_duplicate_provenance(
     db_session: Session,
     duplicate_files: list[DuplicateFile],
+    provenance_context: ProvenanceContext | None = None,
 ) -> DuplicateProvenanceResult:
     """Persist provenance rows for duplicate files eliminated inside one ingest batch."""
     added = 0
@@ -187,7 +207,12 @@ def persist_duplicate_provenance(
     for duplicate_file in duplicate_files:
         source_path = duplicate_file.duplicate.record.original_source_path
         try:
-            was_added = upsert_provenance(db_session, duplicate_file.duplicate.sha256, source_path)
+            was_added = upsert_provenance(
+                db_session,
+                duplicate_file.duplicate.sha256,
+                source_path,
+                context=provenance_context,
+            )
             db_session.commit()
             if was_added:
                 added += 1

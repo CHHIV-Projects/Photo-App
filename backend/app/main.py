@@ -19,6 +19,7 @@ from app.api.timeline import router as timeline_router
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.albums.album_schema import ensure_album_schema
+from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
 from app.services.vision.face_incremental_schema import ensure_face_incremental_schema
 
 
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
 		db_session = SessionLocal()
 		try:
 			ensure_album_schema(db_session)
+			ensure_ingestion_context_schema(db_session)
 			ensure_face_incremental_schema(db_session)
 		finally:
 			db_session.close()

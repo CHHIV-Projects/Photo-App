@@ -38,6 +38,17 @@ class DuplicateLineageSummary:
 
 
 @dataclass(frozen=True)
+class ProvenanceContext:
+    """Optional ingestion context attached to a provenance write."""
+
+    ingestion_source_id: int | None
+    ingestion_run_id: int | None
+    source_label: str | None
+    source_type: str | None
+    source_root_path: str | None
+
+
+@dataclass(frozen=True)
 class _FeatureRow:
     """Cached feature row used for fast near-duplicate grouping."""
 
@@ -205,23 +216,57 @@ def recompute_group_canonical(db_session: Session, group_id: int) -> str | None:
     return winner.sha256
 
 
-def upsert_provenance(db_session: Session, asset_sha256: str, source_path: str) -> bool:
+def _resolve_source_relative_path(source_path: str, source_root_path: str | None) -> str | None:
+    if not source_root_path:
+        return None
+
+    try:
+        relative = Path(source_path).resolve().relative_to(Path(source_root_path).resolve())
+        return str(relative)
+    except Exception:  # noqa: BLE001
+        # Preserve path meaning when relative computation is not possible.
+        return source_path
+
+
+def upsert_provenance(
+    db_session: Session,
+    asset_sha256: str,
+    source_path: str,
+    context: ProvenanceContext | None = None,
+) -> bool:
     source_path = (source_path or "").strip()
     if not source_path:
         return False
 
+    where_clauses = [
+        Provenance.asset_sha256 == asset_sha256,
+        Provenance.source_path == source_path,
+    ]
+    if context is not None and context.ingestion_run_id is not None:
+        where_clauses.append(Provenance.ingestion_run_id == context.ingestion_run_id)
+    else:
+        where_clauses.append(Provenance.ingestion_run_id.is_(None))
+
     existing = db_session.scalar(
-        select(Provenance).where(
-            and_(
-                Provenance.asset_sha256 == asset_sha256,
-                Provenance.source_path == source_path,
-            )
-        )
+        select(Provenance).where(and_(*where_clauses))
     )
     if existing is not None:
         return False
 
-    db_session.add(Provenance(asset_sha256=asset_sha256, source_path=source_path))
+    source_root_path = context.source_root_path if context is not None else None
+    source_relative_path = _resolve_source_relative_path(source_path, source_root_path)
+    db_session.add(
+        Provenance(
+            asset_sha256=asset_sha256,
+            source_path=source_path,
+            ingestion_source_id=context.ingestion_source_id if context is not None else None,
+            ingestion_run_id=context.ingestion_run_id if context is not None else None,
+            source_label=context.source_label if context is not None else None,
+            source_type=context.source_type if context is not None else None,
+            source_root_path=source_root_path,
+            source_relative_path=source_relative_path,
+        )
+    )
     db_session.flush()
     return True
 
