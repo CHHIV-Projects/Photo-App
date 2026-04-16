@@ -24,6 +24,12 @@ class Settings:
 	drop_zone_path: str = os.getenv("DROP_ZONE_PATH", "../storage/drop_zone")
 	vault_path: str = os.getenv("VAULT_PATH", "../storage/vault")
 	quarantine_path: str = os.getenv("QUARANTINE_PATH", "../storage/quarantine")
+	ingest_batch_size: int = int(os.getenv("INGEST_BATCH_SIZE", "50"))
+	ingest_total_limit: int | None = (
+		int(os.getenv("INGEST_TOTAL_LIMIT", "").strip())
+		if os.getenv("INGEST_TOTAL_LIMIT", "").strip()
+		else None
+	)
 	event_cluster_gap_seconds: int = int(os.getenv("EVENT_CLUSTER_GAP_SECONDS", "14400"))
 	duplicate_hamming_threshold: int = int(os.getenv("DUPLICATE_HAMMING_THRESHOLD", "10"))
 	duplicate_resolution_band_ratio: float = float(os.getenv("DUPLICATE_RESOLUTION_BAND_RATIO", "0.25"))
@@ -44,6 +50,8 @@ class Settings:
 	person_suggestion_tentative_threshold: float = float(os.getenv("PERSON_SUGGESTION_TENTATIVE_THRESHOLD", "0.60"))
 	person_suggestion_ambiguity_margin: float = float(os.getenv("PERSON_SUGGESTION_AMBIGUITY_MARGIN", "0.05"))
 	person_suggestion_max_candidates: int = int(os.getenv("PERSON_SUGGESTION_MAX_CANDIDATES", "3"))
+	content_tag_min_confidence: float = float(os.getenv("CONTENT_TAG_MIN_CONFIDENCE", "0.25"))
+	content_tag_max_per_asset: int = int(os.getenv("CONTENT_TAG_MAX_PER_ASSET", "5"))
 	face_embedding_crop_margin_ratio: float = float(os.getenv("FACE_EMBEDDING_CROP_MARGIN_RATIO", "0.1"))
 	frontend_allowed_origins_csv: str = os.getenv(
 		"FRONTEND_ALLOWED_ORIGINS",

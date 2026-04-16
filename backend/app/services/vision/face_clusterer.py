@@ -200,8 +200,24 @@ def assign_faces_incrementally(
     ambiguity_margin: float,
 ) -> FaceIncrementalAssignmentSummary:
     """Assign only unassigned embedded faces to existing or new clusters."""
+    faces_to_assign = load_faces_for_incremental_assignment(db_session)
+    return assign_selected_faces_incrementally(
+        db_session,
+        faces_to_assign=faces_to_assign,
+        similarity_threshold=similarity_threshold,
+        ambiguity_margin=ambiguity_margin,
+    )
+
+
+def assign_selected_faces_incrementally(
+    db_session: Session,
+    *,
+    faces_to_assign: list[Face],
+    similarity_threshold: float,
+    ambiguity_margin: float,
+) -> FaceIncrementalAssignmentSummary:
+    """Assign a specific set of embedded faces to existing or new clusters."""
     try:
-        faces_to_assign = load_faces_for_incremental_assignment(db_session)
         cluster_state_map = _build_cluster_state_map(db_session)
 
         assigned_to_existing = 0

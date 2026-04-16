@@ -13,3 +13,6 @@ opencv-python-headless
 deepface
 Pillow
 ImageHash
+timm
+torch
+torchvision

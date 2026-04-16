@@ -6,6 +6,7 @@ from sqlalchemy import func, nullslast, select
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
+from app.models.asset_content_tag import AssetContentTag
 from app.models.duplicate_group import DuplicateGroup
 from app.models.event import Event
 from app.models.face import Face
@@ -75,6 +76,16 @@ def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[d
         }
         for row in rows
     ]
+
+
+def _get_content_tags(db: Session, sha256: str) -> list[dict]:
+    """Return persisted content tags for an asset, ordered by confidence desc."""
+    rows = db.scalars(
+        select(AssetContentTag)
+        .where(AssetContentTag.asset_sha256 == sha256)
+        .order_by(AssetContentTag.confidence_score.desc())
+    ).all()
+    return [{"tag": row.tag, "tag_type": row.tag_type} for row in rows]
 
 
 def get_photo_detail(db: Session, sha256: str) -> dict | None:
@@ -187,6 +198,7 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
         "duplicate_count": duplicate_count,
         "canonical_asset_sha256": canonical_asset_sha256,
         "faces": faces,
+        "content_tags": _get_content_tags(db, sha256),
     }
 
 

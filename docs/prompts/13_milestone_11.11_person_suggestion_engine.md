@@ -257,3 +257,23 @@ Add endpoint:
 -   ambiguous/weak cases handled safely
 -   no automatic identity changes occur
 -   existing workflows remain stable
+
+11.11 decisions:
+
+- Source clusters must be strictly:
+  - person_id IS NOT NULL
+  - is_reviewed = true
+- Endpoint path = /api/clusters/{cluster_id}/suggestions
+- If target centroid_json is null:
+  - suggestion_state = none
+  - explanation = "Cluster has insufficient embedding data for suggestion."
+- Use one explanation string at response level only
+- Add dedicated config settings:
+  - PERSON_SUGGESTION_HIGH_THRESHOLD
+  - PERSON_SUGGESTION_TENTATIVE_THRESHOLD
+  - PERSON_SUGGESTION_AMBIGUITY_MARGIN
+  - PERSON_SUGGESTION_MAX_CANDIDATES
+- Show suggestions only in Cluster Review panel
+- Do not add suggestion UI to Unassigned Faces
+- Show alternates only when top suggestion is not strong
+- Tie-break equal similarity scores by lower person_id

@@ -2677,3 +2677,359 @@ Do not implement changes prematurely. Address when:
 * events become user-editable
 * timeline becomes a primary navigation layer
 * event identity stability becomes important to UX
+
+# Parking Lot — Metadata Canonicalization and Provenance-Aware Enrichment
+
+## Problem
+
+The system currently selects a **canonical asset based on visual quality**, but metadata (EXIF and derived fields) is taken only from that asset.
+
+This creates issues where:
+
+* duplicate or near-duplicate assets contain **better or more complete metadata**
+* the canonical asset may have:
+
+  * missing metadata
+  * lower-confidence metadata
+  * incorrect or misleading values (e.g., wrong capture date)
+
+Example:
+
+* a canonical JPEG may contain a low-confidence or incorrect `captured_at`
+* a sibling HEIC/original asset contains accurate EXIF capture date, GPS, and device metadata
+* current system does not promote the better data
+
+---
+
+## Goal
+
+Introduce a system that ensures **best available metadata is preserved and applied**, using:
+
+* duplicate lineage relationships
+* provenance awareness
+* trust-based selection rules
+* full auditability
+
+---
+
+## Core Concept
+
+Separate concerns:
+
+* **Visual Canonical Asset**
+
+  * selected by quality (existing 11.7 logic)
+
+* **Metadata Canonicalization**
+
+  * derived from the **best available source across all lineage-linked assets**
+  * applied to normalized metadata fields on the canonical asset
+
+---
+
+## Desired Behavior
+
+### 1. Metadata Enrichment Across Lineage
+
+For each duplicate lineage group:
+
+* evaluate all related assets (exact + near duplicates)
+* select the best value for each metadata field
+* populate normalized metadata on the canonical asset
+
+Fields include (initial scope):
+
+* capture datetime (`captured_at`)
+* GPS (lat/lon)
+* camera make/model
+* orientation
+* other high-value EXIF fields
+
+---
+
+### 2. Not Just Null Filling
+
+System must support:
+
+* filling missing values
+* **replacing lower-quality or lower-trust values**
+* resolving conflicting values across siblings
+
+Example:
+
+* existing `captured_at` is present but low-confidence
+* sibling has high-confidence EXIF capture time
+  → system should **replace**, not ignore
+
+---
+
+### 3. Trust-Based Selection
+
+Define rules to determine “best” value:
+
+Factors may include:
+
+* capture_time_trust (high / low / unknown)
+* source type:
+
+  * original device file (e.g., HEIC)
+  * edited/exported version
+  * scan/import
+* metadata richness (number of populated fields)
+* consistency with other lineage members
+* provenance source (e.g., original path vs derived)
+
+Example priority (conceptual):
+
+1. high-trust original EXIF
+2. high-quality original-format asset
+3. strong metadata from sibling duplicate
+4. inferred/provenance-derived metadata
+5. weak or ambiguous values
+
+Rules must remain:
+
+* deterministic
+* explainable
+
+---
+
+### 4. Per-Field Selection (Not Per-Asset)
+
+Metadata should be selected **per field**, not per asset.
+
+Example:
+
+* one asset provides best capture date
+* another provides GPS
+* another provides device model
+
+System should:
+
+* combine best values across sources
+* not rely on a single “metadata canonical asset”
+
+---
+
+### 5. Provenance and Audit Tracking
+
+Every metadata decision must be auditable.
+
+For each promoted/replaced field, record:
+
+* target asset (canonical asset)
+* metadata field name
+* selected value
+* source asset SHA
+* source provenance record (source_path, ingestion context)
+* reason for selection (e.g., higher trust, non-null replacement, richer metadata)
+* timestamp of promotion
+* previous value (if replaced)
+
+---
+
+### 6. Non-Destructive and Reversible
+
+* original asset metadata must remain unchanged
+* canonical metadata is derived, not destructive
+* system should allow:
+
+  * recomputation
+  * auditing
+  * future refinement of rules
+
+---
+
+### 7. Integration Points
+
+This system should integrate with:
+
+* duplicate lineage (11.7)
+* metadata normalization (existing)
+* timeline/time layer (11.9)
+* future:
+
+  * place detection
+  * search/filtering
+  * ML-based inference
+
+---
+
+## Constraints
+
+* Must not break existing canonical asset logic
+* Must not introduce silent or opaque changes
+* Must remain deterministic and explainable
+* Must preserve provenance integrity
+* Must not require UI changes in initial implementation
+
+---
+
+## Complexity Notes
+
+* Metadata quality varies widely across:
+
+  * originals
+  * exports
+  * scans
+  * cloud downloads
+* Some fields may conflict across siblings
+* Some values may be incorrect but non-null
+* Full correctness may require iterative refinement
+
+---
+
+## Future Enhancements
+
+* ML-assisted metadata inference (e.g., time estimation, scene context)
+* confidence scoring per metadata field
+* user-visible metadata audit and override UI
+* metadata conflict resolution workflows
+* canonical metadata versioning
+
+---
+
+## Notes
+
+This is a **critical architectural enhancement** uncovered after:
+
+* duplicate lineage implementation (11.7)
+* timeline/time layer introduction (11.9)
+
+It addresses the gap between:
+
+* **visual canonical correctness**
+* and **metadata correctness**
+
+This should be implemented before relying heavily on:
+
+* timeline accuracy
+* location grouping
+* advanced search and filtering
+
+# Parking Lot — Suggestion Dismissal and Negative Feedback
+
+## Problem
+
+The current suggestion system provides:
+
+* ranked person suggestions
+* confidence-aware outputs
+* safe, non-destructive behavior
+
+However, when a suggestion is **incorrect**, the system:
+
+* continues to show the same suggestion on subsequent views
+* has no memory of user disagreement
+* cannot learn from negative feedback
+
+This creates friction in cases where:
+
+* a cluster is repeatedly suggested as the wrong person
+* the user has already evaluated and rejected that suggestion mentally
+* the system keeps resurfacing low-value recommendations
+
+---
+
+## Goal
+
+Introduce a lightweight mechanism to allow users to:
+
+* **dismiss suggestions**
+* optionally **reject specific person candidates for a cluster**
+* reduce repeated incorrect suggestions
+* preserve user intent without introducing unsafe automation
+
+---
+
+## Desired Behavior
+
+### 1. Suggestion Dismissal (Minimal Version)
+
+User can:
+
+* dismiss suggestion for a cluster
+
+Result:
+
+* suggestion is no longer shown for that cluster
+* cluster may be marked as:
+
+  * reviewed
+  * or “no suggestion needed”
+
+---
+
+### 2. Candidate-Level Rejection (Future Enhancement)
+
+User can:
+
+* reject a specific suggested person for a cluster
+
+Result:
+
+* that person is excluded from future suggestions for that cluster
+* ranking recalculated without that candidate
+
+---
+
+### 3. Persistence
+
+System should store:
+
+* cluster_id
+* rejected_person_id (optional)
+* dismissal flag (cluster-level)
+* timestamp
+
+---
+
+### 4. Behavior on Rerun
+
+* dismissed clusters should not resurface suggestions unless explicitly reset
+* rejected candidates should remain excluded
+* system remains deterministic and explainable
+
+---
+
+### 5. UI Integration (Future)
+
+Possible UI actions:
+
+* “Dismiss suggestion”
+* “Not this person”
+* “Don’t suggest again”
+
+Keep UI simple and consistent with review workflow.
+
+---
+
+## Constraints
+
+* Must NOT auto-assign identities
+* Must NOT modify cluster membership
+* Must NOT override existing assignments
+* Must remain reversible if needed
+* Must not introduce complex learning systems yet
+
+---
+
+## Future Enhancements
+
+* feedback-aware suggestion ranking
+* learning from rejection patterns
+* confidence recalibration
+* user override/reset controls
+
+---
+
+## Notes
+
+This is a natural follow-on to 11.11:
+
+* 11.11 introduces **suggestions**
+* this item introduces **user feedback on suggestions**
+
+It improves usability without changing core identity logic.
+
+This should be implemented **after observing real usage patterns**, not prematurely.

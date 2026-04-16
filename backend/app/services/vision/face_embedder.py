@@ -62,9 +62,14 @@ def embedding_from_json(embedding_json: str | None) -> np.ndarray | None:
         return None
 
     try:
-        return np.asarray(values, dtype=np.float32)
+        arr = np.asarray(values, dtype=np.float32)
     except (TypeError, ValueError):
         return None
+
+    if arr.ndim != 1 or arr.shape[0] < 64:
+        return None
+
+    return arr
 
 
 def _crop_face_with_margin(image, face: Face, margin_ratio: float):

@@ -54,6 +54,8 @@ class DuplicateProvenanceResult:
     added: int
     already_present: int
     failed: int
+    successful_duplicates: list[DuplicateFile]
+    failed_duplicates: list[tuple[DuplicateFile, str]]
 
 
 def _build_asset(copied_file: CopiedFile) -> Asset:
@@ -179,6 +181,8 @@ def persist_duplicate_provenance(
     added = 0
     already_present = 0
     failed = 0
+    successful_duplicates: list[DuplicateFile] = []
+    failed_duplicates: list[tuple[DuplicateFile, str]] = []
 
     for duplicate_file in duplicate_files:
         source_path = duplicate_file.duplicate.record.original_source_path
@@ -189,8 +193,16 @@ def persist_duplicate_provenance(
                 added += 1
             else:
                 already_present += 1
+            successful_duplicates.append(duplicate_file)
         except SQLAlchemyError:
             db_session.rollback()
             failed += 1
+            failed_duplicates.append((duplicate_file, "provenance_persist_failed"))
 
-    return DuplicateProvenanceResult(added=added, already_present=already_present, failed=failed)
+    return DuplicateProvenanceResult(
+        added=added,
+        already_present=already_present,
+        failed=failed,
+        successful_duplicates=successful_duplicates,
+        failed_duplicates=failed_duplicates,
+    )

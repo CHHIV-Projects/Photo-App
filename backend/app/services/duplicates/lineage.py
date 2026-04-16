@@ -476,3 +476,43 @@ def backfill_missing_lineage_fields(
         db_session.commit()
 
     return DuplicateLineageSummary(processed=processed, updated=updated, skipped=skipped, failed=failed)
+
+
+def update_lineage_for_assets(
+    db_session: Session,
+    asset_sha256_list: list[str],
+    *,
+    dry_run: bool = False,
+) -> DuplicateLineageSummary:
+    """Update lineage fields and grouping only for the provided asset set."""
+    if not asset_sha256_list:
+        return DuplicateLineageSummary(processed=0, updated=0, skipped=0, failed=0)
+
+    ordered_assets = list(
+        db_session.scalars(
+            select(Asset)
+            .where(Asset.sha256.in_(asset_sha256_list))
+            .order_by(Asset.created_at_utc.asc(), Asset.sha256.asc())
+        ).all()
+    )
+
+    processed = 0
+    updated = 0
+    skipped = 0
+    failed = 0
+
+    for asset in ordered_assets:
+        processed += 1
+        if dry_run:
+            skipped += 1
+            continue
+
+        try:
+            update_asset_lineage(db_session, asset)
+            db_session.commit()
+            updated += 1
+        except Exception:  # noqa: BLE001
+            db_session.rollback()
+            failed += 1
+
+    return DuplicateLineageSummary(processed=processed, updated=updated, skipped=skipped, failed=failed)

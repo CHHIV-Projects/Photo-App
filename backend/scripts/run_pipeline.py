@@ -6,10 +6,9 @@ import argparse
 import subprocess
 import sys
 import time
-import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy import select
 
@@ -21,17 +20,19 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.asset import Asset
-from app.services.ingestion.deduplicator import DeduplicationResult, deduplicate
+from app.models.face import Face
+from app.services.ingestion.deduplicator import DeduplicationResult, DuplicateFile
 from app.services.ingestion.dropzone_manager import (
     DropzoneStageResult,
     build_dropzone_processing_records,
     stage_source_records_to_dropzone,
 )
 from app.services.ingestion.filter import FilterResult, filter_records
-from app.services.ingestion.hasher import HashResult, hash_records
+from app.services.ingestion.hasher import HashResult, HashedFile, hash_records
 from app.services.ingestion.scanner import FileScanRecord, ScanResult, scan_folder
 from app.services.ingestion.storage_manager import StorageResult, copy_unique_files_to_vault
 from app.services.persistence.asset_repository import (
+    DuplicateProvenanceResult,
     PersistenceResult,
     persist_copied_files,
     persist_duplicate_provenance,
@@ -44,26 +45,28 @@ class PipelineContext:
     drop_zone_path: Path
     vault_path: Path
     quarantine_path: Path
+    ingest_batch_size: int
+    ingest_total_limit: int | None
     source_scan_result: ScanResult | None = None
     stage_result: DropzoneStageResult | None = None
     dropzone_scan_result: ScanResult | None = None
     processing_records: list[FileScanRecord] = field(default_factory=list)
+    remaining_processing_records: list[FileScanRecord] = field(default_factory=list)
     filter_result: FilterResult | None = None
     hash_result: HashResult | None = None
     dedup_result: DeduplicationResult | None = None
     storage_result: StorageResult | None = None
     persistence_result: PersistenceResult | None = None
+    duplicate_provenance_result: DuplicateProvenanceResult | None = None
+    known_asset_sha256: set[str] = field(default_factory=set)
+    current_batch_records: list[FileScanRecord] = field(default_factory=list)
+    current_batch_new_asset_sha256: list[str] = field(default_factory=list)
+    total_batches_run: int = 0
+    total_new_unique_ingested: int = 0
+    total_existing_or_duplicate_processed: int = 0
+    total_dropzone_files_cleaned: int = 0
     run_face_detection_rebuild: bool = False
     run_face_clustering_rebuild: bool = False
-
-
-@dataclass(frozen=True)
-class StageDefinition:
-    key: str
-    label: str
-    runner: Callable[[PipelineContext], dict[str, Any]]
-    skip_flag: str | None = None
-    skip_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,17 @@ class RuntimeArgs:
     run_face_detection_rebuild: bool
     run_face_clustering_rebuild: bool
     skip_crop_generation: bool
+    ingest_batch_size: int
+    ingest_total_limit: int | None
+
+
+@dataclass(frozen=True)
+class IngestionBatch:
+    records: list[FileScanRecord]
+    filter_result: FilterResult
+    hash_result: HashResult
+    dedup_result: DeduplicationResult
+    prospective_new_unique: int
 
 
 def _resolve_runtime_path(path_setting: str) -> Path:
@@ -135,6 +149,16 @@ def _print_stage_failed(elapsed_seconds: float, error: str) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the AI Photo Organizer pipeline in the correct order.",
+    )
+    parser.add_argument(
+        "--ingest-batch-size",
+        type=int,
+        help="Batch size for newly ingested unique assets.",
+    )
+    parser.add_argument(
+        "--ingest-total-limit",
+        type=int,
+        help="Optional total limit for newly ingested unique assets in this run.",
     )
     parser.add_argument(
         "--from-path",
@@ -208,6 +232,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def _has_non_interactive_flags(parsed: argparse.Namespace) -> bool:
     return any(
         [
+            parsed.ingest_batch_size is not None,
+            parsed.ingest_total_limit is not None,
             parsed.from_path is not None,
             parsed.dry_run,
             parsed.skip_exif_extraction,
@@ -258,6 +284,8 @@ def _build_runtime_args(
     run_face_detection_rebuild: bool,
     run_face_clustering_rebuild: bool,
     run_crop_generation_override: bool,
+    ingest_batch_size: int,
+    ingest_total_limit: int | None,
 ) -> RuntimeArgs:
     any_face_rebuild = run_face_detection_rebuild or run_face_clustering_rebuild
     run_crop_generation = run_crop_generation_override or (not skip_face_processing)
@@ -274,6 +302,8 @@ def _build_runtime_args(
         run_face_detection_rebuild=run_face_detection_rebuild,
         run_face_clustering_rebuild=run_face_clustering_rebuild,
         skip_crop_generation=effective_skip_crop_generation,
+        ingest_batch_size=ingest_batch_size,
+        ingest_total_limit=ingest_total_limit,
     )
 
 
@@ -294,6 +324,13 @@ def _validate_rebuild_confirmation(
         )
 
 
+def _validate_ingest_controls(ingest_batch_size: int, ingest_total_limit: int | None) -> None:
+    if ingest_batch_size <= 0:
+        raise ValueError("Ingest batch size must be greater than zero.")
+    if ingest_total_limit is not None and ingest_total_limit <= 0:
+        raise ValueError("Ingest total limit must be greater than zero when provided.")
+
+
 def _prompt_yes_no(question: str) -> bool:
     """Prompt user for yes/no input."""
     while True:
@@ -303,6 +340,38 @@ def _prompt_yes_no(question: str) -> bool:
         if response in ("n", "no"):
             return False
         print("  Please enter 'y' or 'n'")
+
+
+def _prompt_int_default(question: str, default: int) -> int:
+    while True:
+        response = input(f"{question} (default {default}): ").strip()
+        if response == "":
+            return default
+        try:
+            value = int(response)
+        except ValueError:
+            print("  Please enter a whole number.")
+            continue
+        if value <= 0:
+            print("  Please enter a value greater than zero.")
+            continue
+        return value
+
+
+def _prompt_optional_int(question: str) -> int | None:
+    while True:
+        response = input(f"{question} (leave blank for no limit): ").strip()
+        if response == "":
+            return None
+        try:
+            value = int(response)
+        except ValueError:
+            print("  Please enter a whole number or leave blank.")
+            continue
+        if value <= 0:
+            print("  Please enter a value greater than zero.")
+            continue
+        return value
 
 
 def _get_user_input() -> Any:
@@ -338,6 +407,15 @@ def _get_user_input() -> Any:
             print(f"  Warning: Path does not exist: {from_path}")
     print()
 
+    ingest_batch_size = _prompt_int_default(
+        "Batch size for new unique assets per batch?",
+        settings.ingest_batch_size,
+    )
+    print()
+
+    ingest_total_limit = _prompt_optional_int("Total limit for new unique assets this run?")
+    print()
+
     confirmation_value = _maybe_confirm_rebuild_interactive(
         run_face_detection_rebuild or run_face_clustering_rebuild
     )
@@ -346,6 +424,7 @@ def _get_user_input() -> Any:
         run_face_clustering_rebuild=run_face_clustering_rebuild,
         confirmation_value=confirmation_value,
     )
+    _validate_ingest_controls(ingest_batch_size, ingest_total_limit)
 
     return _build_runtime_args(
         dry_run=dry_run,
@@ -359,6 +438,8 @@ def _get_user_input() -> Any:
         run_face_detection_rebuild=run_face_detection_rebuild,
         run_face_clustering_rebuild=run_face_clustering_rebuild,
         run_crop_generation_override=False,
+        ingest_batch_size=ingest_batch_size,
+        ingest_total_limit=ingest_total_limit,
     )
 
 
@@ -371,6 +452,9 @@ def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
         run_face_clustering_rebuild=parsed.run_face_clustering_rebuild,
         confirmation_value=parsed.confirm_rebuild,
     )
+    ingest_batch_size = parsed.ingest_batch_size or settings.ingest_batch_size
+    ingest_total_limit = parsed.ingest_total_limit if parsed.ingest_total_limit is not None else settings.ingest_total_limit
+    _validate_ingest_controls(ingest_batch_size, ingest_total_limit)
 
     return _build_runtime_args(
         dry_run=parsed.dry_run,
@@ -384,6 +468,8 @@ def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
         run_face_detection_rebuild=parsed.run_face_detection_rebuild,
         run_face_clustering_rebuild=parsed.run_face_clustering_rebuild,
         run_crop_generation_override=parsed.run_crop_generation,
+        ingest_batch_size=ingest_batch_size,
+        ingest_total_limit=ingest_total_limit,
     )
 
 
@@ -396,8 +482,17 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
             ctx.quarantine_path,
         )
         dropzone_scan_result = scan_folder(ctx.drop_zone_path)
+        staged_paths = {
+            str(Path(item.dropzone_path).resolve())
+            for item in stage_result.staged_files
+        }
+        scoped_dropzone_records = [
+            record
+            for record in dropzone_scan_result.files
+            if str(Path(record.full_path).resolve()) in staged_paths
+        ]
         processing_records = build_dropzone_processing_records(
-            dropzone_scan_result.files,
+            scoped_dropzone_records,
             stage_result.staged_files,
         )
 
@@ -405,23 +500,29 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
         ctx.stage_result = stage_result
         ctx.dropzone_scan_result = dropzone_scan_result
         ctx.processing_records = processing_records
+        ctx.remaining_processing_records = list(processing_records)
 
         return {
+            "scope": "batch",
             "input_mode": "from-path via drop zone staging",
             "source_path": str(ctx.from_path),
             "source_files_scanned": len(source_scan_result.files),
             "source_scan_errors": len(source_scan_result.errors),
             "files_staged": len(stage_result.staged_files),
             "stage_failures": len(stage_result.failures),
-            "drop_zone_records": len(dropzone_scan_result.files),
+            "drop_zone_records_total": len(dropzone_scan_result.files),
+            "drop_zone_records_selected": len(processing_records),
+            "drop_zone_records_ignored": max(0, len(dropzone_scan_result.files) - len(processing_records)),
             "processing_records": len(processing_records),
         }
 
     dropzone_scan_result = scan_folder(ctx.drop_zone_path)
     ctx.dropzone_scan_result = dropzone_scan_result
     ctx.processing_records = dropzone_scan_result.files
+    ctx.remaining_processing_records = list(dropzone_scan_result.files)
 
     return {
+        "scope": "batch",
         "input_mode": "existing drop zone contents",
         "drop_zone_path": str(ctx.drop_zone_path),
         "drop_zone_records": len(dropzone_scan_result.files),
@@ -429,14 +530,108 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
     }
 
 
-def _filter_records_stage(ctx: PipelineContext) -> dict[str, Any]:
-    result = filter_records(
-        ctx.processing_records,
-        approved_extensions=settings.approved_extensions,
-        min_size_bytes=settings.minimum_file_size_bytes,
+def _load_known_asset_sha256(ctx: PipelineContext) -> None:
+    db_session = SessionLocal()
+    try:
+        ctx.known_asset_sha256 = set(db_session.scalars(select(Asset.sha256)).all())
+    finally:
+        db_session.close()
+
+
+def _load_assets_by_sha256(asset_sha256_list: list[str]) -> list[Asset]:
+    if not asset_sha256_list:
+        return []
+
+    order = {sha256: index for index, sha256 in enumerate(asset_sha256_list)}
+    db_session = SessionLocal()
+    try:
+        assets = list(
+            db_session.scalars(select(Asset).where(Asset.sha256.in_(asset_sha256_list))).all()
+        )
+    finally:
+        db_session.close()
+
+    assets.sort(key=lambda asset: order.get(asset.sha256, len(order)))
+    return assets
+
+
+def _remaining_new_asset_slots(ctx: PipelineContext) -> int | None:
+    if ctx.ingest_total_limit is None:
+        return None
+    return max(0, ctx.ingest_total_limit - ctx.total_new_unique_ingested)
+
+
+def _select_next_batch(ctx: PipelineContext) -> IngestionBatch | None:
+    remaining_new_slots = _remaining_new_asset_slots(ctx)
+    if remaining_new_slots == 0 or not ctx.remaining_processing_records:
+        return None
+
+    target_new_unique = ctx.ingest_batch_size
+    if remaining_new_slots is not None:
+        target_new_unique = min(target_new_unique, remaining_new_slots)
+
+    batch_records: list[FileScanRecord] = []
+    accepted: list[FileScanRecord] = []
+    rejected = []
+    hashed_files: list[HashedFile] = []
+    hash_errors = []
+    unique_files: list[HashedFile] = []
+    duplicate_files: list[DuplicateFile] = []
+    seen_sha256_in_batch: dict[str, HashedFile] = {}
+    prospective_new_unique = 0
+
+    while ctx.remaining_processing_records:
+        record = ctx.remaining_processing_records.pop(0)
+        batch_records.append(record)
+
+        single_filter_result = filter_records(
+            [record],
+            approved_extensions=settings.approved_extensions,
+            min_size_bytes=settings.minimum_file_size_bytes,
+        )
+        accepted.extend(single_filter_result.accepted)
+        rejected.extend(single_filter_result.rejected)
+
+        if not single_filter_result.accepted:
+            continue
+
+        single_hash_result = hash_records(single_filter_result.accepted)
+        hashed_files.extend(single_hash_result.hashed_files)
+        hash_errors.extend(single_hash_result.errors)
+
+        for hashed_file in single_hash_result.hashed_files:
+            original = seen_sha256_in_batch.get(hashed_file.sha256)
+            if original is not None:
+                duplicate_files.append(DuplicateFile(duplicate=hashed_file, original=original))
+                continue
+
+            seen_sha256_in_batch[hashed_file.sha256] = hashed_file
+            unique_files.append(hashed_file)
+            if hashed_file.sha256 not in ctx.known_asset_sha256:
+                prospective_new_unique += 1
+
+        if target_new_unique > 0 and prospective_new_unique >= target_new_unique:
+            break
+
+    if not batch_records:
+        return None
+
+    return IngestionBatch(
+        records=batch_records,
+        filter_result=FilterResult(accepted=accepted, rejected=rejected),
+        hash_result=HashResult(hashed_files=hashed_files, errors=hash_errors),
+        dedup_result=DeduplicationResult(unique_files=unique_files, duplicate_files=duplicate_files),
+        prospective_new_unique=prospective_new_unique,
     )
-    ctx.filter_result = result
+
+
+def _filter_records_stage(ctx: PipelineContext) -> dict[str, Any]:
+    if ctx.filter_result is None:
+        raise RuntimeError("Batch filter result missing.")
+    result = ctx.filter_result
     return {
+        "scope": "batch",
+        "records_considered": len(ctx.current_batch_records),
         "accepted": len(result.accepted),
         "rejected": len(result.rejected),
         "approved_extensions": len(settings.approved_extensions),
@@ -445,26 +640,25 @@ def _filter_records_stage(ctx: PipelineContext) -> dict[str, Any]:
 
 
 def _hash_stage(ctx: PipelineContext) -> dict[str, Any]:
-    if ctx.filter_result is None:
-        raise RuntimeError("Filter stage must run before hashing.")
-
-    result = hash_records(ctx.filter_result.accepted)
-    ctx.hash_result = result
+    if ctx.hash_result is None:
+        raise RuntimeError("Batch hash result missing.")
+    result = ctx.hash_result
     return {
+        "scope": "batch",
         "hashed": len(result.hashed_files),
         "hash_errors": len(result.errors),
     }
 
 
 def _deduplicate_stage(ctx: PipelineContext) -> dict[str, Any]:
-    if ctx.hash_result is None:
-        raise RuntimeError("Hash stage must run before deduplication.")
-
-    result = deduplicate(ctx.hash_result.hashed_files)
-    ctx.dedup_result = result
+    if ctx.dedup_result is None:
+        raise RuntimeError("Batch dedup result missing.")
+    result = ctx.dedup_result
     return {
+        "scope": "batch",
         "unique": len(result.unique_files),
         "duplicates": len(result.duplicate_files),
+        "new_unique_candidates": sum(1 for item in result.unique_files if item.sha256 not in ctx.known_asset_sha256),
     }
 
 
@@ -475,6 +669,7 @@ def _storage_stage(ctx: PipelineContext) -> dict[str, Any]:
     result = copy_unique_files_to_vault(ctx.dedup_result, ctx.vault_path)
     ctx.storage_result = result
     return {
+        "scope": "batch",
         "copied_to_vault": len(result.copied_files),
         "copy_failures": len(result.failed_files),
         "vault_path": str(ctx.vault_path),
@@ -497,7 +692,21 @@ def _ingest_to_db_stage(ctx: PipelineContext) -> dict[str, Any]:
         db_session.close()
 
     ctx.persistence_result = result
+    ctx.duplicate_provenance_result = duplicate_provenance_result
+    ctx.current_batch_new_asset_sha256 = [
+        item.copied_file.hashed_file.sha256
+        for item in result.inserted_records
+    ]
+    ctx.total_new_unique_ingested += len(result.inserted_records)
+    ctx.total_existing_or_duplicate_processed += len(result.skipped_existing_records)
+    if duplicate_provenance_result is not None:
+        ctx.total_existing_or_duplicate_processed += (
+            duplicate_provenance_result.added + duplicate_provenance_result.already_present
+        )
+    ctx.known_asset_sha256.update(ctx.current_batch_new_asset_sha256)
+
     return {
+        "scope": "batch",
         "inserted": len(result.inserted_records),
         "skipped_existing": len(result.skipped_existing_records),
         "db_failures": len(result.failed_inserts),
@@ -507,19 +716,63 @@ def _ingest_to_db_stage(ctx: PipelineContext) -> dict[str, Any]:
     }
 
 
-def _exif_extraction_stage(_: PipelineContext) -> dict[str, Any]:
+def _cleanup_drop_zone_stage(ctx: PipelineContext) -> dict[str, Any]:
+    if ctx.persistence_result is None:
+        raise RuntimeError("DB ingestion must complete before drop zone cleanup.")
+
+    successful_paths: set[str] = set()
+    failed_cleanup: list[str] = []
+
+    for item in ctx.persistence_result.inserted_records:
+        successful_paths.add(item.copied_file.hashed_file.record.full_path)
+    for item in ctx.persistence_result.skipped_existing_records:
+        successful_paths.add(item.copied_file.hashed_file.record.full_path)
+    if ctx.duplicate_provenance_result is not None:
+        for item in ctx.duplicate_provenance_result.successful_duplicates:
+            successful_paths.add(item.duplicate.record.full_path)
+
+    cleaned = 0
+    for raw_path in sorted(successful_paths):
+        try:
+            Path(raw_path).unlink(missing_ok=False)
+            cleaned += 1
+        except FileNotFoundError:
+            cleaned += 1
+        except OSError:
+            failed_cleanup.append(raw_path)
+
+    ctx.total_dropzone_files_cleaned += cleaned
+    return {
+        "scope": "batch",
+        "cleaned_files": cleaned,
+        "cleanup_failures": len(failed_cleanup),
+        "left_in_drop_zone": max(0, len(ctx.current_batch_records) - cleaned),
+    }
+
+
+def _exif_extraction_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.metadata.exif_extractor import extract_exif_for_assets
     from app.services.metadata.exif_persistence import persist_exif_updates
 
+    assets = _load_assets_by_sha256(ctx.current_batch_new_asset_sha256)
+    if not assets:
+        return {
+            "scope": "batch",
+            "assets_checked": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed": 0,
+        }
+
     db_session = SessionLocal()
     try:
-        assets = list(db_session.scalars(select(Asset)).all())
         extraction_result = extract_exif_for_assets(assets)
         persistence_result = persist_exif_updates(db_session, extraction_result.extracted)
     finally:
         db_session.close()
 
     return {
+        "scope": "batch",
         "assets_checked": len(assets),
         "updated": len(persistence_result.updated_assets),
         "skipped": len(extraction_result.skipped) + len(persistence_result.skipped_assets),
@@ -527,12 +780,22 @@ def _exif_extraction_stage(_: PipelineContext) -> dict[str, Any]:
     }
 
 
-def _metadata_normalization_stage(_: PipelineContext) -> dict[str, Any]:
+def _metadata_normalization_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.metadata.metadata_normalizer import normalize_assets, persist_normalized_metadata
+
+    assets = _load_assets_by_sha256(ctx.current_batch_new_asset_sha256)
+    if not assets:
+        return {
+            "scope": "batch",
+            "assets_processed": 0,
+            "updated_records": 0,
+            "scans_detected": 0,
+            "low_trust_dates": 0,
+            "failed": 0,
+        }
 
     db_session = SessionLocal()
     try:
-        assets = list(db_session.scalars(select(Asset)).all())
         normalization_result = normalize_assets(assets)
         persistence_result = persist_normalized_metadata(db_session, normalization_result.updated_records)
     finally:
@@ -542,6 +805,7 @@ def _metadata_normalization_stage(_: PipelineContext) -> dict[str, Any]:
     low_trust_dates = sum(1 for item in normalization_result.updated_records if item.capture_time_trust == "low")
 
     return {
+        "scope": "batch",
         "assets_processed": len(assets),
         "updated_records": len(persistence_result.updated_records),
         "scans_detected": scans_detected,
@@ -550,8 +814,19 @@ def _metadata_normalization_stage(_: PipelineContext) -> dict[str, Any]:
     }
 
 
-def _event_clustering_stage(_: PipelineContext) -> dict[str, Any]:
+def _event_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.organization.event_clusterer import cluster_assets_into_events, persist_event_clusters
+
+    if ctx.total_new_unique_ingested == 0:
+        return {
+            "scope": "global",
+            "mode": "intentional_global",
+            "status": "skipped_no_new_assets",
+            "assets_considered": 0,
+            "assets_skipped_scans": 0,
+            "events_created": 0,
+            "assigned_assets": 0,
+        }
 
     db_session = SessionLocal()
     try:
@@ -564,6 +839,8 @@ def _event_clustering_stage(_: PipelineContext) -> dict[str, Any]:
         db_session.close()
 
     return {
+        "scope": "global",
+        "mode": "intentional_global",
         "assets_considered": clustering_result.considered_assets,
         "assets_skipped_scans": clustering_result.skipped_scans,
         "events_created": persistence_result.events_created,
@@ -571,26 +848,21 @@ def _event_clustering_stage(_: PipelineContext) -> dict[str, Any]:
     }
 
 
-def _duplicate_lineage_stage(_: PipelineContext) -> dict[str, Any]:
-    from app.services.duplicates.lineage import (
-        backfill_missing_lineage_fields,
-        recompute_near_duplicate_groups,
-    )
+def _duplicate_lineage_stage(ctx: PipelineContext) -> dict[str, Any]:
+    from app.services.duplicates.lineage import update_lineage_for_assets
 
     db_session = SessionLocal()
     try:
-        backfill_summary = backfill_missing_lineage_fields(db_session, chunk_size=100, dry_run=False)
-        grouping_summary = recompute_near_duplicate_groups(db_session, dry_run=False)
+        summary = update_lineage_for_assets(db_session, ctx.current_batch_new_asset_sha256, dry_run=False)
     finally:
         db_session.close()
 
     return {
-        "field_backfill_processed": backfill_summary.processed,
-        "field_backfill_updated": backfill_summary.updated,
-        "field_backfill_failed": backfill_summary.failed,
-        "grouping_assets_considered": grouping_summary.processed,
-        "near_groups_created": grouping_summary.updated,
-        "grouping_failed": grouping_summary.failed,
+        "scope": "batch",
+        "assets_processed": summary.processed,
+        "assets_updated": summary.updated,
+        "assets_skipped": summary.skipped,
+        "failed": summary.failed,
     }
 
 
@@ -604,6 +876,7 @@ def _face_schema_sync_stage(_: PipelineContext) -> dict[str, Any]:
         db_session.close()
 
     return {
+        "scope": "global",
         "added_columns": len(summary.added_columns),
         "added_indexes": len(summary.added_indexes),
         "backfilled_detection_completed": summary.backfilled_asset_detection_completed,
@@ -635,7 +908,13 @@ def _face_detection_stage(ctx: PipelineContext) -> dict[str, Any]:
         if ctx.run_face_detection_rebuild:
             assets = list(db_session.scalars(select(Asset)).all())
         else:
-            assets = load_assets_for_incremental_face_detection(db_session)
+            assets = list(
+                db_session.scalars(
+                    select(Asset)
+                    .where(Asset.sha256.in_(ctx.current_batch_new_asset_sha256))
+                    .order_by(Asset.created_at_utc.asc(), Asset.sha256.asc())
+                ).all()
+            )
 
         detection_result = run_face_detection(
             assets=assets,
@@ -659,6 +938,7 @@ def _face_detection_stage(ctx: PipelineContext) -> dict[str, Any]:
         db_session.close()
 
     return {
+        "scope": "global" if ctx.run_face_detection_rebuild else "batch",
         "mode": "rebuild" if ctx.run_face_detection_rebuild else "incremental",
         "assets_processed": detection_result.total_assets_processed,
         "assets_failed": len(detection_result.failed_asset_sha256),
@@ -671,6 +951,7 @@ def _face_detection_stage(ctx: PipelineContext) -> dict[str, Any]:
 
 def _face_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.vision.face_clusterer import (
+        assign_selected_faces_incrementally,
         assign_faces_incrementally,
         cluster_face_embeddings,
         load_faces_for_embedding,
@@ -687,7 +968,15 @@ def _face_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
         if ctx.run_face_clustering_rebuild:
             face_asset_rows = load_faces_for_embedding(db_session)
         else:
-            face_asset_rows = load_faces_missing_embeddings(db_session)
+            face_asset_rows = [
+                (row[0], row[1])
+                for row in db_session.execute(
+                    select(Face, Asset)
+                    .join(Asset, Asset.sha256 == Face.asset_sha256)
+                    .where(Face.embedding_json.is_(None), Face.asset_sha256.in_(ctx.current_batch_new_asset_sha256))
+                    .order_by(Face.id.asc())
+                ).all()
+            ]
 
         embedding_result = generate_face_embeddings(
             face_asset_rows=face_asset_rows,
@@ -704,8 +993,20 @@ def _face_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
             persistence_result = persist_face_clusters(db_session, clustering_result)
             assignment_summary = None
         else:
-            assignment_summary = assign_faces_incrementally(
+            faces_to_assign = list(
+                db_session.scalars(
+                    select(Face)
+                    .where(
+                        Face.cluster_id.is_(None),
+                        Face.embedding_json.is_not(None),
+                        Face.asset_sha256.in_(ctx.current_batch_new_asset_sha256),
+                    )
+                    .order_by(Face.id.asc())
+                ).all()
+            )
+            assignment_summary = assign_selected_faces_incrementally(
                 db_session,
+                faces_to_assign=faces_to_assign,
                 similarity_threshold=settings.face_cluster_similarity_threshold,
                 ambiguity_margin=settings.face_cluster_ambiguity_margin,
             )
@@ -716,6 +1017,7 @@ def _face_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
 
     if ctx.run_face_clustering_rebuild:
         return {
+            "scope": "global",
             "mode": "rebuild",
             "faces_in_db": len(face_asset_rows),
             "embeddings_generated": embedding_result.embedded_faces,
@@ -726,6 +1028,7 @@ def _face_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
         }
 
     return {
+        "scope": "batch",
         "mode": "incremental",
         "faces_needing_embeddings": len(face_asset_rows),
         "embeddings_generated": embedding_result.embedded_faces,
@@ -745,154 +1048,327 @@ def _crop_generation_stage(_: PipelineContext) -> dict[str, Any]:
         raise RuntimeError(f"Crop generation exited with code {completed.returncode}.")
 
     return {
+        "scope": "global",
         "command": "generate_missing_face_crops.py",
         "status": "completed",
     }
 
 
-def _build_stage_plan() -> list[StageDefinition]:
-    return [
-        StageDefinition(key="collect_input", label="collect input", runner=_collect_input),
-        StageDefinition(key="filter", label="filter records", runner=_filter_records_stage),
-        StageDefinition(key="hash", label="hash files", runner=_hash_stage),
-        StageDefinition(key="deduplicate", label="deduplicate files", runner=_deduplicate_stage),
-        StageDefinition(key="storage", label="store to vault", runner=_storage_stage),
-        StageDefinition(key="ingest_db", label="ingest to database", runner=_ingest_to_db_stage),
-        StageDefinition(
-            key="face_schema_sync",
-            label="face schema sync",
-            runner=_face_schema_sync_stage,
-        ),
-        StageDefinition(
-            key="exif_extraction",
-            label="EXIF extraction",
-            runner=_exif_extraction_stage,
-            skip_flag="skip_exif_extraction",
-            skip_reason="--skip-exif-extraction",
-        ),
-        StageDefinition(
-            key="metadata_normalization",
-            label="metadata normalization",
-            runner=_metadata_normalization_stage,
-            skip_flag="skip_metadata_normalization",
-            skip_reason="--skip-metadata-normalization",
-        ),
-        StageDefinition(
-            key="duplicate_lineage",
-            label="duplicate lineage",
-            runner=_duplicate_lineage_stage,
-            skip_flag="skip_duplicate_lineage",
-            skip_reason="--skip-duplicate-lineage",
-        ),
-        StageDefinition(
-            key="event_clustering",
-            label="event clustering",
-            runner=_event_clustering_stage,
-            skip_flag="skip_event_clustering",
-            skip_reason="--skip-event-clustering",
-        ),
-        StageDefinition(
-            key="face_detection",
-            label="face detection",
-            runner=_face_detection_stage,
-            skip_flag="skip_face_processing",
-            skip_reason="--skip-face-processing",
-        ),
-        StageDefinition(
-            key="face_clustering",
-            label="face embedding + clustering",
-            runner=_face_clustering_stage,
-            skip_flag="skip_face_processing",
-            skip_reason="--skip-face-processing",
-        ),
-        StageDefinition(
-            key="crop_generation",
-            label="review crop generation",
-            runner=_crop_generation_stage,
-            skip_flag="skip_crop_generation",
-            skip_reason="--skip-crop-generation",
-        ),
-    ]
-
-
-def _print_dry_run(stage_plan: list[StageDefinition], args: Any, ctx: PipelineContext) -> None:
+def _print_dry_run(args: RuntimeArgs, ctx: PipelineContext) -> None:
     print("Pipeline dry-run")
     print(f"  Source mode: {'from-path' if ctx.from_path else 'existing drop zone'}")
     if ctx.from_path is not None:
         print(f"  Source path: {ctx.from_path}")
     print(f"  Drop zone path: {ctx.drop_zone_path}")
     print(f"  Vault path: {ctx.vault_path}")
+    print(f"  Ingest batch size: {args.ingest_batch_size}")
+    print(f"  Ingest total limit: {args.ingest_total_limit if args.ingest_total_limit is not None else 'none'}")
     print()
     print("Planned stages:")
-    for index, stage in enumerate(stage_plan, start=1):
-        should_skip = bool(stage.skip_flag and getattr(args, stage.skip_flag))
-        status = f"SKIP ({stage.skip_reason})" if should_skip else "RUN"
-        print(f"  [{index}/{len(stage_plan)}] {status} - {stage.label}")
+    print("  [1] RUN - collect input (scope=batch)")
+    print("  [2] RUN - ingestion batches: filter, hash, deduplicate, storage, ingest, cleanup (scope=batch)")
+    print("  [3] RUN - face schema sync (scope=global)")
+    print(f"  [4] {'SKIP (--skip-exif-extraction)' if args.skip_exif_extraction else 'RUN'} - EXIF extraction (scope=batch)")
+    print(f"  [5] {'SKIP (--skip-metadata-normalization)' if args.skip_metadata_normalization else 'RUN'} - metadata normalization (scope=batch)")
+    print(f"  [6] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
+    print(f"  [7] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
+    print(f"  [8] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
+    print(f"  [9] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
     print()
     print("Status: DRY RUN")
 
 
-def _run_pipeline(stage_plan: list[StageDefinition], ctx: PipelineContext, args: Any) -> list[StageOutcome]:
-    outcomes: list[StageOutcome] = []
-
-    for index, stage in enumerate(stage_plan, start=1):
-        should_skip = bool(stage.skip_flag and getattr(args, stage.skip_flag))
-        if should_skip:
-            _print_stage_skipped(index, len(stage_plan), stage.label, stage.skip_reason or "skipped")
-            outcomes.append(
-                StageOutcome(
-                    key=stage.key,
-                    label=stage.label,
-                    status="skipped",
-                    elapsed_seconds=0.0,
-                    skip_reason=stage.skip_reason,
-                )
-            )
-            continue
-
-        _print_stage_header(index, len(stage_plan), stage.label)
-        started_at = time.perf_counter()
-        try:
-            summary = stage.runner(ctx)
-        except Exception as exc:  # noqa: BLE001
-            elapsed_seconds = time.perf_counter() - started_at
-            error = str(exc) or exc.__class__.__name__
-            _print_stage_failed(elapsed_seconds, error)
-            outcomes.append(
-                StageOutcome(
-                    key=stage.key,
-                    label=stage.label,
-                    status="failed",
-                    elapsed_seconds=elapsed_seconds,
-                    error=error,
-                )
-            )
-            break
-
+def _execute_stage(
+    *,
+    key: str,
+    index: int,
+    total: int,
+    label: str,
+    runner,
+    outcomes: list[StageOutcome],
+) -> dict[str, Any]:
+    _print_stage_header(index, total, label)
+    started_at = time.perf_counter()
+    try:
+        summary = runner()
+    except Exception as exc:  # noqa: BLE001
         elapsed_seconds = time.perf_counter() - started_at
-        _print_stage_done(elapsed_seconds, summary)
+        error = str(exc) or exc.__class__.__name__
+        _print_stage_failed(elapsed_seconds, error)
         outcomes.append(
             StageOutcome(
-                key=stage.key,
-                label=stage.label,
-                status="completed",
+                key=key,
+                label=label,
+                status="failed",
                 elapsed_seconds=elapsed_seconds,
-                summary=summary,
+                error=error,
             )
         )
+        raise
+
+    elapsed_seconds = time.perf_counter() - started_at
+    _print_stage_done(elapsed_seconds, summary)
+    outcomes.append(
+        StageOutcome(
+            key=key,
+            label=label,
+            status="completed",
+            elapsed_seconds=elapsed_seconds,
+            summary=summary,
+        )
+    )
+    return summary
+
+
+def _skip_stage(*, key: str, index: int, total: int, label: str, reason: str, outcomes: list[StageOutcome]) -> None:
+    _print_stage_skipped(index, total, label, reason)
+    outcomes.append(
+        StageOutcome(
+            key=key,
+            label=label,
+            status="skipped",
+            elapsed_seconds=0.0,
+            skip_reason=reason,
+        )
+    )
+
+
+def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[StageOutcome]) -> None:
+    while True:
+        next_batch = _select_next_batch(ctx)
+        if next_batch is None:
+            return
+
+        ctx.total_batches_run += 1
+        ctx.current_batch_records = next_batch.records
+        ctx.filter_result = next_batch.filter_result
+        ctx.hash_result = next_batch.hash_result
+        ctx.dedup_result = next_batch.dedup_result
+        ctx.storage_result = None
+        ctx.persistence_result = None
+        ctx.duplicate_provenance_result = None
+        ctx.current_batch_new_asset_sha256 = []
+
+        batch_label_prefix = f"batch {ctx.total_batches_run}"
+        _execute_stage(
+            key=f"{batch_label_prefix}_filter",
+            index=1,
+            total=6,
+            label=f"{batch_label_prefix}: filter records",
+            runner=lambda: _filter_records_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key=f"{batch_label_prefix}_hash",
+            index=2,
+            total=6,
+            label=f"{batch_label_prefix}: hash files",
+            runner=lambda: _hash_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key=f"{batch_label_prefix}_deduplicate",
+            index=3,
+            total=6,
+            label=f"{batch_label_prefix}: deduplicate files",
+            runner=lambda: _deduplicate_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key=f"{batch_label_prefix}_storage",
+            index=4,
+            total=6,
+            label=f"{batch_label_prefix}: store to vault",
+            runner=lambda: _storage_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key=f"{batch_label_prefix}_ingest",
+            index=5,
+            total=6,
+            label=f"{batch_label_prefix}: ingest to database",
+            runner=lambda: _ingest_to_db_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key=f"{batch_label_prefix}_cleanup",
+            index=6,
+            total=6,
+            label=f"{batch_label_prefix}: clean drop zone",
+            runner=lambda: _cleanup_drop_zone_stage(ctx),
+            outcomes=outcomes,
+        )
+
+        if args.skip_exif_extraction:
+            _skip_stage(
+                key=f"{batch_label_prefix}_exif",
+                index=1,
+                total=4,
+                label=f"{batch_label_prefix}: EXIF extraction",
+                reason="--skip-exif-extraction",
+                outcomes=outcomes,
+            )
+        else:
+            _execute_stage(
+                key=f"{batch_label_prefix}_exif",
+                index=1,
+                total=4,
+                label=f"{batch_label_prefix}: EXIF extraction",
+                runner=lambda: _exif_extraction_stage(ctx),
+                outcomes=outcomes,
+            )
+
+        if args.skip_metadata_normalization:
+            _skip_stage(
+                key=f"{batch_label_prefix}_metadata",
+                index=2,
+                total=4,
+                label=f"{batch_label_prefix}: metadata normalization",
+                reason="--skip-metadata-normalization",
+                outcomes=outcomes,
+            )
+        else:
+            _execute_stage(
+                key=f"{batch_label_prefix}_metadata",
+                index=2,
+                total=4,
+                label=f"{batch_label_prefix}: metadata normalization",
+                runner=lambda: _metadata_normalization_stage(ctx),
+                outcomes=outcomes,
+            )
+
+        if args.skip_duplicate_lineage:
+            _skip_stage(
+                key=f"{batch_label_prefix}_lineage",
+                index=3,
+                total=4,
+                label=f"{batch_label_prefix}: duplicate lineage",
+                reason="--skip-duplicate-lineage",
+                outcomes=outcomes,
+            )
+        else:
+            _execute_stage(
+                key=f"{batch_label_prefix}_lineage",
+                index=3,
+                total=4,
+                label=f"{batch_label_prefix}: duplicate lineage",
+                runner=lambda: _duplicate_lineage_stage(ctx),
+                outcomes=outcomes,
+            )
+
+        if args.skip_face_processing:
+            _skip_stage(
+                key=f"{batch_label_prefix}_faces",
+                index=4,
+                total=4,
+                label=f"{batch_label_prefix}: face detection + clustering",
+                reason="--skip-face-processing",
+                outcomes=outcomes,
+            )
+        else:
+            _execute_stage(
+                key=f"{batch_label_prefix}_face_detection",
+                index=4,
+                total=5,
+                label=f"{batch_label_prefix}: face detection",
+                runner=lambda: _face_detection_stage(ctx),
+                outcomes=outcomes,
+            )
+            _execute_stage(
+                key=f"{batch_label_prefix}_face_clustering",
+                index=5,
+                total=5,
+                label=f"{batch_label_prefix}: face embedding + clustering",
+                runner=lambda: _face_clustering_stage(ctx),
+                outcomes=outcomes,
+            )
+
+
+def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]:
+    outcomes: list[StageOutcome] = []
+    try:
+        _execute_stage(
+            key="collect_input",
+            index=1,
+            total=1,
+            label="collect input",
+            runner=lambda: _collect_input(ctx),
+            outcomes=outcomes,
+        )
+        _load_known_asset_sha256(ctx)
+
+        _execute_stage(
+            key="face_schema_sync",
+            index=1,
+            total=1,
+            label="face schema sync",
+            runner=lambda: _face_schema_sync_stage(ctx),
+            outcomes=outcomes,
+        )
+
+        _run_batch_stages(ctx, args, outcomes)
+
+        if args.skip_crop_generation:
+            _skip_stage(
+                key="crop_generation",
+                index=1,
+                total=2,
+                label="review crop generation",
+                reason="--skip-crop-generation",
+                outcomes=outcomes,
+            )
+        else:
+            _execute_stage(
+                key="crop_generation",
+                index=1,
+                total=2,
+                label="review crop generation",
+                runner=lambda: _crop_generation_stage(ctx),
+                outcomes=outcomes,
+            )
+
+        if args.skip_event_clustering:
+            _skip_stage(
+                key="event_clustering",
+                index=2,
+                total=2,
+                label="event clustering",
+                reason="--skip-event-clustering",
+                outcomes=outcomes,
+            )
+        else:
+            _execute_stage(
+                key="event_clustering",
+                index=2,
+                total=2,
+                label="event clustering",
+                runner=lambda: _event_clustering_stage(ctx),
+                outcomes=outcomes,
+            )
+    except Exception:
+        return outcomes
 
     return outcomes
 
 
-def _print_summary(outcomes: list[StageOutcome], total_elapsed_seconds: float) -> int:
+def _print_summary(ctx: PipelineContext, outcomes: list[StageOutcome], total_elapsed_seconds: float) -> int:
     completed = sum(1 for outcome in outcomes if outcome.status == "completed")
     skipped = sum(1 for outcome in outcomes if outcome.status == "skipped")
     failed = next((outcome for outcome in outcomes if outcome.status == "failed"), None)
+    remaining_dropzone_files = len(scan_folder(ctx.drop_zone_path).files)
 
     print("Pipeline summary")
     print(f"  Stages run: {completed}")
     print(f"  Stages skipped: {skipped}")
     print(f"  Total elapsed: {_format_duration(total_elapsed_seconds)}")
+    print(f"  Source files scanned: {len(ctx.processing_records)}")
+    print(f"  New unique assets ingested: {ctx.total_new_unique_ingested}")
+    print(f"  Duplicates/already-known absorbed: {ctx.total_existing_or_duplicate_processed}")
+    print(f"  Ingest batch size used: {ctx.ingest_batch_size}")
+    print(f"  Ingest total limit used: {ctx.ingest_total_limit if ctx.ingest_total_limit is not None else 'none'}")
+    print(f"  Batches run: {ctx.total_batches_run}")
+    print(f"  Drop zone files cleaned: {ctx.total_dropzone_files_cleaned}")
+    print(f"  Drop zone files remaining: {remaining_dropzone_files}")
 
     if failed is None:
         print("  Status: SUCCESS")
@@ -921,13 +1397,14 @@ def main() -> int:
         drop_zone_path=_resolve_runtime_path(settings.drop_zone_path),
         vault_path=_resolve_runtime_path(settings.vault_path),
         quarantine_path=_resolve_runtime_path(settings.quarantine_path),
+        ingest_batch_size=args.ingest_batch_size,
+        ingest_total_limit=args.ingest_total_limit,
         run_face_detection_rebuild=args.run_face_detection_rebuild,
         run_face_clustering_rebuild=args.run_face_clustering_rebuild,
     )
-    stage_plan = _build_stage_plan()
 
     if args.dry_run:
-        _print_dry_run(stage_plan, args, ctx)
+        _print_dry_run(args, ctx)
         return 0
 
     print("Pipeline start")
@@ -936,12 +1413,14 @@ def main() -> int:
         print(f"  Source path: {ctx.from_path}")
     print(f"  Drop zone path: {ctx.drop_zone_path}")
     print(f"  Vault path: {ctx.vault_path}")
+    print(f"  Ingest batch size: {ctx.ingest_batch_size}")
+    print(f"  Ingest total limit: {ctx.ingest_total_limit if ctx.ingest_total_limit is not None else 'none'}")
     print()
 
     started_at = time.perf_counter()
-    outcomes = _run_pipeline(stage_plan, ctx, args)
+    outcomes = _run_pipeline(ctx, args)
     total_elapsed_seconds = time.perf_counter() - started_at
-    return _print_summary(outcomes, total_elapsed_seconds)
+    return _print_summary(ctx, outcomes, total_elapsed_seconds)
 
 
 if __name__ == "__main__":

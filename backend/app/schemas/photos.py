@@ -54,6 +54,11 @@ class PhotoListResponse(BaseModel):
     items: list[PhotoSummary]
 
 
+class ContentTagSummary(BaseModel):
+    tag: str
+    tag_type: str  # "object" | "scene"
+
+
 class PhotoDetail(BaseModel):
     asset_sha256: str
     filename: str
@@ -71,6 +76,7 @@ class PhotoDetail(BaseModel):
     duplicate_count: int
     canonical_asset_sha256: str | None = None
     faces: list[FaceInPhoto]
+    content_tags: list[ContentTagSummary] = []
 
 
 class DuplicateGroupAssetSummary(BaseModel):
