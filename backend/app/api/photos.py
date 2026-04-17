@@ -10,12 +10,15 @@ from app.schemas.photos import (
     CaptureClassificationOverrideRequest,
     PhotoDetail,
     PhotoListResponse,
+    PhotoRotationUpdateRequest,
+    PhotoRotationUpdateResponse,
     PhotoSummary,
     SuccessResponse,
 )
 from app.services.photos.photos_service import (
     get_photo_detail,
     list_photos,
+    set_photo_display_rotation,
     set_capture_classification_override,
 )
 from app.services.timeline.timeline_service import TimelineFilter, VALID_CAPTURE_TIME_TRUST
@@ -110,3 +113,27 @@ def override_photo_capture_classification(
     if not updated:
         raise HTTPException(status_code=404, detail=f"Photo {asset_sha256!r} not found.")
     return SuccessResponse(success=True)
+
+
+@router.post("/{asset_sha256}/rotation", response_model=PhotoRotationUpdateResponse)
+def update_photo_rotation(
+    asset_sha256: str,
+    request: PhotoRotationUpdateRequest,
+    db: Session = Depends(get_db_session),
+) -> PhotoRotationUpdateResponse:
+    try:
+        updated_rotation = set_photo_display_rotation(
+            db,
+            asset_sha256=asset_sha256,
+            rotation_degrees=request.rotation_degrees,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if updated_rotation is None:
+        raise HTTPException(status_code=404, detail=f"Photo {asset_sha256!r} not found.")
+
+    return PhotoRotationUpdateResponse(
+        asset_sha256=asset_sha256,
+        display_rotation_degrees=updated_rotation,
+    )

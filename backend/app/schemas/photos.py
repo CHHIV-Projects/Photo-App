@@ -69,6 +69,7 @@ class PhotoDetail(BaseModel):
     asset_sha256: str
     filename: str
     image_url: str
+    display_rotation_degrees: Literal[0, 90, 180, 270] = 0
     is_scan: bool
     capture_type: Literal["digital", "scan", "unknown"]
     capture_time_trust: Literal["high", "low", "unknown"]
@@ -106,6 +107,15 @@ class DuplicateGroupDetail(BaseModel):
 class CaptureClassificationOverrideRequest(BaseModel):
     capture_type: Literal["digital", "scan", "unknown"]
     capture_time_trust: Literal["high", "low", "unknown"]
+
+
+class PhotoRotationUpdateRequest(BaseModel):
+    rotation_degrees: Literal[0, 90, 180, 270]
+
+
+class PhotoRotationUpdateResponse(BaseModel):
+    asset_sha256: str
+    display_rotation_degrees: Literal[0, 90, 180, 270]
 
 
 class SuccessResponse(BaseModel):

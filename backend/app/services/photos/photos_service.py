@@ -21,6 +21,15 @@ from app.services.timeline.timeline_service import (
 )
 
 
+ALLOWED_DISPLAY_ROTATION_DEGREES = {0, 90, 180, 270}
+
+
+def _validate_display_rotation_degrees(rotation_degrees: int) -> int:
+    if rotation_degrees not in ALLOWED_DISPLAY_ROTATION_DEGREES:
+        raise ValueError("rotation_degrees must be one of: 0, 90, 180, 270")
+    return rotation_degrees
+
+
 def _build_asset_url(sha256: str, extension: str) -> str:
     """Build a browser-accessible URL for a vault asset.
 
@@ -191,6 +200,7 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
         "asset_sha256": sha256,
         "filename": asset.original_filename,
         "image_url": _build_asset_url(asset.sha256, asset.extension),
+        "display_rotation_degrees": _validate_display_rotation_degrees(int(asset.display_rotation_degrees or 0)),
         "is_scan": capture_type == "scan",
         "capture_type": capture_type,
         "capture_time_trust": capture_time_trust,
@@ -270,3 +280,16 @@ def set_capture_classification_override(
     asset.capture_time_trust_override = capture_time_trust
     db.commit()
     return True
+
+
+def set_photo_display_rotation(db: Session, *, asset_sha256: str, rotation_degrees: int) -> int | None:
+    """Persist display-only rotation for one asset."""
+    validated_rotation = _validate_display_rotation_degrees(rotation_degrees)
+
+    asset = db.get(Asset, asset_sha256)
+    if asset is None:
+        return None
+
+    asset.display_rotation_degrees = validated_rotation
+    db.commit()
+    return validated_rotation

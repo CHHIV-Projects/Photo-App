@@ -50,6 +50,7 @@ class Asset(Base):
 		nullable=True,
 		index=True,
 	)
+	display_rotation_degrees: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 	source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
 	event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)
 	duplicate_group_id: Mapped[int | None] = mapped_column(ForeignKey("duplicate_groups.id"), nullable=True, index=True)
