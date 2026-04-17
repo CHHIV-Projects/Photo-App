@@ -109,6 +109,7 @@ def get_event_detail(db: Session, event_id: int) -> dict | None:
             Asset.sha256,
             Asset.original_filename,
             Asset.extension,
+            Asset.captured_at,
             func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
         )
         .outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
@@ -121,6 +122,7 @@ def get_event_detail(db: Session, event_id: int) -> dict | None:
             "asset_sha256": row.sha256,
             "filename": row.original_filename,
             "image_url": _build_asset_url(row.sha256, row.extension),
+            "captured_at": row.captured_at.isoformat() if row.captured_at else None,
             "face_count": row.face_count,
         }
         for row in photo_rows
