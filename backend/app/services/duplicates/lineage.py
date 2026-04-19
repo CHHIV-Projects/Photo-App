@@ -7,7 +7,10 @@ from datetime import timedelta
 from pathlib import Path
 
 import imagehash
+import pillow_heif
 from PIL import Image
+
+pillow_heif.register_heif_opener()
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
@@ -165,6 +168,10 @@ def _is_candidate_match(
     candidate: Asset,
     dimensions_cache: dict[str, tuple[int, int] | None],
 ) -> bool:
+    # Exact pHash matches are allowed across different resolutions/formats.
+    if current.phash and candidate.phash and current.phash == candidate.phash:
+        return True
+
     current_dims = _image_dimensions(current, dimensions_cache)
     candidate_dims = _image_dimensions(candidate, dimensions_cache)
     if current_dims is None or candidate_dims is None:
@@ -392,6 +399,18 @@ def _connected_components(rows: list[_FeatureRow]) -> list[list[str]]:
             else:
                 parent[root_a] = root_b
 
+    # First pass: exact pHash equality is a strong duplicate signal.
+    rows_by_phash: dict[int, list[_FeatureRow]] = {}
+    for row in rows:
+        rows_by_phash.setdefault(row.phash_int, []).append(row)
+
+    for phash_rows in rows_by_phash.values():
+        if len(phash_rows) < 2:
+            continue
+        anchor = phash_rows[0]
+        for other in phash_rows[1:]:
+            union(anchor.sha256, other.sha256)
+
     # Group by orientation first to reduce comparisons.
     by_orientation: dict[str | None, list[_FeatureRow]] = {}
     for row in rows:
@@ -414,6 +433,11 @@ def _connected_components(rows: list[_FeatureRow]) -> list[list[str]]:
                 candidate = orientation_rows[candidate_index]
                 if candidate.total_pixels > upper:
                     break
+
+                # Exact pHash matches should group even when size/time heuristics differ.
+                if current.phash_int == candidate.phash_int:
+                    union(current.sha256, candidate.sha256)
+                    continue
 
                 if use_time_window and current.captured_at and candidate.captured_at:
                     if abs(current.captured_at - candidate.captured_at) > capture_window:

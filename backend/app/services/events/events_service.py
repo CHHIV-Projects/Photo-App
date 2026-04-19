@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -11,6 +12,13 @@ from app.models.asset import Asset
 from app.models.event import Event
 from app.models.face import Face
 from app.services.photos.photos_service import _build_asset_url
+
+
+def _to_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    utc_value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return utc_value.isoformat().replace("+00:00", "Z")
 
 
 @dataclass(frozen=True)
@@ -38,8 +46,8 @@ def _event_summary_payload(db: Session, event: Event) -> dict:
     return {
         "event_id": event.id,
         "label": event.label,
-        "start_time": event.start_at,
-        "end_time": event.end_at,
+        "start_time": _to_utc_iso(event.start_at),
+        "end_time": _to_utc_iso(event.end_at),
         "photo_count": _count_event_assets(db, event.id),
     }
 
@@ -83,8 +91,8 @@ def list_events(db: Session) -> list[dict]:
         {
             "event_id": row.id,
             "label": row.label,
-            "start_time": row.start_at,
-            "end_time": row.end_at,
+            "start_time": _to_utc_iso(row.start_at),
+            "end_time": _to_utc_iso(row.end_at),
             "photo_count": row.photo_count,
             "face_count": row.face_count,
         }
@@ -122,7 +130,7 @@ def get_event_detail(db: Session, event_id: int) -> dict | None:
             "asset_sha256": row.sha256,
             "filename": row.original_filename,
             "image_url": _build_asset_url(row.sha256, row.extension),
-            "captured_at": row.captured_at.isoformat() if row.captured_at else None,
+            "captured_at": _to_utc_iso(row.captured_at),
             "face_count": row.face_count,
         }
         for row in photo_rows
@@ -131,8 +139,8 @@ def get_event_detail(db: Session, event_id: int) -> dict | None:
     return {
         "event_id": event_id,
         "label": event.label,
-        "start_time": event.start_at,
-        "end_time": event.end_at,
+        "start_time": _to_utc_iso(event.start_at),
+        "end_time": _to_utc_iso(event.end_at),
         "photos": photos,
     }
 
@@ -174,7 +182,7 @@ def merge_events(db: Session, *, source_event_id: int, target_event_id: int) -> 
         target_event_id=target_event.id,
         removed_event_id=source_event_id,
         label=target_event.label,
-        start_time=target_event.start_at,
-        end_time=target_event.end_at,
+        start_time=_to_utc_iso(target_event.start_at),
+        end_time=_to_utc_iso(target_event.end_at),
         photo_count=_count_event_assets(db, target_event.id),
     )

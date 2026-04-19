@@ -12,6 +12,7 @@ pyexiftool
 opencv-python-headless
 deepface
 Pillow
+pillow-heif
 ImageHash
 timm
 torch

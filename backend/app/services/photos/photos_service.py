@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import func, nullslast, select
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
 from app.models.asset_content_tag import AssetContentTag
+from app.models.asset_metadata_observation import AssetMetadataObservation
 from app.models.duplicate_group import DuplicateGroup
 from app.models.event import Event
 from app.models.face import Face
@@ -22,6 +25,46 @@ from app.services.timeline.timeline_service import (
 
 
 ALLOWED_DISPLAY_ROTATION_DEGREES = {0, 90, 180, 270}
+
+
+def _to_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    utc_value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return utc_value.isoformat().replace("+00:00", "Z")
+
+
+def _normalize_string(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.strip().split())
+    return normalized or None
+
+
+def _winner_fields_for_observation(observation: AssetMetadataObservation, asset: Asset) -> list[str]:
+    winner_fields: list[str] = []
+    if observation.captured_at_observed is not None and observation.captured_at_observed == asset.captured_at:
+        winner_fields.append("captured_at")
+
+    obs_make = _normalize_string(observation.camera_make)
+    asset_make = _normalize_string(asset.camera_make)
+    if obs_make is not None and asset_make is not None and obs_make.lower() == asset_make.lower():
+        winner_fields.append("camera_make")
+
+    obs_model = _normalize_string(observation.camera_model)
+    asset_model = _normalize_string(asset.camera_model)
+    if obs_model is not None and asset_model is not None and obs_model.lower() == asset_model.lower():
+        winner_fields.append("camera_model")
+
+    if (
+        observation.width is not None
+        and observation.height is not None
+        and observation.width == asset.width
+        and observation.height == asset.height
+    ):
+        winner_fields.append("dimensions")
+
+    return winner_fields
 
 
 def _validate_display_rotation_degrees(rotation_degrees: int) -> int:
@@ -79,7 +122,7 @@ def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[d
             "asset_sha256": row.sha256,
             "filename": row.original_filename,
             "image_url": _build_asset_url(row.sha256, row.extension),
-            "captured_at": row.captured_at.isoformat() if row.captured_at else None,
+            "captured_at": _to_utc_iso(row.captured_at),
             "capture_time_trust": row.capture_time_trust,
             "face_count": row.face_count,
         }
@@ -145,8 +188,8 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
             event_summary = {
                 "event_id": event.id,
                 "label": event.label,
-                "start_at": event.start_at.isoformat() if event.start_at else None,
-                "end_at": event.end_at.isoformat() if event.end_at else None,
+                "start_at": _to_utc_iso(event.start_at),
+                "end_at": _to_utc_iso(event.end_at),
             }
 
     location_summary: dict | None = None
@@ -155,6 +198,43 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
             "latitude": asset.gps_latitude,
             "longitude": asset.gps_longitude,
         }
+
+    canonical_metadata_summary = {
+        "captured_at": _to_utc_iso(asset.captured_at),
+        "camera_make": asset.camera_make,
+        "camera_model": asset.camera_model,
+        "width": asset.width,
+        "height": asset.height,
+    }
+
+    observation_rows = list(
+        db.scalars(
+            select(AssetMetadataObservation)
+            .where(AssetMetadataObservation.asset_sha256 == sha256)
+            .order_by(AssetMetadataObservation.created_at_utc.asc(), AssetMetadataObservation.id.asc())
+        ).all()
+    )
+    metadata_observations = [
+        {
+            "id": row.id,
+            "provenance_id": row.provenance_id,
+            "observation_origin": row.observation_origin,
+            "observed_source_path": row.observed_source_path,
+            "observed_source_type": row.observed_source_type,
+            "observed_extension": row.observed_extension,
+            "exif_datetime_original": _to_utc_iso(row.exif_datetime_original),
+            "exif_create_date": _to_utc_iso(row.exif_create_date),
+            "captured_at_observed": _to_utc_iso(row.captured_at_observed),
+            "camera_make": row.camera_make,
+            "camera_model": row.camera_model,
+            "width": row.width,
+            "height": row.height,
+            "is_legacy_seeded": row.is_legacy_seeded,
+            "created_at_utc": _to_utc_iso(row.created_at_utc),
+            "winner_fields": _winner_fields_for_observation(row, asset),
+        }
+        for row in observation_rows
+    ]
 
     provenance_rows = list(
         db.scalars(
@@ -172,7 +252,7 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
             "source_relative_path": row.source_relative_path,
             "ingestion_source_id": row.ingestion_source_id,
             "ingestion_run_id": row.ingestion_run_id,
-            "ingested_at": row.ingested_at.isoformat() if row.ingested_at else None,
+            "ingested_at": _to_utc_iso(row.ingested_at),
             "source_hash": row.source_hash,
         }
         for row in provenance_rows
@@ -206,6 +286,8 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
         "capture_time_trust": capture_time_trust,
         "event": event_summary,
         "location": location_summary,
+        "canonical_metadata": canonical_metadata_summary,
+        "metadata_observations": metadata_observations,
         "provenance": provenance_summary,
         "duplicate_group_id": asset.duplicate_group_id,
         "duplicate_group_type": duplicate_group_type,

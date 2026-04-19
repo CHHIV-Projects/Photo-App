@@ -46,6 +46,33 @@ class PhotoProvenance(BaseModel):
     source_hash: str | None = None
 
 
+class CanonicalMetadataSummary(BaseModel):
+    captured_at: str | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    width: int | None = None
+    height: int | None = None
+
+
+class PhotoMetadataObservation(BaseModel):
+    id: int
+    provenance_id: int | None = None
+    observation_origin: str
+    observed_source_path: str | None = None
+    observed_source_type: str | None = None
+    observed_extension: str | None = None
+    exif_datetime_original: str | None = None
+    exif_create_date: str | None = None
+    captured_at_observed: str | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    width: int | None = None
+    height: int | None = None
+    is_legacy_seeded: bool
+    created_at_utc: str | None = None
+    winner_fields: list[str] = []
+
+
 class PhotoSummary(BaseModel):
     asset_sha256: str
     filename: str
@@ -75,6 +102,8 @@ class PhotoDetail(BaseModel):
     capture_time_trust: Literal["high", "low", "unknown"]
     event: PhotoEventSummary | None = None
     location: PhotoLocation | None = None
+    canonical_metadata: CanonicalMetadataSummary | None = None
+    metadata_observations: list[PhotoMetadataObservation] = []
     provenance: list[PhotoProvenance]
     duplicate_group_id: int | None = None
     duplicate_group_type: Literal["near"] | None = None

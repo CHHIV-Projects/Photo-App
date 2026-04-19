@@ -25,6 +25,11 @@ from app.services.duplicates.lineage import ProvenanceContext
 from app.services.ingestion.deduplicator import DeduplicationResult, DuplicateFile
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
 from app.services.ingestion.ingestion_context_service import ResolvedIngestionContext, resolve_ingestion_context
+from app.services.metadata.canonicalization_service import (
+    create_ingest_observations_for_batch,
+    recompute_canonical_metadata_for_assets,
+)
+from app.services.metadata.metadata_canonicalization_schema import ensure_metadata_canonicalization_schema
 from app.services.ingestion.dropzone_manager import (
     DropzoneStageResult,
     build_dropzone_processing_records,
@@ -869,6 +874,63 @@ def _metadata_normalization_stage(ctx: PipelineContext) -> dict[str, Any]:
     }
 
 
+def _metadata_observation_and_canonicalization_stage(ctx: PipelineContext) -> dict[str, Any]:
+    if ctx.persistence_result is None:
+        raise RuntimeError("DB ingestion must complete before metadata observation stage.")
+
+    inserted_records = ctx.persistence_result.inserted_records
+    duplicate_files = (
+        ctx.duplicate_provenance_result.successful_duplicates
+        if ctx.duplicate_provenance_result is not None
+        else []
+    )
+    if not inserted_records and not duplicate_files:
+        return {
+            "scope": "batch",
+            "observations_inserted": 0,
+            "observations_skipped": 0,
+            "observations_failed": 0,
+            "assets_canonical_processed": 0,
+            "assets_canonical_updated": 0,
+            "assets_canonical_failed": 0,
+        }
+
+    provenance_context = None
+    if ctx.resolved_ingestion_context is not None:
+        provenance_context = ProvenanceContext(
+            ingestion_source_id=ctx.resolved_ingestion_context.ingestion_source_id,
+            ingestion_run_id=ctx.resolved_ingestion_context.ingestion_run_id,
+            source_label=ctx.resolved_ingestion_context.source_label,
+            source_type=ctx.resolved_ingestion_context.source_type,
+            source_root_path=ctx.resolved_ingestion_context.source_root_path,
+        )
+
+    db_session = SessionLocal()
+    try:
+        ingest_summary = create_ingest_observations_for_batch(
+            db_session,
+            inserted_records=inserted_records,
+            duplicate_files=duplicate_files,
+            provenance_context=provenance_context,
+        )
+        canonical_summary = recompute_canonical_metadata_for_assets(
+            db_session,
+            ingest_summary.affected_asset_sha256,
+        )
+    finally:
+        db_session.close()
+
+    return {
+        "scope": "batch",
+        "observations_inserted": ingest_summary.inserted,
+        "observations_skipped": ingest_summary.skipped,
+        "observations_failed": ingest_summary.failed,
+        "assets_canonical_processed": canonical_summary.processed,
+        "assets_canonical_updated": canonical_summary.updated,
+        "assets_canonical_failed": canonical_summary.failed,
+    }
+
+
 def _event_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.organization.event_clusterer import cluster_assets_into_events, persist_event_clusters
 
@@ -953,6 +1015,20 @@ def _ingestion_context_schema_sync_stage(_: PipelineContext) -> dict[str, Any]:
         "added_indexes": len(summary.added_indexes),
         "constraints_added": len(summary.added_constraints),
         "constraints_dropped": len(summary.dropped_constraints),
+    }
+
+
+def _metadata_canonicalization_schema_sync_stage(_: PipelineContext) -> dict[str, Any]:
+    db_session = SessionLocal()
+    try:
+        summary = ensure_metadata_canonicalization_schema(db_session)
+    finally:
+        db_session.close()
+
+    return {
+        "scope": "global",
+        "added_tables": len(summary.ensured_tables),
+        "added_columns": len(summary.added_columns),
     }
 
 
@@ -1173,15 +1249,17 @@ def _print_dry_run(args: RuntimeArgs, ctx: PipelineContext) -> None:
     print("Planned stages:")
     print("  [1] RUN - collect input (scope=batch)")
     print("  [2] RUN - ingestion context schema sync (scope=global)")
-    print("  [3] RUN - ingestion context resolve (scope=global)")
-    print("  [4] RUN - face schema sync (scope=global)")
-    print("  [5] RUN - ingestion batches: filter, hash, deduplicate, storage, ingest, cleanup (scope=batch)")
-    print(f"  [6] {'SKIP (--skip-exif-extraction)' if args.skip_exif_extraction else 'RUN'} - EXIF extraction (scope=batch)")
-    print(f"  [7] {'SKIP (--skip-metadata-normalization)' if args.skip_metadata_normalization else 'RUN'} - metadata normalization (scope=batch)")
-    print(f"  [8] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
-    print(f"  [9] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
-    print(f"  [10] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
-    print(f"  [11] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
+    print("  [3] RUN - metadata canonicalization schema sync (scope=global)")
+    print("  [4] RUN - ingestion context resolve (scope=global)")
+    print("  [5] RUN - face schema sync (scope=global)")
+    print("  [6] RUN - ingestion batches: filter, hash, deduplicate, storage, ingest, cleanup (scope=batch)")
+    print(f"  [7] {'SKIP (--skip-exif-extraction)' if args.skip_exif_extraction else 'RUN'} - EXIF extraction (scope=batch)")
+    print(f"  [8] {'SKIP (--skip-metadata-normalization)' if args.skip_metadata_normalization else 'RUN'} - metadata normalization (scope=batch)")
+    print("  [9] RUN - metadata observations + canonicalization (scope=batch)")
+    print(f"  [10] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
+    print(f"  [11] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
+    print(f"  [12] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
+    print(f"  [13] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
     print()
     print("Status: DRY RUN")
 
@@ -1311,7 +1389,7 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
             _skip_stage(
                 key=f"{batch_label_prefix}_exif",
                 index=1,
-                total=4,
+                total=5,
                 label=f"{batch_label_prefix}: EXIF extraction",
                 reason="--skip-exif-extraction",
                 outcomes=outcomes,
@@ -1320,7 +1398,7 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
             _execute_stage(
                 key=f"{batch_label_prefix}_exif",
                 index=1,
-                total=4,
+                total=5,
                 label=f"{batch_label_prefix}: EXIF extraction",
                 runner=lambda: _exif_extraction_stage(ctx),
                 outcomes=outcomes,
@@ -1330,7 +1408,7 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
             _skip_stage(
                 key=f"{batch_label_prefix}_metadata",
                 index=2,
-                total=4,
+                total=5,
                 label=f"{batch_label_prefix}: metadata normalization",
                 reason="--skip-metadata-normalization",
                 outcomes=outcomes,
@@ -1339,17 +1417,26 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
             _execute_stage(
                 key=f"{batch_label_prefix}_metadata",
                 index=2,
-                total=4,
+                total=5,
                 label=f"{batch_label_prefix}: metadata normalization",
                 runner=lambda: _metadata_normalization_stage(ctx),
                 outcomes=outcomes,
             )
 
+        _execute_stage(
+            key=f"{batch_label_prefix}_metadata_canonicalization",
+            index=3,
+            total=5,
+            label=f"{batch_label_prefix}: metadata observations + canonicalization",
+            runner=lambda: _metadata_observation_and_canonicalization_stage(ctx),
+            outcomes=outcomes,
+        )
+
         if args.skip_duplicate_lineage:
             _skip_stage(
                 key=f"{batch_label_prefix}_lineage",
-                index=3,
-                total=4,
+                index=4,
+                total=5,
                 label=f"{batch_label_prefix}: duplicate lineage",
                 reason="--skip-duplicate-lineage",
                 outcomes=outcomes,
@@ -1357,8 +1444,8 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         else:
             _execute_stage(
                 key=f"{batch_label_prefix}_lineage",
-                index=3,
-                total=4,
+                index=4,
+                total=5,
                 label=f"{batch_label_prefix}: duplicate lineage",
                 runner=lambda: _duplicate_lineage_stage(ctx),
                 outcomes=outcomes,
@@ -1367,8 +1454,8 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         if args.skip_face_processing:
             _skip_stage(
                 key=f"{batch_label_prefix}_faces",
-                index=4,
-                total=4,
+                index=5,
+                total=5,
                 label=f"{batch_label_prefix}: face detection + clustering",
                 reason="--skip-face-processing",
                 outcomes=outcomes,
@@ -1376,16 +1463,16 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         else:
             _execute_stage(
                 key=f"{batch_label_prefix}_face_detection",
-                index=4,
-                total=5,
+                index=5,
+                total=6,
                 label=f"{batch_label_prefix}: face detection",
                 runner=lambda: _face_detection_stage(ctx),
                 outcomes=outcomes,
             )
             _execute_stage(
                 key=f"{batch_label_prefix}_face_clustering",
-                index=5,
-                total=5,
+                index=6,
+                total=6,
                 label=f"{batch_label_prefix}: face embedding + clustering",
                 runner=lambda: _face_clustering_stage(ctx),
                 outcomes=outcomes,
@@ -1409,6 +1496,14 @@ def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]
             total=1,
             label="ingestion context schema sync",
             runner=lambda: _ingestion_context_schema_sync_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key="metadata_canonicalization_schema_sync",
+            index=1,
+            total=1,
+            label="metadata canonicalization schema sync",
+            runner=lambda: _metadata_canonicalization_schema_sync_stage(ctx),
             outcomes=outcomes,
         )
         _execute_stage(

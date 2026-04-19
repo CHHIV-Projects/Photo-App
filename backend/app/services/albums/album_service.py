@@ -14,6 +14,13 @@ from app.models.face import Face
 from app.services.timeline.timeline_service import effective_capture_time_trust_expr
 
 
+def _to_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    utc_value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return utc_value.isoformat().replace("+00:00", "Z")
+
+
 def _asset_image_url(sha256: str, extension: str) -> str:
     ext = extension.lower()
     if not ext.startswith("."):
@@ -160,7 +167,7 @@ def list_albums(db: Session) -> list[dict]:
                 membership_rows=membership_by_collection.get(row.id, []),
                 asset_map=asset_map,
             ),
-            "updated_at": row.updated_at_utc.isoformat(),
+            "updated_at": _to_utc_iso(row.updated_at_utc),
         }
         for row in rows
     ]
@@ -218,14 +225,14 @@ def get_album_detail(db: Session, *, album_id: int) -> dict:
             membership_rows=membership_rows,
             asset_map=asset_map,
         ),
-        "created_at": album.created_at_utc.isoformat(),
-        "updated_at": album.updated_at_utc.isoformat(),
+        "created_at": _to_utc_iso(album.created_at_utc),
+        "updated_at": _to_utc_iso(album.updated_at_utc),
         "items": [
             {
                 "asset_sha256": row.asset_sha256,
                 "filename": row.original_filename,
                 "image_url": _asset_image_url(row.asset_sha256, row.extension),
-                "captured_at": row.captured_at.isoformat() if row.captured_at else None,
+                "captured_at": _to_utc_iso(row.captured_at),
                 "capture_time_trust": row.capture_time_trust,
                 "face_count": int(row.face_count or 0),
             }
