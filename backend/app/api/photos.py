@@ -9,12 +9,15 @@ from app.db.session import get_db_session
 from app.schemas.photos import (
     CaptureClassificationOverrideRequest,
     PhotoDetail,
+    PhotoEventAssignRequest,
+    PhotoEventMutationResponse,
     PhotoListResponse,
     PhotoRotationUpdateRequest,
     PhotoRotationUpdateResponse,
     PhotoSummary,
     SuccessResponse,
 )
+from app.services.events.events_service import assign_asset_to_event, remove_asset_from_event
 from app.services.photos.photos_service import (
     get_photo_detail,
     list_photos,
@@ -136,4 +139,55 @@ def update_photo_rotation(
     return PhotoRotationUpdateResponse(
         asset_sha256=asset_sha256,
         display_rotation_degrees=updated_rotation,
+    )
+
+
+@router.post("/{asset_sha256}/event/remove", response_model=PhotoEventMutationResponse)
+def remove_photo_event(
+    asset_sha256: str,
+    db: Session = Depends(get_db_session),
+) -> PhotoEventMutationResponse:
+    try:
+        result = remove_asset_from_event(db, asset_sha256=asset_sha256)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Photo {asset_sha256!r} not found.")
+
+    return PhotoEventMutationResponse(
+        success=True,
+        asset_sha256=result.asset_sha256,
+        event=result.event,
+        old_event=result.old_event_summary,
+        new_event=result.new_event_summary,
+    )
+
+
+@router.post("/{asset_sha256}/event/assign", response_model=PhotoEventMutationResponse)
+def assign_photo_event(
+    asset_sha256: str,
+    request: PhotoEventAssignRequest,
+    db: Session = Depends(get_db_session),
+) -> PhotoEventMutationResponse:
+    try:
+        result = assign_asset_to_event(
+            db,
+            asset_sha256=asset_sha256,
+            target_event_id=request.event_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Photo {asset_sha256!r} not found.")
+
+    return PhotoEventMutationResponse(
+        success=True,
+        asset_sha256=result.asset_sha256,
+        event=result.event,
+        old_event=result.old_event_summary,
+        new_event=result.new_event_summary,
     )

@@ -147,5 +147,26 @@ class PhotoRotationUpdateResponse(BaseModel):
     display_rotation_degrees: Literal[0, 90, 180, 270]
 
 
+class EventImpactSummary(BaseModel):
+    event_id: int
+    label: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    photo_count: int
+    face_count: int
+
+
+class PhotoEventAssignRequest(BaseModel):
+    event_id: int
+
+
+class PhotoEventMutationResponse(BaseModel):
+    success: bool
+    asset_sha256: str
+    event: PhotoEventSummary | None = None
+    old_event: EventImpactSummary | None = None
+    new_event: EventImpactSummary | None = None
+
+
 class SuccessResponse(BaseModel):
     success: bool
