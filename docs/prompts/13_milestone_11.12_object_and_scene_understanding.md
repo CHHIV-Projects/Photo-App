@@ -400,3 +400,35 @@ Optional only if simple.
 -   tags are visible in photo detail
 -   reruns are safe and incremental where practical
 -   no existing systems are destabilized
+
+11.12 decisions:
+
+- Model/library: use timm + lightweight EfficientNet-B0 (or equivalent lightweight timm classifier)
+- Do not use DeepFace attributes
+- Do not use CLIP unless timm/EfficientNet proves clearly unworkable
+
+- Controlled vocabulary: yes
+  - hand-curated mapping dict
+  - whitelist of ~30–50 persisted labels
+
+- tag_type:
+  - assign by vocabulary rule
+  - use object or scene
+  - do not use auto
+
+- Confidence settings:
+  - single threshold only for 11.12
+  - CONTENT_TAG_MIN_CONFIDENCE = 0.25
+  - CONTENT_TAG_MAX_PER_ASSET = 5
+
+- Trigger:
+  - add standalone script backend/scripts/run_content_tagging.py
+  - no FastAPI trigger endpoint in 11.12
+  - pipeline integration is okay if simple
+
+- Tag filtering:
+  - no tag filtering in 11.12
+
+- UI display:
+  - show label only
+  - do not show confidence scores in Photos view

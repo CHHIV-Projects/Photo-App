@@ -3033,3 +3033,395 @@ This is a natural follow-on to 11.11:
 It improves usability without changing core identity logic.
 
 This should be implemented **after observing real usage patterns**, not prematurely.
+
+# Parking Lot — Advanced Semantic Understanding and Tagging System
+
+## Problem
+
+The current content tagging system (11.12 / 11.12.1):
+
+* uses a single image classification model (EfficientNet)
+* maps predictions into a controlled vocabulary
+* provides partial coverage and limited accuracy
+
+Observed limitations:
+
+* inconsistent or incorrect tags (e.g., indoor vs outdoor misclassification)
+* weak detection of important concepts (people, stairs, street scenes)
+* lack of contextual understanding (urban vs nature vs event)
+* dependence on ImageNet-style labels not aligned with personal photo archives
+* limited usefulness for reliable filtering or automation
+
+---
+
+## Goal
+
+Design and implement a **next-generation semantic understanding system** that provides:
+
+* higher accuracy object and scene recognition
+* better alignment with real-world photo archives
+* consistent, trustworthy tagging
+* support for future search, filtering, and automation
+
+---
+
+## Future System Direction
+
+### 1. Multi-Model Architecture
+
+Move from single classifier → layered approach:
+
+* **Scene classifier**
+
+  * indoor/outdoor
+  * beach, city, park, mountain, etc.
+
+* **Object detector**
+
+  * people, cars, dogs, buildings, stairs, etc.
+  * bounding-box aware (optional future)
+
+* **Multimodal model (optional)**
+
+  * CLIP / SigLIP-style zero-shot understanding
+  * flexible concept matching
+
+---
+
+### 2. Tag Fusion Layer
+
+Combine outputs from multiple models:
+
+* merge object + scene predictions
+* resolve conflicts (e.g., indoor vs outdoor)
+* produce final normalized tag set
+
+---
+
+### 3. Confidence and Consistency Layer
+
+* enforce confidence thresholds
+* detect contradictions
+* stabilize tag outputs across similar assets
+* optionally leverage duplicate lineage for consistency
+
+---
+
+### 4. User Feedback Integration
+
+Introduce manual interaction:
+
+* add/remove tags
+* reject incorrect tags
+* mark preferred tags
+
+Future use:
+
+* refine tag outputs
+* guide model behavior
+* improve system trust
+
+---
+
+### 5. Provenance and Audit for Tags
+
+Extend tagging model to include:
+
+* source model
+* confidence
+* generation timestamp
+* user overrides
+
+Supports explainability and future reprocessing.
+
+---
+
+### 6. Optional Cloud / Advanced Models
+
+Evaluate:
+
+* cloud-based vision APIs
+* larger multimodal models
+* hybrid local + cloud inference
+
+Only if justified by:
+
+* significant accuracy improvement
+* acceptable cost/performance tradeoff
+
+---
+
+### 7. Performance Strategy
+
+* batch processing vs incremental
+* caching of inference results
+* optional GPU acceleration (future)
+
+---
+
+## Integration Points
+
+This system will connect to:
+
+* Photos filtering and search
+* Timeline enrichment
+* Albums and collections
+* Event labeling
+* Sharing/export features
+* Administrative workflows (11.13)
+
+---
+
+## Constraints
+
+* must remain explainable
+* must not silently override user input
+* must preserve provenance and auditability
+* must support incremental processing
+* must not degrade system performance unacceptably
+
+---
+
+## Phased Approach (Future)
+
+This should be implemented as a **multi-phase effort**, for example:
+
+1. improved scene classifier
+2. object detection layer
+3. fusion + normalization
+4. user editing workflow
+5. optional cloud augmentation
+
+---
+
+## Notes
+
+This is a **strategic system upgrade**, not a minor enhancement.
+
+The current 11.12 system should be treated as:
+
+* a baseline implementation
+* a schema and pipeline foundation
+* a stepping stone for future improvements
+
+Further work should prioritize:
+
+* correctness
+* usability
+* trust
+
+over raw coverage.
+
+---
+
+## Status
+
+Deferred intentionally after 11.12 / 11.12.1.
+
+To be revisited when:
+
+* semantic tagging becomes critical for search/filtering
+* UX refinement phase begins
+* system is ready for higher-complexity ML integration
+
+# Parking Lot — Deferred Core Functionality (Ingestion Expansion, UX Enhancements, Location System, Tag Editing)
+
+## Purpose
+
+This section captures **important but intentionally deferred functionality** that:
+
+* is not required to complete Milestone 11 (core system)
+* introduces additional complexity, external dependencies, or UX expansion
+* should be revisited in Milestone 12+ or later phases
+
+This ensures we:
+
+* avoid scope creep
+* preserve momentum
+* retain important design ideas
+
+---
+
+## 1. Advanced Ingestion Expansion
+
+### 1.1 Full Drive Scan Ingestion
+
+Ability to:
+
+* scan entire local drives (e.g., `C:\`)
+* recursively discover media files
+* exclude:
+
+  * system directories
+  * recycle bins
+  * hidden/system folders
+  * virtual/cloud-mounted drives (e.g., Google Drive)
+
+### Considerations
+
+* performance and scan time
+* safety (avoid system files)
+* user control over scan scope
+* incremental vs full scan strategy
+
+---
+
+### 1.2 Cloud Ingestion (External Sources)
+
+Initial targets:
+
+* iCloud (priority)
+* OneDrive (future)
+
+Capabilities:
+
+* import photos/videos from cloud libraries
+* preserve metadata and quality (e.g., HEIC from iCloud)
+* integrate with provenance system
+
+### Considerations
+
+* API limitations and authentication
+* download formats and quality differences
+* sync vs one-time ingestion
+* cost and performance
+
+---
+
+## 2. Near-Duplicate Handling System
+
+### 2.1 Near-Duplicate Holding Area
+
+Instead of sending near duplicates directly to vault:
+
+* route to a **holding area**
+* allow human review before final decision
+
+### 2.2 Human Review Workflow
+
+* inspect near duplicates
+* choose:
+
+  * keep
+  * delete
+  * promote to canonical
+  * merge provenance
+
+### Considerations
+
+* storage overhead
+* UI complexity
+* interaction with canonical logic (11.7)
+
+---
+
+## 3. Advanced Photo Viewing UX
+
+### 3.1 Slideshow / Fullscreen Navigation
+
+* left/right arrow navigation
+* continuous browsing of photos
+* keyboard shortcuts
+
+### 3.2 Enhanced Photo Interaction
+
+* zoom
+* pan
+* quick navigation between related assets
+
+### Considerations
+
+* performance with large images
+* integration with existing Photos view
+
+---
+
+## 4. Editable Metadata and Content Layers
+
+### 4.1 Editable Time / Date
+
+* correct incorrect capture dates
+* override or refine timestamp
+
+### 4.2 Editable Content Tags
+
+* add/remove object/scene tags
+* correct incorrect tags
+* suppress unwanted tags
+
+### Considerations
+
+* interaction with future metadata canonicalization
+* need for audit/provenance tracking of edits
+* risk of conflicting with automated systems
+
+---
+
+## 5. Location and Place Intelligence
+
+### 5.1 Human-Readable Location Labels
+
+* convert GPS coordinates into:
+
+  * country
+  * state
+  * city
+  * street (if available)
+
+### 5.2 Place / Landmark System
+
+* identify known locations:
+
+  * landmarks (e.g., waterfalls, monuments)
+  * named places (parks, buildings)
+
+### 5.3 Place Management
+
+* label, edit, merge places
+* group photos by place
+
+### Considerations
+
+* external geocoding services
+* accuracy and consistency
+* API cost and caching
+* offline vs online capability
+
+---
+
+## 6. Event and Place UX Refinement
+
+### 6.1 Event Editing (Extended)
+
+* manual event labeling
+* event merging/splitting
+* override system clustering
+
+### 6.2 Place-Based Organization
+
+* browse by place
+* combine place + time + people
+
+---
+
+## Notes
+
+These items are intentionally deferred because they:
+
+* require additional systems (ML, APIs, UI complexity)
+* introduce cross-cutting concerns
+* benefit from observing real usage patterns first
+
+They should be revisited when:
+
+* Milestone 11 is complete
+* UX consolidation phase begins
+* system intelligence (Milestone 12) is underway
+
+---
+
+## Status
+
+Deferred and tracked.
+
+To be promoted selectively into Milestone 12+ based on priority and observed user needs.

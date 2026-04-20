@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class BBox(BaseModel):
@@ -131,6 +131,48 @@ class DuplicateGroupDetail(BaseModel):
     canonical_asset_sha256: str | None = None
     duplicate_count: int
     assets: list[DuplicateGroupAssetSummary]
+
+
+class DuplicateMergeTargetSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    asset_sha256: str
+    filename: str
+    image_url: str
+    captured_at: str | None = None
+    duplicate_group_id: int
+    duplicate_count: int
+    is_canonical: bool
+
+
+class DuplicateMergeTargetListResponse(BaseModel):
+    count: int
+    items: list[DuplicateMergeTargetSummary]
+
+
+class DuplicateLineageMergeRequest(BaseModel):
+    source_asset_sha256: str
+    target_asset_sha256: str
+
+
+class DuplicateLineageAssetSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    asset_sha256: str
+    filename: str
+    captured_at: str | None = None
+    duplicate_group_id: int | None = None
+    is_canonical: bool
+
+
+class DuplicateLineageMergeResponse(BaseModel):
+    success: bool
+    source_asset_sha256: str
+    target_asset_sha256: str
+    resulting_group_id: int
+    resulting_canonical_asset_sha256: str
+    affected_member_count: int
+    affected_assets: list[DuplicateLineageAssetSummary]
 
 
 class CaptureClassificationOverrideRequest(BaseModel):

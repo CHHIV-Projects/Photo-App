@@ -7,7 +7,12 @@ import type {
   ClusterSuggestionResponse,
   ClusterSummary,
   EventDetail,
+  EventMergeResponse,
+  DuplicateLineageMergeResponse,
+  DuplicateMergeTargetListResponse,
+  PhotoEventMutationResponse,
   EventSummary,
+  EventUpdateResponse,
   FaceSummary,
   ListResponse,
   PersonSummary,
@@ -177,6 +182,35 @@ export function getPhotoDetail(sha256: string): Promise<PhotoDetail> {
   return apiRequest<PhotoDetail>(`/api/photos/${sha256}`);
 }
 
+export function setPhotoRotation(
+  sha256: string,
+  rotationDegrees: 0 | 90 | 180 | 270
+): Promise<{ asset_sha256: string; display_rotation_degrees: 0 | 90 | 180 | 270 }> {
+  return apiRequest<{ asset_sha256: string; display_rotation_degrees: 0 | 90 | 180 | 270 }>(
+    `/api/photos/${sha256}/rotation`,
+    {
+      method: "POST",
+      body: JSON.stringify({ rotation_degrees: rotationDegrees })
+    }
+  );
+}
+
+export function removePhotoFromEvent(sha256: string): Promise<PhotoEventMutationResponse> {
+  return apiRequest<PhotoEventMutationResponse>(`/api/photos/${sha256}/event/remove`, {
+    method: "POST"
+  });
+}
+
+export function assignPhotoToEvent(
+  sha256: string,
+  eventId: number
+): Promise<PhotoEventMutationResponse> {
+  return apiRequest<PhotoEventMutationResponse>(`/api/photos/${sha256}/event/assign`, {
+    method: "POST",
+    body: JSON.stringify({ event_id: eventId })
+  });
+}
+
 export function getTimelineSummary(
   options: TimelineQueryOptions = {}
 ): Promise<TimelineSummaryResponse> {
@@ -189,6 +223,45 @@ export function getEvents(): Promise<ListResponse<EventSummary>> {
 
 export function getEventDetail(eventId: number): Promise<EventDetail> {
   return apiRequest<EventDetail>(`/api/events/${eventId}`);
+}
+
+export function updateEventLabel(eventId: number, label: string): Promise<EventUpdateResponse> {
+  return apiRequest<EventUpdateResponse>(`/api/events/${eventId}/update`, {
+    method: "POST",
+    body: JSON.stringify({ label })
+  });
+}
+
+export function mergeEvents(sourceEventId: number, targetEventId: number): Promise<EventMergeResponse> {
+  return apiRequest<EventMergeResponse>("/api/events/merge", {
+    method: "POST",
+    body: JSON.stringify({ source_event_id: sourceEventId, target_event_id: targetEventId })
+  });
+}
+
+export function getDuplicateMergeTargets(
+  sourceAssetSha256: string,
+  query: string,
+  limit = 30
+): Promise<DuplicateMergeTargetListResponse> {
+  const params = new URLSearchParams({ source_asset_sha256: sourceAssetSha256, limit: String(limit) });
+  if (query.trim()) {
+    params.set("q", query.trim());
+  }
+  return apiRequest<DuplicateMergeTargetListResponse>(`/api/duplicates/merge-targets?${params.toString()}`);
+}
+
+export function mergeDuplicateAssets(
+  sourceAssetSha256: string,
+  targetAssetSha256: string
+): Promise<DuplicateLineageMergeResponse> {
+  return apiRequest<DuplicateLineageMergeResponse>("/api/duplicates/merge-assets", {
+    method: "POST",
+    body: JSON.stringify({
+      source_asset_sha256: sourceAssetSha256,
+      target_asset_sha256: targetAssetSha256
+    })
+  });
 }
 
 export function getPlaces(): Promise<ListResponse<PlaceSummary>> {

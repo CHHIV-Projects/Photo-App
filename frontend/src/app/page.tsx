@@ -20,6 +20,7 @@ import {
   getClusters,
   getEventDetail,
   getEvents,
+  mergeEvents,
   getPeople,
   getPeopleWithClusters,
   getPhotoDetail,
@@ -28,6 +29,7 @@ import {
   getPlaces,
   getUnassignedFaces,
   ignoreCluster,
+  updateEventLabel,
   mergeClusters,
   moveFace,
   removeFaceFromCluster
@@ -88,6 +90,9 @@ export default function HomePage() {
   const [isLoadingEventDetail, setIsLoadingEventDetail] = useState(false);
   const [eventsErrorMessage, setEventsErrorMessage] = useState<string | null>(null);
   const [eventDetailErrorMessage, setEventDetailErrorMessage] = useState<string | null>(null);
+  const [isSavingEventLabel, setIsSavingEventLabel] = useState(false);
+  const [isMergingEvent, setIsMergingEvent] = useState(false);
+  const [eventActionErrorMessage, setEventActionErrorMessage] = useState<string | null>(null);
   const [places, setPlaces] = useState<PlaceSummary[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   const [placeDetail, setPlaceDetail] = useState<PlaceDetail | null>(null);
@@ -269,7 +274,45 @@ export default function HomePage() {
 
   function handleSelectEvent(eventId: number) {
     setSelectedEventId(eventId);
+    setEventActionErrorMessage(null);
     void loadEventDetail(eventId);
+  }
+
+  async function handleUpdateEventLabel(eventId: number, label: string): Promise<boolean> {
+    setIsSavingEventLabel(true);
+    setEventActionErrorMessage(null);
+
+    try {
+      await updateEventLabel(eventId, label);
+      await Promise.all([loadEvents(), loadEventDetail(eventId)]);
+      return true;
+    } catch (error) {
+      setEventActionErrorMessage(getErrorMessage(error, "Failed to update event label."));
+      return false;
+    } finally {
+      setIsSavingEventLabel(false);
+    }
+  }
+
+  async function handleMergeEventIntoTarget(sourceEventId: number, targetEventId: number): Promise<boolean> {
+    setIsMergingEvent(true);
+    setEventActionErrorMessage(null);
+
+    try {
+      const result = await mergeEvents(sourceEventId, targetEventId);
+      setSelectedEventId(result.target_event_id);
+      await Promise.all([loadEvents(), loadEventDetail(result.target_event_id)]);
+      return true;
+    } catch (error) {
+      setEventActionErrorMessage(getErrorMessage(error, "Failed to merge events."));
+      return false;
+    } finally {
+      setIsMergingEvent(false);
+    }
+  }
+
+  async function handleRefreshEventData(eventId: number): Promise<void> {
+    await Promise.all([loadEvents(), loadEventDetail(eventId)]);
   }
 
   function handleOpenPhotoFromEvents(sha256: string) {
@@ -666,6 +709,7 @@ export default function HomePage() {
             isLoadingDetail={isLoadingPhotoDetail}
             photoDetailErrorMessage={photoDetailErrorMessage}
             onSelectPhoto={handleSelectPhoto}
+            onPhotoDetailUpdated={setPhotoDetail}
           />
         ) : viewMode === "albums" ? (
           <AlbumsView onOpenPhoto={handleOpenPhotoFromAlbums} />
@@ -684,8 +728,14 @@ export default function HomePage() {
             eventDetail={eventDetail}
             isLoadingDetail={isLoadingEventDetail}
             eventDetailErrorMessage={eventDetailErrorMessage}
+            actionErrorMessage={eventActionErrorMessage}
+            isSavingLabel={isSavingEventLabel}
+            isMergingEvent={isMergingEvent}
             onSelectEvent={handleSelectEvent}
             onOpenPhoto={handleOpenPhotoFromEvents}
+            onUpdateLabel={handleUpdateEventLabel}
+            onMergeIntoEvent={handleMergeEventIntoTarget}
+            onRefreshEventData={handleRefreshEventData}
           />
         )}
       </div>

@@ -149,19 +149,60 @@ export interface PhotoLocation {
 
 export interface PhotoProvenance {
   source_path: string;
+  source_label: string | null;
+  source_type: string | null;
+  source_root_path: string | null;
+  source_relative_path: string | null;
+  ingestion_source_id: number | null;
+  ingestion_run_id: number | null;
   ingested_at: string | null;
   source_hash: string | null;
+}
+
+export interface CanonicalMetadataSummary {
+  captured_at: string | null;
+  camera_make: string | null;
+  camera_model: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+export interface PhotoMetadataObservation {
+  id: number;
+  provenance_id: number | null;
+  observation_origin: string;
+  observed_source_path: string | null;
+  observed_source_type: string | null;
+  observed_extension: string | null;
+  exif_datetime_original: string | null;
+  exif_create_date: string | null;
+  captured_at_observed: string | null;
+  camera_make: string | null;
+  camera_model: string | null;
+  width: number | null;
+  height: number | null;
+  is_legacy_seeded: boolean;
+  created_at_utc: string | null;
+  winner_fields: string[];
+}
+
+export interface ContentTagSummary {
+  tag: string;
+  tag_type: "object" | "scene";
 }
 
 export interface PhotoDetail {
   asset_sha256: string;
   filename: string;
   image_url: string;
+  display_rotation_degrees: 0 | 90 | 180 | 270;
   is_scan: boolean;
   capture_type: "digital" | "scan" | "unknown";
   capture_time_trust: "high" | "low" | "unknown";
   event: PhotoEventSummary | null;
   location: PhotoLocation | null;
+  canonical_metadata: CanonicalMetadataSummary | null;
+  metadata_observations: PhotoMetadataObservation[];
   provenance: PhotoProvenance[];
   duplicate_group_id: number | null;
   duplicate_group_type: "near" | null;
@@ -170,10 +211,12 @@ export interface PhotoDetail {
   duplicate_count: number;
   canonical_asset_sha256: string | null;
   faces: FaceInPhoto[];
+  content_tags: ContentTagSummary[];
 }
 
 export interface EventSummary {
   event_id: number;
+  label: string | null;
   start_time: string;
   end_time: string;
   photo_count: number;
@@ -182,9 +225,77 @@ export interface EventSummary {
 
 export interface EventDetail {
   event_id: number;
+  label: string | null;
   start_time: string;
   end_time: string;
   photos: PhotoSummary[];
+}
+
+export interface EventUpdateResponse {
+  event_id: number;
+  label: string | null;
+  start_time: string;
+  end_time: string;
+  photo_count: number;
+}
+
+export interface EventMergeResponse {
+  target_event_id: number;
+  removed_event_id: number;
+  label: string | null;
+  start_time: string;
+  end_time: string;
+  photo_count: number;
+}
+
+export interface EventImpactSummary {
+  event_id: number;
+  label: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  photo_count: number;
+  face_count: number;
+}
+
+export interface PhotoEventMutationResponse {
+  success: boolean;
+  asset_sha256: string;
+  event: PhotoEventSummary | null;
+  old_event: EventImpactSummary | null;
+  new_event: EventImpactSummary | null;
+}
+
+export interface DuplicateMergeTargetSummary {
+  asset_sha256: string;
+  filename: string;
+  image_url: string;
+  captured_at: string | null;
+  duplicate_group_id: number;
+  duplicate_count: number;
+  is_canonical: boolean;
+}
+
+export interface DuplicateMergeTargetListResponse {
+  count: number;
+  items: DuplicateMergeTargetSummary[];
+}
+
+export interface DuplicateLineageAssetSummary {
+  asset_sha256: string;
+  filename: string;
+  captured_at: string | null;
+  duplicate_group_id: number | null;
+  is_canonical: boolean;
+}
+
+export interface DuplicateLineageMergeResponse {
+  success: boolean;
+  source_asset_sha256: string;
+  target_asset_sha256: string;
+  resulting_group_id: number;
+  resulting_canonical_asset_sha256: string;
+  affected_member_count: number;
+  affected_assets: DuplicateLineageAssetSummary[];
 }
 
 export interface PlaceSummary {

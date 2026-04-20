@@ -13,6 +13,8 @@ import {
   resolveApiUrl,
   updateAlbum
 } from "@/lib/api";
+import { isVideoAssetFilename } from "@/lib/media";
+import { PresentationViewer } from "@/components/PresentationViewer";
 import type { AlbumDetail, AlbumSummary, PhotoSummary } from "@/types/ui-api";
 import styles from "./albums-view.module.css";
 
@@ -31,6 +33,7 @@ export function AlbumsView({ onOpenPhoto }: Props) {
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [selectedAssetToAdd, setSelectedAssetToAdd] = useState("");
+  const [presentationStartIndex, setPresentationStartIndex] = useState<number | null>(null);
 
   const [isLoadingAlbums, setIsLoadingAlbums] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
@@ -223,6 +226,17 @@ export function AlbumsView({ onOpenPhoto }: Props) {
     }
   }
 
+  function openAlbumPresentation(assetSha256: string) {
+    if (!albumDetail) {
+      return;
+    }
+
+    const currentIndex = albumDetail.items.findIndex((photo) => photo.asset_sha256 === assetSha256);
+    if (currentIndex >= 0) {
+      setPresentationStartIndex(currentIndex);
+    }
+  }
+
   return (
     <div className={styles.layout}>
       <aside className={styles.sidebar}>
@@ -341,11 +355,17 @@ export function AlbumsView({ onOpenPhoto }: Props) {
                 <div className={styles.photoGrid}>
                   {albumDetail.items.map((photo) => (
                     <article key={photo.asset_sha256} className={styles.photoCard}>
-                      <img
-                        src={resolveApiUrl(photo.image_url) ?? ""}
-                        alt={photo.filename}
-                        className={styles.photoThumb}
-                      />
+                      {isVideoAssetFilename(photo.filename) ? (
+                        <div className={`${styles.photoThumb} ${styles.mediaPlaceholder}`}>
+                          <span className={styles.mediaPlaceholderLabel}>Video</span>
+                        </div>
+                      ) : (
+                        <img
+                          src={resolveApiUrl(photo.image_url) ?? ""}
+                          alt={photo.filename}
+                          className={styles.photoThumb}
+                        />
+                      )}
                       <div className={styles.photoText}>
                         <p className={styles.photoName}>{photo.filename}</p>
                       </div>
@@ -355,6 +375,9 @@ export function AlbumsView({ onOpenPhoto }: Props) {
                             Open
                           </button>
                         ) : null}
+                        <button type="button" className={styles.secondaryButton} onClick={() => openAlbumPresentation(photo.asset_sha256)}>
+                          Present
+                        </button>
                         <button
                           type="button"
                           className={styles.secondaryButton}
@@ -372,6 +395,13 @@ export function AlbumsView({ onOpenPhoto }: Props) {
           </>
         )}
       </section>
+      {albumDetail && presentationStartIndex !== null ? (
+        <PresentationViewer
+          items={albumDetail.items}
+          initialIndex={presentationStartIndex}
+          onClose={() => setPresentationStartIndex(null)}
+        />
+      ) : null}
     </div>
   );
 }

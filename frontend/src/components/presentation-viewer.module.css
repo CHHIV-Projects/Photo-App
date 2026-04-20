@@ -1,0 +1,242 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(10, 19, 28, 0.82);
+  cursor: pointer;
+}
+
+.viewerShell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1520px, calc(100vw - 16px));
+  height: calc(100vh - 16px);
+  margin: 8px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, #142435 0%, #0e1823 100%);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.36);
+  overflow: hidden;
+}
+
+.viewerShellFullscreen {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  border-radius: 0;
+}
+
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.viewerShellFullscreen .topBar {
+  padding: 8px 12px;
+}
+
+.topBarActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rotationValue {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #bfd3e4;
+}
+
+.metaBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.filename {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #f6f8fb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metaLine {
+  font-size: 0.78rem;
+  color: #bfd3e4;
+}
+
+.closeButton,
+.navButton {
+  border: 1px solid rgba(180, 211, 232, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f4f7fb;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.closeButton:disabled,
+.navButton:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.viewerFrame {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  min-height: 0;
+}
+
+.viewerShellFullscreen .viewerFrame {
+  gap: 8px;
+  padding: 6px 8px 8px;
+}
+
+.mediaStage {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.image {
+  display: block;
+  max-width: 100%;
+  max-height: 88vh;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+  transform-origin: center center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viewerShellFullscreen .image {
+  max-height: 94vh;
+  border-radius: 10px;
+}
+
+.rotatedImageViewport {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.rotatedImageFrame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 88vh;
+  overflow: visible;
+}
+
+.viewerShellFullscreen .rotatedImageFrame {
+  max-height: 94vh;
+}
+
+.rotatedImage {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.videoPlaceholder {
+  min-width: min(520px, 100%);
+  min-height: min(420px, 82vh);
+  border-radius: 18px;
+  border: 1px solid rgba(180, 211, 232, 0.18);
+  background: linear-gradient(145deg, rgba(37, 56, 77, 0.95) 0%, rgba(23, 35, 48, 0.98) 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.viewerShellFullscreen .videoPlaceholder {
+  min-height: min(520px, 90vh);
+  border-radius: 12px;
+}
+
+.videoBadge {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f4f7fb;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.videoMessage,
+.loadingMessage,
+.errorMessage {
+  margin: 0;
+  font-size: 0.92rem;
+  color: #d8e5f0;
+  text-align: center;
+}
+
+.errorMessage {
+  color: #ffd2ca;
+}
+
+@media (max-width: 900px) {
+  .viewerShell {
+    width: calc(100vw - 8px);
+    height: calc(100vh - 8px);
+    margin: 4px;
+    border-radius: 16px;
+  }
+
+  .viewerFrame {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    justify-items: stretch;
+  }
+
+  .navButton,
+  .closeButton {
+    justify-self: center;
+  }
+
+  .topBarActions {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .videoPlaceholder {
+    min-width: 0;
+    width: 100%;
+  }
+}

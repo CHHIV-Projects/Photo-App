@@ -147,6 +147,21 @@
   background: #e8edf2;
 }
 
+.mediaPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #d7e2ec 0%, #c7d4df 100%);
+}
+
+.mediaPlaceholderLabel {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #35536e;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .photoText {
   min-height: 2.1em;
 }

@@ -133,10 +133,64 @@
   padding: 16px;
 }
 
+.rotationControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  position: relative;
+  z-index: 3;
+}
+
+.rotationButton {
+  border: 1px solid #c8d8e5;
+  background: #edf4fa;
+  color: #214f73;
+  border-radius: 8px;
+  padding: 5px 9px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.rotationButton:hover {
+  background: #e1eef8;
+}
+
+.rotationButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.rotationValue {
+  font-size: 0.74rem;
+  color: #526274;
+  font-weight: 600;
+}
+
 .imageContainer {
   position: relative;
-  display: inline-block;
+  display: flex;
+  justify-content: center;
   max-width: 100%;
+  z-index: 1;
+}
+
+.rotatedImageViewport {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.rotatedImageFrame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 72vh;
+  overflow: visible;
 }
 
 .fullImage {
@@ -144,6 +198,16 @@
   max-width: 100%;
   height: auto;
   border-radius: 8px;
+  transform-origin: center center;
+  transition: transform 140ms ease-in-out;
+  pointer-events: none;
+  user-select: none;
+}
+
+.rotatedFullImage {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .imagePlaceholder {
@@ -226,6 +290,18 @@
   border: 1px solid #e0e8ef;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.winnerBadge {
+  justify-self: start;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid #c2d9ef;
+  background: #ebf5ff;
+  color: #1d4f79;
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .provenanceToggle {
@@ -380,6 +456,69 @@
   font-weight: 600;
 }
 
+.eventActionRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.eventSelect {
+  min-width: 220px;
+  border: 1px solid #d8dfe6;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.eventButton {
+  border: 1px solid #c8d8e5;
+  background: #edf4fa;
+  color: #214f73;
+  border-radius: 8px;
+  padding: 6px 9px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.duplicateControlRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.duplicateSearchInput,
+.duplicateTargetSelect {
+  width: 100%;
+  border: 1px solid #d8dfe6;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 0.8rem;
+  color: #18212b;
+}
+
+.duplicateMergeButton {
+  align-self: flex-start;
+  border: 1px solid #c8d8e5;
+  background: #edf4fa;
+  color: #214f73;
+  border-radius: 8px;
+  padding: 6px 9px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.duplicateMergeButton:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 .albumMembershipList {
   margin: 0;
   padding-left: 18px;
@@ -414,4 +553,48 @@
   .layout {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Content tags ──────────────────────────────────────────────── */
+
+.contentTagsRoot {
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.contentTagsGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.contentTagsGroupLabel {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8299b0;
+}
+
+.contentTagsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.contentTag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: #eef3f8;
+  border: 1px solid #d0dce8;
+  font-size: 0.80rem;
+  color: #2c4a66;
+  font-weight: 500;
+  text-transform: capitalize;
 }
