@@ -89,6 +89,24 @@ export interface PhotoSummary {
   face_count: number;
 }
 
+export interface SearchPhotoSummary {
+  asset_sha256: string;
+  filename: string;
+  image_url: string;
+  captured_at: string | null;
+  camera_make: string | null;
+  camera_model: string | null;
+  capture_time_trust: "high" | "low" | "unknown";
+  face_count: number;
+}
+
+export interface SearchPhotoListResponse {
+  total_count: number;
+  offset: number;
+  limit: number;
+  items: SearchPhotoSummary[];
+}
+
 export interface TimelineBucketSummary {
   period_key: string;
   label: string;

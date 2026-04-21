@@ -1,7 +1,7 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   addAssetsToAlbum,
@@ -36,31 +36,57 @@ interface Props {
   photos: PhotoSummary[];
   isLoading: boolean;
   errorMessage: string | null;
+  searchQuery: string;
+  cameraQuery: string;
+  startDate: string;
+  endDate: string;
+  totalCount: number;
+  offset: number;
+  pageSize: number;
   selectedPhotoSha256: string | null;
   photoDetail: PhotoDetail | null;
   isLoadingDetail: boolean;
   photoDetailErrorMessage: string | null;
   onSelectPhoto: (sha256: string) => void;
   onPhotoDetailUpdated: (detail: PhotoDetail) => void;
+  onSearchFiltersChange: (filters: {
+    query: string;
+    camera: string;
+    startDate: string;
+    endDate: string;
+  }) => void;
+  onPageChange: (nextOffset: number) => void;
 }
 
 export function PhotosView({
   photos,
   isLoading,
   errorMessage,
+  searchQuery,
+  cameraQuery,
+  startDate,
+  endDate,
+  totalCount,
+  offset,
+  pageSize,
   selectedPhotoSha256,
   photoDetail,
   isLoadingDetail,
   photoDetailErrorMessage,
   onSelectPhoto,
   onPhotoDetailUpdated,
+  onSearchFiltersChange,
+  onPageChange,
 }: Props) {
   const [selectedFaceId, setSelectedFaceId] = useState<number | null>(null);
   const [showAllProvenance, setShowAllProvenance] = useState(false);
   const [showAllExifObservations, setShowAllExifObservations] = useState(false);
   const [naturalDims, setNaturalDims] = useState<{ w: number; h: number } | null>(null);
   const [imageLoadError, setImageLoadError] = useState(false);
-  const [photoSearch, setPhotoSearch] = useState("");
+  const [photoSearch, setPhotoSearch] = useState(searchQuery);
+  const [cameraSearch, setCameraSearch] = useState(cameraQuery);
+  const [startDateFilter, setStartDateFilter] = useState(startDate);
+  const [endDateFilter, setEndDateFilter] = useState(endDate);
   const [albums, setAlbums] = useState<AlbumSummary[]>([]);
   const [eventOptions, setEventOptions] = useState<EventSummary[]>([]);
   const [selectedEventTargetId, setSelectedEventTargetId] = useState<number | null>(null);
@@ -88,23 +114,54 @@ export function PhotosView({
   const [imageViewportWidth, setImageViewportWidth] = useState<number | null>(null);
   const [windowHeight, setWindowHeight] = useState<number>(900);
 
-  const visiblePhotos = useMemo(() => {
-    const q = photoSearch.trim().toLowerCase();
-    if (!q) return photos;
-    return photos.filter((p) => p.filename.toLowerCase().includes(q));
-  }, [photos, photoSearch]);
-
-  // Selection stability: if the selected photo is filtered out, move to first visible.
   useEffect(() => {
-    if (!selectedPhotoSha256) return;
-    const visible = photos.filter((p) =>
-      p.filename.toLowerCase().includes(photoSearch.trim().toLowerCase())
-    );
-    if (visible.some((p) => p.asset_sha256 === selectedPhotoSha256)) return;
-    if (visible.length > 0) {
-      onSelectPhoto(visible[0].asset_sha256);
+    setPhotoSearch(searchQuery);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setCameraSearch(cameraQuery);
+  }, [cameraQuery]);
+
+  useEffect(() => {
+    setStartDateFilter(startDate);
+  }, [startDate]);
+
+  useEffect(() => {
+    setEndDateFilter(endDate);
+  }, [endDate]);
+
+  useEffect(() => {
+    const debounceHandle = window.setTimeout(() => {
+      onSearchFiltersChange({
+        query: photoSearch,
+        camera: cameraSearch,
+        startDate: startDateFilter,
+        endDate: endDateFilter,
+      });
+    }, 300);
+
+    return () => {
+      window.clearTimeout(debounceHandle);
+    };
+  }, [photoSearch, cameraSearch, startDateFilter, endDateFilter, onSearchFiltersChange]);
+
+  useEffect(() => {
+    if (photos.length === 0) {
+      return;
     }
-  }, [photoSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Auto-select first item only for initial empty selection.
+    if (!selectedPhotoSha256) {
+      onSelectPhoto(photos[0].asset_sha256);
+      return;
+    }
+
+    // If the selected photo is not on the current page, keep the current detail selection
+    // instead of jumping to the first result on each page turn.
+    if (photos.some((photo) => photo.asset_sha256 === selectedPhotoSha256)) {
+      return;
+    }
+  }, [photos, selectedPhotoSha256, onSelectPhoto]);
 
   // Reset face selection and image state when the selected photo changes.
   useEffect(() => {
@@ -580,7 +637,7 @@ export function PhotosView({
       return;
     }
 
-    const currentIndex = visiblePhotos.findIndex((photo) => photo.asset_sha256 === selectedPhotoSha256);
+    const currentIndex = photos.findIndex((photo) => photo.asset_sha256 === selectedPhotoSha256);
     if (currentIndex >= 0) {
       setPresentationStartIndex(currentIndex);
     }
@@ -714,6 +771,23 @@ export function PhotosView({
   const exifObservationsForDisplay = showAllExifObservations
     ? allExifObservations
     : defaultExifObservations.slice(0, 3);
+  const selectedPhotoIndex = selectedPhotoSha256
+    ? photos.findIndex((photo) => photo.asset_sha256 === selectedPhotoSha256)
+    : -1;
+
+  function selectPreviousPhoto() {
+    if (selectedPhotoIndex <= 0) {
+      return;
+    }
+    onSelectPhoto(photos[selectedPhotoIndex - 1].asset_sha256);
+  }
+
+  function selectNextPhoto() {
+    if (selectedPhotoIndex < 0 || selectedPhotoIndex >= photos.length - 1) {
+      return;
+    }
+    onSelectPhoto(photos[selectedPhotoIndex + 1].asset_sha256);
+  }
 
   return (
     <div className={styles.layout}>
@@ -721,17 +795,41 @@ export function PhotosView({
       <aside className={styles.panel}>
         <div className={styles.panelHeader}>
           <h2 className={styles.panelTitle}>Photos</h2>
-          <span className={styles.panelCount}>{photos.length}</span>
+          <span className={styles.panelCount}>{totalCount}</span>
         </div>
 
         <div className={styles.searchWrapper}>
           <input
             type="search"
             className={styles.searchInput}
-            placeholder="Search photos..."
+            placeholder="Search filename..."
             value={photoSearch}
             onChange={(e) => setPhotoSearch(e.target.value)}
           />
+          <input
+            type="search"
+            className={styles.searchInput}
+            placeholder="Camera make/model..."
+            value={cameraSearch}
+            onChange={(e) => setCameraSearch(e.target.value)}
+          />
+          <div className={styles.dateRangeRow}>
+            <input
+              type="date"
+              className={styles.searchInput}
+              value={startDateFilter}
+              onChange={(e) => setStartDateFilter(e.target.value)}
+              aria-label="Start date"
+            />
+            <input
+              type="date"
+              className={styles.searchInput}
+              value={endDateFilter}
+              onChange={(e) => setEndDateFilter(e.target.value)}
+              aria-label="End date"
+            />
+          </div>
+          <p className={styles.searchHint}>Year: set 01-01 to 12-31. Month: set first to last day (for example 2024-05-01 to 2024-05-31).</p>
         </div>
 
         <div className={styles.photoList}>
@@ -739,12 +837,10 @@ export function PhotosView({
             <p className={styles.statusMessage}>Loading photos…</p>
           ) : errorMessage ? (
             <p className={styles.errorMessage}>{errorMessage}</p>
-          ) : visiblePhotos.length === 0 && photos.length > 0 ? (
-            <p className={styles.statusMessage}>No photos match your search.</p>
           ) : photos.length === 0 ? (
-            <p className={styles.statusMessage}>No photos found.</p>
+            <p className={styles.statusMessage}>No results found.</p>
           ) : (
-            visiblePhotos.map((photo) => (
+            photos.map((photo) => (
               <button
                 key={photo.asset_sha256}
                 type="button"
@@ -773,6 +869,28 @@ export function PhotosView({
             ))
           )}
         </div>
+
+        <div className={styles.pagination}>
+          <button
+            type="button"
+            className={styles.paginationButton}
+            disabled={isLoading || offset <= 0}
+            onClick={() => onPageChange(Math.max(0, offset - pageSize))}
+          >
+            ← Previous Page
+          </button>
+          <span className={styles.paginationInfo}>
+            Page {Math.floor(offset / pageSize) + 1} of {Math.max(1, Math.ceil(totalCount / pageSize))}
+          </span>
+          <button
+            type="button"
+            className={styles.paginationButton}
+            disabled={isLoading || offset + pageSize >= totalCount}
+            onClick={() => onPageChange(offset + pageSize)}
+          >
+            Next Page →
+          </button>
+        </div>
       </aside>
 
       {/* ── Photo detail ──────────────────────────────────────────── */}
@@ -796,6 +914,22 @@ export function PhotosView({
               <div className={styles.panel}>
                 <div className={styles.imageWrapper}>
                   <div className={styles.rotationControls}>
+                    <button
+                      type="button"
+                      className={styles.rotationButton}
+                      onClick={selectPreviousPhoto}
+                      disabled={selectedPhotoIndex <= 0}
+                    >
+                      Prev Photo
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.rotationButton}
+                      onClick={selectNextPhoto}
+                      disabled={selectedPhotoIndex < 0 || selectedPhotoIndex >= photos.length - 1}
+                    >
+                      Next Photo
+                    </button>
                     <button
                       type="button"
                       className={styles.rotationButton}
@@ -1290,7 +1424,7 @@ export function PhotosView({
       </div>
       {presentationStartIndex !== null ? (
         <PresentationViewer
-          items={visiblePhotos}
+          items={photos}
           initialIndex={presentationStartIndex}
           onClose={() => {
             void closePresentationMode();

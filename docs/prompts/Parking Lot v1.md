@@ -304,6 +304,145 @@ Current system distributes correction workflows across multiple views:
 * metadata/canonicalization (Photo detail panel)
 * future systems (tags, time, location) will also require correction workflows
 
+**UX-015 — Multi-Surface UI Architecture (Viewer, Workbench, Admin Separation)**
+
+Current system UI has evolved organically alongside feature development:
+
+* Photos, Events, People, Places, Duplicate Groups, and search are all integrated into a single interface
+* UI functions as a combined browsing, correction, and operational workbench
+* Functional but not optimized for clarity, simplicity, or role separation
+
+---
+
+## Problem
+
+The current UI mixes multiple distinct usage modes:
+
+* everyday photo browsing and discovery
+* human-in-the-loop correction workflows
+* system-level operations and configuration
+
+This leads to:
+
+* increasing UI complexity as features are added
+* tension between simplicity and power
+* reduced usability for non-technical or casual use
+* risk of exposing advanced or destructive actions in normal workflows
+
+---
+
+## Desired Behavior
+
+System should evolve into a **multi-surface UI architecture**, separating concerns into distinct modes:
+
+### 1. Viewer (Library Experience)
+
+Purpose:
+
+* browse photos and collections
+* search and discover content
+* view albums, events, people, places
+
+Characteristics:
+
+* clean, minimal interface
+* tile/grid-based browsing
+* limited, safe interactions
+* optimized for usability and visual clarity
+
+---
+
+### 2. Workbench (Review & Correction)
+
+Purpose:
+
+* fix system errors
+* review duplicates, faces, events, metadata
+* perform human-in-the-loop corrections
+
+Characteristics:
+
+* denser UI with diagnostic panels
+* explicit controls and feedback
+* metadata visibility and audit context
+* workflow-oriented interactions
+
+---
+
+### 3. Admin (Operations & System Control)
+
+Purpose:
+
+* ingestion management
+* processing and pipeline monitoring
+* recompute/backfill operations
+* configuration and system health
+
+Characteristics:
+
+* operational dashboards
+* job and queue visibility
+* system settings and controls
+* separated from everyday user workflows
+
+---
+
+### (Optional Future) 4. Presentation / Sharing Surface
+
+Purpose:
+
+* slideshow or curated viewing
+* potential sharing or external access
+
+Characteristics:
+
+* highly simplified UI
+* no system control exposure
+* focused on display and consumption
+
+---
+
+## Requirements
+
+* clearly define boundaries between Viewer, Workbench, and Admin surfaces
+* avoid mixing advanced controls into everyday browsing workflows
+* maintain shared backend and core data model across all surfaces
+* reuse components where appropriate without duplicating logic
+* support progressive disclosure of functionality based on context
+
+---
+
+## Design Principles
+
+* **Separation of concerns**: each surface optimized for its purpose
+* **Safe defaults**: Viewer exposes only non-destructive actions
+* **Power where needed**: Workbench retains full correction capability
+* **Operational isolation**: Admin tools are not exposed in normal use
+* **Auditability preserved**: deeper metadata/provenance accessible in Workbench/Admin, not forced in Viewer
+
+---
+
+## Constraints
+
+* must not require full rewrite of existing UI
+* should be implemented incrementally across multiple milestones
+* must preserve existing workflows during transition
+* must maintain consistency with current design system
+
+---
+
+## Notes
+
+* current UI should be considered the evolving **Workbench surface**
+* separation should occur only after core systems stabilize
+* premature UI abstraction should be avoided until workflows are well understood
+
+---
+
+## Status
+
+Deferred — foundational UX architecture decision for later-phase implementation
+
 ---
 
 ## Problem
@@ -1515,8 +1654,6 @@ User should be able to:
 
 Deferred — UX enhancement for duplicate lineage audit
 
-
-
 **AQ-008 — Cross-Format Duplicate Auto-Grouping (HEIC ↔ JPEG and Similar Cases)**
 
 Current duplicate-lineage system relies primarily on perceptual hashing (pHash) with a fixed Hamming distance threshold.
@@ -1618,10 +1755,6 @@ Combine:
 
 Deferred — requires enhancement to duplicate detection and grouping logic
 
-
-
-
-
 ---
 
 ## Problem
@@ -1695,6 +1828,94 @@ System should be able to:
 ## Status
 
 Deferred — requires enhancement to near-duplicate detection logic
+
+**AQ-009 — Duplicate Adjudication Policy & Review Workflow**
+
+Current system now supports:
+
+* automatic duplicate grouping
+* canonical asset selection within duplicate groups
+* manual duplicate-lineage merge control
+* duplicate-group audit and visualization
+
+However, the system does not yet define a clear human-reviewed policy for what should happen after a duplicate group is inspected.
+
+---
+
+## Problem
+
+Not all near-duplicate groups represent “keep one, demote the rest” cases.
+
+Examples:
+
+* same underlying photo in different formats (HEIC ↔ JPEG) may be true duplicates
+* slight edits / crops / exports may warrant one canonical asset with others retained
+* visually similar photos taken moments apart may actually be distinct photos that should remain independently important
+* current grouping may contain false positives that should be separated
+
+This creates unresolved questions such as:
+
+* when should one asset remain canonical and others be secondary?
+* when should multiple assets remain effectively first-class photos?
+* when should an asset be removed from a duplicate group?
+* what should happen to non-canonical assets in UI and storage behavior?
+
+---
+
+## Desired Behavior
+
+System should eventually support a human-guided adjudication workflow for duplicate groups.
+
+Possible outcomes after review:
+
+* confirm true duplicate relationship
+* keep one canonical asset and retain other members as secondary
+* reject grouping and separate assets
+* define visibility behavior for non-canonical assets
+* preserve archival truth without forcing destructive simplification
+
+---
+
+## Requirements
+
+* define what “canonical” means for near-duplicate groups
+* define when grouped assets are true duplicates vs distinct related photos
+* support human review outcomes explicitly
+* preserve provenance and auditability
+* avoid destructive deletion or silent hiding of assets
+
+---
+
+## Key Questions for Future Design
+
+* should near-duplicate groups always have exactly one canonical asset?
+* should some groups allow multiple assets to remain first-class for browsing?
+* should non-canonical assets be hidden from default views or remain normally visible?
+* should the system support removing/splitting assets from a duplicate group?
+* how should canonical choice interact with metadata, events, albums, and search?
+
+---
+
+## Constraints
+
+* must preserve non-destructive archival design
+* must remain explainable and human-guided
+* must avoid oversimplifying distinct photos into one representative
+* should build on existing duplicate audit and control workflows
+
+---
+
+## Notes
+
+* this is a policy/workflow design problem, not just a UI issue
+* duplicate-group audit (12.4) is the prerequisite foundation
+* should be designed after reviewing more real duplicate groups and edge cases
+
+---
+
+## Status
+
+Deferred — requires explicit duplicate adjudication policy and workflow design
 
 \- [ ] item
 

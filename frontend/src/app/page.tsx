@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
@@ -25,7 +25,7 @@ import {
   getPeople,
   getPeopleWithClusters,
   getPhotoDetail,
-  getPhotos,
+  searchPhotos,
   getPlaceDetail,
   getPlaces,
   getUnassignedFaces,
@@ -84,6 +84,12 @@ export default function HomePage() {
   const [isLoadingPhotoDetail, setIsLoadingPhotoDetail] = useState(false);
   const [photosErrorMessage, setPhotosErrorMessage] = useState<string | null>(null);
   const [photoDetailErrorMessage, setPhotoDetailErrorMessage] = useState<string | null>(null);
+  const [photoSearchQuery, setPhotoSearchQuery] = useState("");
+  const [photoCameraQuery, setPhotoCameraQuery] = useState("");
+  const [photoStartDate, setPhotoStartDate] = useState("");
+  const [photoEndDate, setPhotoEndDate] = useState("");
+  const [photoSearchOffset, setPhotoSearchOffset] = useState(0);
+  const [photoSearchTotalCount, setPhotoSearchTotalCount] = useState(0);
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [eventDetail, setEventDetail] = useState<EventDetail | null>(null);
@@ -101,16 +107,20 @@ export default function HomePage() {
   const [isLoadingPlaceDetail, setIsLoadingPlaceDetail] = useState(false);
   const [placesErrorMessage, setPlacesErrorMessage] = useState<string | null>(null);
   const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState<string | null>(null);
+  const PHOTO_SEARCH_PAGE_SIZE = 100;
 
   useEffect(() => {
     void loadClusters();
     void loadPeople();
     void loadPeopleWithClusters();
     void loadUnassignedFaces();
-    void loadPhotos();
     void loadEvents();
     void loadPlaces();
   }, []);
+
+  useEffect(() => {
+    void loadPhotos();
+  }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate, photoSearchOffset]);
 
   useEffect(() => {
     if (selectedClusterId === null) {
@@ -215,14 +225,54 @@ export default function HomePage() {
     setPhotosErrorMessage(null);
 
     try {
-      const response = await getPhotos();
+      const response = await searchPhotos({
+        q: photoSearchQuery || undefined,
+        camera: photoCameraQuery || undefined,
+        startDate: photoStartDate || undefined,
+        endDate: photoEndDate || undefined,
+        offset: photoSearchOffset,
+        limit: PHOTO_SEARCH_PAGE_SIZE,
+      });
       setPhotos(response.items);
+      setPhotoSearchTotalCount(response.total_count);
     } catch (error) {
       setPhotosErrorMessage(getErrorMessage(error, "Failed to load photos."));
     } finally {
       setIsLoadingPhotos(false);
     }
   }
+
+  const handlePhotoSearchFiltersChange = useCallback((filters: {
+    query: string;
+    camera: string;
+    startDate: string;
+    endDate: string;
+  }) => {
+    const nextQuery = filters.query.trim();
+    const nextCamera = filters.camera.trim();
+    const nextStartDate = filters.startDate;
+    const nextEndDate = filters.endDate;
+
+    const filtersChanged =
+      nextQuery !== photoSearchQuery ||
+      nextCamera !== photoCameraQuery ||
+      nextStartDate !== photoStartDate ||
+      nextEndDate !== photoEndDate;
+
+    if (!filtersChanged) {
+      return;
+    }
+
+    setPhotoSearchQuery(nextQuery);
+    setPhotoCameraQuery(nextCamera);
+    setPhotoStartDate(nextStartDate);
+    setPhotoEndDate(nextEndDate);
+    setPhotoSearchOffset(0);
+  }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate]);
+
+  const handlePhotoSearchPageChange = useCallback((nextOffset: number) => {
+    setPhotoSearchOffset(Math.max(0, nextOffset));
+  }, []);
 
   async function loadPhotoDetail(sha256: string) {
     setIsLoadingPhotoDetail(true);
@@ -717,12 +767,21 @@ export default function HomePage() {
             photos={photos}
             isLoading={isLoadingPhotos}
             errorMessage={photosErrorMessage}
+            searchQuery={photoSearchQuery}
+            cameraQuery={photoCameraQuery}
+            startDate={photoStartDate}
+            endDate={photoEndDate}
+            totalCount={photoSearchTotalCount}
+            offset={photoSearchOffset}
+            pageSize={PHOTO_SEARCH_PAGE_SIZE}
             selectedPhotoSha256={selectedPhotoSha256}
             photoDetail={photoDetail}
             isLoadingDetail={isLoadingPhotoDetail}
             photoDetailErrorMessage={photoDetailErrorMessage}
             onSelectPhoto={handleSelectPhoto}
             onPhotoDetailUpdated={setPhotoDetail}
+            onSearchFiltersChange={handlePhotoSearchFiltersChange}
+            onPageChange={handlePhotoSearchPageChange}
           />
         ) : viewMode === "albums" ? (
           <AlbumsView onOpenPhoto={handleOpenPhotoFromAlbums} />

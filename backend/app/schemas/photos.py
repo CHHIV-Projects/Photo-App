@@ -87,6 +87,24 @@ class PhotoListResponse(BaseModel):
     items: list[PhotoSummary]
 
 
+class SearchPhotoSummary(BaseModel):
+    asset_sha256: str
+    filename: str
+    image_url: str
+    captured_at: str | None = None
+    camera_make: str | None = None
+    camera_model: str | None = None
+    capture_time_trust: Literal["high", "low", "unknown"] = "unknown"
+    face_count: int
+
+
+class SearchPhotoListResponse(BaseModel):
+    total_count: int
+    offset: int
+    limit: int
+    items: list[SearchPhotoSummary]
+
+
 class ContentTagSummary(BaseModel):
     tag: str
     tag_type: str  # "object" | "scene"

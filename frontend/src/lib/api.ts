@@ -23,6 +23,7 @@ import type {
   PhotoSummary,
   PlaceDetail,
   PlaceSummary,
+  SearchPhotoListResponse,
   TimelineSummaryResponse
 } from "@/types/ui-api";
 
@@ -36,6 +37,15 @@ export interface PhotoQueryOptions {
 }
 
 export interface TimelineQueryOptions extends PhotoQueryOptions {}
+
+export interface SearchPhotoQueryOptions extends PhotoQueryOptions {
+  q?: string;
+  startDate?: string;
+  endDate?: string;
+  camera?: string;
+  offset?: number;
+  limit?: number;
+}
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || "http://127.0.0.1:8001";
@@ -178,6 +188,29 @@ function buildQueryString(options: PhotoQueryOptions = {}): string {
 
 export function getPhotos(options: PhotoQueryOptions = {}): Promise<ListResponse<PhotoSummary>> {
   return apiRequest<ListResponse<PhotoSummary>>(`/api/photos${buildQueryString(options)}`);
+}
+
+export function searchPhotos(options: SearchPhotoQueryOptions = {}): Promise<SearchPhotoListResponse> {
+  const params = new URLSearchParams();
+
+  if (options.q?.trim()) params.set("q", options.q.trim());
+  if (options.startDate) params.set("start_date", options.startDate);
+  if (options.endDate) params.set("end_date", options.endDate);
+  if (options.camera?.trim()) params.set("camera", options.camera.trim());
+  if (options.offset !== undefined) params.set("offset", String(options.offset));
+  if (options.limit !== undefined) params.set("limit", String(options.limit));
+
+  if (options.decade !== undefined) params.set("decade", String(options.decade));
+  if (options.year !== undefined) params.set("year", String(options.year));
+  if (options.month) params.set("month", options.month);
+  if (options.date) params.set("date", options.date);
+  if (options.undated) params.set("undated", "true");
+  for (const trust of options.trust ?? []) {
+    params.append("trust", trust);
+  }
+
+  const query = params.toString();
+  return apiRequest<SearchPhotoListResponse>(`/api/search/photos${query ? `?${query}` : ""}`);
 }
 
 export function getPhotoDetail(sha256: string): Promise<PhotoDetail> {
