@@ -133,6 +133,23 @@ class DuplicateGroupDetail(BaseModel):
     assets: list[DuplicateGroupAssetSummary]
 
 
+class DuplicateGroupSummary(BaseModel):
+    """Summary of a duplicate group for list view."""
+
+    group_id: int
+    member_count: int
+    canonical_asset_sha256: str | None = None
+    canonical_thumbnail_url: str | None = None
+    created_at: str
+
+
+class DuplicateGroupListResponse(BaseModel):
+    """Paginated list of duplicate groups."""
+
+    total_count: int
+    items: list[DuplicateGroupSummary]
+
+
 class DuplicateMergeTargetSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

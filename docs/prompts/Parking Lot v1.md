@@ -219,10 +219,6 @@ This should likely become a dedicated future milestone or milestone track rather
 
 The goal is to ensure video handling is intentionally designed rather than gradually accumulating ad hoc behavior.
 
-
-
-
-
 **4. Photo Interaction & UX System (PX)**
 
 ~~PX-001 — Keyboard Shortcuts~~
@@ -298,8 +294,6 @@ Display:
 **PX-013 — Person-Based Navigation**
 
 Navigate across photos with same person.
-
-
 
 **PX-014 — Photo-Centric Unified Correction Workspace**
 
@@ -384,10 +378,6 @@ From a single photo view, the user should be able to:
 ## Status
 
 Deferred — UX/workflow consolidation milestone
-
-
-
-
 
 **5. Events & Time System (EV)**
 
@@ -491,8 +481,6 @@ Current event administration supports:
 
 However, there is no asset-level event correction workflow for cases where an individual photo is grouped into the wrong event.
 
-
-
 **EV-013 — Event Date Range Recalculation Inconsistency (Assign/Reassign)**
 
 Current system behavior shows inconsistency in event date range updates depending on operation type.
@@ -567,10 +555,6 @@ For each affected event:
 ## Status
 
 Deferred — refinement of event mutation consistency
-
-
-
-
 
 ---
 
@@ -1446,6 +1430,197 @@ Observed limitation:
 * can exceed current threshold (e.g., distance ≈ 20 vs threshold 10)
 * result: visually identical photos are not grouped into the same duplicate lineage
 * commonly occurs with iCloud downloads vs original device files
+
+**AQ-007 — Duplicate Group Audit & Visualization UI**
+
+Current system supports:
+
+* duplicate lineage grouping
+* canonical asset selection
+* manual merge control (12.3)
+
+However, there is no dedicated UI for inspecting and validating duplicate groups as a whole.
+
+---
+
+## Problem
+
+Duplicate groups are not easily auditable as complete sets.
+
+User limitations:
+
+* cannot search or navigate directly to a duplicate group
+* cannot view all assets in a group in one place
+* cannot visually confirm that grouped assets represent the same photo
+* difficult to validate canonical selection quality
+
+This leads to:
+
+* reduced confidence in duplicate grouping
+* slower manual validation workflows
+* increased risk of incorrect canonical asset selection
+
+---
+
+## Desired Behavior
+
+User should be able to:
+
+* search for or navigate to a duplicate group
+* view all assets in the group together
+* visually inspect images (thumbnails/full view)
+* clearly identify the canonical asset
+* see key metadata per asset (captured_at, resolution, source)
+
+---
+
+## Requirements
+
+* duplicate group listing / navigation mechanism
+* group detail view showing:
+  * all member assets
+  * thumbnails or previews
+  * canonical asset clearly marked
+* basic metadata display per asset
+* integration with existing duplicate-lineage system
+
+---
+
+## UI Considerations
+
+* grid or gallery layout for group members
+* clear canonical badge/indicator
+* ability to open asset detail from group view
+* optional future actions (merge, promote/demote canonical)
+
+---
+
+## Constraints
+
+* must not introduce heavy performance cost when loading large groups
+* must remain consistent with current UI patterns
+* must not require major backend redesign
+
+---
+
+## Notes
+
+* complements Milestone 12.3 (manual lineage control)
+* focuses on **auditability and user confidence**
+* likely precursor to more advanced duplicate workflows
+
+---
+
+## Status
+
+Deferred — UX enhancement for duplicate lineage audit
+
+
+
+**AQ-008 — Cross-Format Duplicate Auto-Grouping (HEIC ↔ JPEG and Similar Cases)**
+
+Current duplicate-lineage system relies primarily on perceptual hashing (pHash) with a fixed Hamming distance threshold.
+
+Observed limitation:
+
+* same-photo variants across formats (e.g., HEIC ↔ JPEG)
+* may produce significantly different pHash values
+* exceed current threshold (e.g., distance ≈ 20 vs threshold 10)
+* result: visually identical images are not grouped automatically
+
+---
+
+## Problem
+
+The system correctly handles:
+
+* exact duplicates (SHA256 match)
+* near-duplicates within threshold
+
+However, it fails to reliably detect:
+
+* format-converted versions of the same underlying image
+* images affected by compression, scaling, or encoding differences
+
+This leads to:
+
+* duplicate groups being incomplete
+* multiple canonical assets for the same real-world photo
+* increased manual correction burden (potentially thousands of cases)
+
+---
+
+## Desired Behavior
+
+System should be able to:
+
+* identify same-photo variants across formats
+* group them into the same duplicate lineage automatically or semi-automatically
+* reduce manual merge workload significantly
+
+---
+
+## Potential Approaches (Future)
+
+### Multi-signal matching
+
+Combine:
+
+* pHash similarity
+* capture time proximity
+* filename similarity (e.g., IMG_#### patterns)
+* resolution similarity
+* provenance/source context
+* file type relationships (HEIC ↔ JPEG conversions)
+
+---
+
+### Two-pass detection
+
+* pass 1: strict threshold (current behavior)
+* pass 2: relaxed threshold for strong candidate pairs
+
+---
+
+### Assisted review workflow
+
+* generate candidate duplicate suggestions
+* present in review queue
+* allow user confirmation before grouping
+
+---
+
+### High-confidence auto-grouping (later stage)
+
+* automatically group only when confidence is extremely high
+* leave ambiguous cases for manual review
+
+---
+
+## Constraints
+
+* must avoid false positives (incorrect grouping of different photos)
+* must remain deterministic and explainable
+* must not degrade performance significantly
+* must preserve auditability of grouping decisions
+
+---
+
+## Notes
+
+* this is a refinement of duplicate lineage system (11.7)
+* complements manual control introduced in 12.3
+* should be implemented after sufficient real-world examples are observed
+
+---
+
+## Status
+
+Deferred — requires enhancement to duplicate detection and grouping logic
+
+
+
+
 
 ---
 

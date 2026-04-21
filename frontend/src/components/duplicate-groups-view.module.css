@@ -1,0 +1,335 @@
+.container {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.listPane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: #ffffff;
+  border: 1px solid #d9e0e7;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(24, 33, 43, 0.08);
+  overflow: hidden;
+}
+
+.searchBar {
+  padding: 16px;
+  border-bottom: 1px solid #e8edf2;
+}
+
+.searchInput {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #c8d8e5;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.1);
+}
+
+.groupList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  max-height: calc(100vh - 340px);
+  padding: 8px;
+}
+
+.groupListItem {
+  display: flex;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  align-items: flex-start;
+}
+
+.groupListItem:hover {
+  background: #f4f6f8;
+}
+
+.groupListItemActive {
+  background: #eaf4fb;
+  border-color: #b3d4ec;
+}
+
+.groupThumbnail {
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #e8edf2;
+}
+
+.groupInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.groupId {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #18212b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memberCount {
+  font-size: 0.82rem;
+  color: #526274;
+}
+
+.createdAt {
+  font-size: 0.75rem;
+  color: #8a99aa;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #e8edf2;
+  background: #fafbfc;
+}
+
+.paginationButton {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border: 1px solid #c8d8e5;
+  background: #ffffff;
+  color: #214f73;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.paginationButton:hover:not(:disabled) {
+  background: #edf4fa;
+  border-color: #4a90e2;
+}
+
+.paginationButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.paginationInfo {
+  font-size: 0.8rem;
+  color: #526274;
+  font-weight: 500;
+}
+
+.detailPane {
+  background: #ffffff;
+  border: 1px solid #d9e0e7;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(24, 33, 43, 0.08);
+  padding: 20px;
+  overflow-y: auto;
+  max-height: calc(100vh - 180px);
+}
+
+.groupDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.groupDetailHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.groupDetailHeader h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #18212b;
+}
+
+.groupStats {
+  display: flex;
+  gap: 16px;
+  font-size: 0.9rem;
+  color: #526274;
+}
+
+.groupStats span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.groupMembers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.memberCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #d9e0e7;
+  border-radius: 12px;
+  background: #ffffff;
+  transition: all 0.2s ease;
+}
+
+.memberCard:hover {
+  border-color: #b3d4ec;
+  box-shadow: 0 4px 12px rgba(74, 144, 226, 0.12);
+}
+
+.memberCardCanonical {
+  border: 2px solid #4a90e2;
+  background: #f8fbff;
+}
+
+.memberImage {
+  width: 100%;
+  height: 160px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #e8edf2;
+}
+
+.memberInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.memberFilename {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #18212b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.canonicalBadge {
+  display: inline-block;
+  padding: 4px 8px;
+  background: #e3f2fd;
+  color: #1976d2;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.memberMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: #526274;
+}
+
+.memberMeta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewButton {
+  padding: 8px 12px;
+  border: 1px solid #4a90e2;
+  background: #f0f7ff;
+  color: #214f73;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.viewButton:hover {
+  background: #e1eef8;
+  border-color: #2563eb;
+}
+
+.viewButton:active {
+  background: #d4e6f5;
+}
+
+.loadingMessage {
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 1rem;
+  color: #526274;
+}
+
+.errorMessage {
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 1rem;
+  color: #c5192d;
+  background: #fff0f1;
+  border-radius: 8px;
+}
+
+.emptyState {
+  padding: 60px 20px;
+  text-align: center;
+  font-size: 1.1rem;
+  color: #526274;
+}
+
+@media (max-width: 1200px) {
+  .layout {
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  }
+
+  .groupMembers {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .detailPane {
+    max-height: none;
+  }
+}

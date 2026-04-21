@@ -6,6 +6,8 @@ import type {
   ClusterDetail,
   ClusterSuggestionResponse,
   ClusterSummary,
+  DuplicateGroupListResponse,
+  DuplicateGroupDetail,
   EventDetail,
   EventMergeResponse,
   DuplicateLineageMergeResponse,
@@ -262,6 +264,22 @@ export function mergeDuplicateAssets(
       target_asset_sha256: targetAssetSha256
     })
   });
+}
+
+export function getDuplicateGroups(
+  query: string = "",
+  offset: number = 0,
+  limit: number = 50
+): Promise<DuplicateGroupListResponse> {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (query.trim()) {
+    params.set("q", query.trim());
+  }
+  return apiRequest<DuplicateGroupListResponse>(`/api/duplicates/groups?${params.toString()}`);
+}
+
+export function getDuplicateGroupDetail(groupId: number): Promise<DuplicateGroupDetail> {
+  return apiRequest<DuplicateGroupDetail>(`/api/duplicates/${groupId}`);
 }
 
 export function getPlaces(): Promise<ListResponse<PlaceSummary>> {

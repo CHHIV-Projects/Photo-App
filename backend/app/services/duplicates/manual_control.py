@@ -59,6 +59,25 @@ class DuplicateLineageMergeResult:
     affected_assets: list[DuplicateLineageAssetSummary]
 
 
+@dataclass(frozen=True)
+class DuplicateGroupSummary:
+    """Summary of a duplicate group for list view."""
+
+    group_id: int
+    member_count: int
+    canonical_asset_sha256: str | None
+    canonical_thumbnail_url: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class DuplicateGroupListResult:
+    """Paginated list of duplicate groups."""
+
+    total_count: int
+    items: list[DuplicateGroupSummary]
+
+
 def list_duplicate_merge_targets(
     db_session: Session,
     *,
@@ -200,3 +219,94 @@ def merge_asset_into_target_lineage(
             for item in affected_assets_rows
         ],
     )
+
+
+def list_duplicate_groups(
+    db_session: Session,
+    *,
+    filename_query: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> DuplicateGroupListResult:
+    """
+    List duplicate groups with pagination and optional filename search.
+
+    Sorts by member count DESC (largest first), then group_id DESC.
+    Filename search matches across all member filenames in the group.
+    """
+    print(f"[DEBUG] list_duplicate_groups called: filename_query={filename_query}, offset={offset}, limit={limit}")
+    
+    # Get all groups with their members
+    all_groups = list(db_session.scalars(select(DuplicateGroup)).all())
+    print(f"[DEBUG] Found {len(all_groups)} duplicate groups in database")
+
+    # Build member_count and canonical info for each group
+    group_info: dict[int, tuple[int, str | None, str | None]] = {}  # group_id -> (count, canonical_sha, created_at_iso)
+    group_members: dict[int, list[Asset]] = {}  # group_id -> list of assets
+
+    for group in all_groups:
+        members = list(
+            db_session.scalars(
+                select(Asset)
+                .where(Asset.duplicate_group_id == group.id)
+                .order_by(Asset.is_canonical.desc(), Asset.quality_score.desc().nullslast(), Asset.sha256.asc())
+            ).all()
+        )
+        if not members:
+            print(f"[DEBUG] Group {group.id} has no members, skipping")
+            continue
+
+        print(f"[DEBUG] Group {group.id} has {len(members)} members")
+        group_members[group.id] = members
+        canonical = next((m for m in members if m.is_canonical), None)
+        canonical_sha = canonical.sha256 if canonical else None
+        created_at_iso = group.created_at.isoformat() if group.created_at else ""
+
+        group_info[group.id] = (len(members), canonical_sha, created_at_iso)
+
+    # Apply filename search if provided
+    filtered_group_ids = set(group_info.keys())
+    if filename_query:
+        normalized_query = filename_query.strip().lower()
+        filtered_group_ids = {
+            gid
+            for gid in group_info.keys()
+            if any(normalized_query in (asset.original_filename or "").lower() for asset in group_members[gid])
+        }
+
+    # Sort: by member count DESC, then group_id DESC
+    sorted_group_ids = sorted(
+        filtered_group_ids,
+        key=lambda gid: (
+            -group_info[gid][0],  # negative for DESC
+            -gid,  # negative for DESC
+        ),
+    )
+
+    total_count = len(sorted_group_ids)
+
+    # Paginate
+    paginated_group_ids = sorted_group_ids[offset : offset + limit]
+
+    # Build summaries
+    summaries = []
+    for gid in paginated_group_ids:
+        count, canonical_sha, created_at_iso = group_info[gid]
+        canonical_url = None
+        if canonical_sha:
+            canonical_asset = db_session.get(Asset, canonical_sha)
+            if canonical_asset:
+                canonical_url = _build_asset_url(canonical_sha, canonical_asset.extension)
+
+        summaries.append(
+            DuplicateGroupSummary(
+                group_id=gid,
+                member_count=count,
+                canonical_asset_sha256=canonical_sha,
+                canonical_thumbnail_url=canonical_url,
+                created_at=created_at_iso,
+            )
+        )
+
+    print(f"[DEBUG] list_duplicate_groups returning: total_count={total_count}, items={len(summaries)}")
+    return DuplicateGroupListResult(total_count=total_count, items=summaries)

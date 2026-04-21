@@ -298,6 +298,37 @@ export interface DuplicateLineageMergeResponse {
   affected_assets: DuplicateLineageAssetSummary[];
 }
 
+export interface DuplicateGroupSummary {
+  group_id: number;
+  member_count: number;
+  canonical_asset_sha256: string | null;
+  canonical_thumbnail_url: string | null;
+  created_at: string;
+}
+
+export interface DuplicateGroupListResponse {
+  total_count: number;
+  items: DuplicateGroupSummary[];
+}
+
+export interface DuplicateGroupAssetSummary {
+  asset_sha256: string;
+  filename: string;
+  image_url: string;
+  is_canonical: boolean;
+  quality_score: number | null;
+  capture_type: "digital" | "scan" | "unknown";
+  capture_time_trust: "high" | "low" | "unknown";
+}
+
+export interface DuplicateGroupDetail {
+  group_id: number;
+  group_type: "near";
+  canonical_asset_sha256: string | null;
+  duplicate_count: number;
+  assets: DuplicateGroupAssetSummary[];
+}
+
 export interface PlaceSummary {
   place_id: string;
   latitude: number;

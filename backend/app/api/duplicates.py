@@ -7,18 +7,56 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.schemas.photos import (
+    DuplicateGroupSummary,
     DuplicateGroupDetail,
+    DuplicateGroupListResponse,
     DuplicateLineageMergeRequest,
     DuplicateLineageMergeResponse,
     DuplicateMergeTargetListResponse,
 )
 from app.services.duplicates.manual_control import (
+    list_duplicate_groups,
     list_duplicate_merge_targets,
     merge_asset_into_target_lineage,
 )
 from app.services.photos.photos_service import get_duplicate_group_detail
 
 router = APIRouter(prefix="/api/duplicates", tags=["duplicates"])
+
+
+@router.get("/groups", response_model=DuplicateGroupListResponse)
+def list_groups(
+    q: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db_session),
+) -> DuplicateGroupListResponse:
+    """List duplicate groups with pagination and optional filename search."""
+    try:
+        print(f"[DEBUG] list_groups called: q={q}, offset={offset}, limit={limit}")
+        result = list_duplicate_groups(
+            db,
+            filename_query=q,
+            offset=max(0, offset),
+            limit=max(1, min(limit, 200)),
+        )
+        print(f"[DEBUG] list_groups result: total_count={result.total_count}, items_count={len(result.items)}")
+        items = [
+            DuplicateGroupSummary(
+                group_id=item.group_id,
+                member_count=item.member_count,
+                canonical_asset_sha256=item.canonical_asset_sha256,
+                canonical_thumbnail_url=item.canonical_thumbnail_url,
+                created_at=item.created_at,
+            )
+            for item in result.items
+        ]
+        return DuplicateGroupListResponse(total_count=result.total_count, items=items)
+    except Exception as e:
+        print(f"[DEBUG] list_groups error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 @router.get("/merge-targets", response_model=DuplicateMergeTargetListResponse)

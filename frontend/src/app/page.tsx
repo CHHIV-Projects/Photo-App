@@ -6,6 +6,7 @@ import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
 import { EventsView } from "@/components/EventsView";
 import { AlbumsView } from "@/components/AlbumsView";
+import { DuplicateGroupsView } from "@/components/DuplicateGroupsView";
 import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
 import PlacesView from "@/components/PlacesView";
@@ -48,7 +49,7 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places";
+type ViewMode = "review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("review");
@@ -359,6 +360,11 @@ export default function HomePage() {
     handleSelectPhoto(sha256);
   }
 
+  function handleOpenPhotoFromDuplicateGroups(sha256: string) {
+    setViewMode("photos");
+    handleSelectPhoto(sha256);
+  }
+
   function handleOpenPhotoFromAlbums(sha256: string) {
     setViewMode("photos");
     handleSelectPhoto(sha256);
@@ -642,6 +648,13 @@ export default function HomePage() {
             >
               Places
             </button>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "duplicate-groups" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("duplicate-groups")}
+            >
+              Duplicate Groups
+            </button>
           </div>
         </header>
 
@@ -719,6 +732,8 @@ export default function HomePage() {
           <PlacesView
             onOpenPhoto={handleOpenPhotoFromPlaces}
           />
+        ) : viewMode === "duplicate-groups" ? (
+          <DuplicateGroupsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} />
         ) : (
           <EventsView
             events={events}
