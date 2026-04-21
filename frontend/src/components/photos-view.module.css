@@ -5,6 +5,12 @@
   align-items: start;
 }
 
+.sidebarStack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .panel {
   background: #ffffff;
   border: 1px solid #d9e0e7;

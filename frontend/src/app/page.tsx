@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
@@ -88,6 +88,9 @@ export default function HomePage() {
   const [photoCameraQuery, setPhotoCameraQuery] = useState("");
   const [photoStartDate, setPhotoStartDate] = useState("");
   const [photoEndDate, setPhotoEndDate] = useState("");
+  const [photoTimelineYear, setPhotoTimelineYear] = useState<number | null>(null);
+  const [photoTimelineMonth, setPhotoTimelineMonth] = useState("");
+  const [photoTimelineDate, setPhotoTimelineDate] = useState("");
   const [photoSearchOffset, setPhotoSearchOffset] = useState(0);
   const [photoSearchTotalCount, setPhotoSearchTotalCount] = useState(0);
   const [events, setEvents] = useState<EventSummary[]>([]);
@@ -107,6 +110,7 @@ export default function HomePage() {
   const [isLoadingPlaceDetail, setIsLoadingPlaceDetail] = useState(false);
   const [placesErrorMessage, setPlacesErrorMessage] = useState<string | null>(null);
   const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState<string | null>(null);
+  const latestPhotoDetailRequestShaRef = useRef<string | null>(null);
   const PHOTO_SEARCH_PAGE_SIZE = 100;
 
   useEffect(() => {
@@ -120,7 +124,7 @@ export default function HomePage() {
 
   useEffect(() => {
     void loadPhotos();
-  }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate, photoSearchOffset]);
+  }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate, photoTimelineYear, photoTimelineMonth, photoTimelineDate, photoSearchOffset]);
 
   useEffect(() => {
     if (selectedClusterId === null) {
@@ -225,11 +229,20 @@ export default function HomePage() {
     setPhotosErrorMessage(null);
 
     try {
+      const timelineFilter = photoTimelineDate
+        ? { date: photoTimelineDate }
+        : photoTimelineMonth
+          ? { month: photoTimelineMonth }
+          : photoTimelineYear !== null
+            ? { year: photoTimelineYear }
+            : {};
+
       const response = await searchPhotos({
         q: photoSearchQuery || undefined,
         camera: photoCameraQuery || undefined,
         startDate: photoStartDate || undefined,
         endDate: photoEndDate || undefined,
+        ...timelineFilter,
         offset: photoSearchOffset,
         limit: PHOTO_SEARCH_PAGE_SIZE,
       });
@@ -267,6 +280,10 @@ export default function HomePage() {
     setPhotoCameraQuery(nextCamera);
     setPhotoStartDate(nextStartDate);
     setPhotoEndDate(nextEndDate);
+    setPhotos([]);
+    latestPhotoDetailRequestShaRef.current = null;
+    setSelectedPhotoSha256(null);
+    setPhotoDetail(null);
     setPhotoSearchOffset(0);
   }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate]);
 
@@ -274,18 +291,55 @@ export default function HomePage() {
     setPhotoSearchOffset(Math.max(0, nextOffset));
   }, []);
 
+  const handlePhotoTimelineChange = useCallback((selection: {
+    year: number | null;
+    month: string;
+    date: string;
+  }) => {
+    const nextYear = selection.year;
+    const nextMonth = selection.month;
+    const nextDate = selection.date;
+
+    const selectionChanged =
+      nextYear !== photoTimelineYear ||
+      nextMonth !== photoTimelineMonth ||
+      nextDate !== photoTimelineDate;
+
+    if (!selectionChanged) {
+      return;
+    }
+
+    setPhotoTimelineYear(nextYear);
+    setPhotoTimelineMonth(nextMonth);
+    setPhotoTimelineDate(nextDate);
+    setPhotos([]);
+    latestPhotoDetailRequestShaRef.current = null;
+    setSelectedPhotoSha256(null);
+    setPhotoDetail(null);
+    setPhotoSearchOffset(0);
+  }, [photoTimelineYear, photoTimelineMonth, photoTimelineDate]);
+
   async function loadPhotoDetail(sha256: string) {
+    latestPhotoDetailRequestShaRef.current = sha256;
     setIsLoadingPhotoDetail(true);
     setPhotoDetailErrorMessage(null);
 
     try {
       const response = await getPhotoDetail(sha256);
+      if (latestPhotoDetailRequestShaRef.current !== sha256) {
+        return;
+      }
       setPhotoDetail(response);
     } catch (error) {
+      if (latestPhotoDetailRequestShaRef.current !== sha256) {
+        return;
+      }
       setPhotoDetailErrorMessage(getErrorMessage(error, "Failed to load photo detail."));
       setPhotoDetail(null);
     } finally {
-      setIsLoadingPhotoDetail(false);
+      if (latestPhotoDetailRequestShaRef.current === sha256) {
+        setIsLoadingPhotoDetail(false);
+      }
     }
   }
 
@@ -774,6 +828,9 @@ export default function HomePage() {
             totalCount={photoSearchTotalCount}
             offset={photoSearchOffset}
             pageSize={PHOTO_SEARCH_PAGE_SIZE}
+            timelineYear={photoTimelineYear}
+            timelineMonth={photoTimelineMonth}
+            timelineDate={photoTimelineDate}
             selectedPhotoSha256={selectedPhotoSha256}
             photoDetail={photoDetail}
             isLoadingDetail={isLoadingPhotoDetail}
@@ -782,6 +839,7 @@ export default function HomePage() {
             onPhotoDetailUpdated={setPhotoDetail}
             onSearchFiltersChange={handlePhotoSearchFiltersChange}
             onPageChange={handlePhotoSearchPageChange}
+            onTimelineChange={handlePhotoTimelineChange}
           />
         ) : viewMode === "albums" ? (
           <AlbumsView onOpenPhoto={handleOpenPhotoFromAlbums} />

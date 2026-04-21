@@ -18,6 +18,7 @@ import {
   setPhotoRotation,
 } from "@/lib/api";
 import { PresentationViewer } from "@/components/PresentationViewer";
+import { TimelineNav } from "@/components/TimelineNav";
 import type {
   AlbumMembershipSummary,
   AlbumSummary,
@@ -43,6 +44,9 @@ interface Props {
   totalCount: number;
   offset: number;
   pageSize: number;
+  timelineYear: number | null;
+  timelineMonth: string;
+  timelineDate: string;
   selectedPhotoSha256: string | null;
   photoDetail: PhotoDetail | null;
   isLoadingDetail: boolean;
@@ -56,6 +60,11 @@ interface Props {
     endDate: string;
   }) => void;
   onPageChange: (nextOffset: number) => void;
+  onTimelineChange: (selection: {
+    year: number | null;
+    month: string;
+    date: string;
+  }) => void;
 }
 
 export function PhotosView({
@@ -69,6 +78,9 @@ export function PhotosView({
   totalCount,
   offset,
   pageSize,
+  timelineYear,
+  timelineMonth,
+  timelineDate,
   selectedPhotoSha256,
   photoDetail,
   isLoadingDetail,
@@ -77,6 +89,7 @@ export function PhotosView({
   onPhotoDetailUpdated,
   onSearchFiltersChange,
   onPageChange,
+  onTimelineChange,
 }: Props) {
   const [selectedFaceId, setSelectedFaceId] = useState<number | null>(null);
   const [showAllProvenance, setShowAllProvenance] = useState(false);
@@ -791,107 +804,116 @@ export function PhotosView({
 
   return (
     <div className={styles.layout}>
-      {/* ── Photo list ────────────────────────────────────────────── */}
-      <aside className={styles.panel}>
-        <div className={styles.panelHeader}>
-          <h2 className={styles.panelTitle}>Photos</h2>
-          <span className={styles.panelCount}>{totalCount}</span>
-        </div>
+      <div className={styles.sidebarStack}>
+        <TimelineNav
+          selectedYear={timelineYear}
+          selectedMonth={timelineMonth}
+          selectedDate={timelineDate}
+          onTimelineChange={onTimelineChange}
+        />
 
-        <div className={styles.searchWrapper}>
-          <input
-            type="search"
-            className={styles.searchInput}
-            placeholder="Search filename..."
-            value={photoSearch}
-            onChange={(e) => setPhotoSearch(e.target.value)}
-          />
-          <input
-            type="search"
-            className={styles.searchInput}
-            placeholder="Camera make/model..."
-            value={cameraSearch}
-            onChange={(e) => setCameraSearch(e.target.value)}
-          />
-          <div className={styles.dateRangeRow}>
-            <input
-              type="date"
-              className={styles.searchInput}
-              value={startDateFilter}
-              onChange={(e) => setStartDateFilter(e.target.value)}
-              aria-label="Start date"
-            />
-            <input
-              type="date"
-              className={styles.searchInput}
-              value={endDateFilter}
-              onChange={(e) => setEndDateFilter(e.target.value)}
-              aria-label="End date"
-            />
+        {/* ── Photo list ────────────────────────────────────────────── */}
+        <aside className={styles.panel}>
+          <div className={styles.panelHeader}>
+            <h2 className={styles.panelTitle}>Photos</h2>
+            <span className={styles.panelCount}>{totalCount}</span>
           </div>
-          <p className={styles.searchHint}>Year: set 01-01 to 12-31. Month: set first to last day (for example 2024-05-01 to 2024-05-31).</p>
-        </div>
 
-        <div className={styles.photoList}>
-          {isLoading ? (
-            <p className={styles.statusMessage}>Loading photos…</p>
-          ) : errorMessage ? (
-            <p className={styles.errorMessage}>{errorMessage}</p>
-          ) : photos.length === 0 ? (
-            <p className={styles.statusMessage}>No results found.</p>
-          ) : (
-            photos.map((photo) => (
-              <button
-                key={photo.asset_sha256}
-                type="button"
-                className={
-                  `${styles.photoItem} ${selectedPhotoSha256 === photo.asset_sha256 ? styles.photoItemActive : ""}`.trim()
-                }
-                onClick={() => onSelectPhoto(photo.asset_sha256)}
-              >
-                <div className={styles.photoThumb}>
-                  <img
-                    src={resolveApiUrl(photo.image_url) ?? ""}
-                    alt={photo.filename}
-                    className={styles.photoThumbImg}
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).style.display = "none";
-                    }}
-                  />
-                </div>
-                <div className={styles.photoMeta}>
-                  <span className={styles.photoFilename}>{photo.filename}</span>
-                  <span className={styles.photoFaceCount}>
-                    {photo.face_count} {photo.face_count === 1 ? "face" : "faces"}
-                  </span>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
+          <div className={styles.searchWrapper}>
+            <input
+              type="search"
+              className={styles.searchInput}
+              placeholder="Search filename..."
+              value={photoSearch}
+              onChange={(e) => setPhotoSearch(e.target.value)}
+            />
+            <input
+              type="search"
+              className={styles.searchInput}
+              placeholder="Camera make/model..."
+              value={cameraSearch}
+              onChange={(e) => setCameraSearch(e.target.value)}
+            />
+            <div className={styles.dateRangeRow}>
+              <input
+                type="date"
+                className={styles.searchInput}
+                value={startDateFilter}
+                onChange={(e) => setStartDateFilter(e.target.value)}
+                aria-label="Start date"
+              />
+              <input
+                type="date"
+                className={styles.searchInput}
+                value={endDateFilter}
+                onChange={(e) => setEndDateFilter(e.target.value)}
+                aria-label="End date"
+              />
+            </div>
+            <p className={styles.searchHint}>Year: set 01-01 to 12-31. Month: set first to last day (for example 2024-05-01 to 2024-05-31).</p>
+          </div>
 
-        <div className={styles.pagination}>
-          <button
-            type="button"
-            className={styles.paginationButton}
-            disabled={isLoading || offset <= 0}
-            onClick={() => onPageChange(Math.max(0, offset - pageSize))}
-          >
-            ← Previous Page
-          </button>
-          <span className={styles.paginationInfo}>
-            Page {Math.floor(offset / pageSize) + 1} of {Math.max(1, Math.ceil(totalCount / pageSize))}
-          </span>
-          <button
-            type="button"
-            className={styles.paginationButton}
-            disabled={isLoading || offset + pageSize >= totalCount}
-            onClick={() => onPageChange(offset + pageSize)}
-          >
-            Next Page →
-          </button>
-        </div>
-      </aside>
+          <div className={styles.photoList}>
+            {isLoading ? (
+              <p className={styles.statusMessage}>Loading photos…</p>
+            ) : errorMessage ? (
+              <p className={styles.errorMessage}>{errorMessage}</p>
+            ) : photos.length === 0 ? (
+              <p className={styles.statusMessage}>No results found.</p>
+            ) : (
+              photos.map((photo) => (
+                <button
+                  key={photo.asset_sha256}
+                  type="button"
+                  className={
+                    `${styles.photoItem} ${selectedPhotoSha256 === photo.asset_sha256 ? styles.photoItemActive : ""}`.trim()
+                  }
+                  onClick={() => onSelectPhoto(photo.asset_sha256)}
+                >
+                  <div className={styles.photoThumb}>
+                    <img
+                      src={resolveApiUrl(photo.image_url) ?? ""}
+                      alt={photo.filename}
+                      className={styles.photoThumbImg}
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                  </div>
+                  <div className={styles.photoMeta}>
+                    <span className={styles.photoFilename}>{photo.filename}</span>
+                    <span className={styles.photoFaceCount}>
+                      {photo.face_count} {photo.face_count === 1 ? "face" : "faces"}
+                    </span>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+
+          <div className={styles.pagination}>
+            <button
+              type="button"
+              className={styles.paginationButton}
+              disabled={isLoading || offset <= 0}
+              onClick={() => onPageChange(Math.max(0, offset - pageSize))}
+            >
+              ← Previous Page
+            </button>
+            <span className={styles.paginationInfo}>
+              Page {Math.floor(offset / pageSize) + 1} of {Math.max(1, Math.ceil(totalCount / pageSize))}
+            </span>
+            <button
+              type="button"
+              className={styles.paginationButton}
+              disabled={isLoading || offset + pageSize >= totalCount}
+              onClick={() => onPageChange(offset + pageSize)}
+            >
+              Next Page →
+            </button>
+          </div>
+        </aside>
+      </div>
 
       {/* ── Photo detail ──────────────────────────────────────────── */}
       <div className={styles.detailArea}>

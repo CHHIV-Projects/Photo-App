@@ -1,0 +1,127 @@
+.panel {
+  background: #ffffff;
+  border: 1px solid #d9e0e7;
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(24, 33, 43, 0.08);
+  padding: 12px;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #18212b;
+}
+
+.resetButton {
+  margin-left: auto;
+  border: 1px solid #c8d8e5;
+  background: #edf4fa;
+  color: #214f73;
+  border-radius: 8px;
+  padding: 5px 9px;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.crumb {
+  border: 1px solid #d3e1ee;
+  background: #f4f8fc;
+  color: #35536e;
+  border-radius: 999px;
+  padding: 3px 9px;
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.crumbActive {
+  border: 1px solid #b3d4ec;
+  background: #eaf4fb;
+  color: #214f73;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.sectionTitle {
+  margin: 0 0 8px;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6a7888;
+  font-weight: 700;
+}
+
+.bucketList {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bucketButton {
+  width: 100%;
+  border: 1px solid #e0e8ef;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 7px 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+
+.bucketButton:hover {
+  background: #f7fafd;
+}
+
+.bucketButtonActive {
+  border-color: #b3d4ec;
+  background: #eaf4fb;
+}
+
+.bucketLabel {
+  font-size: 0.8rem;
+  color: #18212b;
+  font-weight: 600;
+}
+
+.bucketCount {
+  font-size: 0.76rem;
+  color: #526274;
+  font-weight: 700;
+}
+
+.statusMessage {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #526274;
+  padding: 6px 2px;
+}
+
+.errorMessage {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #c0392b;
+  padding: 6px 2px;
+}

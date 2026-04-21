@@ -112,9 +112,9 @@ def get_timeline_summary(db: Session, filters: TimelineFilter) -> dict[str, Any]
         label_builder = lambda value: str(value)
         sort_desc = True
     else:
-        level = "decade"
-        group_expr = cast((func.floor(func.extract("year", Asset.captured_at) / 10) * 10), Integer)
-        label_builder = lambda value: f"{value}s"
+        level = "year"
+        group_expr = cast(func.extract("year", Asset.captured_at), Integer)
+        label_builder = lambda value: str(value)
         sort_desc = True
 
     rows = db.execute(

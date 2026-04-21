@@ -312,6 +312,97 @@ Current system UI has evolved organically alongside feature development:
 * UI functions as a combined browsing, correction, and operational workbench
 * Functional but not optimized for clarity, simplicity, or role separation
 
+**PX-016 — Undated Asset Discovery (Missing captured_at Handling)**
+
+Current system behavior:
+
+* timeline navigation (12.6) excludes assets with null `captured_at`
+* unified search (12.5) includes these assets only when no date filter is applied
+* there is no explicit way to locate or isolate undated assets
+
+---
+
+## Problem
+
+Assets missing canonical capture time are not easily discoverable.
+
+User limitations:
+
+* cannot explicitly search for “photos without dates”
+* cannot access undated assets via timeline navigation
+* difficult to audit or correct missing/incorrect metadata
+* undated assets may become effectively hidden in large archives
+
+---
+
+## Desired Behavior
+
+User should be able to:
+
+* explicitly locate assets with missing `captured_at`
+* isolate undated photos for review and correction
+* treat undated assets as a first-class category in discovery
+
+---
+
+## Potential Approaches (Future)
+
+### Timeline Integration
+
+* add an **“Undated” bucket** in timeline navigation
+* behaves alongside Year-level navigation
+
+---
+
+### Search Filter
+
+* add explicit filter:
+  * Date Status:
+    * Has Date
+    * Missing Date
+
+---
+
+### Combined Behavior
+
+* allow undated filter to combine with:
+  * filename search
+  * camera filter
+  * future metadata filters
+
+---
+
+## Requirements
+
+* must use canonical metadata (`captured_at`)
+* must not introduce inference or guessed dates
+* must remain deterministic and auditable
+* must not degrade performance
+
+---
+
+## Constraints
+
+* must integrate cleanly with existing timeline/search architecture
+* should not complicate core navigation for dated assets
+* should remain simple and explicit for user understanding
+
+---
+
+## Notes
+
+* complements Milestones 12.5 (search) and 12.6 (timeline)
+* supports metadata quality improvement workflows
+* useful precursor to future metadata correction tooling
+
+---
+
+## Status
+
+Deferred — discovery/refinement feature for undated assets
+
+
+
 ---
 
 ## Problem
