@@ -371,3 +371,61 @@ It does **not** solve:
 - “the duplicate detection system should become smarter automatically”
 
 Those larger improvements remain future work.
+
+
+Use recommended defaults.
+
+Confirmed decisions for 12.3:
+
+1. Primary UI surface
+- **Yes**
+- Put the controls in **Photos detail only** for 12.3
+- Do not expand to additional surfaces in this milestone
+
+2. Merge interaction model
+- **Yes**
+- Use **asset-to-asset merge** in both UI and API
+- Source asset merges into target asset lineage
+- Backend resolves resulting group
+
+3. Target picker scope
+- **Use the recommended simple/safe picker**
+- Do **not** build a full-archive picker in 12.3
+- Safe local selector is acceptable with:
+  - image assets only
+  - likely-candidate filtering
+  - optional filename search
+  - filename + captured date + group status shown
+
+4. Group-to-group merge entry point
+- **Yes**
+- Support this by selecting a target asset from the other group
+- No separate group-id UI in 12.3
+
+5. Canonical winner rule after merge
+- **Yes**
+- Re-run existing canonical selection logic exactly as-is
+- No ranking changes in 12.3
+
+6. Conflict protection
+- **Yes**
+- Block no-op merges explicitly
+- Examples:
+  - same asset
+  - same group
+- Return clear validation-style error
+
+7. API response payload
+- **Yes**
+- Return:
+  - source asset id
+  - target asset id
+  - resulting group id
+  - resulting canonical asset id
+  - affected member count
+  - lightweight summary list of impacted assets
+
+8. Events/Albums refresh behavior in UI
+- **Yes**
+- No automatic cross-view orchestration in 12.3
+- Refresh only the active photo detail / duplicate summary panel

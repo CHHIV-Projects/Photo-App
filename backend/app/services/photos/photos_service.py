@@ -46,6 +46,16 @@ def _winner_fields_for_observation(observation: AssetMetadataObservation, asset:
     if observation.captured_at_observed is not None and observation.captured_at_observed == asset.captured_at:
         winner_fields.append("captured_at")
 
+    if (
+        observation.gps_latitude is not None
+        and observation.gps_longitude is not None
+        and asset.gps_latitude is not None
+        and asset.gps_longitude is not None
+        and round(observation.gps_latitude, 6) == round(asset.gps_latitude, 6)
+        and round(observation.gps_longitude, 6) == round(asset.gps_longitude, 6)
+    ):
+        winner_fields.append("location")
+
     obs_make = _normalize_string(observation.camera_make)
     asset_make = _normalize_string(asset.camera_make)
     if obs_make is not None and asset_make is not None and obs_make.lower() == asset_make.lower():
@@ -225,6 +235,8 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
             "exif_datetime_original": _to_utc_iso(row.exif_datetime_original),
             "exif_create_date": _to_utc_iso(row.exif_create_date),
             "captured_at_observed": _to_utc_iso(row.captured_at_observed),
+            "gps_latitude": row.gps_latitude,
+            "gps_longitude": row.gps_longitude,
             "camera_make": row.camera_make,
             "camera_model": row.camera_model,
             "width": row.width,

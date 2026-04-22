@@ -377,3 +377,128 @@ It does NOT solve:
 - “I want the system to infer meaning”
 
 Those will come in later milestones.
+
+
+Use these defaults, with one important clarification on date behavior.
+
+## Confirmed decisions for 12.5
+
+1. Search UI location
+- **Yes**
+- Put unified search inside the existing Photos panel search area
+- Replace the current client-side filename filtering in that area
+- Keep this as the primary search entry point for 12.5
+
+---
+
+2. Relationship to existing timeline filters
+- **Keep existing timeline filters active alongside unified search filters**
+- Do **not** remove or replace timeline filters in 12.5
+- Unified search and timeline filters should combine cleanly
+
+### Combination rule
+- filters are **AND-combined**
+- example:
+  - timeline set to year 2020
+  - search query `IMG_`
+  - camera `iPhone`
+  - results must satisfy all active filters
+
+### Important constraint
+- do not redesign timeline behavior in 12.5
+- simply allow unified search to work in combination with the existing timeline filter state
+
+---
+
+3. Date filtering semantics
+- Interpret `start_date` / `end_date` as **full-day bounds in the user’s local time**
+- **Do not use UTC day bounds**
+- This is important for usability and matches expected photo browsing behavior
+
+### Required behavior
+If the user searches for:
+- start_date = 2024-01-10
+- end_date = 2024-01-10
+
+that means:
+- all assets whose canonical `captured_at` falls on **January 10 in local time**
+- not January 10 UTC
+
+### Backend expectation
+- the backend must apply date filtering in a way that matches local-day semantics for the user
+- if needed, convert local-day bounds to the system comparison format carefully and deterministically
+
+---
+
+4. Exact date support
+- Use **start_date == end_date**
+- Do **not** add a separate dedicated exact-date query param in 12.5
+
+Reason:
+- keeps API simpler
+- exact date is just a one-day range
+
+---
+
+5. Camera filter shape
+- Use a **single camera input**
+- substring match across:
+  - `camera_make`
+  - `camera_model`
+
+Do not split into separate make/model inputs in 12.5
+
+---
+
+6. Pagination UX
+- **Yes**
+- Use simple:
+  - Prev
+  - Next
+  - page info
+- default limit = **100**
+- no infinite scroll in 12.5
+
+---
+
+7. Empty captured_at behavior
+- **Confirmed**
+- assets with `captured_at = null` are:
+  - excluded whenever any date filter is provided
+  - included when no date filter is provided
+
+---
+
+8. API contract
+- Use a **dedicated search result schema**
+- Do **not** overload the existing `PhotoSummary` shape if a dedicated schema gives cleaner separation
+
+Recommended:
+- create something like `SearchPhotoSummary` / `SearchPhotoResult`
+- keep it close to existing photo summary fields, but explicit for search
+
+Reason:
+- cleaner separation
+- easier future evolution of search without unintended coupling
+
+---
+
+## Confirmed recommended implementation path
+
+- Implement `GET /api/search/photos`
+- Params:
+  - `q`
+  - `start_date`
+  - `end_date`
+  - `camera`
+  - `offset`
+  - `limit`
+
+- Put unified controls at top of Photos list
+- Debounce at ~300ms
+- Deterministic order:
+  - `captured_at DESC`
+  - tie-breaker stable deterministic fields are acceptable
+- Add simple offset pagination controls in Photos view
+
+Proceed with implementation under these defaults.

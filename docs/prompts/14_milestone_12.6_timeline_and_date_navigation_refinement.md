@@ -382,3 +382,98 @@ It does NOT solve:
 - “I want semantic time-based queries”
 
 Those remain future work.
+
+
+Use these defaults for 12.6:
+
+1. Backend endpoints
+- **Reuse the existing `GET /api/timeline` endpoint**
+- Do **not** create new `/timeline/years`, `/timeline/months`, `/timeline/days` URLs in 12.6 if the existing endpoint already cleanly supports the drill-down model
+
+### Expected behavior
+- no params → return years
+- `year=YYYY` → return months within that year
+- `year=YYYY&month=MM` → return days within that month
+
+Reason:
+- avoids unnecessary API proliferation
+- keeps scope tighter
+- uses the existing timeline foundation if it already supports the required behavior
+
+---
+
+2. Decade level
+- **Skip decades for 12.6**
+- Open directly at **Year** level
+
+Reason:
+- the milestone intent is to make browsing easier and more direct
+- decade level adds one more click without enough value for this refinement
+- we can revisit decade navigation later if needed
+
+---
+
+3. UI placement
+- Use a **left sidebar** in Photos view
+
+Reason:
+- timeline is a navigation structure, not a transient control
+- left sidebar fits hierarchical browsing better than a top strip
+- it leaves the top area available for search/filter controls from 12.5
+
+---
+
+4. Search integration
+- When a user clicks a Year / Month / Day in the timeline, it should filter results by **timeline state directly**, not by visibly populating `start_date` / `end_date` fields in the 12.5 search UI
+
+### Important distinction
+- timeline and search should work together
+- but they should remain conceptually separate controls
+
+### Backend/frontend behavior
+- it is acceptable for implementation to translate timeline selection into effective date bounds internally
+- but do **not** make the UI look like the user manually entered date ranges
+- timeline selection should remain its own visible state (breadcrumb/sidebar selection)
+
+Reason:
+- cleaner UX
+- avoids confusing users with date inputs changing under them
+- preserves distinction between navigation and explicit search filters
+
+---
+
+5. Filter interaction
+- **Keep other active search filters**
+- timeline selection and existing search filters remain **AND-combined**
+
+Example:
+- timeline = 2023 → July → 14
+- camera = iPhone
+- filename = IMG_
+
+Results must satisfy all active filters.
+
+Do **not** clear search filters automatically when a timeline bucket is selected.
+
+---
+
+6. Photos grid behavior
+- Clicking a day/month/year bucket should **immediately update the main Photos grid**
+- No separate “Apply” action
+
+Reason:
+- timeline is navigation, so it should feel direct and responsive
+- extra apply step would make browsing feel clunky
+
+---
+
+## Summary of intended 12.6 behavior
+
+- existing `/api/timeline` reused
+- no decade level
+- left sidebar timeline
+- timeline state separate from search field state
+- timeline + search filters AND-combined
+- click immediately updates Photos grid
+
+Proceed with implementation under these defaults.

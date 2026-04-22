@@ -320,6 +320,163 @@ Current system behavior:
 * unified search (12.5) includes these assets only when no date filter is applied
 * there is no explicit way to locate or isolate undated assets
 
+**PX-017 — Comprehensive Location Intelligence & Place System**
+
+The long-term goal of the location system extends beyond storing coordinates and includes a multi-layered place intelligence capability combining metadata, user input, and image understanding.
+
+---
+
+## Problem
+
+Current and near-term milestones focus on:
+
+* canonical GPS coordinates (12.8)
+* place grouping (12.9)
+* place navigation (12.10)
+
+However, the desired system must support a much richer concept of “place” that includes:
+
+* geographic hierarchy (address → city → state → country)
+* user-defined places (e.g., “Audrey’s House”)
+* landmark recognition (e.g., Disneyland, Empire State Building)
+* image-based location inference (for scans or missing GPS)
+* learned place recognition from user-confirmed examples
+
+Without a unified design, these capabilities risk becoming fragmented or inconsistent.
+
+---
+
+## Desired Behavior
+
+The system should evolve into a **multi-layer location intelligence system** supporting:
+
+### 1. Canonical Coordinates (Foundation)
+
+* reliable latitude/longitude per asset
+* derived only from provenance-linked metadata (initially)
+
+---
+
+### 2. Geographic Resolution (Reverse Geocoding)
+
+From coordinates, derive structured hierarchy:
+
+* address (if available)
+* street
+* city
+* county
+* state/province
+* country
+
+---
+
+### 3. User-Defined Place Identity
+
+Allow users to define semantic locations:
+
+* “Audrey’s House”
+* “Grandma’s House”
+* “Office”
+* “Cabin”
+
+Characteristics:
+
+* mapped to one or more coordinate clusters
+* independent from generic geographic names
+* used in search, browsing, and organization
+
+---
+
+### 4. Landmark Recognition
+
+Support identification of well-known or recurring landmarks:
+
+* Disneyland
+* Empire State Building
+* Seattle Space Needle
+* Mount Hood
+
+Sources may include:
+
+* coordinates
+* image recognition
+* external datasets (future)
+
+---
+
+### 5. Image-Based Location Inference
+
+For assets without GPS data:
+
+* infer location from visual content
+* provide best-available granularity (e.g., “Oceanside Pier”)
+* remain explainable and confidence-based
+
+---
+
+### 6. Learned Place Recognition (User-Guided)
+
+Enable system to learn from user input:
+
+* user assigns location to a set of photos
+* system identifies visually similar photos
+* suggests location assignment for review
+
+Analogous to:
+
+* Face recognition → extended to **Place recognition**
+
+---
+
+## Architectural Requirements
+
+* separate layers:
+  * coordinates
+  * geographic hierarchy
+  * place identity
+  * inference results
+* preserve source, derivation, and confidence for all location data
+* support multiple location evidence sources:
+  * EXIF GPS
+  * geocoding
+  * user input
+  * image inference
+* maintain deterministic and auditable behavior where possible
+* avoid destructive overwrites of location data
+
+---
+
+## Key Design Questions (Future)
+
+* how to reconcile conflicting location sources?
+* how to represent confidence/trust across sources?
+* how to merge user-defined places with geographic hierarchy?
+* how to expose inferred locations vs confirmed locations?
+* how to prevent incorrect auto-assignment of locations?
+
+---
+
+## Constraints
+
+* must preserve non-destructive system philosophy
+* must remain explainable and user-correctable
+* must not over-rely on external services without fallback
+* should be implemented incrementally across multiple milestones
+
+---
+
+## Notes
+
+* this is a long-term system vision, not a single milestone
+* 12.8–12.10 represent the foundational layers
+* later milestones will progressively introduce intelligence and user-driven workflows
+
+---
+
+## Status
+
+Deferred — multi-phase location intelligence system
+
 ---
 
 ## Problem
@@ -400,8 +557,6 @@ User should be able to:
 ## Status
 
 Deferred — discovery/refinement feature for undated assets
-
-
 
 ---
 

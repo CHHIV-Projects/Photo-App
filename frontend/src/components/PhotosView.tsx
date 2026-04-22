@@ -419,6 +419,13 @@ export function PhotosView({
     return `${formatCoordinate(location.latitude)}, ${formatCoordinate(location.longitude)}`;
   }
 
+  function formatObservationLocation(latitude: number | null, longitude: number | null): string {
+    if (latitude === null || longitude === null) {
+      return "Unknown";
+    }
+    return `${formatCoordinate(latitude)}, ${formatCoordinate(longitude)}`;
+  }
+
   function getCaptureTypeLabel(captureType: PhotoDetail["capture_type"]): string {
     if (captureType === "digital") return "Digital";
     if (captureType === "scan") return "Scan";
@@ -473,6 +480,8 @@ export function PhotosView({
     return (
       normalizeComparableTimestamp(left.captured_at_observed) ===
         normalizeComparableTimestamp(right.captured_at_observed) &&
+      (left.gps_latitude ?? null) === (right.gps_latitude ?? null) &&
+      (left.gps_longitude ?? null) === (right.gps_longitude ?? null) &&
       normalizeComparableString(left.camera_make) === normalizeComparableString(right.camera_make) &&
       normalizeComparableString(left.camera_model) === normalizeComparableString(right.camera_model) &&
       (left.width ?? null) === (right.width ?? null) &&
@@ -1325,6 +1334,10 @@ export function PhotosView({
                               : "Unknown"}
                           </span>
                         </div>
+                        <div className={styles.metadataRow}>
+                          <span className={styles.metadataLabel}>Canonical Location</span>
+                          <span className={styles.metadataValue}>{formatLocationSummary(photoDetail.location)}</span>
+                        </div>
                       </>
                     ) : (
                       <p className={styles.metadataValue}>No canonical metadata available</p>
@@ -1355,6 +1368,9 @@ export function PhotosView({
                                 {item.captured_at_observed
                                   ? `Captured At: ${formatDateTime(item.captured_at_observed)}`
                                   : "Captured At: Unknown"}
+                              </span>
+                              <span className={styles.metadataSubtle}>
+                                GPS: {formatObservationLocation(item.gps_latitude, item.gps_longitude)}
                               </span>
                               <span className={styles.metadataSubtle}>
                                 Camera: {(item.camera_make || "").trim()} {(item.camera_model || "").trim()} 

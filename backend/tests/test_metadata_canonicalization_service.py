@@ -10,6 +10,7 @@ from app.services.metadata.canonicalization_service import (
     _choose_best_camera_value,
     _choose_best_captured_at,
     _choose_best_dimensions,
+    _choose_best_location,
 )
 
 
@@ -20,6 +21,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
         obs_id: int,
         origin: str,
         captured_at: datetime | None,
+        gps_latitude: float | None = None,
+        gps_longitude: float | None = None,
         camera_make: str | None,
         camera_model: str | None,
         width: int | None,
@@ -40,6 +43,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
             exif_datetime_original=None,
             exif_create_date=None,
             captured_at_observed=captured_at,
+            gps_latitude=gps_latitude,
+            gps_longitude=gps_longitude,
             camera_make=camera_make,
             camera_model=camera_model,
             width=width,
@@ -56,6 +61,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
                 obs_id=1,
                 origin="legacy",
                 captured_at=bad_placeholder,
+                gps_latitude=None,
+                gps_longitude=None,
                 camera_make=None,
                 camera_model=None,
                 width=None,
@@ -67,6 +74,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
                 obs_id=2,
                 origin="vault",
                 captured_at=datetime(2020, 6, 3, 12, 30, 0, tzinfo=timezone.utc),
+                gps_latitude=None,
+                gps_longitude=None,
                 camera_make="Canon",
                 camera_model="EOS",
                 width=4000,
@@ -77,6 +86,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
                 obs_id=3,
                 origin="provenance",
                 captured_at=chosen,
+                gps_latitude=None,
+                gps_longitude=None,
                 camera_make="Canon",
                 camera_model="EOS",
                 width=4000,
@@ -94,6 +105,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
                 obs_id=1,
                 origin="provenance",
                 captured_at=None,
+                gps_latitude=None,
+                gps_longitude=None,
                 camera_make="Unknown",
                 camera_model="N/A",
                 width=None,
@@ -104,6 +117,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
                 obs_id=2,
                 origin="vault",
                 captured_at=None,
+                gps_latitude=None,
+                gps_longitude=None,
                 camera_make="FUJIFILM",
                 camera_model="X-T5",
                 width=None,
@@ -121,6 +136,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
                 obs_id=1,
                 origin="provenance",
                 captured_at=None,
+                gps_latitude=None,
+                gps_longitude=None,
                 camera_make=None,
                 camera_model=None,
                 width=4032,
@@ -132,6 +149,8 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
                 obs_id=2,
                 origin="provenance",
                 captured_at=None,
+                gps_latitude=None,
+                gps_longitude=None,
                 camera_make=None,
                 camera_model=None,
                 width=6000,
@@ -142,6 +161,121 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
         ]
 
         self.assertEqual(_choose_best_dimensions(observations), (6000, 4000))
+
+    def test_choose_best_location_prefers_most_frequent_normalized_pair(self) -> None:
+        observations = [
+            self._observation(
+                obs_id=1,
+                origin="provenance",
+                captured_at=None,
+                gps_latitude=40.7127764,
+                gps_longitude=-74.0059741,
+                camera_make=None,
+                camera_model=None,
+                width=None,
+                height=None,
+                provenance_id=10,
+            ),
+            self._observation(
+                obs_id=2,
+                origin="vault",
+                captured_at=None,
+                gps_latitude=40.71277649,
+                gps_longitude=-74.00597409,
+                camera_make=None,
+                camera_model=None,
+                width=None,
+                height=None,
+                provenance_id=None,
+            ),
+            self._observation(
+                obs_id=3,
+                origin="provenance",
+                captured_at=None,
+                gps_latitude=34.052235,
+                gps_longitude=-118.243683,
+                camera_make=None,
+                camera_model=None,
+                width=None,
+                height=None,
+                provenance_id=11,
+            ),
+        ]
+
+        self.assertEqual(_choose_best_location(observations), (40.712776, -74.005974))
+
+    def test_choose_best_location_tiebreak_prefers_origin_then_ids(self) -> None:
+        observations = [
+            self._observation(
+                obs_id=7,
+                origin="vault",
+                captured_at=None,
+                gps_latitude=35.0000004,
+                gps_longitude=-80.0000004,
+                camera_make=None,
+                camera_model=None,
+                width=None,
+                height=None,
+                provenance_id=None,
+            ),
+            self._observation(
+                obs_id=3,
+                origin="provenance",
+                captured_at=None,
+                gps_latitude=36.0,
+                gps_longitude=-81.0,
+                camera_make=None,
+                camera_model=None,
+                width=None,
+                height=None,
+                provenance_id=5,
+            ),
+        ]
+
+        self.assertEqual(_choose_best_location(observations), (36.0, -81.0))
+
+    def test_choose_best_location_ignores_invalid_and_zero_pairs(self) -> None:
+        observations = [
+            self._observation(
+                obs_id=1,
+                origin="provenance",
+                captured_at=None,
+                gps_latitude=0.0,
+                gps_longitude=0.0,
+                camera_make=None,
+                camera_model=None,
+                width=None,
+                height=None,
+                provenance_id=1,
+            ),
+            self._observation(
+                obs_id=2,
+                origin="provenance",
+                captured_at=None,
+                gps_latitude=120.0,
+                gps_longitude=10.0,
+                camera_make=None,
+                camera_model=None,
+                width=None,
+                height=None,
+                provenance_id=2,
+            ),
+            self._observation(
+                obs_id=3,
+                origin="legacy",
+                captured_at=None,
+                gps_latitude=47.6062095,
+                gps_longitude=-122.3320708,
+                camera_make=None,
+                camera_model=None,
+                width=None,
+                height=None,
+                provenance_id=None,
+                is_legacy_seeded=True,
+            ),
+        ]
+
+        self.assertEqual(_choose_best_location(observations), (47.60621, -122.332071))
 
 
 if __name__ == "__main__":

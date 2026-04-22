@@ -66,8 +66,6 @@ def persist_exif_updates(
 		try:
 			asset.exif_datetime_original = item.exif_datetime_original
 			asset.exif_create_date = item.exif_create_date
-			asset.gps_latitude = item.gps_latitude
-			asset.gps_longitude = item.gps_longitude
 			asset.camera_make = item.camera_make
 			asset.camera_model = item.camera_model
 			asset.lens_model = item.lens_model

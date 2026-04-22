@@ -439,3 +439,62 @@ It does **not** solve:
 - “the duplicate detection system should become smarter automatically”
 
 Those larger improvements remain future work.
+
+Use these defaults for 12.4:
+
+1. Default sort order for group list
+- Default: **largest groups first**
+- Secondary sort: duplicate group id descending or other stable deterministic fallback
+- Do **not** add user-selectable sort controls in 12.4 unless trivial and clearly zero-risk
+
+Reason:
+- largest groups are highest audit value
+- keeps UI simple for first version
+
+---
+
+2. Filename search behavior
+- Search across **all member filenames in a group**
+- Do **not** restrict search to canonical filename only
+
+Reason:
+- user may remember a non-canonical filename
+- search should help locate the group regardless of which member name is known
+
+---
+
+3. Frontend navigation location
+- Add **Duplicate Groups as a main nav item**
+- Place it alongside:
+  - Photos
+  - People
+  - Events
+  - Albums
+- Do **not** bury it in admin/tools or inside Photos sub-view for 12.4
+
+Reason:
+- duplicate review is now a first-class archival workflow
+- it should be easy to find and use
+
+---
+
+4. Representative thumbnail for list
+- Use the **canonical asset** thumbnail
+
+Reason:
+- canonical asset is the system’s primary representative
+- keeps list behavior consistent with duplicate-lineage purpose
+- do not introduce separate “best thumbnail” logic in 12.4
+
+---
+
+5. Pagination
+- **Yes, support pagination**
+- Default page size: **50 groups per page**
+
+Reason:
+- avoids overly heavy initial page loads
+- scales better as archive grows
+- 50 is large enough for useful browsing without overcomplicating MVP behavior
+
+Proceed with implementation under these defaults.

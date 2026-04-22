@@ -195,6 +195,8 @@ export interface PhotoMetadataObservation {
   exif_datetime_original: string | null;
   exif_create_date: string | null;
   captured_at_observed: string | null;
+  gps_latitude: number | null;
+  gps_longitude: number | null;
   camera_make: string | null;
   camera_model: string | null;
   width: number | null;

@@ -14,6 +14,11 @@ ASSET_COLUMN_DDLS = {
     "height": "ALTER TABLE assets ADD COLUMN height INTEGER NULL",
 }
 
+OBSERVATION_COLUMN_DDLS = {
+    "gps_latitude": "ALTER TABLE asset_metadata_observations ADD COLUMN gps_latitude FLOAT NULL",
+    "gps_longitude": "ALTER TABLE asset_metadata_observations ADD COLUMN gps_longitude FLOAT NULL",
+}
+
 
 @dataclass(frozen=True)
 class MetadataCanonicalizationSchemaSummary:
@@ -44,6 +49,12 @@ def ensure_metadata_canonicalization_schema(db_session: Session) -> MetadataCano
     else:
         # Keep checkfirst for idempotency if SQLAlchemy metadata drifts.
         AssetMetadataObservation.__table__.create(bind=db_session.bind, checkfirst=True)
+        observation_columns = {column["name"] for column in inspector.get_columns("asset_metadata_observations")}
+        for column_name, ddl in OBSERVATION_COLUMN_DDLS.items():
+            if column_name in observation_columns:
+                continue
+            db_session.execute(text(ddl))
+            added_columns.append(f"asset_metadata_observations.{column_name}")
 
     db_session.commit()
     return MetadataCanonicalizationSchemaSummary(

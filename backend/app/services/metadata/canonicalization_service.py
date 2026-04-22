@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from app.services.persistence.asset_repository import InsertedAsset
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".heic", ".webp"}
 PREFERRED_EXTENSIONS = {".heic", ".heif", ".dng", ".arw", ".cr2", ".cr3", ".nef", ".orf", ".rw2", ".raf"}
 GENERIC_CAMERA_VALUES = {"unknown", "none", "null", "camera", "digital camera", "-", "n/a"}
+GPS_DECIMAL_PLACES = 6
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,8 @@ class ExtractedMetadataObservation:
     exif_datetime_original: datetime | None
     exif_create_date: datetime | None
     captured_at_observed: datetime | None
+    gps_latitude: float | None
+    gps_longitude: float | None
     camera_make: str | None
     camera_model: str | None
     width: int | None
@@ -95,6 +99,15 @@ def _parse_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _parse_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_datetime_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -111,6 +124,30 @@ def _is_invalid_captured_at(value: datetime | None) -> bool:
     if value.year == 2000 and value.month == 1 and value.day == 1:
         return True
     return False
+
+
+def _normalize_coordinate(value: float | None) -> float | None:
+    if value is None:
+        return None
+    quantizer = Decimal("1").scaleb(-GPS_DECIMAL_PLACES)
+    normalized = Decimal(str(value)).quantize(quantizer, rounding=ROUND_HALF_UP)
+    return float(normalized)
+
+
+def _normalized_gps_pair(latitude: float | None, longitude: float | None) -> tuple[float, float] | None:
+    if latitude is None or longitude is None:
+        return None
+    normalized_latitude = _normalize_coordinate(latitude)
+    normalized_longitude = _normalize_coordinate(longitude)
+    if normalized_latitude is None or normalized_longitude is None:
+        return None
+    if not (-90.0 <= normalized_latitude <= 90.0):
+        return None
+    if not (-180.0 <= normalized_longitude <= 180.0):
+        return None
+    if normalized_latitude == 0.0 and normalized_longitude == 0.0:
+        return None
+    return normalized_latitude, normalized_longitude
 
 
 def _extract_dimensions(path: Path, metadata: dict[str, object]) -> tuple[int | None, int | None]:
@@ -152,19 +189,33 @@ def extract_metadata_observation_from_path(path: str) -> ExtractedMetadataObserv
     metadata = metadata_list[0] if metadata_list else {}
     exif_datetime_original = _parse_datetime(metadata.get("EXIF:DateTimeOriginal"))
     exif_create_date = _parse_datetime(metadata.get("EXIF:CreateDate"))
+    gps_latitude = _parse_float(metadata.get("EXIF:GPSLatitude"))
+    gps_longitude = _parse_float(metadata.get("EXIF:GPSLongitude"))
     camera_make = _normalize_string(str(metadata.get("EXIF:Make"))) if metadata.get("EXIF:Make") else None
     camera_model = _normalize_string(str(metadata.get("EXIF:Model"))) if metadata.get("EXIF:Model") else None
     width, height = _extract_dimensions(file_path, metadata)
 
     captured_at_observed = _normalize_datetime_utc(exif_datetime_original or exif_create_date)
 
-    if not any([captured_at_observed, camera_make, camera_model, width, height, exif_datetime_original, exif_create_date]):
+    if not any([
+        captured_at_observed,
+        gps_latitude,
+        gps_longitude,
+        camera_make,
+        camera_model,
+        width,
+        height,
+        exif_datetime_original,
+        exif_create_date,
+    ]):
         return None
 
     return ExtractedMetadataObservation(
         exif_datetime_original=exif_datetime_original,
         exif_create_date=exif_create_date,
         captured_at_observed=captured_at_observed,
+        gps_latitude=gps_latitude,
+        gps_longitude=gps_longitude,
         camera_make=camera_make,
         camera_model=camera_model,
         width=width,
@@ -181,6 +232,8 @@ def build_legacy_observation_from_asset(asset: Asset) -> ExtractedMetadataObserv
         exif_datetime_original=asset.exif_datetime_original,
         exif_create_date=asset.exif_create_date,
         captured_at_observed=_normalize_datetime_utc(asset.captured_at),
+        gps_latitude=asset.gps_latitude,
+        gps_longitude=asset.gps_longitude,
         camera_make=_normalize_string(asset.camera_make),
         camera_model=_normalize_string(asset.camera_model),
         width=asset.width,
@@ -190,6 +243,8 @@ def build_legacy_observation_from_asset(asset: Asset) -> ExtractedMetadataObserv
 
     if not any([
         payload.captured_at_observed,
+        payload.gps_latitude,
+        payload.gps_longitude,
         payload.camera_make,
         payload.camera_model,
         payload.width,
@@ -206,6 +261,7 @@ def _observation_signature(extracted: ExtractedMetadataObservation) -> tuple:
         extracted.exif_datetime_original,
         extracted.exif_create_date,
         extracted.captured_at_observed,
+        _normalized_gps_pair(extracted.gps_latitude, extracted.gps_longitude),
         (extracted.camera_make or "").lower(),
         (extracted.camera_model or "").lower(),
         extracted.width,
@@ -236,6 +292,7 @@ def persist_metadata_observation(
             observation.exif_datetime_original,
             observation.exif_create_date,
             observation.captured_at_observed,
+            _normalized_gps_pair(observation.gps_latitude, observation.gps_longitude),
             (observation.camera_make or "").lower(),
             (observation.camera_model or "").lower(),
             observation.width,
@@ -256,6 +313,8 @@ def persist_metadata_observation(
             exif_datetime_original=extracted.exif_datetime_original,
             exif_create_date=extracted.exif_create_date,
             captured_at_observed=extracted.captured_at_observed,
+            gps_latitude=extracted.gps_latitude,
+            gps_longitude=extracted.gps_longitude,
             camera_make=extracted.camera_make,
             camera_model=extracted.camera_model,
             width=extracted.width,
@@ -308,6 +367,16 @@ def _completeness_score(observation: AssetMetadataObservation) -> int:
 def _tiebreak_key(observation: AssetMetadataObservation) -> tuple[int, int]:
     provenance_key = observation.provenance_id if observation.provenance_id is not None else 2_000_000_000
     return provenance_key, observation.id
+
+
+def _origin_trust_rank(observation: AssetMetadataObservation) -> int:
+    if observation.observation_origin == "provenance":
+        return 3
+    if observation.observation_origin == "vault":
+        return 2
+    if observation.observation_origin == "legacy":
+        return 1
+    return 0
 
 
 def _choose_best_captured_at(observations: list[AssetMetadataObservation]) -> datetime | None:
@@ -422,6 +491,42 @@ def _choose_best_dimensions(observations: list[AssetMetadataObservation]) -> tup
     return best_observation.width, best_observation.height
 
 
+def _choose_best_location(observations: list[AssetMetadataObservation]) -> tuple[float | None, float | None]:
+    grouped_candidates: dict[tuple[float, float], list[AssetMetadataObservation]] = {}
+    for item in observations:
+        pair = _normalized_gps_pair(item.gps_latitude, item.gps_longitude)
+        if pair is None:
+            continue
+        grouped_candidates.setdefault(pair, []).append(item)
+
+    if not grouped_candidates:
+        return None, None
+
+    best_pair: tuple[float, float] | None = None
+    best_rank: tuple[int, int, int, int] | None = None
+    for pair, items in grouped_candidates.items():
+        winning_observation = min(
+            items,
+            key=lambda item: (
+                item.provenance_id if item.provenance_id is not None else 2_000_000_000,
+                item.id,
+            ),
+        )
+        rank = (
+            len(items),
+            _origin_trust_rank(max(items, key=_origin_trust_rank)),
+            -(winning_observation.provenance_id if winning_observation.provenance_id is not None else 2_000_000_000),
+            -winning_observation.id,
+        )
+        if best_rank is None or rank > best_rank:
+            best_rank = rank
+            best_pair = pair
+
+    if best_pair is None:
+        return None, None
+    return best_pair
+
+
 def recompute_canonical_metadata_for_assets(db_session: Session, asset_sha256_list: list[str]) -> CanonicalizationSummary:
     processed = 0
     updated = 0
@@ -451,6 +556,7 @@ def recompute_canonical_metadata_for_assets(db_session: Session, asset_sha256_li
                 continue
 
             next_captured_at = _choose_best_captured_at(observations)
+            next_gps_latitude, next_gps_longitude = _choose_best_location(observations)
             next_camera_make = _choose_best_camera_value(observations, "camera_make")
             next_camera_model = _choose_best_camera_value(observations, "camera_model")
             next_width, next_height = _choose_best_dimensions(observations)
@@ -458,6 +564,12 @@ def recompute_canonical_metadata_for_assets(db_session: Session, asset_sha256_li
             did_change = False
             if next_captured_at != asset.captured_at:
                 asset.captured_at = next_captured_at
+                did_change = True
+            if next_gps_latitude != asset.gps_latitude:
+                asset.gps_latitude = next_gps_latitude
+                did_change = True
+            if next_gps_longitude != asset.gps_longitude:
+                asset.gps_longitude = next_gps_longitude
                 did_change = True
             if next_camera_make != asset.camera_make:
                 asset.camera_make = next_camera_make
