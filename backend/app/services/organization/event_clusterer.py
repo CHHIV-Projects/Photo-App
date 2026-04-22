@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from collections import defaultdict
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -134,14 +134,23 @@ def _build_scan_clusters(scan_assets: list[Asset]) -> list[EventCluster]:
 
 
 def cluster_assets_into_events(db_session: Session, gap_seconds: int) -> EventClusteringResult:
-    """Load assets and build digital time clusters plus scan provenance clusters."""
-    all_assets = list(db_session.scalars(select(Asset).order_by(Asset.captured_at, Asset.sha256)).all())
+    """Load eligible assets and build digital time clusters plus scan provenance clusters."""
+    eligible_assets = list(
+        db_session.scalars(
+            select(Asset)
+            .where(
+                Asset.event_id.is_(None),
+                Asset.is_user_modified.is_(False),
+            )
+            .order_by(Asset.captured_at, Asset.sha256)
+        ).all()
+    )
 
     digital_assets: list[Asset] = []
     scan_assets: list[Asset] = []
     skipped_missing_captured_at = 0
 
-    for asset in all_assets:
+    for asset in eligible_assets:
         capture_type, capture_time_trust = get_effective_capture_classification(asset)
         if capture_type == "scan":
             scan_assets.append(asset)
@@ -176,14 +185,10 @@ def persist_event_clusters(
     db_session: Session,
     clustering_result: EventClusteringResult,
 ) -> EventPersistenceSummary:
-    """Rebuild all Event rows and Asset.event_id links from clustering output."""
+    """Incrementally create events and assign only currently eligible assets."""
     failed = 0
 
     try:
-        # Development-safe reruns: clear assignments and rebuild all events.
-        db_session.execute(update(Asset).values(event_id=None))
-        db_session.execute(delete(Event))
-
         assigned_assets = 0
         cluster_sizes: list[int] = []
 
@@ -199,12 +204,19 @@ def persist_event_clusters(
 
             db_session.execute(
                 update(Asset)
-                .where(Asset.sha256.in_(cluster.asset_sha256_list))
+                .where(
+                    Asset.sha256.in_(cluster.asset_sha256_list),
+                    Asset.event_id.is_(None),
+                    Asset.is_user_modified.is_(False),
+                )
                 .values(event_id=event.id)
             )
+            # Keep event rollups based on rows actually assigned in this incremental run.
+            event.asset_count = int(db_session.scalar(select(func.count(Asset.sha256)).where(Asset.event_id == event.id)) or 0)
 
-            assigned_assets += len(cluster.asset_sha256_list)
-            cluster_sizes.append(len(cluster.asset_sha256_list))
+            assigned_assets += event.asset_count
+            if event.asset_count > 0:
+                cluster_sizes.append(event.asset_count)
 
         db_session.commit()
 

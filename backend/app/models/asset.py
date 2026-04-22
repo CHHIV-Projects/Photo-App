@@ -56,6 +56,7 @@ class Asset(Base):
 	display_rotation_degrees: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 	source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
 	event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)
+	is_user_modified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 	duplicate_group_id: Mapped[int | None] = mapped_column(ForeignKey("duplicate_groups.id"), nullable=True, index=True)
 	is_canonical: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 	quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)

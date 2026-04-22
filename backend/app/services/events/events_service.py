@@ -254,7 +254,10 @@ def merge_events(db: Session, *, source_event_id: int, target_event_id: int) -> 
         return None
 
     db.query(Asset).filter(Asset.event_id == source_event_id).update(
-        {Asset.event_id: target_event_id},
+        {
+            Asset.event_id: target_event_id,
+            Asset.is_user_modified: True,
+        },
         synchronize_session=False,
     )
 
@@ -285,6 +288,7 @@ def remove_asset_from_event(db: Session, *, asset_sha256: str) -> EventMembershi
 
     old_event_id = asset.event_id
     asset.event_id = None
+    asset.is_user_modified = True
     old_event = _recalculate_event_rollup(db, old_event_id)
 
     db.commit()
@@ -314,6 +318,7 @@ def assign_asset_to_event(db: Session, *, asset_sha256: str, target_event_id: in
 
     old_event_id = asset.event_id
     asset.event_id = target_event_id
+    asset.is_user_modified = True
 
     old_event = _recalculate_event_rollup(db, old_event_id) if old_event_id is not None else None
     new_event = _recalculate_event_rollup(db, target_event_id)
