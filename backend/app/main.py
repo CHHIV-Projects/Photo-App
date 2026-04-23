@@ -22,6 +22,7 @@ from app.db.session import SessionLocal
 from app.services.albums.album_schema import ensure_album_schema
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
 from app.services.metadata.metadata_canonicalization_schema import ensure_metadata_canonicalization_schema
+from app.services.places.place_schema import ensure_place_schema
 from app.services.photos.display_adjustment_schema import ensure_display_adjustment_schema
 from app.services.vision.face_incremental_schema import ensure_face_incremental_schema
 
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
 			ensure_album_schema(db_session)
 			ensure_ingestion_context_schema(db_session)
 			ensure_metadata_canonicalization_schema(db_session)
+			ensure_place_schema(db_session)
 			ensure_display_adjustment_schema(db_session)
 			ensure_face_incremental_schema(db_session)
 		finally:

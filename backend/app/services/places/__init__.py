@@ -1,107 +1,69 @@
-"""Places (location-based) service for grouping photos by GPS coordinates."""
-from sqlalchemy import func
+"""Places API read services backed by stable place entities."""
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
 from app.models.face import Face
+from app.models.place import Place
 from app.schemas.places import PlaceSummary, PlaceDetail, PlaceListResponse
 from app.schemas.photos import PhotoSummary
 from app.services.photos.photos_service import _build_asset_url
 
-
-def _round_coordinate(value: float, decimals: int = 2) -> float:
-	"""Round coordinate to specified decimal places."""
-	if value is None:
-		return None
-	multiplier = 10 ** decimals
-	return round(value * multiplier) / multiplier
-
-
-def _build_place_id(latitude: float, longitude: float) -> str:
-	"""Build place_id from rounded coordinates."""
-	lat = _round_coordinate(latitude, 2)
-	lon = _round_coordinate(longitude, 2)
-	return f"{lat}_{lon}"
-
-
 def list_places(db: Session) -> PlaceListResponse:
-	"""List all unique grouped places (rounded coordinates) with photo counts.
-	
-	Only includes assets with valid GPS data.
-	Sorted by photo_count descending.
-	"""
-	# Query assets with GPS data, group by rounded coordinates
-	assets_with_gps = (
-		db.query(Asset)
-		.filter(Asset.gps_latitude.isnot(None), Asset.gps_longitude.isnot(None))
-		.all()
-	)
-	
-	# Group by rounded coordinates
-	places_dict = {}
-	for asset in assets_with_gps:
-		place_id = _build_place_id(asset.gps_latitude, asset.gps_longitude)
-		if place_id not in places_dict:
-			places_dict[place_id] = {
-				"latitude": _round_coordinate(asset.gps_latitude, 2),
-				"longitude": _round_coordinate(asset.gps_longitude, 2),
-				"photo_count": 0,
-			}
-		places_dict[place_id]["photo_count"] += 1
-	
-	# Convert to PlaceSummary list, sorted by photo_count descending
+	"""List stable places with photo counts, sorted by usage and place_id."""
+	rows = db.execute(
+		select(
+			Place.place_id,
+			Place.representative_latitude,
+			Place.representative_longitude,
+			func.count(Asset.sha256).label("photo_count"),
+		)
+		.join(Asset, Asset.place_id == Place.place_id)
+		.group_by(Place.place_id, Place.representative_latitude, Place.representative_longitude)
+		.order_by(func.count(Asset.sha256).desc(), Place.place_id.asc())
+	).all()
+
 	items = [
 		PlaceSummary(
-			place_id=place_id,
-			latitude=data["latitude"],
-			longitude=data["longitude"],
-			photo_count=data["photo_count"],
+			place_id=str(row.place_id),
+			latitude=row.representative_latitude,
+			longitude=row.representative_longitude,
+			photo_count=int(row.photo_count),
 		)
-		for place_id, data in places_dict.items()
+		for row in rows
 	]
-	items.sort(key=lambda x: x.photo_count, reverse=True)
-	
+
 	return PlaceListResponse(count=len(items), items=items)
 
 
 def get_place_detail(db: Session, place_id: str) -> PlaceDetail | None:
-	"""Get photos at a specific location (rounded coordinates).
-	
-	Parse place_id to extract rounded lat/lon, then find all assets
-	that round to the same coordinates.
-	"""
-	# Parse place_id
+	"""Get photos assigned to a stable place entity."""
 	try:
-		lat_str, lon_str = place_id.split("_")
-		target_lat = float(lat_str)
-		target_lon = float(lon_str)
+		place_pk = int(place_id)
 	except (ValueError, AttributeError):
 		return None
-	
-	# Query assets within the tolerance of rounded coordinates
-	# to account for floating-point precision
-	tolerance = 0.005  # ~500 meters at equator for 2 decimal places
+
+	place = db.get(Place, place_pk)
+	if place is None:
+		return None
+
 	assets = (
 		db.query(Asset)
 		.filter(
-			Asset.gps_latitude.isnot(None),
-			Asset.gps_longitude.isnot(None),
-			func.abs(Asset.gps_latitude - target_lat) < tolerance,
-			func.abs(Asset.gps_longitude - target_lon) < tolerance,
+			Asset.place_id == place.place_id,
 		)
 		.order_by(Asset.captured_at.asc())
 		.all()
 	)
-	
+
 	if not assets:
 		return None
-	
-	# Build PhotoSummary for each asset
+
 	photos = []
 	for asset in assets:
-		# Count faces in this asset
 		face_count = db.query(Face).filter(Face.asset_sha256 == asset.sha256).count()
-		
+
 		photo = PhotoSummary(
 			asset_sha256=asset.sha256,
 			filename=asset.original_filename,
@@ -109,10 +71,10 @@ def get_place_detail(db: Session, place_id: str) -> PlaceDetail | None:
 			face_count=face_count,
 		)
 		photos.append(photo)
-	
+
 	return PlaceDetail(
-		place_id=place_id,
-		latitude=target_lat,
-		longitude=target_lon,
+		place_id=str(place.place_id),
+		latitude=place.representative_latitude,
+		longitude=place.representative_longitude,
 		photos=photos,
 	)

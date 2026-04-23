@@ -30,6 +30,8 @@ from app.services.metadata.canonicalization_service import (
     recompute_canonical_metadata_for_assets,
 )
 from app.services.metadata.metadata_canonicalization_schema import ensure_metadata_canonicalization_schema
+from app.services.places.grouping import assign_assets_to_places
+from app.services.places.place_schema import ensure_place_schema
 from app.services.ingestion.dropzone_manager import (
     DropzoneStageResult,
     build_dropzone_processing_records,
@@ -965,6 +967,28 @@ def _event_clustering_stage(ctx: PipelineContext) -> dict[str, Any]:
     }
 
 
+def _place_grouping_stage(ctx: PipelineContext) -> dict[str, Any]:
+    db_session = SessionLocal()
+    try:
+        summary = assign_assets_to_places(
+            db_session,
+            asset_sha256_list=ctx.current_batch_new_asset_sha256,
+        )
+    finally:
+        db_session.close()
+
+    return {
+        "scope": "batch",
+        "assets_considered": summary.considered_assets,
+        "assigned_assets": summary.assigned_assets,
+        "created_places": summary.created_places,
+        "matched_existing_places": summary.matched_existing_places,
+        "skipped_without_gps": summary.skipped_without_gps,
+        "skipped_already_assigned": summary.skipped_already_assigned,
+        "skipped_invalid_gps": summary.skipped_invalid_gps,
+    }
+
+
 def _duplicate_lineage_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.duplicates.lineage import update_lineage_for_assets
 
@@ -1029,6 +1053,21 @@ def _metadata_canonicalization_schema_sync_stage(_: PipelineContext) -> dict[str
         "scope": "global",
         "added_tables": len(summary.ensured_tables),
         "added_columns": len(summary.added_columns),
+    }
+
+
+def _place_schema_sync_stage(_: PipelineContext) -> dict[str, Any]:
+    db_session = SessionLocal()
+    try:
+        summary = ensure_place_schema(db_session)
+    finally:
+        db_session.close()
+
+    return {
+        "scope": "global",
+        "added_tables": len(summary.created_tables),
+        "added_columns": len(summary.added_columns),
+        "added_indexes": len(summary.created_indexes),
     }
 
 
@@ -1250,16 +1289,18 @@ def _print_dry_run(args: RuntimeArgs, ctx: PipelineContext) -> None:
     print("  [1] RUN - collect input (scope=batch)")
     print("  [2] RUN - ingestion context schema sync (scope=global)")
     print("  [3] RUN - metadata canonicalization schema sync (scope=global)")
-    print("  [4] RUN - ingestion context resolve (scope=global)")
-    print("  [5] RUN - face schema sync (scope=global)")
-    print("  [6] RUN - ingestion batches: filter, hash, deduplicate, storage, ingest, cleanup (scope=batch)")
+    print("  [4] RUN - place schema sync (scope=global)")
+    print("  [5] RUN - ingestion context resolve (scope=global)")
+    print("  [6] RUN - face schema sync (scope=global)")
+    print("  [7] RUN - ingestion batches: filter, hash, deduplicate, storage, ingest, cleanup (scope=batch)")
     print(f"  [7] {'SKIP (--skip-exif-extraction)' if args.skip_exif_extraction else 'RUN'} - EXIF extraction (scope=batch)")
     print(f"  [8] {'SKIP (--skip-metadata-normalization)' if args.skip_metadata_normalization else 'RUN'} - metadata normalization (scope=batch)")
     print("  [9] RUN - metadata observations + canonicalization (scope=batch)")
-    print(f"  [10] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
-    print(f"  [11] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
-    print(f"  [12] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
-    print(f"  [13] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
+    print("  [10] RUN - place grouping (scope=batch)")
+    print(f"  [11] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
+    print(f"  [12] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
+    print(f"  [13] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
+    print(f"  [14] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
     print()
     print("Status: DRY RUN")
 
@@ -1426,17 +1467,26 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         _execute_stage(
             key=f"{batch_label_prefix}_metadata_canonicalization",
             index=3,
-            total=5,
+            total=6,
             label=f"{batch_label_prefix}: metadata observations + canonicalization",
             runner=lambda: _metadata_observation_and_canonicalization_stage(ctx),
+            outcomes=outcomes,
+        )
+
+        _execute_stage(
+            key=f"{batch_label_prefix}_place_grouping",
+            index=4,
+            total=6,
+            label=f"{batch_label_prefix}: place grouping",
+            runner=lambda: _place_grouping_stage(ctx),
             outcomes=outcomes,
         )
 
         if args.skip_duplicate_lineage:
             _skip_stage(
                 key=f"{batch_label_prefix}_lineage",
-                index=4,
-                total=5,
+                index=5,
+                total=6,
                 label=f"{batch_label_prefix}: duplicate lineage",
                 reason="--skip-duplicate-lineage",
                 outcomes=outcomes,
@@ -1444,8 +1494,8 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         else:
             _execute_stage(
                 key=f"{batch_label_prefix}_lineage",
-                index=4,
-                total=5,
+                index=5,
+                total=6,
                 label=f"{batch_label_prefix}: duplicate lineage",
                 runner=lambda: _duplicate_lineage_stage(ctx),
                 outcomes=outcomes,
@@ -1454,8 +1504,8 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         if args.skip_face_processing:
             _skip_stage(
                 key=f"{batch_label_prefix}_faces",
-                index=5,
-                total=5,
+                index=6,
+                total=6,
                 label=f"{batch_label_prefix}: face detection + clustering",
                 reason="--skip-face-processing",
                 outcomes=outcomes,
@@ -1463,16 +1513,16 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         else:
             _execute_stage(
                 key=f"{batch_label_prefix}_face_detection",
-                index=5,
-                total=6,
+                index=6,
+                total=7,
                 label=f"{batch_label_prefix}: face detection",
                 runner=lambda: _face_detection_stage(ctx),
                 outcomes=outcomes,
             )
             _execute_stage(
                 key=f"{batch_label_prefix}_face_clustering",
-                index=6,
-                total=6,
+                index=7,
+                total=7,
                 label=f"{batch_label_prefix}: face embedding + clustering",
                 runner=lambda: _face_clustering_stage(ctx),
                 outcomes=outcomes,
@@ -1504,6 +1554,14 @@ def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]
             total=1,
             label="metadata canonicalization schema sync",
             runner=lambda: _metadata_canonicalization_schema_sync_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key="place_schema_sync",
+            index=1,
+            total=1,
+            label="place schema sync",
+            runner=lambda: _place_schema_sync_stage(ctx),
             outcomes=outcomes,
         )
         _execute_stage(

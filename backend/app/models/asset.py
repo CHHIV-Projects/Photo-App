@@ -10,6 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.session import Base
 from app.models import asset_metadata_observation as _asset_metadata_observation_model
 from app.models import event as _event_model
+from app.models import place as _place_model
 
 
 class Asset(Base):
@@ -55,6 +56,7 @@ class Asset(Base):
 	)
 	display_rotation_degrees: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 	source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+	place_id: Mapped[int | None] = mapped_column(ForeignKey("places.place_id"), nullable=True, index=True)
 	event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)
 	is_user_modified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 	duplicate_group_id: Mapped[int | None] = mapped_column(ForeignKey("duplicate_groups.id"), nullable=True, index=True)
