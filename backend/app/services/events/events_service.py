@@ -51,7 +51,15 @@ def _normalize_event_label(label: str | None) -> str | None:
 
 
 def _count_event_assets(db: Session, event_id: int) -> int:
-    return int(db.scalar(select(func.count(Asset.sha256)).where(Asset.event_id == event_id)) or 0)
+    return int(
+        db.scalar(
+            select(func.count(Asset.sha256)).where(
+                Asset.event_id == event_id,
+                Asset.visibility_status == "visible",
+            )
+        )
+        or 0
+    )
 
 
 def _count_event_faces(db: Session, event_id: int) -> int:
@@ -59,7 +67,7 @@ def _count_event_faces(db: Session, event_id: int) -> int:
         db.scalar(
             select(func.count(Face.id))
             .join(Asset, Asset.sha256 == Face.asset_sha256)
-            .where(Asset.event_id == event_id)
+            .where(Asset.event_id == event_id, Asset.visibility_status == "visible")
         )
         or 0
     )
@@ -90,6 +98,7 @@ def _event_photo_time_bounds(db: Session, event_id: int) -> tuple[datetime | Non
     return db.execute(
         select(func.min(Asset.captured_at), func.max(Asset.captured_at)).where(
             Asset.event_id == event_id,
+            Asset.visibility_status == "visible",
             Asset.captured_at.is_not(None),
         )
     ).one()
@@ -97,7 +106,10 @@ def _event_photo_time_bounds(db: Session, event_id: int) -> tuple[datetime | Non
 
 def _event_fallback_time_bounds(db: Session, event_id: int) -> tuple[datetime | None, datetime | None]:
     return db.execute(
-        select(func.min(Asset.created_at_utc), func.max(Asset.created_at_utc)).where(Asset.event_id == event_id)
+        select(func.min(Asset.created_at_utc), func.max(Asset.created_at_utc)).where(
+            Asset.event_id == event_id,
+            Asset.visibility_status == "visible",
+        )
     ).one()
 
 
@@ -148,7 +160,7 @@ def list_events(db: Session) -> list[dict]:
     """
     photo_count_subq = (
         select(Asset.event_id, func.count(Asset.sha256).label("photo_count"))
-        .where(Asset.event_id.isnot(None))
+        .where(Asset.event_id.isnot(None), Asset.visibility_status == "visible")
         .group_by(Asset.event_id)
         .subquery()
     )
@@ -156,7 +168,7 @@ def list_events(db: Session) -> list[dict]:
     face_count_subq = (
         select(Asset.event_id, func.count(Face.id).label("face_count"))
         .join(Face, Face.asset_sha256 == Asset.sha256)
-        .where(Asset.event_id.isnot(None))
+        .where(Asset.event_id.isnot(None), Asset.visibility_status == "visible")
         .group_by(Asset.event_id)
         .subquery()
     )
@@ -209,7 +221,7 @@ def get_event_detail(db: Session, event_id: int) -> dict | None:
             func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
         )
         .outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
-        .where(Asset.event_id == event_id)
+        .where(Asset.event_id == event_id, Asset.visibility_status == "visible")
         .order_by(Asset.captured_at.asc(), Asset.sha256.asc())
     ).all()
 

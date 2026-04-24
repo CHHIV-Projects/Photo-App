@@ -12,6 +12,9 @@ from app.models.asset import Asset
 from app.models.duplicate_group import DuplicateGroup
 from app.services.duplicates.lineage import IMAGE_EXTENSIONS, recompute_group_canonical
 
+VISIBILITY_VISIBLE = "visible"
+VISIBILITY_DEMOTED = "demoted"
+
 
 def _to_utc_iso(value: datetime | None) -> str | None:
     if value is None:
@@ -47,6 +50,7 @@ class DuplicateLineageAssetSummary:
     captured_at: str | None
     duplicate_group_id: int | None
     is_canonical: bool
+    visibility_status: str
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,37 @@ class DuplicateGroupListResult:
 
     total_count: int
     items: list[DuplicateGroupSummary]
+
+
+@dataclass(frozen=True)
+class DuplicateAdjudicationResult:
+    success: bool
+    noop: bool
+    message: str | None
+    group_id: int | None
+    asset_sha256: str | None
+    affected_assets: list[DuplicateLineageAssetSummary]
+
+
+def _to_lineage_asset_summary(asset: Asset) -> DuplicateLineageAssetSummary:
+    return DuplicateLineageAssetSummary(
+        asset_sha256=asset.sha256,
+        filename=asset.original_filename,
+        captured_at=_to_utc_iso(asset.captured_at),
+        duplicate_group_id=asset.duplicate_group_id,
+        is_canonical=asset.is_canonical,
+        visibility_status=asset.visibility_status,
+    )
+
+
+def _get_group_members(db_session: Session, group_id: int) -> list[Asset]:
+    return list(
+        db_session.scalars(
+            select(Asset)
+            .where(Asset.duplicate_group_id == group_id)
+            .order_by(Asset.is_canonical.desc(), Asset.quality_score.desc().nullslast(), Asset.sha256.asc())
+        ).all()
+    )
 
 
 def list_duplicate_merge_targets(
@@ -209,15 +244,166 @@ def merge_asset_into_target_lineage(
         resulting_canonical_asset_sha256=canonical_sha,
         affected_member_count=len(affected_assets_rows),
         affected_assets=[
-            DuplicateLineageAssetSummary(
-                asset_sha256=item.sha256,
-                filename=item.original_filename,
-                captured_at=_to_utc_iso(item.captured_at),
-                duplicate_group_id=item.duplicate_group_id,
-                is_canonical=item.is_canonical,
-            )
+            _to_lineage_asset_summary(item)
             for item in affected_assets_rows
         ],
+    )
+
+
+def set_group_canonical(db_session: Session, *, asset_sha256: str) -> DuplicateAdjudicationResult | None:
+    asset = db_session.get(Asset, asset_sha256)
+    if asset is None:
+        return None
+    if asset.duplicate_group_id is None:
+        raise ValueError("Asset is standalone and has no duplicate group.")
+
+    group_id = asset.duplicate_group_id
+    members = _get_group_members(db_session, group_id)
+
+    if asset.is_canonical and asset.visibility_status == VISIBILITY_VISIBLE:
+        return DuplicateAdjudicationResult(
+            success=True,
+            noop=True,
+            message="Asset is already canonical.",
+            group_id=group_id,
+            asset_sha256=asset.sha256,
+            affected_assets=[_to_lineage_asset_summary(item) for item in members],
+        )
+
+    for member in members:
+        member.is_canonical = member.sha256 == asset.sha256
+        if member.sha256 == asset.sha256:
+            member.visibility_status = VISIBILITY_VISIBLE
+
+    db_session.commit()
+
+    updated_members = _get_group_members(db_session, group_id)
+    return DuplicateAdjudicationResult(
+        success=True,
+        noop=False,
+        message="Canonical asset updated.",
+        group_id=group_id,
+        asset_sha256=asset.sha256,
+        affected_assets=[_to_lineage_asset_summary(item) for item in updated_members],
+    )
+
+
+def remove_asset_from_group(db_session: Session, *, asset_sha256: str) -> DuplicateAdjudicationResult | None:
+    asset = db_session.get(Asset, asset_sha256)
+    if asset is None:
+        return None
+    if asset.duplicate_group_id is None:
+        asset.is_canonical = True
+        asset.visibility_status = VISIBILITY_VISIBLE
+        db_session.commit()
+        return DuplicateAdjudicationResult(
+            success=True,
+            noop=True,
+            message="Asset is already standalone.",
+            group_id=None,
+            asset_sha256=asset.sha256,
+            affected_assets=[_to_lineage_asset_summary(asset)],
+        )
+
+    source_group_id = asset.duplicate_group_id
+    asset.duplicate_group_id = None
+    asset.is_canonical = True
+    asset.visibility_status = VISIBILITY_VISIBLE
+    db_session.flush()
+
+    remaining_members = _get_group_members(db_session, source_group_id)
+    if not remaining_members:
+        group = db_session.get(DuplicateGroup, source_group_id)
+        if group is not None:
+            db_session.delete(group)
+    else:
+        canonical_sha = recompute_group_canonical(db_session, source_group_id)
+        if canonical_sha is None:
+            raise LookupError("Failed to assign replacement canonical asset after group removal.")
+
+    db_session.commit()
+    refreshed_asset = db_session.get(Asset, asset_sha256)
+    updated_remaining = _get_group_members(db_session, source_group_id)
+    affected_assets = [_to_lineage_asset_summary(item) for item in updated_remaining]
+    if refreshed_asset is not None:
+        affected_assets.append(_to_lineage_asset_summary(refreshed_asset))
+
+    return DuplicateAdjudicationResult(
+        success=True,
+        noop=False,
+        message="Asset removed from duplicate group.",
+        group_id=source_group_id,
+        asset_sha256=asset_sha256,
+        affected_assets=affected_assets,
+    )
+
+
+def demote_group_asset(db_session: Session, *, asset_sha256: str) -> DuplicateAdjudicationResult | None:
+    asset = db_session.get(Asset, asset_sha256)
+    if asset is None:
+        return None
+    if asset.duplicate_group_id is None:
+        raise ValueError("Cannot demote a standalone asset.")
+    if asset.is_canonical:
+        raise ValueError("Cannot demote canonical asset. Choose another canonical first.")
+
+    group_id = asset.duplicate_group_id
+    members = _get_group_members(db_session, group_id)
+    if len(members) <= 1:
+        raise ValueError("Cannot demote the only asset in a group.")
+
+    if asset.visibility_status == VISIBILITY_DEMOTED:
+        return DuplicateAdjudicationResult(
+            success=True,
+            noop=True,
+            message="Asset is already demoted.",
+            group_id=group_id,
+            asset_sha256=asset.sha256,
+            affected_assets=[_to_lineage_asset_summary(item) for item in members],
+        )
+
+    asset.visibility_status = VISIBILITY_DEMOTED
+    db_session.commit()
+
+    updated_members = _get_group_members(db_session, group_id)
+    return DuplicateAdjudicationResult(
+        success=True,
+        noop=False,
+        message="Asset demoted.",
+        group_id=group_id,
+        asset_sha256=asset.sha256,
+        affected_assets=[_to_lineage_asset_summary(item) for item in updated_members],
+    )
+
+
+def restore_group_asset(db_session: Session, *, asset_sha256: str) -> DuplicateAdjudicationResult | None:
+    asset = db_session.get(Asset, asset_sha256)
+    if asset is None:
+        return None
+
+    group_id = asset.duplicate_group_id
+    if asset.visibility_status == VISIBILITY_VISIBLE:
+        members = _get_group_members(db_session, group_id) if group_id is not None else [asset]
+        return DuplicateAdjudicationResult(
+            success=True,
+            noop=True,
+            message="Asset is already visible.",
+            group_id=group_id,
+            asset_sha256=asset.sha256,
+            affected_assets=[_to_lineage_asset_summary(item) for item in members],
+        )
+
+    asset.visibility_status = VISIBILITY_VISIBLE
+    db_session.commit()
+
+    updated_members = _get_group_members(db_session, group_id) if group_id is not None else [asset]
+    return DuplicateAdjudicationResult(
+        success=True,
+        noop=False,
+        message="Asset restored to visible.",
+        group_id=group_id,
+        asset_sha256=asset.sha256,
+        affected_assets=[_to_lineage_asset_summary(item) for item in updated_members],
     )
 
 

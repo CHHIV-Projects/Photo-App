@@ -306,6 +306,7 @@ export interface DuplicateLineageAssetSummary {
   captured_at: string | null;
   duplicate_group_id: number | null;
   is_canonical: boolean;
+  visibility_status: "visible" | "demoted";
 }
 
 export interface DuplicateLineageMergeResponse {
@@ -365,6 +366,7 @@ export interface DuplicateGroupAssetSummary {
   filename: string;
   image_url: string;
   is_canonical: boolean;
+  visibility_status: "visible" | "demoted";
   quality_score: number | null;
   capture_type: "digital" | "scan" | "unknown";
   capture_time_trust: "high" | "low" | "unknown";
@@ -376,6 +378,15 @@ export interface DuplicateGroupDetail {
   canonical_asset_sha256: string | null;
   duplicate_count: number;
   assets: DuplicateGroupAssetSummary[];
+}
+
+export interface DuplicateAdjudicationResponse {
+  success: boolean;
+  noop: boolean;
+  message: string | null;
+  group_id: number | null;
+  asset_sha256: string | null;
+  affected_assets: DuplicateLineageAssetSummary[];
 }
 
 export interface PlaceSummary {

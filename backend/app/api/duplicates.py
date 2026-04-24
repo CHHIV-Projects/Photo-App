@@ -7,11 +7,16 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.schemas.photos import (
+    DuplicateAdjudicationResponse,
+    DuplicateDemoteRequest,
     DuplicateGroupSummary,
     DuplicateGroupDetail,
     DuplicateGroupListResponse,
     DuplicateLineageMergeRequest,
     DuplicateLineageMergeResponse,
+    DuplicateRemoveFromGroupRequest,
+    DuplicateRestoreRequest,
+    DuplicateSetCanonicalRequest,
     DuplicateMergeTargetListResponse,
     DuplicateSuggestionListResponse,
     DuplicateSuggestionSummary,
@@ -20,9 +25,13 @@ from app.schemas.photos import (
     DuplicateSuggestionRejectResponse,
 )
 from app.services.duplicates.manual_control import (
+    demote_group_asset,
     list_duplicate_groups,
     list_duplicate_merge_targets,
     merge_asset_into_target_lineage,
+    remove_asset_from_group,
+    restore_group_asset,
+    set_group_canonical,
 )
 from app.services.duplicates.suggestion_service import list_duplicate_suggestions, reject_duplicate_pair
 from app.services.photos.photos_service import get_duplicate_group_detail
@@ -218,6 +227,96 @@ def reject_duplicate_suggestion(
         created=created,
         asset_sha256_a=left,
         asset_sha256_b=right,
+    )
+
+
+@router.post("/set-canonical", response_model=DuplicateAdjudicationResponse)
+def set_duplicate_group_canonical(
+    payload: DuplicateSetCanonicalRequest,
+    db: Session = Depends(get_db_session),
+) -> DuplicateAdjudicationResponse:
+    try:
+        result = set_group_canonical(db, asset_sha256=payload.asset_sha256)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Asset {payload.asset_sha256!r} not found.")
+
+    return DuplicateAdjudicationResponse(
+        success=result.success,
+        noop=result.noop,
+        message=result.message,
+        group_id=result.group_id,
+        asset_sha256=result.asset_sha256,
+        affected_assets=result.affected_assets,
+    )
+
+
+@router.post("/remove-from-group", response_model=DuplicateAdjudicationResponse)
+def remove_duplicate_group_member(
+    payload: DuplicateRemoveFromGroupRequest,
+    db: Session = Depends(get_db_session),
+) -> DuplicateAdjudicationResponse:
+    try:
+        result = remove_asset_from_group(db, asset_sha256=payload.asset_sha256)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Asset {payload.asset_sha256!r} not found.")
+
+    return DuplicateAdjudicationResponse(
+        success=result.success,
+        noop=result.noop,
+        message=result.message,
+        group_id=result.group_id,
+        asset_sha256=result.asset_sha256,
+        affected_assets=result.affected_assets,
+    )
+
+
+@router.post("/demote", response_model=DuplicateAdjudicationResponse)
+def demote_duplicate_group_member(
+    payload: DuplicateDemoteRequest,
+    db: Session = Depends(get_db_session),
+) -> DuplicateAdjudicationResponse:
+    try:
+        result = demote_group_asset(db, asset_sha256=payload.asset_sha256)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Asset {payload.asset_sha256!r} not found.")
+
+    return DuplicateAdjudicationResponse(
+        success=result.success,
+        noop=result.noop,
+        message=result.message,
+        group_id=result.group_id,
+        asset_sha256=result.asset_sha256,
+        affected_assets=result.affected_assets,
+    )
+
+
+@router.post("/restore", response_model=DuplicateAdjudicationResponse)
+def restore_duplicate_group_member(
+    payload: DuplicateRestoreRequest,
+    db: Session = Depends(get_db_session),
+) -> DuplicateAdjudicationResponse:
+    result = restore_group_asset(db, asset_sha256=payload.asset_sha256)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Asset {payload.asset_sha256!r} not found.")
+
+    return DuplicateAdjudicationResponse(
+        success=result.success,
+        noop=result.noop,
+        message=result.message,
+        group_id=result.group_id,
+        asset_sha256=result.asset_sha256,
+        affected_assets=result.affected_assets,
     )
 
 

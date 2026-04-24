@@ -126,6 +126,7 @@ class PhotoDetail(BaseModel):
     duplicate_group_id: int | None = None
     duplicate_group_type: Literal["near"] | None = None
     is_canonical: bool
+    visibility_status: Literal["visible", "demoted"] = "visible"
     quality_score: float | None = None
     duplicate_count: int
     canonical_asset_sha256: str | None = None
@@ -138,6 +139,7 @@ class DuplicateGroupAssetSummary(BaseModel):
     filename: str
     image_url: str
     is_canonical: bool
+    visibility_status: Literal["visible", "demoted"] = "visible"
     quality_score: float | None = None
     capture_type: Literal["digital", "scan", "unknown"]
     capture_time_trust: Literal["high", "low", "unknown"]
@@ -198,6 +200,7 @@ class DuplicateLineageAssetSummary(BaseModel):
     captured_at: str | None = None
     duplicate_group_id: int | None = None
     is_canonical: bool
+    visibility_status: Literal["visible", "demoted"] = "visible"
 
 
 class DuplicateLineageMergeResponse(BaseModel):
@@ -210,6 +213,31 @@ class DuplicateLineageMergeResponse(BaseModel):
     affected_assets: list[DuplicateLineageAssetSummary]
     noop: bool = False
     message: str | None = None
+
+
+class DuplicateSetCanonicalRequest(BaseModel):
+    asset_sha256: str
+
+
+class DuplicateRemoveFromGroupRequest(BaseModel):
+    asset_sha256: str
+
+
+class DuplicateDemoteRequest(BaseModel):
+    asset_sha256: str
+
+
+class DuplicateRestoreRequest(BaseModel):
+    asset_sha256: str
+
+
+class DuplicateAdjudicationResponse(BaseModel):
+    success: bool
+    noop: bool = False
+    message: str | None = None
+    group_id: int | None = None
+    asset_sha256: str | None = None
+    affected_assets: list[DuplicateLineageAssetSummary] = []
 
 
 class DuplicateSuggestionAssetSummary(BaseModel):

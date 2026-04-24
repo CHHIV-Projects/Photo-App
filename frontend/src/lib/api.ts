@@ -8,6 +8,7 @@ import type {
   ClusterSummary,
   DuplicateGroupListResponse,
   DuplicateGroupDetail,
+  DuplicateAdjudicationResponse,
   EventDetail,
   EventMergeResponse,
   DuplicateLineageMergeResponse,
@@ -331,6 +332,42 @@ export function mergeDuplicateAssets(
     body: JSON.stringify({
       source_asset_sha256: sourceAssetSha256,
       target_asset_sha256: targetAssetSha256
+    })
+  });
+}
+
+export function setDuplicateGroupCanonical(assetSha256: string): Promise<DuplicateAdjudicationResponse> {
+  return apiRequest<DuplicateAdjudicationResponse>("/api/duplicates/set-canonical", {
+    method: "POST",
+    body: JSON.stringify({
+      asset_sha256: assetSha256
+    })
+  });
+}
+
+export function removeDuplicateGroupMember(assetSha256: string): Promise<DuplicateAdjudicationResponse> {
+  return apiRequest<DuplicateAdjudicationResponse>("/api/duplicates/remove-from-group", {
+    method: "POST",
+    body: JSON.stringify({
+      asset_sha256: assetSha256
+    })
+  });
+}
+
+export function demoteDuplicateGroupMember(assetSha256: string): Promise<DuplicateAdjudicationResponse> {
+  return apiRequest<DuplicateAdjudicationResponse>("/api/duplicates/demote", {
+    method: "POST",
+    body: JSON.stringify({
+      asset_sha256: assetSha256
+    })
+  });
+}
+
+export function restoreDuplicateGroupMember(assetSha256: string): Promise<DuplicateAdjudicationResponse> {
+  return apiRequest<DuplicateAdjudicationResponse>("/api/duplicates/restore", {
+    method: "POST",
+    body: JSON.stringify({
+      asset_sha256: assetSha256
     })
   });
 }

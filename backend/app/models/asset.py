@@ -61,5 +61,6 @@ class Asset(Base):
 	is_user_modified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 	duplicate_group_id: Mapped[int | None] = mapped_column(ForeignKey("duplicate_groups.id"), nullable=True, index=True)
 	is_canonical: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+	visibility_status: Mapped[str] = mapped_column(String(16), nullable=False, default="visible")
 	quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 	phash: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)

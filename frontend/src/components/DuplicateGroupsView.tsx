@@ -3,9 +3,13 @@
 import { useEffect, useState } from "react";
 import styles from "@/components/duplicate-groups-view.module.css";
 import {
+  demoteDuplicateGroupMember,
   getDuplicateGroups,
   getDuplicateGroupDetail,
+  removeDuplicateGroupMember,
   resolveApiUrl,
+  restoreDuplicateGroupMember,
+  setDuplicateGroupCanonical,
 } from "@/lib/api";
 import type {
   DuplicateGroupSummary,
@@ -27,6 +31,8 @@ export function DuplicateGroupsView({ onOpenPhoto }: DuplicateGroupsViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [busyAssetSha256, setBusyAssetSha256] = useState<string | null>(null);
 
   const PAGE_SIZE = 50;
 
@@ -57,6 +63,7 @@ export function DuplicateGroupsView({ onOpenPhoto }: DuplicateGroupsViewProps) {
   async function loadGroupDetail(groupId: number): Promise<void> {
     setIsLoadingDetail(true);
     setDetailErrorMessage(null);
+    setActionMessage(null);
 
     try {
       const response = await getDuplicateGroupDetail(groupId);
@@ -96,6 +103,63 @@ export function DuplicateGroupsView({ onOpenPhoto }: DuplicateGroupsViewProps) {
 
   function handleOpenAssetDetail(sha256: string): void {
     onOpenPhoto(sha256);
+  }
+
+  async function handleSetCanonical(assetSha256: string): Promise<void> {
+    if (selectedGroupId === null) return;
+    setBusyAssetSha256(assetSha256);
+    try {
+      const response = await setDuplicateGroupCanonical(assetSha256);
+      setActionMessage(response.message ?? "Canonical asset updated.");
+      await loadGroupDetail(selectedGroupId);
+    } catch (error) {
+      setDetailErrorMessage(getErrorMessage(error, "Failed to set canonical asset."));
+    } finally {
+      setBusyAssetSha256(null);
+    }
+  }
+
+  async function handleRemoveFromGroup(assetSha256: string): Promise<void> {
+    if (selectedGroupId === null) return;
+    setBusyAssetSha256(assetSha256);
+    try {
+      const response = await removeDuplicateGroupMember(assetSha256);
+      setActionMessage(response.message ?? "Asset removed from group.");
+      await loadGroupDetail(selectedGroupId);
+      await loadGroups(currentPage * PAGE_SIZE, searchQuery);
+    } catch (error) {
+      setDetailErrorMessage(getErrorMessage(error, "Failed to remove asset from group."));
+    } finally {
+      setBusyAssetSha256(null);
+    }
+  }
+
+  async function handleDemote(assetSha256: string): Promise<void> {
+    if (selectedGroupId === null) return;
+    setBusyAssetSha256(assetSha256);
+    try {
+      const response = await demoteDuplicateGroupMember(assetSha256);
+      setActionMessage(response.message ?? "Asset demoted.");
+      await loadGroupDetail(selectedGroupId);
+    } catch (error) {
+      setDetailErrorMessage(getErrorMessage(error, "Failed to demote asset."));
+    } finally {
+      setBusyAssetSha256(null);
+    }
+  }
+
+  async function handleRestore(assetSha256: string): Promise<void> {
+    if (selectedGroupId === null) return;
+    setBusyAssetSha256(assetSha256);
+    try {
+      const response = await restoreDuplicateGroupMember(assetSha256);
+      setActionMessage(response.message ?? "Asset restored.");
+      await loadGroupDetail(selectedGroupId);
+    } catch (error) {
+      setDetailErrorMessage(getErrorMessage(error, "Failed to restore asset."));
+    } finally {
+      setBusyAssetSha256(null);
+    }
   }
 
   if (isLoadingGroups) {
@@ -210,6 +274,7 @@ export function DuplicateGroupsView({ onOpenPhoto }: DuplicateGroupsViewProps) {
                     <span>{groupDetail.duplicate_count} assets</span>
                     <span>Type: {groupDetail.group_type}</span>
                   </div>
+                  {actionMessage && <div className={styles.successMessage}>{actionMessage}</div>}
                 </div>
 
                 <div className={styles.groupMembers}>
@@ -227,22 +292,75 @@ export function DuplicateGroupsView({ onOpenPhoto }: DuplicateGroupsViewProps) {
                       )}
                       <div className={styles.memberInfo}>
                         <div className={styles.memberFilename}>{asset.filename}</div>
-                        {asset.is_canonical && (
-                          <div className={styles.canonicalBadge}>Canonical</div>
-                        )}
+                        <div className={styles.memberBadges}>
+                          {asset.is_canonical && (
+                            <div className={styles.canonicalBadge}>Canonical</div>
+                          )}
+                          {asset.visibility_status === "demoted" && (
+                            <div className={styles.demotedBadge}>Demoted</div>
+                          )}
+                        </div>
                         <div className={styles.memberMeta}>
                           <span>Quality: {asset.quality_score?.toFixed(2) ?? "unknown"}</span>
                           <span>Type: {asset.capture_type}</span>
                           <span>Trust: {asset.capture_time_trust}</span>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenAssetDetail(asset.asset_sha256)}
-                        className={styles.viewButton}
-                      >
-                        View Details
-                      </button>
+                      <div className={styles.memberActions}>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenAssetDetail(asset.asset_sha256)}
+                          className={styles.viewButton}
+                        >
+                          View Details
+                        </button>
+                        {!asset.is_canonical && (
+                          <button
+                            type="button"
+                            disabled={busyAssetSha256 === asset.asset_sha256}
+                            onClick={() => {
+                              void handleSetCanonical(asset.asset_sha256);
+                            }}
+                            className={styles.actionButton}
+                          >
+                            Set Canonical
+                          </button>
+                        )}
+                        {asset.visibility_status === "visible" && !asset.is_canonical && (
+                          <button
+                            type="button"
+                            disabled={busyAssetSha256 === asset.asset_sha256}
+                            onClick={() => {
+                              void handleDemote(asset.asset_sha256);
+                            }}
+                            className={styles.actionButton}
+                          >
+                            Demote
+                          </button>
+                        )}
+                        {asset.visibility_status === "demoted" && (
+                          <button
+                            type="button"
+                            disabled={busyAssetSha256 === asset.asset_sha256}
+                            onClick={() => {
+                              void handleRestore(asset.asset_sha256);
+                            }}
+                            className={styles.actionButton}
+                          >
+                            Restore
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={busyAssetSha256 === asset.asset_sha256}
+                          onClick={() => {
+                            void handleRemoveFromGroup(asset.asset_sha256);
+                          }}
+                          className={styles.actionButtonDanger}
+                        >
+                          Remove From Group
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>

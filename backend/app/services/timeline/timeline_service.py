@@ -37,6 +37,7 @@ def _trust_count_expr(trust_value: str) -> Any:
 
 def apply_asset_time_filters(query: Any, filters: TimelineFilter) -> Any:
     """Apply explicit time/trust filters to an Asset-backed query."""
+    query = query.where(Asset.visibility_status == "visible")
     trust_expr = effective_capture_time_trust_expr()
 
     if filters.trust_values:

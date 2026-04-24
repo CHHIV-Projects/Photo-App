@@ -224,6 +224,65 @@ class DuplicateLineageControlApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_set_canonical_endpoint_returns_payload(self) -> None:
+        with patch(
+            "app.api.duplicates.set_group_canonical",
+            return_value=type(
+                "AdjudicationResult",
+                (),
+                {
+                    "success": True,
+                    "noop": False,
+                    "message": "Canonical asset updated.",
+                    "group_id": 42,
+                    "asset_sha256": "asset-a",
+                    "affected_assets": [],
+                },
+            )(),
+        ):
+            response = self.client.post("/api/duplicates/set-canonical", json={"asset_sha256": "asset-a"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["success"])
+        self.assertFalse(body["noop"])
+        self.assertEqual(body["group_id"], 42)
+
+    def test_remove_from_group_endpoint_not_found_returns_404(self) -> None:
+        with patch("app.api.duplicates.remove_asset_from_group", return_value=None):
+            response = self.client.post("/api/duplicates/remove-from-group", json={"asset_sha256": "missing"})
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_demote_endpoint_validation_error_returns_422(self) -> None:
+        with patch("app.api.duplicates.demote_group_asset", side_effect=ValueError("Cannot demote canonical asset.")):
+            response = self.client.post("/api/duplicates/demote", json={"asset_sha256": "canonical"})
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_restore_endpoint_noop_success(self) -> None:
+        with patch(
+            "app.api.duplicates.restore_group_asset",
+            return_value=type(
+                "AdjudicationResult",
+                (),
+                {
+                    "success": True,
+                    "noop": True,
+                    "message": "Asset is already visible.",
+                    "group_id": 7,
+                    "asset_sha256": "asset-v",
+                    "affected_assets": [],
+                },
+            )(),
+        ):
+            response = self.client.post("/api/duplicates/restore", json={"asset_sha256": "asset-v"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["success"])
+        self.assertTrue(body["noop"])
+
 
 if __name__ == "__main__":
     unittest.main()

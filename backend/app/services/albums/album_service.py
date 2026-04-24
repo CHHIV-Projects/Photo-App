@@ -115,6 +115,8 @@ def list_albums(db: Session) -> list[dict]:
             CollectionAsset.collection_id,
             func.count(CollectionAsset.asset_sha256).label("asset_count"),
         )
+        .join(Asset, Asset.sha256 == CollectionAsset.asset_sha256)
+        .where(Asset.visibility_status == "visible")
         .group_by(CollectionAsset.collection_id)
         .subquery()
     )
@@ -138,7 +140,9 @@ def list_albums(db: Session) -> list[dict]:
     all_collection_ids = [row.id for row in rows]
     membership_rows = db.execute(
         select(CollectionAsset.collection_id, CollectionAsset.asset_sha256, CollectionAsset.added_at_utc)
+        .join(Asset, Asset.sha256 == CollectionAsset.asset_sha256)
         .where(CollectionAsset.collection_id.in_(all_collection_ids))
+        .where(Asset.visibility_status == "visible")
         .order_by(CollectionAsset.collection_id.asc(), CollectionAsset.added_at_utc.asc())
     ).all()
 
@@ -208,7 +212,7 @@ def get_album_detail(db: Session, *, album_id: int) -> dict:
         )
         .join(Asset, Asset.sha256 == CollectionAsset.asset_sha256)
         .outerjoin(face_count_subq, face_count_subq.c.asset_sha256 == Asset.sha256)
-        .where(CollectionAsset.collection_id == album.id)
+        .where(CollectionAsset.collection_id == album.id, Asset.visibility_status == "visible")
         .order_by(CollectionAsset.added_at_utc.desc(), CollectionAsset.asset_sha256.asc())
     ).all()
 

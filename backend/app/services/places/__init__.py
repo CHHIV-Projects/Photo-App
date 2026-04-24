@@ -24,7 +24,7 @@ def list_places(db: Session) -> PlaceListResponse:
 				order_by=[nullslast(Asset.captured_at.desc()), Asset.sha256.asc()],
 			).label("rn"),
 		)
-		.where(Asset.place_id.isnot(None))
+		.where(Asset.place_id.isnot(None), Asset.visibility_status == "visible")
 		.subquery("asset_ranked")
 	)
 
@@ -55,6 +55,7 @@ def list_places(db: Session) -> PlaceListResponse:
 			thumb_sq.c.extension.label("thumb_ext"),
 		)
 		.join(Asset, Asset.place_id == Place.place_id)
+		.where(Asset.visibility_status == "visible")
 		.outerjoin(thumb_sq, thumb_sq.c.place_id == Place.place_id)
 		.group_by(
 			Place.place_id,
@@ -115,6 +116,7 @@ def get_place_detail(db: Session, place_id: str) -> PlaceDetail | None:
 		db.query(Asset)
 		.filter(
 			Asset.place_id == place.place_id,
+			Asset.visibility_status == "visible",
 		)
 		.order_by(Asset.captured_at.asc())
 		.all()

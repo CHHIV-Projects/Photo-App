@@ -2166,3 +2166,193 @@ Deferred — requires explicit duplicate adjudication policy and workflow design
 \- [ ] item
 
 \- [ ] item
+
+# AQ-010 — Multi-Signal Duplicate Scoring System
+
+## Goal
+
+Enhance duplicate detection by introducing a multi-signal scoring system that evaluates likely duplicates using multiple deterministic signals, rather than relying solely on pHash distance.
+
+This improves detection of:
+
+- HEIC ↔ JPEG conversions
+- cloud download variants
+- resized / recompressed images
+- borderline visual matches missed by current thresholds
+
+---
+
+## Context
+
+Current system:
+
+- uses pHash + Hamming distance
+- groups duplicates at threshold ≤ 10
+- surfaces 11–15 via suggestion queue (12.12)
+
+Observed limitations:
+
+- visually identical photos can fall outside threshold (e.g., HEIC vs JPEG)
+- grouping misses certain real duplicates
+- pHash alone is insufficient for all real-world cases
+
+---
+
+## Core Principle
+
+Duplicate likelihood should be determined by combining multiple deterministic signals into a single explainable score.
+
+---
+
+## Scope (Future Work)
+
+### In Scope
+
+- define multiple duplicate signals
+- compute weighted composite score
+- surface score + explanation in UI
+- use score for ranking suggestions
+- optionally support auto-grouping at high confidence
+
+### Out of Scope (initial implementation)
+
+- ML / black-box inference
+- non-deterministic scoring
+- destructive automation (deletion)
+- replacing pHash (it remains a core signal)
+
+---
+
+## Proposed Signals
+
+### 1. Visual Similarity (pHash)
+
+- existing system
+- remains primary signal
+
+### 2. Filename Similarity
+
+- match filename stems (e.g., IMG_5450)
+- detect extension-only differences
+
+### 3. Capture Time Proximity
+
+- exact match or near match in captured_at
+- strong indicator for duplicates
+
+### 4. Resolution Relationship
+
+- identical or proportional dimensions
+- detect downscaled copies
+
+### 5. Camera Metadata Match
+
+- same camera make/model
+
+### 6. Provenance Context
+
+- same source batch or import context
+- cloud vs local duplication patterns
+
+---
+
+## Scoring Model (Conceptual)
+
+Duplicate Score (0–100) =
+weighted combination of:
+
+- visual similarity
+- filename match
+- capture time proximity
+- resolution similarity
+- camera match
+- provenance relationship
+
+Output includes:
+
+- numeric score
+- contributing factors (explainability)
+
+---
+
+## Output Behavior
+
+Instead of:
+distance = 14
+
+System provides:
+Score: 87 / 100
+Reasons:
+
+- same filename stem
+- identical capture time
+- similar resolution
+
+---
+
+## Use Cases
+
+### 1. Suggestion Queue Ranking
+
+- sort by score instead of distance alone
+
+### 2. Improved Candidate Discovery
+
+- detect duplicates beyond current pHash threshold
+
+### 3. Future Auto-Grouping (Optional)
+
+- auto-group only at very high confidence
+
+---
+
+## UI Integration (Future)
+
+- show score on suggestion cards
+- show reasoning for transparency
+- allow user to trust/override system
+
+---
+
+## Configuration (Future Admin)
+
+Duplicate Settings:
+
+- pHash weight
+- filename weight
+- time proximity weight
+- resolution weight
+- camera weight
+- provenance weight
+
+---
+
+## Constraints
+
+- must remain deterministic
+- must remain explainable
+- must not introduce black-box AI
+- must preserve user trust
+
+---
+
+## Risks
+
+- overfitting signals
+- false positives if weights poorly tuned
+- increased computational cost
+
+---
+
+## Dependencies
+
+- existing duplicate detection (pHash)
+- canonical metadata (12.1)
+- suggestion system (12.12)
+- adjudication workflow (AQ-009)
+
+---
+
+## Summary
+
+Replace single-signal duplicate detection with a multi-signal, explainable scoring system to improve accuracy and usability in real-world datasets.

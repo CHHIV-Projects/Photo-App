@@ -255,6 +255,24 @@
   letter-spacing: 0.5px;
 }
 
+.memberBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.demotedBadge {
+  display: inline-block;
+  padding: 4px 8px;
+  background: #fff5e8;
+  color: #b45309;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .memberMeta {
   display: flex;
   flex-direction: column;
@@ -280,6 +298,62 @@
   font-weight: 600;
   transition: all 0.2s ease;
   white-space: nowrap;
+}
+
+.memberActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.actionButton {
+  padding: 8px 12px;
+  border: 1px solid #9bb9d4;
+  background: #f5f9fc;
+  color: #214f73;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.actionButton:hover:not(:disabled) {
+  background: #e9f2f8;
+}
+
+.actionButtonDanger {
+  padding: 8px 12px;
+  border: 1px solid #e0a2a9;
+  background: #fff5f6;
+  color: #9f2133;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.actionButtonDanger:hover:not(:disabled) {
+  background: #ffecee;
+}
+
+.actionButton:disabled,
+.actionButtonDanger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.successMessage {
+  padding: 10px 12px;
+  border: 1px solid #a9d5ba;
+  background: #f1fbf4;
+  color: #206a3d;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .viewButton:hover {
