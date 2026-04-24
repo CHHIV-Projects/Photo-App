@@ -77,10 +77,13 @@
 }
 
 .placeItem {
-  padding: 12px 15px;
+  padding: 10px 15px;
   border-bottom: 1px solid #eee;
   cursor: pointer;
   transition: background-color 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .placeItem:hover {
@@ -93,9 +96,45 @@
   padding-left: 12px;
 }
 
+.placeThumb {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #e8edf2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.placeThumbImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.placeThumbPlaceholder {
+  font-size: 20px;
+  line-height: 1;
+  color: #aaa;
+}
+
+.placeItemContent {
+  min-width: 0;
+  flex: 1;
+}
+
 .coordinates {
   font-weight: 500;
   font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.coordinateMeta {
+  font-size: 12px;
+  color: #6b7785;
   margin-bottom: 4px;
 }
 

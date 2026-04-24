@@ -37,30 +37,30 @@ interface Props {
   photos: PhotoSummary[];
   isLoading: boolean;
   errorMessage: string | null;
-  searchQuery: string;
-  cameraQuery: string;
-  startDate: string;
-  endDate: string;
-  totalCount: number;
-  offset: number;
-  pageSize: number;
-  timelineYear: number | null;
-  timelineMonth: string;
-  timelineDate: string;
+  searchQuery?: string;
+  cameraQuery?: string;
+  startDate?: string;
+  endDate?: string;
+  totalCount?: number;
+  offset?: number;
+  pageSize?: number;
+  timelineYear?: number | null;
+  timelineMonth?: string;
+  timelineDate?: string;
   selectedPhotoSha256: string | null;
   photoDetail: PhotoDetail | null;
   isLoadingDetail: boolean;
   photoDetailErrorMessage: string | null;
   onSelectPhoto: (sha256: string) => void;
-  onPhotoDetailUpdated: (detail: PhotoDetail) => void;
-  onSearchFiltersChange: (filters: {
+  onPhotoDetailUpdated?: (detail: PhotoDetail) => void;
+  onSearchFiltersChange?: (filters: {
     query: string;
     camera: string;
     startDate: string;
     endDate: string;
   }) => void;
-  onPageChange: (nextOffset: number) => void;
-  onTimelineChange: (selection: {
+  onPageChange?: (nextOffset: number) => void;
+  onTimelineChange?: (selection: {
     year: number | null;
     month: string;
     date: string;
@@ -71,16 +71,16 @@ export function PhotosView({
   photos,
   isLoading,
   errorMessage,
-  searchQuery,
-  cameraQuery,
-  startDate,
-  endDate,
-  totalCount,
-  offset,
-  pageSize,
-  timelineYear,
-  timelineMonth,
-  timelineDate,
+  searchQuery = "",
+  cameraQuery = "",
+  startDate = "",
+  endDate = "",
+  totalCount = 0,
+  offset = 0,
+  pageSize = 50,
+  timelineYear = null,
+  timelineMonth = "",
+  timelineDate = "",
   selectedPhotoSha256,
   photoDetail,
   isLoadingDetail,
@@ -144,6 +144,7 @@ export function PhotosView({
   }, [endDate]);
 
   useEffect(() => {
+    if (!onSearchFiltersChange) return;
     const debounceHandle = window.setTimeout(() => {
       onSearchFiltersChange({
         query: photoSearch,
@@ -814,12 +815,14 @@ export function PhotosView({
   return (
     <div className={styles.layout}>
       <div className={styles.sidebarStack}>
-        <TimelineNav
-          selectedYear={timelineYear}
-          selectedMonth={timelineMonth}
-          selectedDate={timelineDate}
-          onTimelineChange={onTimelineChange}
-        />
+        {onTimelineChange && (
+          <TimelineNav
+            selectedYear={timelineYear}
+            selectedMonth={timelineMonth}
+            selectedDate={timelineDate}
+            onTimelineChange={onTimelineChange}
+          />
+        )}
 
         {/* ── Photo list ────────────────────────────────────────────── */}
         <aside className={styles.panel}>
@@ -828,39 +831,41 @@ export function PhotosView({
             <span className={styles.panelCount}>{totalCount}</span>
           </div>
 
-          <div className={styles.searchWrapper}>
-            <input
-              type="search"
-              className={styles.searchInput}
-              placeholder="Search filename..."
-              value={photoSearch}
-              onChange={(e) => setPhotoSearch(e.target.value)}
-            />
-            <input
-              type="search"
-              className={styles.searchInput}
-              placeholder="Camera make/model..."
-              value={cameraSearch}
-              onChange={(e) => setCameraSearch(e.target.value)}
-            />
-            <div className={styles.dateRangeRow}>
+          {onSearchFiltersChange && (
+            <div className={styles.searchWrapper}>
               <input
-                type="date"
+                type="search"
                 className={styles.searchInput}
-                value={startDateFilter}
-                onChange={(e) => setStartDateFilter(e.target.value)}
-                aria-label="Start date"
+                placeholder="Search filename..."
+                value={photoSearch}
+                onChange={(e) => setPhotoSearch(e.target.value)}
               />
               <input
-                type="date"
+                type="search"
                 className={styles.searchInput}
-                value={endDateFilter}
-                onChange={(e) => setEndDateFilter(e.target.value)}
-                aria-label="End date"
+                placeholder="Camera make/model..."
+                value={cameraSearch}
+                onChange={(e) => setCameraSearch(e.target.value)}
               />
+              <div className={styles.dateRangeRow}>
+                <input
+                  type="date"
+                  className={styles.searchInput}
+                  value={startDateFilter}
+                  onChange={(e) => setStartDateFilter(e.target.value)}
+                  aria-label="Start date"
+                />
+                <input
+                  type="date"
+                  className={styles.searchInput}
+                  value={endDateFilter}
+                  onChange={(e) => setEndDateFilter(e.target.value)}
+                  aria-label="End date"
+                />
+              </div>
+              <p className={styles.searchHint}>Year: set 01-01 to 12-31. Month: set first to last day (for example 2024-05-01 to 2024-05-31).</p>
             </div>
-            <p className={styles.searchHint}>Year: set 01-01 to 12-31. Month: set first to last day (for example 2024-05-01 to 2024-05-31).</p>
-          </div>
+          )}
 
           <div className={styles.photoList}>
             {isLoading ? (
@@ -900,27 +905,29 @@ export function PhotosView({
             )}
           </div>
 
-          <div className={styles.pagination}>
-            <button
-              type="button"
-              className={styles.paginationButton}
-              disabled={isLoading || offset <= 0}
-              onClick={() => onPageChange(Math.max(0, offset - pageSize))}
-            >
-              ← Previous Page
-            </button>
-            <span className={styles.paginationInfo}>
-              Page {Math.floor(offset / pageSize) + 1} of {Math.max(1, Math.ceil(totalCount / pageSize))}
-            </span>
-            <button
-              type="button"
-              className={styles.paginationButton}
-              disabled={isLoading || offset + pageSize >= totalCount}
-              onClick={() => onPageChange(offset + pageSize)}
-            >
-              Next Page →
-            </button>
-          </div>
+          {onPageChange && (
+            <div className={styles.pagination}>
+              <button
+                type="button"
+                className={styles.paginationButton}
+                disabled={isLoading || offset <= 0}
+                onClick={() => onPageChange(Math.max(0, offset - pageSize))}
+              >
+                ← Previous Page
+              </button>
+              <span className={styles.paginationInfo}>
+                Page {Math.floor(offset / pageSize) + 1} of {Math.max(1, Math.ceil(totalCount / pageSize))}
+              </span>
+              <button
+                type="button"
+                className={styles.paginationButton}
+                disabled={isLoading || offset + pageSize >= totalCount}
+                onClick={() => onPageChange(offset + pageSize)}
+              >
+                Next Page →
+              </button>
+            </div>
+          )}
         </aside>
       </div>
 

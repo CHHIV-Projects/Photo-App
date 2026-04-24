@@ -28,3 +28,6 @@ backend/app/services/vision/models/*.onnx
 
 # vision models
 backend/app/services/vision/models/
+
+#keys
+.env

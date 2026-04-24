@@ -2,6 +2,13 @@
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(dotenv_path=BACKEND_ROOT / ".env", override=True)
 
 
 DEFAULT_APPROVED_EXTENSIONS = ".jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.heic,.mp4,.mov,.avi,.mkv"
@@ -57,6 +64,8 @@ class Settings:
 		"FRONTEND_ALLOWED_ORIGINS",
 		"http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
 	)
+	google_maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+	place_geocode_max_calls_per_run: int = int(os.getenv("PLACE_GEOCODE_MAX_CALLS_PER_RUN", "100"))
 
 	@property
 	def database_url(self) -> str:

@@ -343,6 +343,7 @@ export function TimelineView() {
           isLoadingDetail={isLoadingPhotoDetail}
           photoDetailErrorMessage={photoDetailErrorMessage}
           onSelectPhoto={setSelectedPhotoSha256}
+          onPhotoDetailUpdated={setPhotoDetail}
         />
       </div>
     </div>

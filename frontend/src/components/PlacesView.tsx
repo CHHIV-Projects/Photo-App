@@ -26,9 +26,12 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
   const visiblePlaces = useMemo(() => {
     const q = placeSearch.trim().toLowerCase();
     if (!q) return places;
-    return places.filter((p) =>
-      formatCoordinates(p.latitude, p.longitude).includes(q)
-    );
+    return places.filter((p) => {
+      const coordinateText = formatCoordinates(p.latitude, p.longitude).toLowerCase();
+      const labelText = p.display_label.toLowerCase();
+      const addressText = (p.formatted_address ?? "").toLowerCase();
+      return coordinateText.includes(q) || labelText.includes(q) || addressText.includes(q);
+    });
   }, [places, placeSearch]);
 
   // Load places list
@@ -116,7 +119,7 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
             <input
               type="search"
               className={styles.searchInput}
-              placeholder="Filter by coordinates..."
+              placeholder="Filter by location or coordinates..."
               value={placeSearch}
               onChange={(e) => setPlaceSearch(e.target.value)}
             />
@@ -137,11 +140,17 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
               }`}
               onClick={() => setSelectedPlaceId(place.place_id)}
             >
-              <div className={styles.coordinates}>
-                {formatCoordinates(place.latitude, place.longitude)}
-              </div>
-              <div className={styles.photoCount}>
-                {place.photo_count} {place.photo_count === 1 ? "photo" : "photos"}
+              <PlaceThumb thumbnailUrl={place.thumbnail_url} />
+              <div className={styles.placeItemContent}>
+                <div className={styles.coordinates}>
+                  {place.display_label}
+                </div>
+                <div className={styles.coordinateMeta}>
+                  {formatCoordinates(place.latitude, place.longitude)}
+                </div>
+                <div className={styles.photoCount}>
+                  {place.photo_count} {place.photo_count === 1 ? "photo" : "photos"}
+                </div>
               </div>
             </div>
           ))}
@@ -153,7 +162,12 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
         {placeDetail && (
           <>
             <div className={styles.detailHeader}>
-              <h3>Location: {formatCoordinates(placeDetail.latitude, placeDetail.longitude)}</h3>
+              <div>
+                <h3>{placeDetail.display_label}</h3>
+                <div className={styles.coordinateMeta}>
+                  {formatCoordinates(placeDetail.latitude, placeDetail.longitude)}
+                </div>
+              </div>
               <div className={styles.detailBadge}>
                 {placeDetail.photos.length}{" "}
                 {placeDetail.photos.length === 1 ? "photo" : "photos"}
@@ -231,3 +245,28 @@ const PlacePhotoCard = forwardRef<HTMLDivElement, PlacePhotoCardProps>(
     );
   }
 );
+PlacePhotoCard.displayName = "PlacePhotoCard";
+
+interface PlaceThumbProps {
+  thumbnailUrl: string | null;
+}
+
+function PlaceThumb({ thumbnailUrl }: PlaceThumbProps) {
+  const [imgError, setImgError] = useState(false);
+  const resolvedUrl = thumbnailUrl ? resolveApiUrl(thumbnailUrl) : null;
+
+  return (
+    <div className={styles.placeThumb}>
+      {resolvedUrl && !imgError ? (
+        <img
+          src={resolvedUrl}
+          alt=""
+          className={styles.placeThumbImg}
+          onError={() => setImgError(true)}
+        />
+      ) : (
+        <div className={styles.placeThumbPlaceholder}>📍</div>
+      )}
+    </div>
+  );
+}

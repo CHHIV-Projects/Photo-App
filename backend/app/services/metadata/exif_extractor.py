@@ -74,12 +74,37 @@ def _parse_float(value: object) -> float | None:
 		return None
 
 
+def _apply_gps_ref(value: float | None, ref: object, *, positive_refs: set[str], negative_refs: set[str]) -> float | None:
+	"""Apply hemisphere reference tags to GPS values when present."""
+	if value is None or ref is None:
+		return value
+
+	ref_text = str(ref).strip().upper()
+	if ref_text in negative_refs:
+		return -abs(value)
+	if ref_text in positive_refs:
+		return abs(value)
+	return value
+
+
 def _extract_single_metadata(metadata: dict[str, object], asset: Asset) -> ExtractedExifData | None:
 	"""Build extracted EXIF structure from one ExifTool metadata dict."""
 	exif_datetime_original = _parse_datetime(metadata.get("EXIF:DateTimeOriginal") if isinstance(metadata, dict) else None)  # type: ignore[arg-type]
 	exif_create_date = _parse_datetime(metadata.get("EXIF:CreateDate") if isinstance(metadata, dict) else None)  # type: ignore[arg-type]
 	gps_latitude = _parse_float(metadata.get("EXIF:GPSLatitude") if isinstance(metadata, dict) else None)  # type: ignore[arg-type]
 	gps_longitude = _parse_float(metadata.get("EXIF:GPSLongitude") if isinstance(metadata, dict) else None)  # type: ignore[arg-type]
+	gps_latitude = _apply_gps_ref(
+		gps_latitude,
+		metadata.get("EXIF:GPSLatitudeRef") if isinstance(metadata, dict) else None,
+		positive_refs={"N"},
+		negative_refs={"S"},
+	)
+	gps_longitude = _apply_gps_ref(
+		gps_longitude,
+		metadata.get("EXIF:GPSLongitudeRef") if isinstance(metadata, dict) else None,
+		positive_refs={"E"},
+		negative_refs={"W"},
+	)
 	camera_make = str(metadata.get("EXIF:Make")).strip() if metadata.get("EXIF:Make") else None
 	camera_model = str(metadata.get("EXIF:Model")).strip() if metadata.get("EXIF:Model") else None
 	lens_model = str(metadata.get("EXIF:LensModel")).strip() if metadata.get("EXIF:LensModel") else None

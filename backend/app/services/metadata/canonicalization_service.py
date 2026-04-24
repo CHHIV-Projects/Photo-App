@@ -108,6 +108,18 @@ def _parse_float(value: object) -> float | None:
         return None
 
 
+def _apply_gps_ref(value: float | None, ref: object, *, positive_refs: set[str], negative_refs: set[str]) -> float | None:
+    if value is None or ref is None:
+        return value
+
+    ref_text = str(ref).strip().upper()
+    if ref_text in negative_refs:
+        return -abs(value)
+    if ref_text in positive_refs:
+        return abs(value)
+    return value
+
+
 def _normalize_datetime_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -191,6 +203,18 @@ def extract_metadata_observation_from_path(path: str) -> ExtractedMetadataObserv
     exif_create_date = _parse_datetime(metadata.get("EXIF:CreateDate"))
     gps_latitude = _parse_float(metadata.get("EXIF:GPSLatitude"))
     gps_longitude = _parse_float(metadata.get("EXIF:GPSLongitude"))
+    gps_latitude = _apply_gps_ref(
+        gps_latitude,
+        metadata.get("EXIF:GPSLatitudeRef"),
+        positive_refs={"N"},
+        negative_refs={"S"},
+    )
+    gps_longitude = _apply_gps_ref(
+        gps_longitude,
+        metadata.get("EXIF:GPSLongitudeRef"),
+        positive_refs={"E"},
+        negative_refs={"W"},
+    )
     camera_make = _normalize_string(str(metadata.get("EXIF:Make"))) if metadata.get("EXIF:Make") else None
     camera_model = _normalize_string(str(metadata.get("EXIF:Model"))) if metadata.get("EXIF:Model") else None
     width, height = _extract_dimensions(file_path, metadata)
@@ -299,8 +323,26 @@ def persist_metadata_observation(
             observation.height,
         )
         current_scope = (observation.provenance_id, observation.observation_origin, observation.observed_source_path)
-        if current_signature == incoming_signature and current_scope == incoming_scope:
+        if current_scope != incoming_scope:
+            continue
+
+        if current_signature == incoming_signature:
             return False
+
+        # Keep one observation row per source scope and update it when extraction changes.
+        observation.observed_source_type = observed_source_type
+        observation.observed_extension = extracted.observed_extension
+        observation.exif_datetime_original = extracted.exif_datetime_original
+        observation.exif_create_date = extracted.exif_create_date
+        observation.captured_at_observed = extracted.captured_at_observed
+        observation.gps_latitude = extracted.gps_latitude
+        observation.gps_longitude = extracted.gps_longitude
+        observation.camera_make = extracted.camera_make
+        observation.camera_model = extracted.camera_model
+        observation.width = extracted.width
+        observation.height = extracted.height
+        observation.is_legacy_seeded = is_legacy_seeded
+        return True
 
     db_session.add(
         AssetMetadataObservation(

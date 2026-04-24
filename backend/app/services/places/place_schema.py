@@ -21,8 +21,21 @@ ASSET_COLUMN_DDLS = {
     "place_id": "ALTER TABLE assets ADD COLUMN place_id INTEGER NULL REFERENCES places(place_id)",
 }
 
+PLACE_COLUMN_DDLS = {
+    "formatted_address": "ALTER TABLE places ADD COLUMN formatted_address TEXT NULL",
+    "street": "ALTER TABLE places ADD COLUMN street VARCHAR(255) NULL",
+    "city": "ALTER TABLE places ADD COLUMN city VARCHAR(255) NULL",
+    "county": "ALTER TABLE places ADD COLUMN county VARCHAR(255) NULL",
+    "state": "ALTER TABLE places ADD COLUMN state VARCHAR(255) NULL",
+    "country": "ALTER TABLE places ADD COLUMN country VARCHAR(255) NULL",
+    "geocode_status": "ALTER TABLE places ADD COLUMN geocode_status VARCHAR(32) NOT NULL DEFAULT 'never_tried'",
+    "geocode_error": "ALTER TABLE places ADD COLUMN geocode_error TEXT NULL",
+    "geocoded_at": "ALTER TABLE places ADD COLUMN geocoded_at TIMESTAMPTZ NULL",
+}
+
 INDEX_DDLS = {
-    "ix_assets_place_id": "CREATE INDEX ix_assets_place_id ON assets (place_id)",
+    "ix_assets_place_id": "CREATE INDEX IF NOT EXISTS ix_assets_place_id ON assets (place_id)",
+    "ix_places_geocode_status": "CREATE INDEX IF NOT EXISTS ix_places_geocode_status ON places (geocode_status)",
 }
 
 
@@ -44,6 +57,7 @@ def ensure_place_schema(db_session: Session) -> PlaceSchemaSummary:
 
     inspector = inspect(bind)
     existing_asset_columns = {column["name"] for column in inspector.get_columns("assets")}
+    existing_place_columns = {column["name"] for column in inspector.get_columns("places")}
 
     added_columns: list[str] = []
     for column_name, ddl in ASSET_COLUMN_DDLS.items():
@@ -52,12 +66,20 @@ def ensure_place_schema(db_session: Session) -> PlaceSchemaSummary:
         db_session.execute(text(ddl))
         added_columns.append(f"assets.{column_name}")
 
+    for column_name, ddl in PLACE_COLUMN_DDLS.items():
+        if column_name in existing_place_columns:
+            continue
+        db_session.execute(text(ddl))
+        added_columns.append(f"places.{column_name}")
+
     inspector = inspect(bind)
     existing_asset_indexes = {index["name"] for index in inspector.get_indexes("assets")}
+    existing_place_indexes = {index["name"] for index in inspector.get_indexes("places")}
 
     created_indexes: list[str] = []
     for index_name, ddl in INDEX_DDLS.items():
-        if index_name in existing_asset_indexes:
+        exists = index_name in existing_asset_indexes or index_name in existing_place_indexes
+        if exists:
             continue
         db_session.execute(text(ddl))
         created_indexes.append(index_name)

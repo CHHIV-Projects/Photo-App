@@ -11,6 +11,14 @@ class PlaceSummary(BaseModel):
 	latitude: float
 	longitude: float
 	photo_count: int
+	thumbnail_url: str | None = None
+	display_label: str
+	formatted_address: str | None = None
+	city: str | None = None
+	county: str | None = None
+	state: str | None = None
+	country: str | None = None
+	geocode_status: str = "never_tried"
 
 
 class PlaceListResponse(BaseModel):
@@ -26,4 +34,11 @@ class PlaceDetail(BaseModel):
 	place_id: str
 	latitude: float
 	longitude: float
+	display_label: str
+	formatted_address: str | None = None
+	city: str | None = None
+	county: str | None = None
+	state: str | None = None
+	country: str | None = None
+	geocode_status: str = "never_tried"
 	photos: list[PhotoSummary]

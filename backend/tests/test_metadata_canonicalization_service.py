@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from app.models.asset_metadata_observation import AssetMetadataObservation
 from app.services.metadata.canonicalization_service import (
+    _apply_gps_ref,
     _choose_best_camera_value,
     _choose_best_captured_at,
     _choose_best_dimensions,
@@ -276,6 +277,20 @@ class MetadataCanonicalizationServiceTests(unittest.TestCase):
         ]
 
         self.assertEqual(_choose_best_location(observations), (47.60621, -122.332071))
+
+    def test_apply_gps_ref_enforces_expected_sign(self) -> None:
+        self.assertEqual(
+            _apply_gps_ref(117.611333, "W", positive_refs={"E"}, negative_refs={"W"}),
+            -117.611333,
+        )
+        self.assertEqual(
+            _apply_gps_ref(-117.611333, "E", positive_refs={"E"}, negative_refs={"W"}),
+            117.611333,
+        )
+        self.assertEqual(
+            _apply_gps_ref(33.622, "N", positive_refs={"N"}, negative_refs={"S"}),
+            33.622,
+        )
 
 
 if __name__ == "__main__":

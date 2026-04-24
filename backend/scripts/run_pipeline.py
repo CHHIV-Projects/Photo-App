@@ -21,10 +21,12 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.face import Face
+from app.models.place import Place
 from app.services.duplicates.lineage import ProvenanceContext
 from app.services.ingestion.deduplicator import DeduplicationResult, DuplicateFile
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
 from app.services.ingestion.ingestion_context_service import ResolvedIngestionContext, resolve_ingestion_context
+from app.services.location.geocoding_service import enrich_places_with_reverse_geocoding
 from app.services.metadata.canonicalization_service import (
     create_ingest_observations_for_batch,
     recompute_canonical_metadata_for_assets,
@@ -599,6 +601,26 @@ def _load_assets_by_sha256(asset_sha256_list: list[str]) -> list[Asset]:
     return assets
 
 
+def _load_place_ids_for_assets(asset_sha256_list: list[str]) -> list[int]:
+    if not asset_sha256_list:
+        return []
+
+    db_session = SessionLocal()
+    try:
+        rows = db_session.execute(
+            select(Asset.place_id)
+            .where(
+                Asset.sha256.in_(dict.fromkeys(asset_sha256_list)),
+                Asset.place_id.is_not(None),
+            )
+            .order_by(Asset.created_at_utc.asc(), Asset.sha256.asc())
+        ).all()
+    finally:
+        db_session.close()
+
+    return [int(row.place_id) for row in rows if row.place_id is not None]
+
+
 def _remaining_new_asset_slots(ctx: PipelineContext) -> int | None:
     if ctx.ingest_total_limit is None:
         return None
@@ -989,6 +1011,39 @@ def _place_grouping_stage(ctx: PipelineContext) -> dict[str, Any]:
     }
 
 
+def _place_geocoding_stage(ctx: PipelineContext) -> dict[str, Any]:
+    place_ids = _load_place_ids_for_assets(ctx.current_batch_new_asset_sha256)
+
+    db_session = SessionLocal()
+    try:
+        total_candidate_places = (
+            db_session.query(Place)
+            .filter(Place.place_id.in_(place_ids), Place.geocode_status == "never_tried")
+            .count()
+            if place_ids
+            else 0
+        )
+        summary = enrich_places_with_reverse_geocoding(
+            db_session,
+            place_ids=place_ids,
+            include_failed=False,
+            max_calls=settings.place_geocode_max_calls_per_run,
+        )
+    finally:
+        db_session.close()
+
+    return {
+        "scope": "batch",
+        "candidate_places": total_candidate_places,
+        "eligible_places": summary.eligible_places,
+        "attempted_calls": summary.attempted_calls,
+        "successful": summary.successful,
+        "failed": summary.failed,
+        "skipped_due_to_cap": summary.skipped_due_to_cap,
+        "max_calls_per_run": settings.place_geocode_max_calls_per_run,
+    }
+
+
 def _duplicate_lineage_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.duplicates.lineage import update_lineage_for_assets
 
@@ -1297,10 +1352,11 @@ def _print_dry_run(args: RuntimeArgs, ctx: PipelineContext) -> None:
     print(f"  [8] {'SKIP (--skip-metadata-normalization)' if args.skip_metadata_normalization else 'RUN'} - metadata normalization (scope=batch)")
     print("  [9] RUN - metadata observations + canonicalization (scope=batch)")
     print("  [10] RUN - place grouping (scope=batch)")
-    print(f"  [11] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
-    print(f"  [12] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
-    print(f"  [13] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
-    print(f"  [14] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
+    print("  [11] RUN - place geocoding enrichment (scope=batch)")
+    print(f"  [12] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
+    print(f"  [13] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
+    print(f"  [14] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
+    print(f"  [15] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
     print()
     print("Status: DRY RUN")
 
@@ -1467,7 +1523,7 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         _execute_stage(
             key=f"{batch_label_prefix}_metadata_canonicalization",
             index=3,
-            total=6,
+            total=7,
             label=f"{batch_label_prefix}: metadata observations + canonicalization",
             runner=lambda: _metadata_observation_and_canonicalization_stage(ctx),
             outcomes=outcomes,
@@ -1476,17 +1532,26 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         _execute_stage(
             key=f"{batch_label_prefix}_place_grouping",
             index=4,
-            total=6,
+            total=7,
             label=f"{batch_label_prefix}: place grouping",
             runner=lambda: _place_grouping_stage(ctx),
+            outcomes=outcomes,
+        )
+
+        _execute_stage(
+            key=f"{batch_label_prefix}_place_geocoding",
+            index=5,
+            total=7,
+            label=f"{batch_label_prefix}: place geocoding enrichment",
+            runner=lambda: _place_geocoding_stage(ctx),
             outcomes=outcomes,
         )
 
         if args.skip_duplicate_lineage:
             _skip_stage(
                 key=f"{batch_label_prefix}_lineage",
-                index=5,
-                total=6,
+                index=6,
+                total=7,
                 label=f"{batch_label_prefix}: duplicate lineage",
                 reason="--skip-duplicate-lineage",
                 outcomes=outcomes,
@@ -1494,8 +1559,8 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         else:
             _execute_stage(
                 key=f"{batch_label_prefix}_lineage",
-                index=5,
-                total=6,
+                index=6,
+                total=7,
                 label=f"{batch_label_prefix}: duplicate lineage",
                 runner=lambda: _duplicate_lineage_stage(ctx),
                 outcomes=outcomes,
@@ -1504,8 +1569,8 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         if args.skip_face_processing:
             _skip_stage(
                 key=f"{batch_label_prefix}_faces",
-                index=6,
-                total=6,
+                index=7,
+                total=7,
                 label=f"{batch_label_prefix}: face detection + clustering",
                 reason="--skip-face-processing",
                 outcomes=outcomes,
@@ -1513,7 +1578,7 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         else:
             _execute_stage(
                 key=f"{batch_label_prefix}_face_detection",
-                index=6,
+                index=7,
                 total=7,
                 label=f"{batch_label_prefix}: face detection",
                 runner=lambda: _face_detection_stage(ctx),
@@ -1521,8 +1586,8 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
             )
             _execute_stage(
                 key=f"{batch_label_prefix}_face_clustering",
-                index=7,
-                total=7,
+                index=8,
+                total=8,
                 label=f"{batch_label_prefix}: face embedding + clustering",
                 runner=lambda: _face_clustering_stage(ctx),
                 outcomes=outcomes,

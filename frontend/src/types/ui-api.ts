@@ -354,11 +354,26 @@ export interface PlaceSummary {
   latitude: number;
   longitude: number;
   photo_count: number;
+  thumbnail_url: string | null;
+  display_label: string;
+  formatted_address: string | null;
+  city: string | null;
+  county: string | null;
+  state: string | null;
+  country: string | null;
+  geocode_status: string;
 }
 
 export interface PlaceDetail {
   place_id: string;
   latitude: number;
   longitude: number;
+  display_label: string;
+  formatted_address: string | null;
+  city: string | null;
+  county: string | null;
+  state: string | null;
+  country: string | null;
+  geocode_status: string;
   photos: PhotoSummary[];
 }
