@@ -117,6 +117,113 @@ class DuplicateLineageControlApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_get_suggestions_returns_items(self) -> None:
+        with patch(
+            "app.api.duplicates.list_duplicate_suggestions",
+            return_value=type(
+                "SuggestionResult",
+                (),
+                {
+                    "total_count": 1,
+                    "items": [
+                        type(
+                            "SuggestionItem",
+                            (),
+                            {
+                                "confidence": "high",
+                                "distance": 3,
+                                "asset_a": {
+                                    "asset_sha256": "a",
+                                    "filename": "A.jpg",
+                                    "image_url": "/media/assets/aa/a.jpg",
+                                    "duplicate_group_id": None,
+                                    "quality_score": 87.5,
+                                },
+                                "asset_b": {
+                                    "asset_sha256": "b",
+                                    "filename": "B.jpg",
+                                    "image_url": "/media/assets/bb/b.jpg",
+                                    "duplicate_group_id": 12,
+                                    "quality_score": None,
+                                },
+                            },
+                        )()
+                    ],
+                },
+            )(),
+        ):
+            response = self.client.get("/api/duplicates/suggestions", params={"offset": 0, "limit": 50})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_count"], 1)
+        self.assertEqual(body["items"][0]["confidence"], "high")
+        self.assertEqual(body["items"][0]["distance"], 3)
+
+    def test_confirm_endpoint_reuses_merge_payload(self) -> None:
+        with patch(
+            "app.api.duplicates.merge_asset_into_target_lineage",
+            return_value=type(
+                "MergeResult",
+                (),
+                {
+                    "source_asset_sha256": "source-sha",
+                    "target_asset_sha256": "target-sha",
+                    "resulting_group_id": 33,
+                    "resulting_canonical_asset_sha256": "target-sha",
+                    "affected_member_count": 2,
+                    "affected_assets": [],
+                },
+            )(),
+        ):
+            response = self.client.post(
+                "/api/duplicates/confirm",
+                json={"source_asset_sha256": "source-sha", "target_asset_sha256": "target-sha"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["success"])
+        self.assertEqual(body["resulting_group_id"], 33)
+        self.assertFalse(body["noop"])
+
+    def test_confirm_endpoint_already_grouped_returns_noop_success(self) -> None:
+        with patch(
+            "app.api.duplicates.merge_asset_into_target_lineage",
+            side_effect=ValueError("Source and target assets are already in the same duplicate group."),
+        ):
+            response = self.client.post(
+                "/api/duplicates/confirm",
+                json={"source_asset_sha256": "source-sha", "target_asset_sha256": "target-sha"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["success"])
+        self.assertTrue(body["noop"])
+
+    def test_reject_endpoint_returns_canonical_order(self) -> None:
+        with patch("app.api.duplicates.reject_duplicate_pair", return_value=True):
+            response = self.client.post(
+                "/api/duplicates/reject",
+                json={"asset_sha256_a": "z-sha", "asset_sha256_b": "a-sha"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["success"])
+        self.assertTrue(body["created"])
+        self.assertEqual(body["asset_sha256_a"], "a-sha")
+        self.assertEqual(body["asset_sha256_b"], "z-sha")
+
+    def test_reject_endpoint_same_asset_returns_422(self) -> None:
+        response = self.client.post(
+            "/api/duplicates/reject",
+            json={"asset_sha256_a": "same", "asset_sha256_b": "same"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()

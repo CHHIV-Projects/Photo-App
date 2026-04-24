@@ -13,15 +13,62 @@ from app.schemas.photos import (
     DuplicateLineageMergeRequest,
     DuplicateLineageMergeResponse,
     DuplicateMergeTargetListResponse,
+    DuplicateSuggestionListResponse,
+    DuplicateSuggestionSummary,
+    DuplicateSuggestionConfirmRequest,
+    DuplicateSuggestionRejectRequest,
+    DuplicateSuggestionRejectResponse,
 )
 from app.services.duplicates.manual_control import (
     list_duplicate_groups,
     list_duplicate_merge_targets,
     merge_asset_into_target_lineage,
 )
+from app.services.duplicates.suggestion_service import list_duplicate_suggestions, reject_duplicate_pair
 from app.services.photos.photos_service import get_duplicate_group_detail
 
 router = APIRouter(prefix="/api/duplicates", tags=["duplicates"])
+
+
+@router.get("/suggestions", response_model=DuplicateSuggestionListResponse)
+def get_duplicate_suggestions(
+    offset: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db_session),
+) -> DuplicateSuggestionListResponse:
+    result = list_duplicate_suggestions(db, offset=max(0, offset), limit=max(1, min(limit, 200)))
+
+    def _asset_payload(asset: object) -> dict[str, object]:
+        if isinstance(asset, dict):
+            return {
+                "asset_sha256": asset.get("asset_sha256"),
+                "filename": asset.get("filename"),
+                "image_url": asset.get("image_url"),
+                "duplicate_group_id": asset.get("duplicate_group_id"),
+                "quality_score": asset.get("quality_score"),
+            }
+        return {
+            "asset_sha256": getattr(asset, "asset_sha256"),
+            "filename": getattr(asset, "filename"),
+            "image_url": getattr(asset, "image_url"),
+            "duplicate_group_id": getattr(asset, "duplicate_group_id"),
+            "quality_score": getattr(asset, "quality_score"),
+        }
+
+    return DuplicateSuggestionListResponse(
+        total_count=result.total_count,
+        offset=max(0, offset),
+        limit=max(1, min(limit, 200)),
+        items=[
+            DuplicateSuggestionSummary(
+                confidence=item.confidence,
+                distance=item.distance,
+                asset_a=_asset_payload(item.asset_a),
+                asset_b=_asset_payload(item.asset_b),
+            )
+            for item in result.items
+        ],
+    )
 
 
 @router.get("/groups", response_model=DuplicateGroupListResponse)
@@ -104,6 +151,73 @@ def merge_duplicate_assets(
         resulting_canonical_asset_sha256=result.resulting_canonical_asset_sha256,
         affected_member_count=result.affected_member_count,
         affected_assets=result.affected_assets,
+    )
+
+
+@router.post("/confirm", response_model=DuplicateLineageMergeResponse)
+def confirm_duplicate_suggestion(
+    payload: DuplicateSuggestionConfirmRequest,
+    db: Session = Depends(get_db_session),
+) -> DuplicateLineageMergeResponse:
+    try:
+        result = merge_asset_into_target_lineage(
+            db,
+            source_asset_sha256=payload.source_asset_sha256,
+            target_asset_sha256=payload.target_asset_sha256,
+        )
+    except ValueError as exc:
+        error_message = str(exc)
+        if "already in the same duplicate group" in error_message.lower():
+            return DuplicateLineageMergeResponse(
+                success=True,
+                source_asset_sha256=payload.source_asset_sha256,
+                target_asset_sha256=payload.target_asset_sha256,
+                resulting_group_id=0,
+                resulting_canonical_asset_sha256=payload.target_asset_sha256,
+                affected_member_count=0,
+                affected_assets=[],
+                noop=True,
+                message="Assets already in same duplicate group",
+            )
+        raise HTTPException(status_code=422, detail=error_message) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Source asset {payload.source_asset_sha256!r} not found.")
+
+    return DuplicateLineageMergeResponse(
+        success=True,
+        source_asset_sha256=result.source_asset_sha256,
+        target_asset_sha256=result.target_asset_sha256,
+        resulting_group_id=result.resulting_group_id,
+        resulting_canonical_asset_sha256=result.resulting_canonical_asset_sha256,
+        affected_member_count=result.affected_member_count,
+        affected_assets=result.affected_assets,
+        noop=False,
+    )
+
+
+@router.post("/reject", response_model=DuplicateSuggestionRejectResponse)
+def reject_duplicate_suggestion(
+    payload: DuplicateSuggestionRejectRequest,
+    db: Session = Depends(get_db_session),
+) -> DuplicateSuggestionRejectResponse:
+    if payload.asset_sha256_a == payload.asset_sha256_b:
+        raise HTTPException(status_code=422, detail="Rejected pair must contain two different assets.")
+
+    created = reject_duplicate_pair(
+        db,
+        asset_sha256_a=payload.asset_sha256_a,
+        asset_sha256_b=payload.asset_sha256_b,
+    )
+
+    left, right = sorted([payload.asset_sha256_a, payload.asset_sha256_b])
+    return DuplicateSuggestionRejectResponse(
+        success=True,
+        created=created,
+        asset_sha256_a=left,
+        asset_sha256_b=right,
     )
 
 

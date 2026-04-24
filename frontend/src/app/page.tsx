@@ -7,6 +7,7 @@ import { ClusterList } from "@/components/ClusterList";
 import { EventsView } from "@/components/EventsView";
 import { AlbumsView } from "@/components/AlbumsView";
 import { DuplicateGroupsView } from "@/components/DuplicateGroupsView";
+import { DuplicateSuggestionsView } from "@/components/DuplicateSuggestionsView";
 import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
 import PlacesView from "@/components/PlacesView";
@@ -49,7 +50,7 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups";
+type ViewMode = "review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("review");
@@ -759,6 +760,13 @@ export default function HomePage() {
             >
               Duplicate Groups
             </button>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "duplicate-suggestions" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("duplicate-suggestions")}
+            >
+              Duplicate Suggestions
+            </button>
           </div>
         </header>
 
@@ -851,6 +859,8 @@ export default function HomePage() {
           />
         ) : viewMode === "duplicate-groups" ? (
           <DuplicateGroupsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} />
+        ) : viewMode === "duplicate-suggestions" ? (
+          <DuplicateSuggestionsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} />
         ) : (
           <EventsView
             events={events}

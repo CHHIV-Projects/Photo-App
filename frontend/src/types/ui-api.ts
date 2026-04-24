@@ -318,6 +318,35 @@ export interface DuplicateLineageMergeResponse {
   affected_assets: DuplicateLineageAssetSummary[];
 }
 
+export interface DuplicateSuggestionAssetSummary {
+  asset_sha256: string;
+  filename: string;
+  image_url: string;
+  duplicate_group_id: number | null;
+  quality_score: number | null;
+}
+
+export interface DuplicateSuggestionSummary {
+  confidence: "high" | "medium" | "low";
+  distance: number;
+  asset_a: DuplicateSuggestionAssetSummary;
+  asset_b: DuplicateSuggestionAssetSummary;
+}
+
+export interface DuplicateSuggestionListResponse {
+  total_count: number;
+  offset: number;
+  limit: number;
+  items: DuplicateSuggestionSummary[];
+}
+
+export interface DuplicateSuggestionRejectResponse {
+  success: boolean;
+  created: boolean;
+  asset_sha256_a: string;
+  asset_sha256_b: string;
+}
+
 export interface DuplicateGroupSummary {
   group_id: number;
   member_count: number;

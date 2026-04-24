@@ -208,6 +208,47 @@ class DuplicateLineageMergeResponse(BaseModel):
     resulting_canonical_asset_sha256: str
     affected_member_count: int
     affected_assets: list[DuplicateLineageAssetSummary]
+    noop: bool = False
+    message: str | None = None
+
+
+class DuplicateSuggestionAssetSummary(BaseModel):
+    asset_sha256: str
+    filename: str
+    image_url: str
+    duplicate_group_id: int | None = None
+    quality_score: float | None = None
+
+
+class DuplicateSuggestionSummary(BaseModel):
+    confidence: Literal["high", "medium", "low"]
+    distance: int
+    asset_a: DuplicateSuggestionAssetSummary
+    asset_b: DuplicateSuggestionAssetSummary
+
+
+class DuplicateSuggestionListResponse(BaseModel):
+    total_count: int
+    offset: int
+    limit: int
+    items: list[DuplicateSuggestionSummary]
+
+
+class DuplicateSuggestionConfirmRequest(BaseModel):
+    source_asset_sha256: str
+    target_asset_sha256: str
+
+
+class DuplicateSuggestionRejectRequest(BaseModel):
+    asset_sha256_a: str
+    asset_sha256_b: str
+
+
+class DuplicateSuggestionRejectResponse(BaseModel):
+    success: bool
+    created: bool
+    asset_sha256_a: str
+    asset_sha256_b: str
 
 
 class CaptureClassificationOverrideRequest(BaseModel):

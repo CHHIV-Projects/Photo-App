@@ -11,6 +11,8 @@ import type {
   EventDetail,
   EventMergeResponse,
   DuplicateLineageMergeResponse,
+  DuplicateSuggestionListResponse,
+  DuplicateSuggestionRejectResponse,
   DuplicateMergeTargetListResponse,
   PhotoEventMutationResponse,
   EventSummary,
@@ -284,6 +286,40 @@ export function getDuplicateMergeTargets(
     params.set("q", query.trim());
   }
   return apiRequest<DuplicateMergeTargetListResponse>(`/api/duplicates/merge-targets?${params.toString()}`);
+}
+
+export function getDuplicateSuggestions(
+  offset: number = 0,
+  limit: number = 50
+): Promise<DuplicateSuggestionListResponse> {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  return apiRequest<DuplicateSuggestionListResponse>(`/api/duplicates/suggestions?${params.toString()}`);
+}
+
+export function confirmDuplicateSuggestion(
+  sourceAssetSha256: string,
+  targetAssetSha256: string
+): Promise<DuplicateLineageMergeResponse> {
+  return apiRequest<DuplicateLineageMergeResponse>("/api/duplicates/confirm", {
+    method: "POST",
+    body: JSON.stringify({
+      source_asset_sha256: sourceAssetSha256,
+      target_asset_sha256: targetAssetSha256
+    })
+  });
+}
+
+export function rejectDuplicateSuggestion(
+  assetSha256A: string,
+  assetSha256B: string
+): Promise<DuplicateSuggestionRejectResponse> {
+  return apiRequest<DuplicateSuggestionRejectResponse>("/api/duplicates/reject", {
+    method: "POST",
+    body: JSON.stringify({
+      asset_sha256_a: assetSha256A,
+      asset_sha256_b: assetSha256B
+    })
+  });
 }
 
 export function mergeDuplicateAssets(
