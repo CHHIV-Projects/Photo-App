@@ -406,6 +406,13 @@ export function getPlaceDetail(placeId: string): Promise<PlaceDetail> {
   return apiRequest<PlaceDetail>(`/api/places/${placeId}`);
 }
 
+export function updatePlaceLabel(placeId: string, userLabel: string | null): Promise<PlaceDetail> {
+  return apiRequest<PlaceDetail>(`/api/places/${placeId}/label`, {
+    method: "POST",
+    body: JSON.stringify({ user_label: userLabel })
+  });
+}
+
 export function getAlbums(): Promise<ListResponse<AlbumSummary>> {
   return apiRequest<ListResponse<AlbumSummary>>("/api/albums");
 }

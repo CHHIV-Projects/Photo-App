@@ -138,6 +138,12 @@
   margin-bottom: 4px;
 }
 
+.userLabelMeta {
+  font-size: 12px;
+  color: #4f5f70;
+  margin-bottom: 4px;
+}
+
 .photoCount {
   font-size: 12px;
   color: #666;
@@ -175,6 +181,51 @@
   padding: 4px 8px;
   border-radius: 4px;
   white-space: nowrap;
+}
+
+.labelEditorRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 15px;
+  border-bottom: 1px solid #eee;
+  flex-wrap: wrap;
+}
+
+.labelInput {
+  min-width: 280px;
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  background: #f8fafc;
+}
+
+.labelButton,
+.labelButtonPrimary,
+.labelButtonDanger {
+  border: 1px solid #c4cfdb;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #f7fafc;
+  color: #2a3f55;
+}
+
+.labelButtonPrimary {
+  border-color: #9bb9d4;
+  background: #e8f3fc;
+  color: #184a76;
+}
+
+.labelButtonDanger {
+  border-color: #e0b0b7;
+  background: #fff3f5;
+  color: #922b3a;
 }
 
 .photoGrid {

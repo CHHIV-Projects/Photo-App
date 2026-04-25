@@ -3,7 +3,7 @@
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import type { ForwardedRef } from "react";
 import type { PlaceSummary, PlaceDetail, PhotoSummary } from "@/types/ui-api";
-import { getPlaces, getPlaceDetail, resolveApiUrl } from "@/lib/api";
+import { getPlaces, getPlaceDetail, resolveApiUrl, updatePlaceLabel } from "@/lib/api";
 import styles from "./places-view.module.css";
 
 interface PlacesViewProps {
@@ -20,6 +20,10 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
   const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState("");
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [placeSearch, setPlaceSearch] = useState("");
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState("");
+  const [isSavingLabel, setIsSavingLabel] = useState(false);
+  const [labelErrorMessage, setLabelErrorMessage] = useState("");
   const placeListRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const photoListRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -29,8 +33,9 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
     return places.filter((p) => {
       const coordinateText = formatCoordinates(p.latitude, p.longitude).toLowerCase();
       const labelText = p.display_label.toLowerCase();
+      const userLabelText = (p.user_label ?? "").toLowerCase();
       const addressText = (p.formatted_address ?? "").toLowerCase();
-      return coordinateText.includes(q) || labelText.includes(q) || addressText.includes(q);
+      return coordinateText.includes(q) || labelText.includes(q) || userLabelText.includes(q) || addressText.includes(q);
     });
   }, [places, placeSearch]);
 
@@ -61,6 +66,9 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
       const detail = await getPlaceDetail(placeId);
       setPlaceDetail(detail);
       setSelectedPhotoId(null);
+      setIsEditingLabel(false);
+      setLabelDraft(detail.user_label ?? "");
+      setLabelErrorMessage("");
     } catch (err) {
       setPlaceDetailErrorMessage(
         err instanceof Error ? err.message : "Failed to load place details"
@@ -85,6 +93,80 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
       });
     }
   }, [selectedPlaceId]);
+
+  const geocodedLabel = useMemo(() => {
+    if (!placeDetail) return "";
+    if (placeDetail.user_label && placeDetail.user_label.trim()) {
+      const geoLabel = placeDetail.display_label;
+      const fallbackParts = [
+        placeDetail.city,
+        placeDetail.state,
+        placeDetail.country
+      ].filter(Boolean) as string[];
+      return fallbackParts.join(", ") || placeDetail.formatted_address || geoLabel;
+    }
+    return placeDetail.formatted_address || "";
+  }, [placeDetail]);
+
+  const saveLabel = async () => {
+    if (!selectedPlaceId) return;
+    setIsSavingLabel(true);
+    setLabelErrorMessage("");
+    try {
+      const updated = await updatePlaceLabel(selectedPlaceId, labelDraft);
+      setPlaceDetail(updated);
+      setLabelDraft(updated.user_label ?? "");
+      setIsEditingLabel(false);
+      setPlaces((prev) => prev.map((place) => {
+        if (place.place_id !== selectedPlaceId) return place;
+        return {
+          ...place,
+          user_label: updated.user_label,
+          display_label: updated.display_label,
+          formatted_address: updated.formatted_address,
+          city: updated.city,
+          county: updated.county,
+          state: updated.state,
+          country: updated.country,
+          geocode_status: updated.geocode_status,
+        };
+      }));
+    } catch (err) {
+      setLabelErrorMessage(err instanceof Error ? err.message : "Failed to update place name");
+    } finally {
+      setIsSavingLabel(false);
+    }
+  };
+
+  const clearLabel = async () => {
+    if (!selectedPlaceId) return;
+    setIsSavingLabel(true);
+    setLabelErrorMessage("");
+    try {
+      const updated = await updatePlaceLabel(selectedPlaceId, null);
+      setPlaceDetail(updated);
+      setLabelDraft("");
+      setIsEditingLabel(false);
+      setPlaces((prev) => prev.map((place) => {
+        if (place.place_id !== selectedPlaceId) return place;
+        return {
+          ...place,
+          user_label: updated.user_label,
+          display_label: updated.display_label,
+          formatted_address: updated.formatted_address,
+          city: updated.city,
+          county: updated.county,
+          state: updated.state,
+          country: updated.country,
+          geocode_status: updated.geocode_status,
+        };
+      }));
+    } catch (err) {
+      setLabelErrorMessage(err instanceof Error ? err.message : "Failed to clear place name");
+    } finally {
+      setIsSavingLabel(false);
+    }
+  };
 
   // Auto-scroll photo to selected
   useEffect(() => {
@@ -145,6 +227,9 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
                 <div className={styles.coordinates}>
                   {place.display_label}
                 </div>
+                {place.user_label && (
+                  <div className={styles.userLabelMeta}>{place.formatted_address ?? formatCoordinates(place.latitude, place.longitude)}</div>
+                )}
                 <div className={styles.coordinateMeta}>
                   {formatCoordinates(place.latitude, place.longitude)}
                 </div>
@@ -164,6 +249,7 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
             <div className={styles.detailHeader}>
               <div>
                 <h3>{placeDetail.display_label}</h3>
+                {geocodedLabel && <div className={styles.userLabelMeta}>{geocodedLabel}</div>}
                 <div className={styles.coordinateMeta}>
                   {formatCoordinates(placeDetail.latitude, placeDetail.longitude)}
                 </div>
@@ -173,6 +259,56 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
                 {placeDetail.photos.length === 1 ? "photo" : "photos"}
               </div>
             </div>
+            <div className={styles.labelEditorRow}>
+              {isEditingLabel ? (
+                <>
+                  <input
+                    type="text"
+                    maxLength={120}
+                    value={labelDraft}
+                    onChange={(event) => setLabelDraft(event.target.value)}
+                    className={styles.labelInput}
+                    placeholder="Place name (e.g., Audrey's House)"
+                  />
+                  <button type="button" className={styles.labelButtonPrimary} disabled={isSavingLabel} onClick={saveLabel}>Save</button>
+                  <button
+                    type="button"
+                    className={styles.labelButton}
+                    disabled={isSavingLabel}
+                    onClick={() => {
+                      setIsEditingLabel(false);
+                      setLabelDraft(placeDetail.user_label ?? "");
+                      setLabelErrorMessage("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.labelButtonDanger}
+                    disabled={isSavingLabel}
+                    onClick={() => {
+                      void clearLabel();
+                    }}
+                  >
+                    Clear
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className={styles.labelButton}
+                  onClick={() => {
+                    setIsEditingLabel(true);
+                    setLabelDraft(placeDetail.user_label ?? "");
+                    setLabelErrorMessage("");
+                  }}
+                >
+                  Edit Name
+                </button>
+              )}
+            </div>
+            {labelErrorMessage && <div className={styles.error}>{labelErrorMessage}</div>}
             {isLoadingPlaceDetail && <div className={styles.loading}>Loading photos...</div>}
             {placeDetailErrorMessage && (
               <div className={styles.error}>{placeDetailErrorMessage}</div>

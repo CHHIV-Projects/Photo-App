@@ -1,4 +1,6 @@
 """Schemas for Places (location-based) view."""
+from __future__ import annotations
+
 from pydantic import BaseModel
 
 from app.schemas.photos import PhotoSummary
@@ -12,6 +14,7 @@ class PlaceSummary(BaseModel):
 	longitude: float
 	photo_count: int
 	thumbnail_url: str | None = None
+	user_label: str | None = None
 	display_label: str
 	formatted_address: str | None = None
 	city: str | None = None
@@ -34,6 +37,7 @@ class PlaceDetail(BaseModel):
 	place_id: str
 	latitude: float
 	longitude: float
+	user_label: str | None = None
 	display_label: str
 	formatted_address: str | None = None
 	city: str | None = None
@@ -42,3 +46,7 @@ class PlaceDetail(BaseModel):
 	country: str | None = None
 	geocode_status: str = "never_tried"
 	photos: list[PhotoSummary]
+
+
+class PlaceLabelUpdateRequest(BaseModel):
+	user_label: str | None = None

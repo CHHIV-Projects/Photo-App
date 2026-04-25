@@ -19,6 +19,7 @@ class Place(Base):
     representative_latitude: Mapped[float] = mapped_column(Float, nullable=False)
     representative_longitude: Mapped[float] = mapped_column(Float, nullable=False)
     formatted_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     street: Mapped[str | None] = mapped_column(String(255), nullable=True)
     city: Mapped[str | None] = mapped_column(String(255), nullable=True)
     county: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -3,8 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.schemas.places import PlaceListResponse, PlaceDetail
-from app.services.places import list_places, get_place_detail
+from app.schemas.places import PlaceListResponse, PlaceDetail, PlaceLabelUpdateRequest
+from app.services.places import list_places, get_place_detail, update_place_user_label
 
 router = APIRouter(prefix="/api/places", tags=["places"])
 
@@ -22,3 +22,20 @@ def get_place_detail_endpoint(place_id: str, db: Session = Depends(get_db_sessio
 	if place_detail is None:
 		raise HTTPException(status_code=404, detail="Place not found")
 	return place_detail
+
+
+@router.post("/{place_id}/label", response_model=PlaceDetail)
+def update_place_label_endpoint(
+	place_id: str,
+	payload: PlaceLabelUpdateRequest,
+	db: Session = Depends(get_db_session),
+) -> PlaceDetail:
+	"""Set, edit, or clear user-defined place label."""
+	try:
+		updated = update_place_user_label(db, place_id, payload.user_label)
+	except ValueError as exc:
+		raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+	if updated is None:
+		raise HTTPException(status_code=404, detail="Place not found")
+	return updated

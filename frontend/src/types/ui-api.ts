@@ -400,6 +400,7 @@ export interface PlaceSummary {
   longitude: number;
   photo_count: number;
   thumbnail_url: string | null;
+  user_label: string | null;
   display_label: string;
   formatted_address: string | null;
   city: string | null;
@@ -413,6 +414,7 @@ export interface PlaceDetail {
   place_id: string;
   latitude: number;
   longitude: number;
+  user_label: string | null;
   display_label: string;
   formatted_address: string | null;
   city: string | null;

@@ -7,6 +7,11 @@ face cluster merge by search
 
 demote unwanted pictures
 
+
+
+degroup a photo in places and or when allias applied, set some so that alias not applied for that photo.  
+edit address in places
+
 ## After 12.15
 
 Then I would recommend:

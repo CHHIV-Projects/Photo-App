@@ -23,6 +23,7 @@ ASSET_COLUMN_DDLS = {
 
 PLACE_COLUMN_DDLS = {
     "formatted_address": "ALTER TABLE places ADD COLUMN formatted_address TEXT NULL",
+    "user_label": "ALTER TABLE places ADD COLUMN user_label VARCHAR(120) NULL",
     "street": "ALTER TABLE places ADD COLUMN street VARCHAR(255) NULL",
     "city": "ALTER TABLE places ADD COLUMN city VARCHAR(255) NULL",
     "county": "ALTER TABLE places ADD COLUMN county VARCHAR(255) NULL",

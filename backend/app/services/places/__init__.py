@@ -11,6 +11,32 @@ from app.schemas.photos import PhotoSummary
 from app.services.location.geocoding_service import build_place_display_label
 from app.services.photos.photos_service import _build_asset_url
 
+MAX_PLACE_USER_LABEL_LENGTH = 120
+
+
+def _place_display_label(*, place: Place) -> str:
+	if place.user_label and place.user_label.strip():
+		return place.user_label.strip()
+	return build_place_display_label(
+		city=place.city,
+		state=place.state,
+		country=place.country,
+		formatted_address=place.formatted_address,
+		latitude=place.representative_latitude,
+		longitude=place.representative_longitude,
+	)
+
+
+def _normalize_user_label(value: str | None) -> str | None:
+	if value is None:
+		return None
+	trimmed = value.strip()
+	if not trimmed:
+		return None
+	if len(trimmed) > MAX_PLACE_USER_LABEL_LENGTH:
+		raise ValueError(f"user_label must be at most {MAX_PLACE_USER_LABEL_LENGTH} characters.")
+	return trimmed
+
 def list_places(db: Session) -> PlaceListResponse:
 	"""List stable places with photo counts and representative thumbnails, sorted by usage and place_id."""
 	# Subquery: rank assets within each place by most recent captured_at (nulls last), then sha256 for stability.
@@ -45,6 +71,7 @@ def list_places(db: Session) -> PlaceListResponse:
 			Place.representative_latitude,
 			Place.representative_longitude,
 			Place.formatted_address,
+			Place.user_label,
 			Place.city,
 			Place.county,
 			Place.state,
@@ -62,6 +89,7 @@ def list_places(db: Session) -> PlaceListResponse:
 			Place.representative_latitude,
 			Place.representative_longitude,
 			Place.formatted_address,
+			Place.user_label,
 			Place.city,
 			Place.county,
 			Place.state,
@@ -80,14 +108,15 @@ def list_places(db: Session) -> PlaceListResponse:
 			longitude=row.representative_longitude,
 			photo_count=int(row.photo_count),
 			thumbnail_url=_build_asset_url(row.thumb_sha256, row.thumb_ext) if row.thumb_sha256 else None,
-			display_label=build_place_display_label(
+			user_label=row.user_label,
+			display_label=(row.user_label.strip() if row.user_label and row.user_label.strip() else build_place_display_label(
 				city=row.city,
 				state=row.state,
 				country=row.country,
 				formatted_address=row.formatted_address,
 				latitude=row.representative_latitude,
 				longitude=row.representative_longitude,
-			),
+			)),
 			formatted_address=row.formatted_address,
 			city=row.city,
 			county=row.county,
@@ -141,14 +170,8 @@ def get_place_detail(db: Session, place_id: str) -> PlaceDetail | None:
 		place_id=str(place.place_id),
 		latitude=place.representative_latitude,
 		longitude=place.representative_longitude,
-		display_label=build_place_display_label(
-			city=place.city,
-			state=place.state,
-			country=place.country,
-			formatted_address=place.formatted_address,
-			latitude=place.representative_latitude,
-			longitude=place.representative_longitude,
-		),
+		user_label=place.user_label,
+		display_label=_place_display_label(place=place),
 		formatted_address=place.formatted_address,
 		city=place.city,
 		county=place.county,
@@ -157,3 +180,20 @@ def get_place_detail(db: Session, place_id: str) -> PlaceDetail | None:
 		geocode_status=place.geocode_status,
 		photos=photos,
 	)
+
+
+def update_place_user_label(db: Session, place_id: str, user_label: str | None) -> PlaceDetail | None:
+	"""Set/edit/clear user-defined place label and return updated detail."""
+	try:
+		place_pk = int(place_id)
+	except (ValueError, AttributeError):
+		return None
+
+	place = db.get(Place, place_pk)
+	if place is None:
+		return None
+
+	place.user_label = _normalize_user_label(user_label)
+	db.commit()
+
+	return get_place_detail(db, place_id)
