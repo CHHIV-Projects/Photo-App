@@ -12,6 +12,78 @@ import {
 } from "@/lib/api";
 import type { SearchPhotoSummary } from "@/types/ui-api";
 
+const MONTH_MAP: Record<string, string> = {
+  january: "01", jan: "01",
+  february: "02", feb: "02",
+  march: "03", mar: "03",
+  april: "04", apr: "04",
+  may: "05",
+  june: "06", jun: "06",
+  july: "07", jul: "07",
+  august: "08", aug: "08",
+  september: "09", sep: "09", sept: "09",
+  october: "10", oct: "10",
+  november: "11", nov: "11",
+  december: "12", dec: "12",
+};
+
+const MONTH_NUM_TO_NAME: Record<string, string> = {
+  "01": "January",
+  "02": "February",
+  "03": "March",
+  "04": "April",
+  "05": "May",
+  "06": "June",
+  "07": "July",
+  "08": "August",
+  "09": "September",
+  "10": "October",
+  "11": "November",
+  "12": "December",
+};
+
+interface ParsedQuery {
+  year?: number;
+  monthNum?: string;
+  cameraTokens: string[];
+}
+
+function parseSearchQuery(input: string): ParsedQuery {
+  const tokens = input.trim().split(/\s+/).filter(Boolean);
+  let year: number | undefined;
+  let monthNum: string | undefined;
+  const cameraTokens: string[] = [];
+
+  for (const token of tokens) {
+    if (/^\d{4}$/.test(token)) {
+      const n = Number(token);
+      if (n >= 1900 && n <= 2100) {
+        year = n;
+        continue;
+      }
+    }
+    const mapped = MONTH_MAP[token.toLowerCase()];
+    if (mapped) {
+      monthNum = mapped;
+      continue;
+    }
+    cameraTokens.push(token);
+  }
+
+  return { year, monthNum, cameraTokens };
+}
+
+function buildSearchText(year: string, monthNum: string, camera: string): string {
+  const parts: string[] = [];
+  if (year) parts.push(year);
+  if (monthNum) {
+    const name = MONTH_NUM_TO_NAME[monthNum];
+    if (name) parts.push(name);
+  }
+  if (camera.trim()) parts.push(camera.trim());
+  return parts.join(" ");
+}
+
 interface PhotoReviewViewProps {
   onOpenPhotoDetail: (sha256: string) => void;
   onOpenDuplicateGroup: (groupId: number) => void;
@@ -27,23 +99,42 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busyAssetSha256, setBusyAssetSha256] = useState<string | null>(null);
 
+  const [searchText, setSearchText] = useState("");
   const [year, setYear] = useState<string>("");
   const [month, setMonth] = useState<string>("");
-  const [cameraInput, setCameraInput] = useState("");
-  const [cameraQuery, setCameraQuery] = useState("");
+  const [camera, setCamera] = useState("");
   const [hasLocation, setHasLocation] = useState(false);
   const [hasFaces, setHasFaces] = useState(false);
   const [yearOptions, setYearOptions] = useState<string[]>([]);
-  const [monthOptions, setMonthOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [monthOptions, setMonthOptions] = useState<Array<{ value: string; label: string }>>([])
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const yearRef = useRef(year);
+  yearRef.current = year;
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      setCameraQuery(cameraInput.trim());
-    }, 250);
+      const parsed = parseSearchQuery(searchText);
+      const currentYear = yearRef.current;
+
+      let newYear: string;
+      if (parsed.year !== undefined) {
+        newYear = String(parsed.year);
+      } else if (parsed.monthNum && currentYear) {
+        newYear = currentYear;
+      } else {
+        newYear = "";
+      }
+
+      const newMonth = parsed.monthNum && newYear ? parsed.monthNum : "";
+      const newCamera = parsed.cameraTokens.join(" ");
+
+      setYear(newYear);
+      setMonth(newMonth);
+      setCamera(newCamera);
+    }, 300);
     return () => window.clearTimeout(handle);
-  }, [cameraInput]);
+  }, [searchText]);
 
   const monthLabelByValue = useMemo(
     () =>
@@ -155,7 +246,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
       const response = await searchPhotos({
         year: activeYear,
         month: activeMonth,
-        camera: cameraQuery || undefined,
+        camera: camera || undefined,
         hasLocation: hasLocation ? true : undefined,
         hasFaces: hasFaces ? true : undefined,
         canonicalFirst: true,
@@ -196,7 +287,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
   useEffect(() => {
     void reloadFromStart();
-  }, [year, month, cameraQuery, hasLocation, hasFaces]);
+  }, [year, month, camera, hasLocation, hasFaces]);
 
   const hasMore = items.length < totalCount;
 
@@ -218,7 +309,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
     observer.observe(sentinelRef.current);
     return () => observer.disconnect();
-  }, [offset, hasMore, isLoading, year, month, cameraQuery, hasLocation, hasFaces]);
+  }, [offset, hasMore, isLoading, year, month, camera, hasLocation, hasFaces]);
 
   async function handleSetCanonical(assetSha256: string): Promise<void> {
     setBusyAssetSha256(assetSha256);
@@ -259,19 +350,96 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     }
   }
 
+  function handleYearDropdownChange(newYear: string): void {
+    setYear(newYear);
+    setMonth("");
+    setSearchText(buildSearchText(newYear, "", camera));
+  }
+
+  function handleMonthDropdownChange(newMonth: string): void {
+    setMonth(newMonth);
+    setSearchText(buildSearchText(year, newMonth, camera));
+  }
+
+  function removeYearChip(): void {
+    setYear("");
+    setMonth("");
+    setSearchText(buildSearchText("", "", camera));
+  }
+
+  function removeMonthChip(): void {
+    setMonth("");
+    setSearchText(buildSearchText(year, "", camera));
+  }
+
+  function removeCameraChip(): void {
+    setCamera("");
+    setSearchText(buildSearchText(year, month, ""));
+  }
+
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
+        <div className={styles.searchRow}>
+          <input
+            type="search"
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+            placeholder="Search photos... e.g. 2023, March, Canon"
+            className={styles.searchInput}
+          />
+        </div>
+
+        {(year || month || camera) && (
+          <div className={styles.chipRow}>
+            {year && (
+              <span className={styles.chip}>
+                Year: {year}
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  onClick={removeYearChip}
+                  aria-label="Remove year filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {month && (
+              <span className={styles.chip}>
+                Month: {MONTH_NUM_TO_NAME[month] ?? month}
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  onClick={removeMonthChip}
+                  aria-label="Remove month filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {camera && (
+              <span className={styles.chip}>
+                Camera: {camera}
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  onClick={removeCameraChip}
+                  aria-label="Remove camera filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+          </div>
+        )}
+
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>
             Year
             <select
               value={year}
-              onChange={(event) => {
-                const nextYear = event.target.value;
-                setYear(nextYear);
-                setMonth("");
-              }}
+              onChange={(event) => handleYearDropdownChange(event.target.value)}
               className={styles.select}
             >
               <option value="">All</option>
@@ -287,7 +455,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
             Month
             <select
               value={month}
-              onChange={(event) => setMonth(event.target.value)}
+              onChange={(event) => handleMonthDropdownChange(event.target.value)}
               className={styles.select}
               disabled={!year}
             >
@@ -298,17 +466,6 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
                 </option>
               ))}
             </select>
-          </label>
-
-          <label className={styles.fieldLabelWide}>
-            Camera
-            <input
-              type="search"
-              value={cameraInput}
-              onChange={(event) => setCameraInput(event.target.value)}
-              placeholder="Make or model"
-              className={styles.input}
-            />
           </label>
 
           <label className={styles.checkboxLabel}>

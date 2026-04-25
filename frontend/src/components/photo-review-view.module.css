@@ -168,3 +168,59 @@
 .sentinel {
   height: 1px;
 }
+
+.searchRow {
+  display: flex;
+  width: 100%;
+}
+
+.searchInput {
+  flex: 1;
+  border: 1px solid #becad6;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1d2b39;
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  min-height: 38px;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: #5b9ac9;
+  box-shadow: 0 0 0 3px rgba(91, 154, 201, 0.18);
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 12px;
+  background: #e0edf7;
+  border: 1px solid #9bb9d4;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #1a3a56;
+}
+
+.chipRemove {
+  border: none;
+  background: transparent;
+  color: #486a87;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+  font-weight: 700;
+}
+
+.chipRemove:hover {
+  color: #9f2133;
+}
