@@ -18,9 +18,10 @@ import type {
 
 interface DuplicateGroupsViewProps {
   onOpenPhoto: (sha256: string) => void;
+  focusGroupId?: number | null;
 }
 
-export function DuplicateGroupsView({ onOpenPhoto }: DuplicateGroupsViewProps) {
+export function DuplicateGroupsView({ onOpenPhoto, focusGroupId = null }: DuplicateGroupsViewProps) {
   const [groups, setGroups] = useState<DuplicateGroupSummary[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
   const [groupDetail, setGroupDetail] = useState<DuplicateGroupDetail | null>(null);
@@ -40,6 +41,14 @@ export function DuplicateGroupsView({ onOpenPhoto }: DuplicateGroupsViewProps) {
     void loadGroups(0, searchQuery);
   }, []);
 
+  useEffect(() => {
+    if (focusGroupId === null) {
+      return;
+    }
+    setSelectedGroupId(focusGroupId);
+    void loadGroupDetail(focusGroupId);
+  }, [focusGroupId]);
+
   async function loadGroups(offset: number, query: string = ""): Promise<void> {
     setIsLoadingGroups(true);
     setGroupsErrorMessage(null);
@@ -50,8 +59,6 @@ export function DuplicateGroupsView({ onOpenPhoto }: DuplicateGroupsViewProps) {
       setGroups(response.items);
       setTotalCount(response.total_count);
       setCurrentPage(offset / PAGE_SIZE);
-      setSelectedGroupId(null);
-      setGroupDetail(null);
     } catch (error) {
       console.error("Error loading groups:", error);
       setGroupsErrorMessage(getErrorMessage(error, "Failed to load duplicate groups."));

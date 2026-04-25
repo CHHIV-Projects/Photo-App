@@ -96,6 +96,9 @@ class SearchPhotoSummary(BaseModel):
     camera_model: str | None = None
     capture_time_trust: Literal["high", "low", "unknown"] = "unknown"
     face_count: int
+    duplicate_group_id: int | None = None
+    is_canonical: bool
+    visibility_status: Literal["visible", "demoted"] = "visible"
 
 
 class SearchPhotoListResponse(BaseModel):

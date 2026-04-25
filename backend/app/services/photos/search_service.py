@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
@@ -25,6 +25,9 @@ class SearchPhotoSummary:
     camera_model: str | None
     capture_time_trust: str
     face_count: int
+    duplicate_group_id: int | None
+    is_canonical: bool
+    visibility_status: str
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,9 @@ def search_photos(
     start_date: str | None = None,
     end_date: str | None = None,
     camera_query: str | None = None,
+    has_location: bool | None = None,
+    has_faces: bool | None = None,
+    canonical_first: bool = False,
     timeline_filters: TimelineFilter | None = None,
     offset: int = 0,
     limit: int = 100,
@@ -108,6 +114,9 @@ def search_photos(
         Asset.captured_at,
         Asset.camera_make,
         Asset.camera_model,
+        Asset.duplicate_group_id,
+        Asset.is_canonical,
+        Asset.visibility_status,
         trust_expr.label("capture_time_trust"),
         func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
     ).outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
@@ -128,6 +137,16 @@ def search_photos(
             )
         )
 
+    if has_location is True:
+        base_query = base_query.where(Asset.gps_latitude.is_not(None), Asset.gps_longitude.is_not(None))
+    elif has_location is False:
+        base_query = base_query.where(or_(Asset.gps_latitude.is_(None), Asset.gps_longitude.is_(None)))
+
+    if has_faces is True:
+        base_query = base_query.where(func.coalesce(face_count_subq.c.face_count, 0) > 0)
+    elif has_faces is False:
+        base_query = base_query.where(func.coalesce(face_count_subq.c.face_count, 0) <= 0)
+
     start_bound_utc, end_bound_utc_exclusive = _build_local_day_bounds(
         start_date=start_date,
         end_date=end_date,
@@ -141,8 +160,13 @@ def search_photos(
 
     total_count = int(db.execute(base_query.with_only_columns(func.count(Asset.sha256))).scalar_one())
 
+    ordering: list[Any] = []
+    if canonical_first:
+        ordering.append(case((Asset.is_canonical.is_(True), 0), else_=1).asc())
+
     rows = db.execute(
         base_query.order_by(
+            *ordering,
             Asset.captured_at.desc().nullslast(),
             Asset.created_at_utc.desc(),
             Asset.sha256.asc(),
@@ -161,6 +185,9 @@ def search_photos(
             camera_model=row.camera_model,
             capture_time_trust=row.capture_time_trust,
             face_count=int(row.face_count or 0),
+            duplicate_group_id=row.duplicate_group_id,
+            is_canonical=bool(row.is_canonical),
+            visibility_status=row.visibility_status,
         )
         for row in rows
     ]

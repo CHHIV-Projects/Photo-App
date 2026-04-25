@@ -8,6 +8,7 @@ import { EventsView } from "@/components/EventsView";
 import { AlbumsView } from "@/components/AlbumsView";
 import { DuplicateGroupsView } from "@/components/DuplicateGroupsView";
 import { DuplicateSuggestionsView } from "@/components/DuplicateSuggestionsView";
+import { PhotoReviewView } from "@/components/PhotoReviewView";
 import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
 import PlacesView from "@/components/PlacesView";
@@ -50,10 +51,10 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions";
+type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions";
 
 export default function HomePage() {
-  const [viewMode, setViewMode] = useState<ViewMode>("review");
+  const [viewMode, setViewMode] = useState<ViewMode>("photo-review");
   const [clusters, setClusters] = useState<ClusterSummary[]>([]);
   const [people, setPeople] = useState<PersonSummary[]>([]);
   const [peopleWithClusters, setPeopleWithClusters] = useState<PersonWithClusters[]>([]);
@@ -111,6 +112,7 @@ export default function HomePage() {
   const [isLoadingPlaceDetail, setIsLoadingPlaceDetail] = useState(false);
   const [placesErrorMessage, setPlacesErrorMessage] = useState<string | null>(null);
   const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState<string | null>(null);
+  const [focusedDuplicateGroupId, setFocusedDuplicateGroupId] = useState<number | null>(null);
   const latestPhotoDetailRequestShaRef = useRef<string | null>(null);
   const PHOTO_SEARCH_PAGE_SIZE = 100;
 
@@ -466,8 +468,20 @@ export default function HomePage() {
   }
 
   function handleOpenPhotoFromDuplicateGroups(sha256: string) {
+    setFocusedDuplicateGroupId(null);
     setViewMode("photos");
     handleSelectPhoto(sha256);
+  }
+
+  function handleOpenPhotoDetailFromReview(sha256: string) {
+    setFocusedDuplicateGroupId(null);
+    setViewMode("photos");
+    handleSelectPhoto(sha256);
+  }
+
+  function handleOpenDuplicateGroupFromReview(groupId: number) {
+    setFocusedDuplicateGroupId(groupId);
+    setViewMode("duplicate-groups");
   }
 
   function handleOpenPhotoFromAlbums(sha256: string) {
@@ -699,6 +713,16 @@ export default function HomePage() {
           <div className={styles.viewSwitch}>
             <button
               type="button"
+              className={`${styles.viewButton} ${viewMode === "photo-review" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => {
+                setFocusedDuplicateGroupId(null);
+                setViewMode("photo-review");
+              }}
+            >
+              Photo Review
+            </button>
+            <button
+              type="button"
               className={`${styles.viewButton} ${viewMode === "review" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("review")}
             >
@@ -770,7 +794,12 @@ export default function HomePage() {
           </div>
         </header>
 
-        {viewMode === "review" ? (
+        {viewMode === "photo-review" ? (
+          <PhotoReviewView
+            onOpenPhotoDetail={handleOpenPhotoDetailFromReview}
+            onOpenDuplicateGroup={handleOpenDuplicateGroupFromReview}
+          />
+        ) : viewMode === "review" ? (
           <div className={styles.layout}>
             <ClusterList
               clusters={clusters}
@@ -858,7 +887,7 @@ export default function HomePage() {
             onOpenPhoto={handleOpenPhotoFromPlaces}
           />
         ) : viewMode === "duplicate-groups" ? (
-          <DuplicateGroupsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} />
+          <DuplicateGroupsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} focusGroupId={focusedDuplicateGroupId} />
         ) : viewMode === "duplicate-suggestions" ? (
           <DuplicateSuggestionsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} />
         ) : (
