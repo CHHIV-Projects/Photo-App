@@ -258,28 +258,108 @@ This milestone is a stepping stone toward:
 
 ---
 
-## Summary
+Use these defaults for 12.16.
 
-Photo Review now surfaces face and person information, enabling faster and more intuitive interaction with people in the photo library.
+## Confirmed decisions for 12.16
 
-I reproduced this: the backend set-canonical works for group 704, but the UI hides the success feedback because loadGroupDetail() clears actionMessage during refresh. I’m patching that now so action feedback persists after clicks.
+1. Unassigned Faces filter behavior
+- Make it additive with Has Faces.
+- Both checkboxes can be checked.
+- If Unassigned Faces is checked, it naturally implies photos have faces, but do not disable Has Faces.
 
-Great catch. I reproduced and debugged it.
+Reason:
+- simpler UI
+- avoids hidden behavior
+- filters remain explicit
 
-What I found
+---
 
-- Backend Set Canonical is working.
-- I directly called the API for group 704 and it returned success, and DB updated correctly.
-- The UI issue was that success feedback got cleared immediately after refresh, making it look like nothing happened.
+2. Person indicator format on photo cards
+- Use count badges only.
 
-Fix applied
+Recommended badges:
+- `3 faces`
+- `2 assigned`
+- `1 unassigned`
 
-- Updated DuplicateGroupsView.tsx so action messages are not wiped during post-action reload.
-- Specifically, DuplicateGroupsView.tsx:64 now supports a clearActionMessage option in loadGroupDetail, and action handlers call it with false.
+Reason:
+- minimal and uncluttered
+- avoids needing person-name payloads in this milestone
 
-Validation
+---
 
-- No TypeScript errors after patch in DuplicateGroupsView.tsx.
-- Group 704 canonical now reflects the change in DB from the direct test call.
+3. Data shape for assigned people
+- Keep this milestone aggregate-only.
+- Do not include person names in search photo summaries yet.
 
+Use:
+- face_count
+- assigned_face_count
+- unassigned_face_count
 
+Reason:
+- keeps 12.16 lightweight
+- named person chips/search can be a future milestone
+
+---
+
+4. Review Faces quick action target
+- For 12.16, route to the existing photo detail view for that photo.
+
+Reason:
+- face boxes and assignments already exist there
+- avoids complex context-passing into the Review/Faces workflow
+- lower risk
+
+---
+
+5. Context passing for navigation
+- Only asset sha256 is required.
+- Open/select the photo in the existing detail flow.
+
+Do not implement:
+- auto-opening unassigned subset
+- cluster preselection
+- special face workflow context
+
+---
+
+6. Card action visibility
+- Show `Review Faces` only when `face_count > 0`.
+- Hide it when no faces exist.
+
+Reason:
+- avoids disabled clutter
+
+---
+
+7. Backend filtering API naming
+- Use query param:
+  - `has_unassigned_faces`
+- Boolean semantics:
+  - true = only photos with at least one unassigned face
+  - false/omitted = no unassigned-face filter
+
+---
+
+8. Cleanup of stale notes in milestone file
+- Yes, clean up leftover debug/stale text from the 12.16 milestone file if it is clearly accidental.
+- Do not alter substantive milestone requirements.
+
+Reason:
+- keeps project documentation clean
+
+---
+
+## Summary of intended 12.16 behavior
+
+- Photo Review remains lightweight
+- face/person integration is count-based only
+- filters:
+  - Has Faces
+  - Unassigned Faces
+- no person-name chips yet
+- Review Faces opens existing photo detail
+- no face clustering or workflow redesign
+
+Proceed with implementation under these defaults.

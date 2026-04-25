@@ -424,3 +424,40 @@ export interface PlaceDetail {
   geocode_status: string;
   photos: PhotoSummary[];
 }
+
+export interface AdminDuplicateTypeCount {
+  group_type: string;
+  count: number;
+}
+
+export interface AdminAssetsSummary {
+  total: number;
+  visible: number;
+  demoted: number;
+}
+
+export interface AdminDuplicatesSummary {
+  total_groups: number;
+  by_type: AdminDuplicateTypeCount[];
+}
+
+export interface AdminFacesSummary {
+  total: number;
+  unassigned: number;
+}
+
+export interface AdminPlacesSummary {
+  total: number;
+  with_user_label: number;
+  without_user_label: number;
+  linked_to_assets: number;
+  empty: number;
+}
+
+export interface AdminSummaryResponse {
+  generated_at: string;
+  assets: AdminAssetsSummary;
+  duplicates: AdminDuplicatesSummary;
+  faces: AdminFacesSummary;
+  places: AdminPlacesSummary;
+}

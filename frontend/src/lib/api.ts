@@ -1,4 +1,5 @@
 import type {
+  AdminSummaryResponse,
   AlbumDetail,
   AlbumMembershipSummary,
   AlbumSummary,
@@ -411,6 +412,10 @@ export function updatePlaceLabel(placeId: string, userLabel: string | null): Pro
     method: "POST",
     body: JSON.stringify({ user_label: userLabel })
   });
+}
+
+export function getAdminSummary(): Promise<AdminSummaryResponse> {
+  return apiRequest<AdminSummaryResponse>("/api/admin/summary");
 }
 
 export function getAlbums(): Promise<ListResponse<AlbumSummary>> {

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.api.admin import router as admin_router
 from app.api.albums import router as albums_router
 from app.api.clusters import router as clusters_router
 from app.api.duplicates import router as duplicates_router
@@ -45,6 +46,7 @@ def create_app() -> FastAPI:
 		allow_methods=["*"],
 		allow_headers=["*"],
 	)
+	app.include_router(admin_router)
 	app.include_router(health_router)
 	app.include_router(albums_router)
 	app.include_router(clusters_router)

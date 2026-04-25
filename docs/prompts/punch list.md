@@ -7,8 +7,6 @@ face cluster merge by search
 
 demote unwanted pictures
 
-
-
 degroup a photo in places and or when allias applied, set some so that alias not applied for that photo.  
 edit address in places
 
@@ -17,5 +15,5 @@ edit address in places
 Then I would recommend:
 
 - **~~12.16 → Person integration into Photo Review~~**
-- **12.17 → Place aliasing (Audrey’s House)**
+- ~~**12.17 → Place aliasing (Audrey’s House)~~**
 - **12.18 → Admin / Settings panel**

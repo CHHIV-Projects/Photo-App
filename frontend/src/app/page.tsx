@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
 import { EventsView } from "@/components/EventsView";
+import AdminView from "@/components/AdminView";
 import { AlbumsView } from "@/components/AlbumsView";
 import { DuplicateGroupsView } from "@/components/DuplicateGroupsView";
 import { DuplicateSuggestionsView } from "@/components/DuplicateSuggestionsView";
@@ -51,7 +52,7 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions";
+type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions" | "admin";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("photo-review");
@@ -791,6 +792,13 @@ export default function HomePage() {
             >
               Duplicate Suggestions
             </button>
+            <button
+              type="button"
+              className={`${styles.viewButton} ${viewMode === "admin" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("admin")}
+            >
+              Admin
+            </button>
           </div>
         </header>
 
@@ -890,6 +898,8 @@ export default function HomePage() {
           <DuplicateGroupsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} focusGroupId={focusedDuplicateGroupId} />
         ) : viewMode === "duplicate-suggestions" ? (
           <DuplicateSuggestionsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} />
+        ) : viewMode === "admin" ? (
+          <AdminView />
         ) : (
           <EventsView
             events={events}

@@ -313,3 +313,89 @@ Future milestones may include:
 ## Summary
 
 This milestone lets the user rename machine-derived places into meaningful personal places while preserving all underlying geographic data.
+
+
+Use these defaults for 12.17.
+
+## Confirmed decisions for 12.17
+
+1. Field naming
+- Use exactly:
+  - `user_label`
+- Do not use `alias` or `display_name`.
+
+---
+
+2. API shape
+- Confirmed endpoint:
+
+POST /api/places/{place_id}/label
+
+Request body:
+- `user_label: string | null`
+
+Response:
+- return updated `PlaceDetail`
+
+Reason:
+- detail response is most useful after editing the selected place.
+
+---
+
+3. Places UI display behavior
+- Yes.
+- When `user_label` exists:
+  - list item shows `user_label` as primary text
+  - detail header shows `user_label` as primary text
+  - geocoded `display_label` remains visible as secondary text underneath
+
+Reason:
+- user label should be primary, but machine location context should not disappear.
+
+---
+
+4. Places search behavior
+- Yes.
+- Places search should match `user_label` in addition to:
+  - geocoded display label
+  - formatted address
+  - coordinates
+
+Reason:
+- once user labels exist, they must be discoverable.
+
+---
+
+5. Clearing / validation behavior
+- Confirmed.
+- Trim whitespace.
+- Empty string means clear label and persist `null`.
+- Max length: 120 characters.
+- If over max length, return validation error.
+
+---
+
+6. Display priority scope
+- Apply `user_label` priority wherever place labels are currently displayed.
+- At minimum:
+  - Places list
+  - Place detail
+
+If other current views already display place labels, use the same priority there too.
+
+Reason:
+- user-defined naming should become the human-facing label consistently.
+
+---
+
+## Summary
+
+- field = `user_label`
+- write endpoint returns `PlaceDetail`
+- user label is primary, geocode remains secondary
+- Places search includes user_label
+- empty string clears
+- max length 120
+- apply label priority consistently wherever place labels appear
+
+Proceed with implementation under these defaults.
