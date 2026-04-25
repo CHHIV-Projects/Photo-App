@@ -105,6 +105,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   const [camera, setCamera] = useState("");
   const [hasLocation, setHasLocation] = useState(false);
   const [hasFaces, setHasFaces] = useState(false);
+  const [hasUnassignedFaces, setHasUnassignedFaces] = useState(false);
   const [yearOptions, setYearOptions] = useState<string[]>([]);
   const [monthOptions, setMonthOptions] = useState<Array<{ value: string; label: string }>>([])
 
@@ -249,6 +250,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
         camera: camera || undefined,
         hasLocation: hasLocation ? true : undefined,
         hasFaces: hasFaces ? true : undefined,
+        hasUnassignedFaces: hasUnassignedFaces ? true : undefined,
         canonicalFirst: true,
         offset: nextOffset,
         limit: PAGE_SIZE,
@@ -287,7 +289,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
   useEffect(() => {
     void reloadFromStart();
-  }, [year, month, camera, hasLocation, hasFaces]);
+  }, [year, month, camera, hasLocation, hasFaces, hasUnassignedFaces]);
 
   const hasMore = items.length < totalCount;
 
@@ -309,7 +311,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
     observer.observe(sentinelRef.current);
     return () => observer.disconnect();
-  }, [offset, hasMore, isLoading, year, month, camera, hasLocation, hasFaces]);
+  }, [offset, hasMore, isLoading, year, month, camera, hasLocation, hasFaces, hasUnassignedFaces]);
 
   async function handleSetCanonical(assetSha256: string): Promise<void> {
     setBusyAssetSha256(assetSha256);
@@ -485,6 +487,15 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
             />
             Has Faces
           </label>
+
+          <label className={styles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={hasUnassignedFaces}
+              onChange={(event) => setHasUnassignedFaces(event.target.checked)}
+            />
+            Unassigned Faces
+          </label>
         </div>
 
         <div className={styles.countRow}>{items.length} / {totalCount} photos</div>
@@ -508,6 +519,13 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
               />
             </button>
             <div className={styles.filename} title={item.filename}>{item.filename}</div>
+            {item.face_count > 0 && (
+              <div className={styles.badgeRow}>
+                <span className={styles.badgeNeutral}>{item.face_count} face{item.face_count !== 1 ? "s" : ""}</span>
+                <span className={styles.badgePositive}>{item.assigned_face_count} assigned</span>
+                <span className={styles.badgeWarning}>{item.unassigned_face_count} unassigned</span>
+              </div>
+            )}
             <div className={styles.actionRow}>
               <button
                 type="button"
@@ -516,6 +534,16 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
               >
                 Open Detail
               </button>
+
+              {item.face_count > 0 && (
+                <button
+                  type="button"
+                  className={styles.actionButton}
+                  onClick={() => onOpenPhotoDetail(item.asset_sha256)}
+                >
+                  Review Faces
+                </button>
+              )}
 
               {item.duplicate_group_id !== null && (
                 <button

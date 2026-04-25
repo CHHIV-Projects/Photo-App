@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
 from app.models.face import Face
+from app.models.face_cluster import FaceCluster
 from app.services.photos.photos_service import _build_asset_url
 from app.services.timeline.timeline_service import TimelineFilter, apply_asset_time_filters, effective_capture_time_trust_expr
 
@@ -25,6 +26,8 @@ class SearchPhotoSummary:
     camera_model: str | None
     capture_time_trust: str
     face_count: int
+    assigned_face_count: int
+    unassigned_face_count: int
     duplicate_group_id: int | None
     is_canonical: bool
     visibility_status: str
@@ -93,6 +96,7 @@ def search_photos(
     camera_query: str | None = None,
     has_location: bool | None = None,
     has_faces: bool | None = None,
+    has_unassigned_faces: bool | None = None,
     canonical_first: bool = False,
     timeline_filters: TimelineFilter | None = None,
     offset: int = 0,
@@ -100,7 +104,13 @@ def search_photos(
 ) -> SearchPhotoListResult:
     """Search photos by canonical metadata fields with deterministic ordering."""
     face_count_subq = (
-        select(Face.asset_sha256, func.count(Face.id).label("face_count"))
+        select(
+            Face.asset_sha256,
+            func.count(Face.id).label("face_count"),
+            func.sum(case((FaceCluster.person_id.is_not(None), 1), else_=0)).label("assigned_face_count"),
+            func.sum(case((FaceCluster.person_id.is_(None), 1), else_=0)).label("unassigned_face_count"),
+        )
+        .outerjoin(FaceCluster, Face.cluster_id == FaceCluster.id)
         .group_by(Face.asset_sha256)
         .subquery()
     )
@@ -119,6 +129,8 @@ def search_photos(
         Asset.visibility_status,
         trust_expr.label("capture_time_trust"),
         func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
+        func.coalesce(face_count_subq.c.assigned_face_count, 0).label("assigned_face_count"),
+        func.coalesce(face_count_subq.c.unassigned_face_count, 0).label("unassigned_face_count"),
     ).outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
 
     active_timeline_filters = timeline_filters or TimelineFilter()
@@ -146,6 +158,9 @@ def search_photos(
         base_query = base_query.where(func.coalesce(face_count_subq.c.face_count, 0) > 0)
     elif has_faces is False:
         base_query = base_query.where(func.coalesce(face_count_subq.c.face_count, 0) <= 0)
+
+    if has_unassigned_faces is True:
+        base_query = base_query.where(func.coalesce(face_count_subq.c.unassigned_face_count, 0) > 0)
 
     start_bound_utc, end_bound_utc_exclusive = _build_local_day_bounds(
         start_date=start_date,
@@ -185,6 +200,8 @@ def search_photos(
             camera_model=row.camera_model,
             capture_time_trust=row.capture_time_trust,
             face_count=int(row.face_count or 0),
+            assigned_face_count=int(row.assigned_face_count or 0),
+            unassigned_face_count=int(row.unassigned_face_count or 0),
             duplicate_group_id=row.duplicate_group_id,
             is_canonical=bool(row.is_canonical),
             visibility_status=row.visibility_status,

@@ -67,10 +67,12 @@ export function DuplicateGroupsView({ onOpenPhoto, focusGroupId = null }: Duplic
     }
   }
 
-  async function loadGroupDetail(groupId: number): Promise<void> {
+  async function loadGroupDetail(groupId: number, options?: { clearActionMessage?: boolean }): Promise<void> {
     setIsLoadingDetail(true);
     setDetailErrorMessage(null);
-    setActionMessage(null);
+    if (options?.clearActionMessage ?? true) {
+      setActionMessage(null);
+    }
 
     try {
       const response = await getDuplicateGroupDetail(groupId);
@@ -85,7 +87,7 @@ export function DuplicateGroupsView({ onOpenPhoto, focusGroupId = null }: Duplic
 
   function handleSelectGroup(groupId: number): void {
     setSelectedGroupId(groupId);
-    void loadGroupDetail(groupId);
+    void loadGroupDetail(groupId, { clearActionMessage: true });
   }
 
   async function handleSearch(query: string): Promise<void> {
@@ -118,7 +120,7 @@ export function DuplicateGroupsView({ onOpenPhoto, focusGroupId = null }: Duplic
     try {
       const response = await setDuplicateGroupCanonical(assetSha256);
       setActionMessage(response.message ?? "Canonical asset updated.");
-      await loadGroupDetail(selectedGroupId);
+      await loadGroupDetail(selectedGroupId, { clearActionMessage: false });
     } catch (error) {
       setDetailErrorMessage(getErrorMessage(error, "Failed to set canonical asset."));
     } finally {
@@ -132,7 +134,7 @@ export function DuplicateGroupsView({ onOpenPhoto, focusGroupId = null }: Duplic
     try {
       const response = await removeDuplicateGroupMember(assetSha256);
       setActionMessage(response.message ?? "Asset removed from group.");
-      await loadGroupDetail(selectedGroupId);
+      await loadGroupDetail(selectedGroupId, { clearActionMessage: false });
       await loadGroups(currentPage * PAGE_SIZE, searchQuery);
     } catch (error) {
       setDetailErrorMessage(getErrorMessage(error, "Failed to remove asset from group."));
@@ -147,7 +149,7 @@ export function DuplicateGroupsView({ onOpenPhoto, focusGroupId = null }: Duplic
     try {
       const response = await demoteDuplicateGroupMember(assetSha256);
       setActionMessage(response.message ?? "Asset demoted.");
-      await loadGroupDetail(selectedGroupId);
+      await loadGroupDetail(selectedGroupId, { clearActionMessage: false });
     } catch (error) {
       setDetailErrorMessage(getErrorMessage(error, "Failed to demote asset."));
     } finally {
@@ -161,7 +163,7 @@ export function DuplicateGroupsView({ onOpenPhoto, focusGroupId = null }: Duplic
     try {
       const response = await restoreDuplicateGroupMember(assetSha256);
       setActionMessage(response.message ?? "Asset restored.");
-      await loadGroupDetail(selectedGroupId);
+      await loadGroupDetail(selectedGroupId, { clearActionMessage: false });
     } catch (error) {
       setDetailErrorMessage(getErrorMessage(error, "Failed to restore asset."));
     } finally {

@@ -334,6 +334,11 @@ def update_asset_lineage(db_session: Session, asset: Asset) -> AssetLineageUpdat
 
     group_id = _ensure_group_for_candidate(db_session, best_match)
     asset.duplicate_group_id = group_id
+    # Flush before recompute so the new group assignment is visible to the
+    # SELECT inside recompute_group_canonical. The session uses autoflush=False,
+    # so without this flush the incoming asset is invisible to the query and
+    # keeps its default is_canonical=True, producing two canonicals per group.
+    db_session.flush()
     winner = recompute_group_canonical(db_session, group_id)
     db_session.flush()
 

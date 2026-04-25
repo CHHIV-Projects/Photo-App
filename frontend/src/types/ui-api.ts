@@ -98,6 +98,8 @@ export interface SearchPhotoSummary {
   camera_model: string | null;
   capture_time_trust: "high" | "low" | "unknown";
   face_count: number;
+  assigned_face_count: number;
+  unassigned_face_count: number;
   duplicate_group_id: number | null;
   is_canonical: boolean;
   visibility_status: "visible" | "demoted";

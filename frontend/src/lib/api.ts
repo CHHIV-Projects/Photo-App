@@ -48,6 +48,7 @@ export interface SearchPhotoQueryOptions extends PhotoQueryOptions {
   camera?: string;
   hasLocation?: boolean;
   hasFaces?: boolean;
+  hasUnassignedFaces?: boolean;
   canonicalFirst?: boolean;
   offset?: number;
   limit?: number;
@@ -205,6 +206,9 @@ export function searchPhotos(options: SearchPhotoQueryOptions = {}): Promise<Sea
   if (options.camera?.trim()) params.set("camera", options.camera.trim());
   if (options.hasLocation !== undefined) params.set("has_location", String(options.hasLocation));
   if (options.hasFaces !== undefined) params.set("has_faces", String(options.hasFaces));
+  if (options.hasUnassignedFaces !== undefined) {
+    params.set("has_unassigned_faces", String(options.hasUnassignedFaces));
+  }
   if (options.canonicalFirst !== undefined) params.set("canonical_first", String(options.canonicalFirst));
   if (options.offset !== undefined) params.set("offset", String(options.offset));
   if (options.limit !== undefined) params.set("limit", String(options.limit));
