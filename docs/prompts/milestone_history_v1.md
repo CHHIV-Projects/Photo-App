@@ -146,6 +146,10 @@
 
 - Included video placeholder handling in navigation
 
+### **Notation**
+
+- Established ingestion pipeline foundation, with further stabilization and scaling improvements planned in later milestones
+
 ---
 
 ## Milestone 12 — Data Quality, Search, and Places Foundation
@@ -280,6 +284,8 @@
 
 - Updated Places UI to display readable location labels instead of coordinates
 
+- Completed transition from raw coordinate storage to human-readable geographic system
+
 ---
 
 ### 12.12 — Near-Duplicate Suggestions and Review Queue
@@ -304,6 +310,8 @@
 
 - Added restore functionality to unhide demoted assets
 
+- Transitioned duplicate handling from automated grouping to human-guided adjudication workflow
+
 ---
 
 ### 12.14 — Photo Review Workspace
@@ -315,6 +323,8 @@
 - Added lightweight quick actions per photo (make canonical, demote, restore)
 
 - Integrated filter controls (year, month, camera, location, faces)
+
+- Established Photo Review as primary browsing surface (partial completion; further consolidation planned)
 
 ---
 
@@ -363,3 +373,18 @@
 - Implemented read-only operational visibility dashboard
 
 - Added UI placeholders for future Maintenance and Settings functionality
+
+- Introduced operational visibility layer separating system management from user workflows
+
+---  
+
+## Forward-Looking Areas
+
+The following areas are identified for future milestones:  
+
+- Cloud-based ingestion (iCloud and others)  
+- Native HEIC support and Live Photo handling  
+- Background duplicate processing and pipeline decoupling  
+- Advanced location intelligence and landmark detection  
+- Non-duplicate asset curation (demotion workflows)  
+- Video asset strategy and integration

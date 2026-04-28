@@ -31,6 +31,12 @@ def _resolve_runtime_path(path_setting: str) -> Path:
 
 
 def main() -> int:
+    print(
+        "run_dropzone_ingestion.py is deprecated for milestone 12.19. "
+        "Use run_pipeline.py so Drop Zone batch freezing, failure relocation, and cleanup rules stay consistent."
+    )
+    return 2
+
     if len(sys.argv) >= 2:
         source_folder = Path(sys.argv[1]).expanduser().resolve()
     else:

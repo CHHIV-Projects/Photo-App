@@ -36,6 +36,7 @@ class FailedAssetInsert:
 
     copied_file: CopiedFile
     reason: str
+    should_remove_vault_copy: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,13 @@ def persist_copied_files(
                 )
             except SQLAlchemyError as error:
                 db_session.rollback()
-                failed_inserts.append(FailedAssetInsert(copied_file=copied_file, reason=str(error)))
+                failed_inserts.append(
+                    FailedAssetInsert(
+                        copied_file=copied_file,
+                        reason=str(error),
+                        should_remove_vault_copy=False,
+                    )
+                )
             continue
 
         try:
@@ -130,7 +137,13 @@ def persist_copied_files(
             )
         except SQLAlchemyError as error:
             db_session.rollback()
-            failed_inserts.append(FailedAssetInsert(copied_file=copied_file, reason=str(error)))
+            failed_inserts.append(
+                FailedAssetInsert(
+                    copied_file=copied_file,
+                    reason=str(error),
+                    should_remove_vault_copy=True,
+                )
+            )
 
     return PersistenceResult(
         inserted_records=inserted_records,

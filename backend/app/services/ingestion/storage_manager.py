@@ -69,15 +69,11 @@ def copy_unique_files_to_vault(
                 unique_file.record.extension,
             )
 
-            if destination_path.exists():
-                copied_files.append(
-                    CopiedFile(
-                        hashed_file=unique_file,
-                        destination_path=str(destination_path),
-                    )
-                )
-                continue
-
+            # For 12.19: Always copy and verify, even if destination exists.
+            # This prevents false positives where destination_path.exists() is True
+            # but the file is corrupted, incomplete, or will be deleted later.
+            # Never assume an existing file is valid without verification.
+            
             destination_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, destination_path)
 

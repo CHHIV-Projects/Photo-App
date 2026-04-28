@@ -22,7 +22,7 @@ The system combines:
 
 - Database: PostgreSQL
 
-- Cache / Queue: Redis (planned / partial)
+- Cache / Queue: Redis (planned / partial integration)
 
 ### Computer Vision
 
@@ -85,7 +85,9 @@ Source → Drop Zone
   → Capture Classification (type + time trust)
   → Event Clustering
 
-  → Duplicate Lineage (near-duplicate grouping)
+  → Duplicate Detection (pHash / lineage)
+  → Duplicate Suggestions (candidate pairs)
+  → Duplicate Adjudication (confirm / reject / demote / canonical selection)
 
   → Face Detection
   → Face Cropping
@@ -129,6 +131,14 @@ Source → Drop Zone
 
 - **Vault** — single source of truth for files
 
+- **Place** — grouped geographic location (GPS cluster)  
+
+- **User Place Label** — human-defined place name  
+
+- **Visibility Status** — visible / demoted asset state  
+
+- **Canonical Metadata** — selected metadata from multiple observations
+
 ---
 
 ## 6. Active Systems
@@ -158,6 +168,13 @@ Source → Drop Zone
 - exact duplicates collapsed at ingest
 
 - near-duplicate lineage grouping (11.7)
+
+### Duplicate Adjudication System
+
+- duplicate suggestions (12.12)  
+- canonical selection (12.13)  
+- demotion (visibility control)  
+- rejection persistence
 
 ### Face & Identity System
 
@@ -195,6 +212,20 @@ Source → Drop Zone
 
 - controlled vocabulary (early stage)
 
+### Location System
+
+- canonical GPS selection (12.8)  
+- place grouping (12.9)  
+- reverse geocoding (12.11)  
+- user-defined place labels (12.17)
+
+### Photo Review System
+
+- primary browsing workspace (12.14)  
+- unified filtering and search (12.15)  
+- person-aware filtering (12.16)  
+- visibility-aware asset filtering
+
 ### Presentation Layer
 
 - slideshow / presentation viewer (11.15)
@@ -204,6 +235,12 @@ Source → Drop Zone
 - keyboard controls
 
 - fullscreen support
+
+### Admin System
+
+- system summary metrics (12.18)  
+- operational visibility layer  
+- foundation for future system controls
 
 ### Display Adjustment System
 
@@ -224,6 +261,14 @@ Source → Drop Zone
 - Places
 
 - Unassigned Faces
+
+- Photo Review (primary surface)  
+
+- Duplicate Groups  
+
+- Duplicate Suggestions  
+
+- Admin
 
 ---
 
@@ -343,41 +388,39 @@ Includes:
 
 ## 12. Known Limitations
 
-- metadata inconsistency across sources (EXIF gaps)
+- ingestion performance constrained by duplicate lineage processing (pending decoupling)  
 
-- no canonical metadata selection yet
+- no cloud ingestion (iCloud / others)  
 
-- near-duplicate review workflow missing
+- HEIC viewing not fully supported  
 
-- no asset-level event reassignment
+- Live Photo (HEIC + MOV) handling undefined  
 
-- content tagging accuracy limited
+- location intelligence limited to geocoding (no landmark detection or inference)  
 
-- no video playback or video intelligence
+- face clustering suggestions limited in effectiveness  
 
-- limited provenance UI visibility
+- UI still workbench-oriented (Photo Review not fully unified workspace)  
 
-- UI consistency not yet optimized
+- video handling not yet implemented
 
 ---
 
-## 13. Near-Term Direction (Milestone 12+)
+## 13. Near-Term Direction (Post 12.18)
 
-- metadata canonicalization (EXIF reconciliation)
+- ingestion stabilization (batch staging, cloud ingestion)  
 
-- provenance model refinement
+- duplicate processing decoupling (background processing)  
 
-- event refinement (remove/reassign assets)
+- HEIC native support and Live Photo handling  
 
-- album-event integration
+- undated asset discovery and metadata completeness workflows  
 
-- near-duplicate review system
+- duplicate system refinement (threshold tuning, UX improvements)  
 
-- improved tagging / semantic search
+- location filtering and place system expansion  
 
-- video asset strategy
-
-- UX/UI refinement layer
+- demotion workflows for non-duplicate unwanted assets
 
 ---
 
@@ -392,3 +435,62 @@ Includes:
 - scalable for large archives
 
 - optimize later, structure first
+
+## 15. System Layers
+
+- **Storage Layer** — Vault (immutable file storage)  
+
+- **Data Layer** — Database (assets, metadata, relationships)  
+
+- **Processing Layer** — ingestion, clustering, canonicalization  
+
+- **Intelligence Layer** — faces, duplicates, tagging (partially implemented)  
+
+- **Interaction Layer** — UI (Photo Review, Workbench, Admin)
+
+## 16. Processing Model
+
+- ingestion pipeline is deterministic and repeatable  
+
+- certain systems will transition to asynchronous/background processing:  
+  
+  - duplicate lineage  
+  
+  - suggestions  
+  
+  - future intelligence tasks  
+
+- system is evolving toward hybrid:  
+  
+  - ingestion-time processing  
+  
+  - background enrichment
+
+## 17. Storage and Deployment Direction
+
+The system is designed to operate locally, with planned migration toward dedicated NAS-based storage for scalability and reliability.  
+
+### Planned Architecture
+
+- Primary storage will migrate to a Synology NAS (DS225+)  
+- Vault directory will reside on NAS-backed storage  
+- PostgreSQL and Redis expected to run via Docker on NAS  
+- Local machine will act as:  
+- development environment  
+- UI/frontend host  
+- optional processing node  
+
+### Design Implications
+
+- Vault must remain:  
+- immutable  
+- file-system independent  
+- ingestion and processing must support:  
+- network-mounted storage  
+- larger datasets  
+- long-running processes (duplicate lineage, enrichment) will transition to background execution aligned with NAS capabilities  
+
+### Status
+
+- migration not yet complete  
+- system currently optimized for local-first development

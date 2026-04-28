@@ -48,7 +48,9 @@ This workflow ensures:
 
 - anticipates likely coder clarification questions
 
-- answers coder questions clearly and decisively
+- 
+
+- answers coder questions clearly and decisively, while ensuring alignment with current system behavior and architecture
 
 - interprets results and adjusts direction
 
@@ -112,6 +114,36 @@ Coder:
 
 ---
 
+###### Step 2.5 — Codebase Reconnaissance (NEW)
+
+For complex milestones, the coder should:  
+
+- inspect relevant existing systems and code paths  
+
+- identify:  
+
+- conflicts with current implementation  
+
+- missing data structures  
+
+- implicit assumptions in prompt vs reality  
+
+- confirm:  
+
+- where changes will occur  
+
+- whether migration/backfill is required  
+
+- return structured observations before implementation if needed  
+
+Purpose:  
+
+- avoid incorrect assumptions  
+- reduce rework  
+- ensure prompt aligns with actual system state 
+
+---
+
 ### Step 3 — Clarification Loop
 
 Coder asks targeted questions.
@@ -125,6 +157,8 @@ ChatGPT:
 - avoids introducing new scope
 
 - maintains architectural alignment
+
+- coder may challenge prompt assumptions if they conflict with current system behavior
 
 User sends finalized answers to coder.
 
@@ -234,6 +268,30 @@ ChatGPT:
 
 ---
 
+### Prompt Types
+
+#### Milestone Types
+
+Milestones generally fall into one of the following categories:  
+
+- **New System** — introduces new models or workflows  
+
+- **Extension** — builds on existing systems  
+
+- **Refactor / Stabilization** — modifies behavior or performance  
+
+- **UX / Interaction** — improves usability without changing core logic  
+
+- **Design-First** — requires analysis before implementation (no immediate coding)  
+
+Each type may require different levels of:  
+
+- codebase reconnaissance  
+- migration/backfill planning  
+- clarification depth
+
+---
+
 ## Prompt Structure Standard
 
 All milestone prompts follow a consistent format:
@@ -265,6 +323,51 @@ This ensures:
 - repeatability
 
 - minimal interpretation errors
+
+---
+
+## Migration / Backfill Considerations
+
+For milestones that modify:  
+
+- data models  
+- canonical fields  
+- grouping logic  
+
+the system must consider:  
+
+- existing data state  
+
+- whether backfill is required  
+
+- whether changes are:  
+
+- forward-only  
+
+- recomputable  
+
+- destructive or non-destructive  
+
+Coder should raise these questions during clarification phase.
+
+---
+
+## Performance Awareness
+
+Milestones must consider:  
+
+- impact on ingestion time  
+- query efficiency  
+- scalability with large datasets  
+
+Expensive operations should:  
+
+- be identified explicitly  
+- be candidates for background processing  
+
+Example:  
+
+- duplicate lineage (moved toward background processing)
 
 ---
 

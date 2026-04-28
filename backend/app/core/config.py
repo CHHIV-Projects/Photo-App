@@ -31,6 +31,7 @@ class Settings:
 	drop_zone_path: str = os.getenv("DROP_ZONE_PATH", "../storage/drop_zone")
 	vault_path: str = os.getenv("VAULT_PATH", "../storage/vault")
 	quarantine_path: str = os.getenv("QUARANTINE_PATH", "../storage/quarantine")
+	ingest_failures_path: str = os.getenv("INGEST_FAILURES_PATH", "../storage/ingest_failures")
 	ingest_batch_size: int = int(os.getenv("INGEST_BATCH_SIZE", "50"))
 	ingest_total_limit: int | None = (
 		int(os.getenv("INGEST_TOTAL_LIMIT", "").strip())

@@ -30,7 +30,24 @@ It currently supports:
 
 - multi-view UI (Photos, Review, People, Events, Albums, Places, Unassigned)
 
+- duplicate adjudication system (suggestions, canonical selection, demotion)  
+
+- location system (place grouping, geocoding, user-defined labels)  
+
+- Photo Review workspace (primary browsing surface)  
+
+- admin system (system visibility and operational layer)
+
 The system is no longer a prototype — it is a **functionally complete archival platform**.
+
+## System Evolution Note
+
+The system has evolved from a primarily pipeline-centric architecture  
+to a layered architecture where user workflow surfaces (review, correction, curation)  
+are now the primary interaction model, while system pipelines continue to provide  
+the underlying structure and automation.
+
+This shift is centered around the Photo Review workspace and duplicate adjudication system.
 
 ---
 
@@ -94,25 +111,47 @@ Remaining minor gaps:
 
 ---
 
-### Phase 4 — Intelligence & Refinement (Next Phase)
 
-Focus:
 
-- metadata canonicalization (critical next step)
+### Phase 4 — Data Quality & User Workflows (Complete)
 
-- provenance model refinement
+Focus:  
 
-- event refinement (remove/reassign assets)
+- metadata canonicalization  
+- duplicate adjudication and control  
+- event stabilization (non-destructive model)  
+- location system foundation (GPS, places, geocoding)  
+- unified search and Photo Review workspace  
+- user-driven workflows for correction and curation  
 
-- near-duplicate review workflows
+Delivered:  
 
-- improved content tagging and semantic understanding
-
-- video asset strategy
+- canonical metadata system (12.1)  
+- duplicate review, suggestions, adjudication (12.3–12.13)  
+- event stabilization (12.7)  
+- place system + geocoding (12.8–12.11)  
+- Photo Review + unified search (12.14–12.15)  
+- person integration (12.16)  
+- place aliasing (12.17)  
+- admin system (12.18)
 
 ---
 
-### Phase 5 — Platform Expansion (Future)
+###### Phase 5 — System Stabilization & Real-World Scale (Current)
+
+Focus:  
+
+- ingestion stabilization (batch staging)  
+- cloud ingestion (iCloud priority)  
+- duplicate processing decoupling (background processing)  
+- format handling (HEIC, Live Photos)  
+- performance and scalability improvements  
+- UX refinement toward unified workflows  
+
+This phase marks transition from:  
+prototype completeness → real-world operational robustness
+
+### Phase 6 — Platform Expansion (Future)
 
 Focus:
 
@@ -240,6 +279,34 @@ System must distinguish:
 
 - system workflows (ingestion, clustering, tagging)
 
+### G. Processing Decoupling
+
+The system must evolve from ingestion-time heavy processing to:  
+
+- background processing for expensive tasks  
+- non-blocking ingestion pipeline  
+- controllable execution via admin layer  
+
+Key candidates:  
+
+- duplicate lineage  
+- suggestion generation  
+- future intelligence tasks
+
+### H. Format-Aware Asset Handling
+
+The system must support multiple media formats:  
+
+- HEIC (primary modern photo format)  
+- Live Photos (HEIC + MOV linkage)  
+- video assets  
+
+Design must:  
+
+- preserve original formats  
+- avoid lossy conversion  
+- support unified viewing experience
+
 ---
 
 ## 5. Parking Lot Integration Strategy
@@ -254,35 +321,26 @@ Features move from parking lot to roadmap when they:
 
 ---
 
-### Immediate Promotion Candidates
+###### Immediate Promotion Candidates
 
-- metadata canonicalization
-
-- provenance visibility
-
-- near-duplicate review
-
----
+- ingestion stabilization (batch staging)  
+- background duplicate processing  
+- cloud ingestion (iCloud)  
+- HEIC support (minimum viable)  
 
 ### Mid-Term Candidates
 
-- event refinement
-
-- album-event integration
-
-- tagging improvements
-
----
+- Live Photo handling (design + implementation)  
+- undated asset discovery  
+- duplicate UX improvements  
+- location filtering  
 
 ### Long-Term Candidates
 
-- semantic search
-
-- collaborative users
-
-- mobile expansion
-
-- cloud-assisted ML
+- multi-signal duplicate scoring  
+- location intelligence (landmarks, inference)  
+- semantic search and tagging  
+- collections / album-event integration
 
 ---
 
@@ -347,3 +405,10 @@ The system evolves into a **local-first photo intelligence platform** capable of
 - remaining private-first, with optional expansion to sharing and external access
 
 This is not just a photo viewer — it is a **curated, intelligent archival system**.
+
+### 8. NAS/Synology
+
+- planned migration to NAS-backed storage (Synology) for:  
+- vault storage  
+- database and cache hosting  
+- background processing workloads

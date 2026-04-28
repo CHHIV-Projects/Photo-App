@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,7 @@ from app.services.ingestion.dropzone_manager import (
     build_dropzone_processing_records,
     stage_source_records_to_dropzone,
 )
+from app.services.ingestion.failure_manager import move_record_to_ingest_failures
 from app.services.ingestion.filter import FilterResult, filter_records
 from app.services.ingestion.hasher import HashResult, HashedFile, hash_records
 from app.services.ingestion.scanner import FileScanRecord, ScanResult, scan_folder
@@ -57,15 +60,16 @@ class PipelineContext:
     drop_zone_path: Path
     vault_path: Path
     quarantine_path: Path
+    ingest_failures_path: Path
     ingest_batch_size: int
     ingest_total_limit: int | None
     source_label: str | None
     source_type: str | None
     source_scan_result: ScanResult | None = None
+    source_selected_records: list[FileScanRecord] = field(default_factory=list)
     stage_result: DropzoneStageResult | None = None
     dropzone_scan_result: ScanResult | None = None
     processing_records: list[FileScanRecord] = field(default_factory=list)
-    remaining_processing_records: list[FileScanRecord] = field(default_factory=list)
     filter_result: FilterResult | None = None
     hash_result: HashResult | None = None
     dedup_result: DeduplicationResult | None = None
@@ -79,6 +83,10 @@ class PipelineContext:
     total_new_unique_ingested: int = 0
     total_existing_or_duplicate_processed: int = 0
     total_dropzone_files_cleaned: int = 0
+    cleaned_dropzone_paths: list[str] = field(default_factory=list)
+    moved_to_ingest_failures: list[dict[str, str]] = field(default_factory=list)
+    failed_move_paths: list[str] = field(default_factory=list)
+    manifest_path: Path | None = None
     run_face_detection_rebuild: bool = False
     run_face_clustering_rebuild: bool = False
     resolved_ingestion_context: ResolvedIngestionContext | None = None
@@ -361,8 +369,8 @@ def _validate_rebuild_confirmation(
 def _validate_ingest_controls(ingest_batch_size: int, ingest_total_limit: int | None) -> None:
     if ingest_batch_size <= 0:
         raise ValueError("Ingest batch size must be greater than zero.")
-    if ingest_total_limit is not None and ingest_total_limit <= 0:
-        raise ValueError("Ingest total limit must be greater than zero when provided.")
+    if ingest_total_limit is not None:
+        raise ValueError("INGEST_TOTAL_LIMIT is not supported in milestone 12.19. Use INGEST_BATCH_SIZE only.")
 
 
 def _prompt_yes_no(question: str) -> bool:
@@ -448,13 +456,12 @@ def _get_user_input() -> Any:
     print()
 
     ingest_batch_size = _prompt_int_default(
-        "Batch size for new unique assets per batch?",
+        "Batch size for Drop Zone files per run?",
         settings.ingest_batch_size,
     )
     print()
 
-    ingest_total_limit = _prompt_optional_int("Total limit for new unique assets this run?")
-    print()
+    ingest_total_limit = None
 
     confirmation_value = _maybe_confirm_rebuild_interactive(
         run_face_detection_rebuild or run_face_clustering_rebuild
@@ -521,32 +528,30 @@ def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
 
 def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
     if ctx.from_path is not None:
+        existing_dropzone_scan = scan_folder(ctx.drop_zone_path)
+        if existing_dropzone_scan.files:
+            raise RuntimeError(
+                "Drop Zone already contains an active batch. Process or clear it before using --from-path."
+            )
+
         source_scan_result = scan_folder(ctx.from_path)
+        selected_source_records = list(source_scan_result.files[: ctx.ingest_batch_size])
         stage_result = stage_source_records_to_dropzone(
-            source_scan_result.files,
+            selected_source_records,
             ctx.drop_zone_path,
             ctx.quarantine_path,
         )
         dropzone_scan_result = scan_folder(ctx.drop_zone_path)
-        staged_paths = {
-            str(Path(item.dropzone_path).resolve())
-            for item in stage_result.staged_files
-        }
-        scoped_dropzone_records = [
-            record
-            for record in dropzone_scan_result.files
-            if str(Path(record.full_path).resolve()) in staged_paths
-        ]
         processing_records = build_dropzone_processing_records(
-            scoped_dropzone_records,
+            dropzone_scan_result.files,
             stage_result.staged_files,
         )
 
         ctx.source_scan_result = source_scan_result
+        ctx.source_selected_records = selected_source_records
         ctx.stage_result = stage_result
         ctx.dropzone_scan_result = dropzone_scan_result
         ctx.processing_records = processing_records
-        ctx.remaining_processing_records = list(processing_records)
 
         return {
             "scope": "batch",
@@ -554,24 +559,23 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
             "source_path": str(ctx.from_path),
             "source_files_scanned": len(source_scan_result.files),
             "source_scan_errors": len(source_scan_result.errors),
+            "source_files_selected_for_batch": len(selected_source_records),
+            "source_files_deferred": max(0, len(source_scan_result.files) - len(selected_source_records)),
             "files_staged": len(stage_result.staged_files),
             "stage_failures": len(stage_result.failures),
             "drop_zone_records_total": len(dropzone_scan_result.files),
-            "drop_zone_records_selected": len(processing_records),
-            "drop_zone_records_ignored": max(0, len(dropzone_scan_result.files) - len(processing_records)),
-            "processing_records": len(processing_records),
+            "drop_zone_records_frozen": len(processing_records),
         }
 
     dropzone_scan_result = scan_folder(ctx.drop_zone_path)
     ctx.dropzone_scan_result = dropzone_scan_result
     ctx.processing_records = dropzone_scan_result.files
-    ctx.remaining_processing_records = list(dropzone_scan_result.files)
 
     return {
         "scope": "batch",
         "input_mode": "existing drop zone contents",
         "drop_zone_path": str(ctx.drop_zone_path),
-        "drop_zone_records": len(dropzone_scan_result.files),
+        "drop_zone_records_frozen": len(dropzone_scan_result.files),
         "drop_zone_scan_errors": len(dropzone_scan_result.errors),
     }
 
@@ -628,15 +632,10 @@ def _remaining_new_asset_slots(ctx: PipelineContext) -> int | None:
 
 
 def _select_next_batch(ctx: PipelineContext) -> IngestionBatch | None:
-    remaining_new_slots = _remaining_new_asset_slots(ctx)
-    if remaining_new_slots == 0 or not ctx.remaining_processing_records:
+    if not ctx.processing_records:
         return None
 
-    target_new_unique = ctx.ingest_batch_size
-    if remaining_new_slots is not None:
-        target_new_unique = min(target_new_unique, remaining_new_slots)
-
-    batch_records: list[FileScanRecord] = []
+    batch_records = list(ctx.processing_records[: ctx.ingest_batch_size])
     accepted: list[FileScanRecord] = []
     rejected = []
     hashed_files: list[HashedFile] = []
@@ -646,10 +645,7 @@ def _select_next_batch(ctx: PipelineContext) -> IngestionBatch | None:
     seen_sha256_in_batch: dict[str, HashedFile] = {}
     prospective_new_unique = 0
 
-    while ctx.remaining_processing_records:
-        record = ctx.remaining_processing_records.pop(0)
-        batch_records.append(record)
-
+    for record in batch_records:
         single_filter_result = filter_records(
             [record],
             approved_extensions=settings.approved_extensions,
@@ -676,12 +672,6 @@ def _select_next_batch(ctx: PipelineContext) -> IngestionBatch | None:
             if hashed_file.sha256 not in ctx.known_asset_sha256:
                 prospective_new_unique += 1
 
-        if target_new_unique > 0 and prospective_new_unique >= target_new_unique:
-            break
-
-    if not batch_records:
-        return None
-
     return IngestionBatch(
         records=batch_records,
         filter_result=FilterResult(accepted=accepted, rejected=rejected),
@@ -689,6 +679,84 @@ def _select_next_batch(ctx: PipelineContext) -> IngestionBatch | None:
         dedup_result=DeduplicationResult(unique_files=unique_files, duplicate_files=duplicate_files),
         prospective_new_unique=prospective_new_unique,
     )
+
+
+def _remove_vault_copy_for_failed_insert(destination_path: str) -> None:
+    path = Path(destination_path)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _resolve_failure_source_root(ctx: PipelineContext) -> Path | None:
+    if ctx.from_path is None:
+        return None
+    return ctx.from_path.expanduser().resolve()
+
+
+def _move_failed_batch_records(ctx: PipelineContext) -> tuple[int, list[str]]:
+    failed_records_by_path: dict[str, tuple[FileScanRecord, str]] = {}
+    failed_moves: list[str] = []
+
+    if ctx.filter_result is not None:
+        for item in ctx.filter_result.rejected:
+            failed_records_by_path[item.record.full_path] = (item.record, item.reason)
+    if ctx.hash_result is not None:
+        for item in ctx.hash_result.errors:
+            failed_records_by_path[item.record.full_path] = (item.record, item.reason)
+    if ctx.storage_result is not None:
+        for item in ctx.storage_result.failed_files:
+            failed_records_by_path[item.hashed_file.record.full_path] = (item.hashed_file.record, item.reason)
+    if ctx.persistence_result is not None:
+        for item in ctx.persistence_result.failed_inserts:
+            failed_records_by_path[item.copied_file.hashed_file.record.full_path] = (
+                item.copied_file.hashed_file.record,
+                item.reason,
+            )
+            if item.should_remove_vault_copy:
+                _remove_vault_copy_for_failed_insert(item.copied_file.destination_path)
+    if ctx.duplicate_provenance_result is not None:
+        for item, _ in ctx.duplicate_provenance_result.failed_duplicates:
+            failed_records_by_path[item.duplicate.record.full_path] = (
+                item.duplicate.record,
+                "duplicate_provenance_persist_failed",
+            )
+
+    moved = 0
+    moved_entries: list[dict[str, str]] = []
+    failure_source_root = _resolve_failure_source_root(ctx)
+    for raw_path in sorted(failed_records_by_path):
+        record, reason = failed_records_by_path[raw_path]
+        try:
+            moved_target = move_record_to_ingest_failures(
+                record,
+                ctx.ingest_failures_path,
+                source_root=failure_source_root,
+            )
+            moved += 1
+            moved_entries.append(
+                {
+                    "source_path": raw_path,
+                    "moved_to": moved_target,
+                    "reason": reason,
+                }
+            )
+        except FileNotFoundError:
+            moved += 1
+            moved_entries.append(
+                {
+                    "source_path": raw_path,
+                    "moved_to": "already_missing",
+                    "reason": reason,
+                }
+            )
+        except OSError:
+            failed_moves.append(raw_path)
+
+    ctx.moved_to_ingest_failures = moved_entries
+    ctx.failed_move_paths = failed_moves
+    return moved, failed_moves
 
 
 def _filter_records_stage(ctx: PipelineContext) -> dict[str, Any]:
@@ -816,22 +884,207 @@ def _cleanup_drop_zone_stage(ctx: PipelineContext) -> dict[str, Any]:
             successful_paths.add(item.duplicate.record.full_path)
 
     cleaned = 0
+    cleaned_paths: list[str] = []
     for raw_path in sorted(successful_paths):
         try:
             Path(raw_path).unlink(missing_ok=False)
             cleaned += 1
+            cleaned_paths.append(raw_path)
         except FileNotFoundError:
             cleaned += 1
+            cleaned_paths.append(raw_path)
         except OSError:
             failed_cleanup.append(raw_path)
 
+    failed_moved, failed_move_errors = _move_failed_batch_records(ctx)
+
     ctx.total_dropzone_files_cleaned += cleaned
+    ctx.cleaned_dropzone_paths = cleaned_paths
+    remaining_selected_paths = 0
+    for record in ctx.current_batch_records:
+        if Path(record.full_path).exists():
+            remaining_selected_paths += 1
+
     return {
         "scope": "batch",
         "cleaned_files": cleaned,
-        "cleanup_failures": len(failed_cleanup),
-        "left_in_drop_zone": max(0, len(ctx.current_batch_records) - cleaned),
+        "failed_files_relocated": failed_moved,
+        "cleanup_failures": len(failed_cleanup) + len(failed_move_errors),
+        "left_in_drop_zone": remaining_selected_paths,
     }
+
+
+def _build_ingestion_run_manifest(
+    ctx: PipelineContext,
+    outcomes: list[StageOutcome],
+    total_elapsed_seconds: float,
+    status: str,
+) -> dict[str, Any]:
+    selected_from_source = [record.full_path for record in ctx.source_selected_records]
+    staged_into_drop_zone = [item.dropzone_path for item in (ctx.stage_result.staged_files if ctx.stage_result else [])]
+    frozen_for_processing = [record.full_path for record in ctx.processing_records]
+
+    inserted_sources = [
+        item.copied_file.hashed_file.record.original_source_path
+        for item in (ctx.persistence_result.inserted_records if ctx.persistence_result else [])
+    ]
+    existing_sources = [
+        item.copied_file.hashed_file.record.original_source_path
+        for item in (ctx.persistence_result.skipped_existing_records if ctx.persistence_result else [])
+    ]
+    duplicate_sources = [
+        item.duplicate.record.original_source_path
+        for item in (
+            ctx.duplicate_provenance_result.successful_duplicates
+            if ctx.duplicate_provenance_result is not None
+            else []
+        )
+    ]
+
+    persisted_unique = sorted(
+        {
+            *inserted_sources,
+            *existing_sources,
+            *duplicate_sources,
+        }
+    )
+
+    failures_with_reasons: list[dict[str, str]] = []
+    if ctx.stage_result is not None:
+        failures_with_reasons.extend(
+            {
+                "source_path": item.source_record.full_path,
+                "reason": item.reason,
+                "phase": "staging",
+            }
+            for item in ctx.stage_result.failures
+        )
+    if ctx.filter_result is not None:
+        failures_with_reasons.extend(
+            {
+                "source_path": item.record.full_path,
+                "reason": item.reason,
+                "phase": "filter",
+            }
+            for item in ctx.filter_result.rejected
+        )
+    if ctx.hash_result is not None:
+        failures_with_reasons.extend(
+            {
+                "source_path": item.record.full_path,
+                "reason": item.reason,
+                "phase": "hash",
+            }
+            for item in ctx.hash_result.errors
+        )
+    if ctx.storage_result is not None:
+        failures_with_reasons.extend(
+            {
+                "source_path": item.hashed_file.record.full_path,
+                "reason": item.reason,
+                "phase": "storage",
+            }
+            for item in ctx.storage_result.failed_files
+        )
+    if ctx.persistence_result is not None:
+        failures_with_reasons.extend(
+            {
+                "source_path": item.copied_file.hashed_file.record.full_path,
+                "reason": item.reason,
+                "phase": "persistence",
+            }
+            for item in ctx.persistence_result.failed_inserts
+        )
+    if ctx.duplicate_provenance_result is not None:
+        failures_with_reasons.extend(
+            {
+                "source_path": item.duplicate.record.full_path,
+                "reason": reason,
+                "phase": "duplicate_provenance",
+            }
+            for item, reason in ctx.duplicate_provenance_result.failed_duplicates
+        )
+
+    return {
+        "run_metadata": {
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "status": status,
+            "elapsed_seconds": round(total_elapsed_seconds, 3),
+            "source_path": str(ctx.from_path) if ctx.from_path is not None else None,
+            "drop_zone_path": str(ctx.drop_zone_path),
+            "ingest_failures_path": str(ctx.ingest_failures_path),
+            "ingest_batch_size": ctx.ingest_batch_size,
+            "ingestion_run_id": (
+                ctx.resolved_ingestion_context.ingestion_run_id
+                if ctx.resolved_ingestion_context is not None
+                else None
+            ),
+            "ingestion_source_id": (
+                ctx.resolved_ingestion_context.ingestion_source_id
+                if ctx.resolved_ingestion_context is not None
+                else None
+            ),
+        },
+        "files": {
+            "selected_from_source": selected_from_source,
+            "staged_into_drop_zone": staged_into_drop_zone,
+            "frozen_for_processing": frozen_for_processing,
+            "successfully_persisted": persisted_unique,
+            "cleaned_from_drop_zone": list(ctx.cleaned_dropzone_paths),
+            "moved_to_ingest_failures": list(ctx.moved_to_ingest_failures),
+            "failed_to_move_to_ingest_failures": list(ctx.failed_move_paths),
+        },
+        "failures_with_reasons": failures_with_reasons,
+        "counts": {
+            "source_files_scanned": len(ctx.source_scan_result.files) if ctx.source_scan_result is not None else None,
+            "source_files_selected_for_batch": len(selected_from_source),
+            "files_staged": len(staged_into_drop_zone),
+            "files_frozen": len(frozen_for_processing),
+            "files_successfully_persisted": len(persisted_unique),
+            "files_cleaned_from_drop_zone": len(ctx.cleaned_dropzone_paths),
+            "files_moved_to_ingest_failures": len(ctx.moved_to_ingest_failures),
+            "failed_to_move_to_ingest_failures": len(ctx.failed_move_paths),
+            "stage_outcomes": [
+                {
+                    "key": outcome.key,
+                    "label": outcome.label,
+                    "status": outcome.status,
+                    "elapsed_seconds": round(outcome.elapsed_seconds, 3),
+                    "error": outcome.error,
+                    "skip_reason": outcome.skip_reason,
+                    "summary": outcome.summary,
+                }
+                for outcome in outcomes
+            ],
+        },
+    }
+
+
+def _write_ingestion_run_manifest(
+    ctx: PipelineContext,
+    outcomes: list[StageOutcome],
+    total_elapsed_seconds: float,
+    status: str,
+) -> Path | None:
+    manifest_root = _resolve_runtime_path("../storage/logs/ingestion_manifests")
+    manifest_root.mkdir(parents=True, exist_ok=True)
+
+    run_id = (
+        str(ctx.resolved_ingestion_context.ingestion_run_id)
+        if ctx.resolved_ingestion_context is not None
+        else datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    )
+    manifest_path = manifest_root / f"ingestion_run_{run_id}.json"
+
+    manifest_payload = _build_ingestion_run_manifest(
+        ctx,
+        outcomes,
+        total_elapsed_seconds,
+        status,
+    )
+    manifest_path.write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
+    ctx.manifest_path = manifest_path
+    return manifest_path
 
 
 def _exif_extraction_stage(ctx: PipelineContext) -> dict[str, Any]:
@@ -1337,8 +1590,8 @@ def _print_dry_run(args: RuntimeArgs, ctx: PipelineContext) -> None:
         print(f"  Source type: {args.source_type}")
     print(f"  Drop zone path: {ctx.drop_zone_path}")
     print(f"  Vault path: {ctx.vault_path}")
+    print(f"  Ingest failures path: {ctx.ingest_failures_path}")
     print(f"  Ingest batch size: {args.ingest_batch_size}")
-    print(f"  Ingest total limit: {args.ingest_total_limit if args.ingest_total_limit is not None else 'none'}")
     print()
     print("Planned stages:")
     print("  [1] RUN - collect input (scope=batch)")
@@ -1417,102 +1670,101 @@ def _skip_stage(*, key: str, index: int, total: int, label: str, reason: str, ou
 
 
 def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[StageOutcome]) -> None:
-    while True:
-        next_batch = _select_next_batch(ctx)
-        if next_batch is None:
-            return
+    next_batch = _select_next_batch(ctx)
+    if next_batch is None:
+        return
 
-        ctx.total_batches_run += 1
-        ctx.current_batch_records = next_batch.records
-        ctx.filter_result = next_batch.filter_result
-        ctx.hash_result = next_batch.hash_result
-        ctx.dedup_result = next_batch.dedup_result
-        ctx.storage_result = None
-        ctx.persistence_result = None
-        ctx.duplicate_provenance_result = None
-        ctx.current_batch_new_asset_sha256 = []
+    ctx.total_batches_run = 1
+    ctx.current_batch_records = next_batch.records
+    ctx.filter_result = next_batch.filter_result
+    ctx.hash_result = next_batch.hash_result
+    ctx.dedup_result = next_batch.dedup_result
+    ctx.storage_result = None
+    ctx.persistence_result = None
+    ctx.duplicate_provenance_result = None
+    ctx.current_batch_new_asset_sha256 = []
 
-        batch_label_prefix = f"batch {ctx.total_batches_run}"
-        _execute_stage(
-            key=f"{batch_label_prefix}_filter",
+    batch_label_prefix = f"batch {ctx.total_batches_run}"
+    _execute_stage(
+        key=f"{batch_label_prefix}_filter",
+        index=1,
+        total=6,
+        label=f"{batch_label_prefix}: filter records",
+        runner=lambda: _filter_records_stage(ctx),
+        outcomes=outcomes,
+    )
+    _execute_stage(
+        key=f"{batch_label_prefix}_hash",
+        index=2,
+        total=6,
+        label=f"{batch_label_prefix}: hash files",
+        runner=lambda: _hash_stage(ctx),
+        outcomes=outcomes,
+    )
+    _execute_stage(
+        key=f"{batch_label_prefix}_deduplicate",
+        index=3,
+        total=6,
+        label=f"{batch_label_prefix}: deduplicate files",
+        runner=lambda: _deduplicate_stage(ctx),
+        outcomes=outcomes,
+    )
+    _execute_stage(
+        key=f"{batch_label_prefix}_storage",
+        index=4,
+        total=6,
+        label=f"{batch_label_prefix}: store to vault",
+        runner=lambda: _storage_stage(ctx),
+        outcomes=outcomes,
+    )
+    _execute_stage(
+        key=f"{batch_label_prefix}_ingest",
+        index=5,
+        total=6,
+        label=f"{batch_label_prefix}: ingest to database",
+        runner=lambda: _ingest_to_db_stage(ctx),
+        outcomes=outcomes,
+    )
+    _execute_stage(
+        key=f"{batch_label_prefix}_cleanup",
+        index=6,
+        total=6,
+        label=f"{batch_label_prefix}: clean drop zone",
+        runner=lambda: _cleanup_drop_zone_stage(ctx),
+        outcomes=outcomes,
+    )
+
+    if args.skip_exif_extraction:
+        _skip_stage(
+            key=f"{batch_label_prefix}_exif",
             index=1,
-            total=6,
-            label=f"{batch_label_prefix}: filter records",
-            runner=lambda: _filter_records_stage(ctx),
+            total=5,
+            label=f"{batch_label_prefix}: EXIF extraction",
+            reason="--skip-exif-extraction",
             outcomes=outcomes,
         )
+    else:
         _execute_stage(
-            key=f"{batch_label_prefix}_hash",
+            key=f"{batch_label_prefix}_exif",
+            index=1,
+            total=5,
+            label=f"{batch_label_prefix}: EXIF extraction",
+            runner=lambda: _exif_extraction_stage(ctx),
+            outcomes=outcomes,
+        )
+
+    if args.skip_metadata_normalization:
+        _skip_stage(
+            key=f"{batch_label_prefix}_metadata",
             index=2,
-            total=6,
-            label=f"{batch_label_prefix}: hash files",
-            runner=lambda: _hash_stage(ctx),
+            total=5,
+            label=f"{batch_label_prefix}: metadata normalization",
+            reason="--skip-metadata-normalization",
             outcomes=outcomes,
         )
+    else:
         _execute_stage(
-            key=f"{batch_label_prefix}_deduplicate",
-            index=3,
-            total=6,
-            label=f"{batch_label_prefix}: deduplicate files",
-            runner=lambda: _deduplicate_stage(ctx),
-            outcomes=outcomes,
-        )
-        _execute_stage(
-            key=f"{batch_label_prefix}_storage",
-            index=4,
-            total=6,
-            label=f"{batch_label_prefix}: store to vault",
-            runner=lambda: _storage_stage(ctx),
-            outcomes=outcomes,
-        )
-        _execute_stage(
-            key=f"{batch_label_prefix}_ingest",
-            index=5,
-            total=6,
-            label=f"{batch_label_prefix}: ingest to database",
-            runner=lambda: _ingest_to_db_stage(ctx),
-            outcomes=outcomes,
-        )
-        _execute_stage(
-            key=f"{batch_label_prefix}_cleanup",
-            index=6,
-            total=6,
-            label=f"{batch_label_prefix}: clean drop zone",
-            runner=lambda: _cleanup_drop_zone_stage(ctx),
-            outcomes=outcomes,
-        )
-
-        if args.skip_exif_extraction:
-            _skip_stage(
-                key=f"{batch_label_prefix}_exif",
-                index=1,
-                total=5,
-                label=f"{batch_label_prefix}: EXIF extraction",
-                reason="--skip-exif-extraction",
-                outcomes=outcomes,
-            )
-        else:
-            _execute_stage(
-                key=f"{batch_label_prefix}_exif",
-                index=1,
-                total=5,
-                label=f"{batch_label_prefix}: EXIF extraction",
-                runner=lambda: _exif_extraction_stage(ctx),
-                outcomes=outcomes,
-            )
-
-        if args.skip_metadata_normalization:
-            _skip_stage(
-                key=f"{batch_label_prefix}_metadata",
-                index=2,
-                total=5,
-                label=f"{batch_label_prefix}: metadata normalization",
-                reason="--skip-metadata-normalization",
-                outcomes=outcomes,
-            )
-        else:
-            _execute_stage(
-                key=f"{batch_label_prefix}_metadata",
+            key=f"{batch_label_prefix}_metadata",
                 index=2,
                 total=5,
                 label=f"{batch_label_prefix}: metadata normalization",
@@ -1707,10 +1959,12 @@ def _print_summary(ctx: PipelineContext, outcomes: list[StageOutcome], total_ela
     print(f"  New unique assets ingested: {ctx.total_new_unique_ingested}")
     print(f"  Duplicates/already-known absorbed: {ctx.total_existing_or_duplicate_processed}")
     print(f"  Ingest batch size used: {ctx.ingest_batch_size}")
-    print(f"  Ingest total limit used: {ctx.ingest_total_limit if ctx.ingest_total_limit is not None else 'none'}")
     print(f"  Batches run: {ctx.total_batches_run}")
     print(f"  Drop zone files cleaned: {ctx.total_dropzone_files_cleaned}")
     print(f"  Drop zone files remaining: {remaining_dropzone_files}")
+    print(f"  Ingest failures path: {ctx.ingest_failures_path}")
+    if ctx.manifest_path is not None:
+        print(f"  Ingestion manifest: {ctx.manifest_path}")
     if ctx.resolved_ingestion_context is not None:
         print(f"  Source label: {ctx.resolved_ingestion_context.source_label}")
         print(f"  Source type: {ctx.resolved_ingestion_context.source_type}")
@@ -1746,6 +2000,7 @@ def main() -> int:
         drop_zone_path=_resolve_runtime_path(settings.drop_zone_path),
         vault_path=_resolve_runtime_path(settings.vault_path),
         quarantine_path=_resolve_runtime_path(settings.quarantine_path),
+        ingest_failures_path=_resolve_runtime_path(settings.ingest_failures_path),
         ingest_batch_size=args.ingest_batch_size,
         ingest_total_limit=args.ingest_total_limit,
         source_label=args.source_label,
@@ -1768,13 +2023,19 @@ def main() -> int:
         print(f"  Source type: {args.source_type}")
     print(f"  Drop zone path: {ctx.drop_zone_path}")
     print(f"  Vault path: {ctx.vault_path}")
+    print(f"  Ingest failures path: {ctx.ingest_failures_path}")
     print(f"  Ingest batch size: {ctx.ingest_batch_size}")
-    print(f"  Ingest total limit: {ctx.ingest_total_limit if ctx.ingest_total_limit is not None else 'none'}")
     print()
 
     started_at = time.perf_counter()
     outcomes = _run_pipeline(ctx, args)
     total_elapsed_seconds = time.perf_counter() - started_at
+    failed = next((outcome for outcome in outcomes if outcome.status == "failed"), None)
+    status = "FAILED" if failed is not None else "SUCCESS"
+    try:
+        _write_ingestion_run_manifest(ctx, outcomes, total_elapsed_seconds, status)
+    except OSError as error:
+        print(f"Warning: could not write ingestion manifest: {error}")
     return _print_summary(ctx, outcomes, total_elapsed_seconds)
 
 
