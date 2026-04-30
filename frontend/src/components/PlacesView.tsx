@@ -31,15 +31,20 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
     return `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
   };
 
+  const formatCoordinatesFull = (lat: number, lon: number) => {
+    return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  };
+
   const visiblePlaces = useMemo(() => {
     const q = placeSearch.trim().toLowerCase();
     if (!q) return places;
     return places.filter((p) => {
       const coordinateText = formatCoordinates(p.latitude, p.longitude).toLowerCase();
+      const coordinateTextFull = formatCoordinatesFull(p.latitude, p.longitude).toLowerCase();
       const labelText = p.display_label.toLowerCase();
       const userLabelText = (p.user_label ?? "").toLowerCase();
       const addressText = (p.formatted_address ?? "").toLowerCase();
-      return coordinateText.includes(q) || labelText.includes(q) || userLabelText.includes(q) || addressText.includes(q);
+      return coordinateText.includes(q) || coordinateTextFull.includes(q) || labelText.includes(q) || userLabelText.includes(q) || addressText.includes(q);
     });
   }, [places, placeSearch]);
 
