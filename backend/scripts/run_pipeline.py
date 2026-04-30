@@ -28,7 +28,6 @@ from app.services.duplicates.lineage import ProvenanceContext
 from app.services.ingestion.deduplicator import DeduplicationResult, DuplicateFile
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
 from app.services.ingestion.ingestion_context_service import ResolvedIngestionContext, resolve_ingestion_context
-from app.services.location.geocoding_service import enrich_places_with_reverse_geocoding
 from app.services.metadata.canonicalization_service import (
     create_ingest_observations_for_batch,
     recompute_canonical_metadata_for_assets,
@@ -1264,39 +1263,6 @@ def _place_grouping_stage(ctx: PipelineContext) -> dict[str, Any]:
     }
 
 
-def _place_geocoding_stage(ctx: PipelineContext) -> dict[str, Any]:
-    place_ids = _load_place_ids_for_assets(ctx.current_batch_new_asset_sha256)
-
-    db_session = SessionLocal()
-    try:
-        total_candidate_places = (
-            db_session.query(Place)
-            .filter(Place.place_id.in_(place_ids), Place.geocode_status == "never_tried")
-            .count()
-            if place_ids
-            else 0
-        )
-        summary = enrich_places_with_reverse_geocoding(
-            db_session,
-            place_ids=place_ids,
-            include_failed=False,
-            max_calls=settings.place_geocode_max_calls_per_run,
-        )
-    finally:
-        db_session.close()
-
-    return {
-        "scope": "batch",
-        "candidate_places": total_candidate_places,
-        "eligible_places": summary.eligible_places,
-        "attempted_calls": summary.attempted_calls,
-        "successful": summary.successful,
-        "failed": summary.failed,
-        "skipped_due_to_cap": summary.skipped_due_to_cap,
-        "max_calls_per_run": settings.place_geocode_max_calls_per_run,
-    }
-
-
 def _duplicate_lineage_stage(ctx: PipelineContext) -> dict[str, Any]:
     from app.services.duplicates.lineage import update_lineage_for_assets
 
@@ -1790,12 +1756,12 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
             outcomes=outcomes,
         )
 
-        _execute_stage(
+        _skip_stage(
             key=f"{batch_label_prefix}_place_geocoding",
             index=5,
             total=7,
             label=f"{batch_label_prefix}: place geocoding enrichment",
-            runner=lambda: _place_geocoding_stage(ctx),
+            reason="decoupled to scripts/run_place_geocoding.py",
             outcomes=outcomes,
         )
 

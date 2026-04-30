@@ -488,3 +488,31 @@ export interface AdminDuplicateProcessingActionResponse {
   message: string;
   status: AdminDuplicateProcessingRunStatus;
 }
+
+export interface AdminPlaceGeocodingRunStatus {
+  run_id: number | null;
+  status: "idle" | "running" | "stop_requested" | "completed" | "failed" | "stopped";
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  total_places: number;
+  processed_places: number;
+  succeeded_places: number;
+  failed_places: number;
+  current_place_id: number | null;
+  last_error: string | null;
+  last_run_summary: string | null;
+  stop_requested: boolean;
+}
+
+export interface AdminPlaceGeocodingStatusResponse {
+  generated_at: string;
+  pending_places: number;
+  current: AdminPlaceGeocodingRunStatus;
+}
+
+export interface AdminPlaceGeocodingActionResponse {
+  accepted: boolean;
+  message: string;
+  status: AdminPlaceGeocodingRunStatus;
+}

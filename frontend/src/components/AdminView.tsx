@@ -2,16 +2,30 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { getAdminSummary, getDuplicateProcessingStatus, runDuplicateProcessing, stopDuplicateProcessing } from "@/lib/api";
-import type { AdminDuplicateProcessingStatusResponse, AdminSummaryResponse } from "@/types/ui-api";
+import {
+  getAdminSummary,
+  getDuplicateProcessingStatus,
+  runDuplicateProcessing,
+  stopDuplicateProcessing,
+  getPlaceGeocodingStatus,
+  runPlaceGeocoding,
+  stopPlaceGeocoding
+} from "@/lib/api";
+import type {
+  AdminDuplicateProcessingStatusResponse,
+  AdminPlaceGeocodingStatusResponse,
+  AdminSummaryResponse
+} from "@/types/ui-api";
 
 import styles from "./admin-view.module.css";
 
 export default function AdminView() {
   const [summary, setSummary] = useState<AdminSummaryResponse | null>(null);
   const [duplicateStatus, setDuplicateStatus] = useState<AdminDuplicateProcessingStatusResponse | null>(null);
+  const [placeGeocodingStatus, setPlaceGeocodingStatus] = useState<AdminPlaceGeocodingStatusResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDuplicateActionLoading, setIsDuplicateActionLoading] = useState(false);
+  const [isPlaceGeocodingActionLoading, setIsPlaceGeocodingActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const loadSummary = useCallback(async () => {
@@ -34,6 +48,15 @@ export default function AdminView() {
       setDuplicateStatus(response);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to load duplicate processing status.");
+    }
+  }, []);
+
+  const loadPlaceGeocodingStatus = useCallback(async () => {
+    try {
+      const response = await getPlaceGeocodingStatus();
+      setPlaceGeocodingStatus(response);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load place geocoding status.");
     }
   }, []);
 
@@ -63,9 +86,35 @@ export default function AdminView() {
     }
   }, [loadDuplicateStatus]);
 
+  const runPlaceGeocodingJob = useCallback(async () => {
+    setIsPlaceGeocodingActionLoading(true);
+    setErrorMessage("");
+    try {
+      await runPlaceGeocoding();
+      await loadPlaceGeocodingStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to start place geocoding.");
+    } finally {
+      setIsPlaceGeocodingActionLoading(false);
+    }
+  }, [loadPlaceGeocodingStatus]);
+
+  const stopPlaceGeocodingJob = useCallback(async () => {
+    setIsPlaceGeocodingActionLoading(true);
+    setErrorMessage("");
+    try {
+      await stopPlaceGeocoding();
+      await loadPlaceGeocodingStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to request place geocoding stop.");
+    } finally {
+      setIsPlaceGeocodingActionLoading(false);
+    }
+  }, [loadPlaceGeocodingStatus]);
+
   const loadAll = useCallback(async () => {
-    await Promise.all([loadSummary(), loadDuplicateStatus()]);
-  }, [loadDuplicateStatus, loadSummary]);
+    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus()]);
+  }, [loadDuplicateStatus, loadPlaceGeocodingStatus, loadSummary]);
 
   useEffect(() => {
     void loadAll();
@@ -88,8 +137,28 @@ export default function AdminView() {
     };
   }, [duplicateStatus?.current.status, loadDuplicateStatus]);
 
+  useEffect(() => {
+    // Start polling if status is running or stop requested
+    const isActive = placeGeocodingStatus && ["running", "stop_requested"].includes(placeGeocodingStatus.current.status);
+    
+    if (!isActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadPlaceGeocodingStatus();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [placeGeocodingStatus?.current.status, loadPlaceGeocodingStatus]);
+
   const duplicateRunState = duplicateStatus?.current.status ?? "idle";
   const isDuplicateRunActive = duplicateRunState === "running" || duplicateRunState === "stop_requested";
+
+  const placeGeocodingRunState = placeGeocodingStatus?.current.status ?? "idle";
+  const isPlaceGeocodingRunActive = placeGeocodingRunState === "running" || placeGeocodingRunState === "stop_requested";
 
   return (
     <section className={styles.adminRoot}>
@@ -176,6 +245,41 @@ export default function AdminView() {
               disabled={isDuplicateActionLoading || !isDuplicateRunActive}
             >
               {isDuplicateActionLoading && isDuplicateRunActive ? "Stopping..." : "Stop"}
+            </button>
+          </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.duplicateCard}`.trim()}>
+          <h3 className={styles.cardTitle}>Place Geocoding</h3>
+          <p className={styles.meta}>Status: {placeGeocodingStatus?.current.status ?? "idle"}</p>
+          <p className={styles.meta}>Pending places: {placeGeocodingStatus?.pending_places ?? 0}</p>
+          <p className={styles.meta}>
+            Progress: {placeGeocodingStatus?.current.processed_places ?? 0}/{placeGeocodingStatus?.current.total_places ?? 0}
+          </p>
+          <p className={styles.meta}>Succeeded: {placeGeocodingStatus?.current.succeeded_places ?? 0}</p>
+          <p className={styles.meta}>Failed: {placeGeocodingStatus?.current.failed_places ?? 0}</p>
+          <p className={styles.meta}>Started: {placeGeocodingStatus?.current.started_at ? new Date(placeGeocodingStatus.current.started_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Finished: {placeGeocodingStatus?.current.finished_at ? new Date(placeGeocodingStatus.current.finished_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Elapsed: {placeGeocodingStatus?.current.elapsed_seconds ? `${placeGeocodingStatus.current.elapsed_seconds.toFixed(1)}s` : "-"}</p>
+          {placeGeocodingStatus?.current.last_error && (
+            <p className={styles.errorText}>Error: {placeGeocodingStatus.current.last_error}</p>
+          )}
+          <div className={styles.actionRow}>
+            <button
+              type="button"
+              className={styles.actionButton}
+              onClick={() => void runPlaceGeocodingJob()}
+              disabled={isPlaceGeocodingActionLoading || isPlaceGeocodingRunActive}
+            >
+              {isPlaceGeocodingActionLoading && !isPlaceGeocodingRunActive ? "Starting..." : "Run"}
+            </button>
+            <button
+              type="button"
+              className={styles.actionButtonSecondary}
+              onClick={() => void stopPlaceGeocodingJob()}
+              disabled={isPlaceGeocodingActionLoading || !isPlaceGeocodingRunActive}
+            >
+              {isPlaceGeocodingActionLoading && isPlaceGeocodingRunActive ? "Stopping..." : "Stop"}
             </button>
           </div>
         </article>

@@ -386,3 +386,86 @@ Future milestones may later:
 - optimize place geocoding
 - background face processing
   ```
+# 12.20.2 Pre-Coding Decisions
+
+## 1. Temporary baseline toggle for validation
+
+Use a one-off diagnostic script, not a permanent runtime toggle.
+
+A short-lived internal comparison path is acceptable during development, but do not leave a user-facing or production runtime toggle in `canonicalization_service.py` unless absolutely necessary.
+
+Preferred approach:
+
+- preserve/implement baseline-vs-optimized comparison in a diagnostic script or test helper
+- use it to prove output equivalence
+- keep production path clean after validation
+
+Goal:
+
+> production code should have one optimized path, not long-term dual behavior.
+
+---
+
+## 2. Reuse priority rule
+
+Yes.
+
+In optimized mode, prefer already-persisted asset fields / already-extracted metadata first, then call file-based extraction only when needed.
+
+Approved priority:
+
+1. reuse metadata already extracted earlier in the ingestion run
+2. reuse persisted asset fields where appropriate
+3. reuse existing observations where valid
+4. fall back to file/EXIF extraction only for missing or incomplete fields
+
+Important constraint:
+
+Do not replace stronger metadata with weaker metadata just because it is easier to access.
+
+Correctness over speed.
+
+## Comparison artifact format
+
+Yes.
+
+Generate a metadata-specific JSON equivalence report, using the same general pattern as duplicate-processing reports.
+
+Suggested location:
+
+storage/logs/metadata_canonicalization_reports/
+
+Include per-asset mismatch details.
+
+The report should show:
+
+- asset count compared
+- fields compared
+- total mismatches
+- per-asset mismatch details
+- baseline values
+- optimized values
+- baseline runtime
+- optimized runtime
+- runtime improvement
+
+Primary purpose:
+
+same metadata output, faster runtime
+
+---
+
+## Scope boundary
+
+Confirmed.
+
+Optimize ingestion-path functions only:
+
+- create_ingest_observations_for_batch
+- recompute_canonical_metadata_for_assets
+
+Leave backfill_observations_and_canonicalize unchanged for now unless there is a clearly no-risk shared helper improvement.
+
+Do not expand this into full metadata backfill optimization.
+
+Primary target is normal ingestion runtime.

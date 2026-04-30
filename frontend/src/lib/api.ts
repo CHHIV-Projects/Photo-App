@@ -1,6 +1,8 @@
 import type {
   AdminDuplicateProcessingActionResponse,
   AdminDuplicateProcessingStatusResponse,
+  AdminPlaceGeocodingActionResponse,
+  AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse,
   AlbumDetail,
   AlbumMembershipSummary,
@@ -434,6 +436,22 @@ export function runDuplicateProcessing(): Promise<AdminDuplicateProcessingAction
 
 export function stopDuplicateProcessing(): Promise<AdminDuplicateProcessingActionResponse> {
   return apiRequest<AdminDuplicateProcessingActionResponse>("/api/admin/duplicate-processing/stop", {
+    method: "POST"
+  });
+}
+
+export function getPlaceGeocodingStatus(): Promise<AdminPlaceGeocodingStatusResponse> {
+  return apiRequest<AdminPlaceGeocodingStatusResponse>("/api/admin/place-geocoding/status");
+}
+
+export function runPlaceGeocoding(): Promise<AdminPlaceGeocodingActionResponse> {
+  return apiRequest<AdminPlaceGeocodingActionResponse>("/api/admin/place-geocoding/run", {
+    method: "POST"
+  });
+}
+
+export function stopPlaceGeocoding(): Promise<AdminPlaceGeocodingActionResponse> {
+  return apiRequest<AdminPlaceGeocodingActionResponse>("/api/admin/place-geocoding/stop", {
     method: "POST"
   });
 }

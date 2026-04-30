@@ -361,3 +361,95 @@ This is a measurement-guided optimization milestone.
 Do not jump to BK-trees, MVP-trees, GPU processing, or full algorithm redesign yet.
 
 Those may become future milestones after this report shows whether simple candidate prefiltering is sufficient.
+
+# 12.20.1 Clarification Answers
+
+## Q1 — Width/height coverage on existing assets
+
+Please check the DB quickly and report the coverage.
+
+Specifically report:
+
+- total assets
+- assets with width and height populated
+- percent populated
+- assets with width/height missing
+
+For implementation:
+
+- use DB-level orientation/resolution filters where width/height are available
+- if width/height are NULL, do not exclude the candidate solely because of missing dimensions
+- missing width/height should fall through conservatively
+
+This avoids false negatives while still improving performance for assets with complete metadata.
+
+---
+
+## Q2 — Instrumentation home
+
+Use Option A.
+
+Production duplicate-processing runs should emit a JSON report automatically.
+
+The comparison script should be a separate read-only diagnostic.
+
+Approved model:
+
+- production processing run → writes operational performance report
+- comparison script → writes baseline-vs-optimized quality report
+
+Suggested report location remains:
+
+```text
+storage/logs/duplicate_processing_reports/
+Q3 — Dry-run comparison script
+
+Yes.
+
+The comparison script should be non-mutating / dry-run.
+
+It should not change:
+
+duplicate_group_id
+is_canonical
+visibility_status
+duplicate-processing cutoff
+duplicate-processing run status
+manual decisions
+
+It should only:
+
+scan assets
+compute baseline candidates vs optimized candidates
+compare results
+write a report
+Q4 — Pairs vs assignments
+
+For the comparison report, count pairs, not only final assignments.
+
+Reason:
+
+pairs provide a better recall/quality measurement
+assignments can hide missed candidate relationships
+the goal of 12.20.1 is candidate quality evaluation, not final adjudication redesign
+
+The dry-run comparison may compute all candidate pairs under threshold for measurement purposes, even if production lineage currently chooses the single best match per asset.
+
+However:
+
+do not change production duplicate assignment behavior in this milestone
+production should continue using the current best-match behavior unless explicitly changed later
+
+Report should include:
+
+baseline pairs under threshold
+optimized pairs under threshold
+pairs found by both
+pairs found only by baseline
+pairs found only by optimized
+recall percentage versus baseline
+
+If practical, also include assignment-level comparison as a secondary metric, but pair-level recall is the primary quality metric.
+
+
+This is a good direction. The fact that width/height and captured_at can be pushed into SQL is exactly the kind of low-risk gain we wanted.

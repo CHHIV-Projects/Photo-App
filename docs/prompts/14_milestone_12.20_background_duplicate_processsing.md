@@ -688,3 +688,50 @@ Please explicitly identify:
 - whether existing assets must be initialized into pending state
 
 before implementation begins.
+
+Approved.
+
+For 12.20, proceed with the lightweight DB-backed run status design.
+
+## Approved Pending / Completed Definition
+
+### Pending duplicate processing
+
+Eligible image asset where:
+
+```text
+asset.created_at_utc > last_successful_run_cutoff
+
+If no successful run exists yet:
+
+all eligible image assets are pending
+Completed duplicate processing
+
+Eligible image asset where:
+
+asset.created_at_utc <= last_successful_run_cutoff
+Approved Migration
+
+Add only a minimal DuplicateProcessingRun table.
+
+Do not add per-asset duplicate-processing status columns in 12.20.
+
+Approved First-Run Behavior
+
+The first successful 12.20 duplicate-processing run should process all eligible existing assets.
+
+After that, future runs should be incremental based on the last successful cutoff.
+
+Important Constraint
+
+The cutoff should be frozen at job start.
+
+Assets ingested after the duplicate job starts must not be included in the active job. They should be picked up on the next run.
+
+Caveat Accepted
+
+Using created_at_utc as the ordering/watermark is acceptable for 12.20.
+
+If stronger source/run-based tracking is needed later, we can address that in a future ingestion/session-control milestone.
+
+Proceed with implementation on this basis.

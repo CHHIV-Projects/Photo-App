@@ -12,6 +12,9 @@ from app.schemas.admin import (
     DuplicateProcessingActionResponse,
     DuplicateProcessingRunStatus,
     DuplicateProcessingStatusResponse,
+    PlaceGeocodingActionResponse,
+    PlaceGeocodingRunStatus,
+    PlaceGeocodingStatusResponse,
 )
 from app.services.admin import build_admin_summary
 from app.services.duplicates.processing_service import (
@@ -20,6 +23,13 @@ from app.services.duplicates.processing_service import (
     get_duplicate_processing_status,
     request_duplicate_processing_stop,
     start_duplicate_processing_background,
+)
+from app.services.location.place_geocoding_service import (
+    PlaceGeocodingAlreadyRunningError,
+    PlaceGeocodingStatusSnapshot,
+    get_place_geocoding_status,
+    request_place_geocoding_stop,
+    start_place_geocoding_background,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -39,6 +49,24 @@ def _to_run_status(snapshot: DuplicateProcessingStatusSnapshot) -> DuplicateProc
         stop_requested=snapshot.stop_requested,
         workset_cutoff=snapshot.workset_cutoff,
         last_successful_cutoff=snapshot.last_successful_cutoff,
+    )
+
+
+def _to_place_geocoding_run_status(snapshot: PlaceGeocodingStatusSnapshot) -> PlaceGeocodingRunStatus:
+    return PlaceGeocodingRunStatus(
+        run_id=snapshot.run_id,
+        status=snapshot.status,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        elapsed_seconds=snapshot.elapsed_seconds,
+        total_places=snapshot.total_places,
+        processed_places=snapshot.processed_places,
+        succeeded_places=snapshot.succeeded_places,
+        failed_places=snapshot.failed_places,
+        current_place_id=snapshot.current_place_id,
+        last_error=snapshot.last_error,
+        last_run_summary=snapshot.last_run_summary,
+        stop_requested=snapshot.stop_requested,
     )
 
 
@@ -92,4 +120,51 @@ def stop_duplicate_processing(db: Session = Depends(get_db_session)) -> Duplicat
         accepted=accepted,
         message=result.message,
         status=_to_run_status(result.status),
+    )
+
+
+@router.get("/place-geocoding/status", response_model=PlaceGeocodingStatusResponse)
+def get_place_geocoding_run_status(db: Session = Depends(get_db_session)) -> PlaceGeocodingStatusResponse:
+    """Return place geocoding status and pending-work estimate."""
+    status_view = get_place_geocoding_status(db)
+    return PlaceGeocodingStatusResponse(
+        generated_at=status_view.generated_at,
+        pending_places=status_view.pending_places,
+        current=_to_place_geocoding_run_status(status_view.current),
+    )
+
+
+@router.post("/place-geocoding/run", response_model=PlaceGeocodingActionResponse)
+def run_place_geocoding() -> PlaceGeocodingActionResponse | JSONResponse:
+    """Start place geocoding in the background when no active run exists."""
+    try:
+        result = start_place_geocoding_background(created_by="admin_api")
+    except PlaceGeocodingAlreadyRunningError as exc:
+        payload = PlaceGeocodingActionResponse(
+            accepted=False,
+            message="A place geocoding run is already active.",
+            status=_to_place_geocoding_run_status(exc.status),
+        )
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+
+    accepted = result.status.status in {"running", "stop_requested"}
+    payload = PlaceGeocodingActionResponse(
+        accepted=accepted,
+        message=result.message,
+        status=_to_place_geocoding_run_status(result.status),
+    )
+    if not accepted:
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+    return payload
+
+
+@router.post("/place-geocoding/stop", response_model=PlaceGeocodingActionResponse)
+def stop_place_geocoding(db: Session = Depends(get_db_session)) -> PlaceGeocodingActionResponse:
+    """Request graceful stop for the currently active place geocoding run."""
+    result = request_place_geocoding_stop(db)
+    accepted = result.status.status in {"stop_requested", "running"}
+    return PlaceGeocodingActionResponse(
+        accepted=accepted,
+        message=result.message,
+        status=_to_place_geocoding_run_status(result.status),
     )

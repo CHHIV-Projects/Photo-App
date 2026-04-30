@@ -88,3 +88,37 @@ class DuplicateProcessingActionResponse(BaseModel):
     accepted: bool
     message: str
     status: DuplicateProcessingRunStatus
+
+
+class PlaceGeocodingRunStatus(BaseModel):
+    """Current or last place geocoding run snapshot."""
+
+    run_id: int | None = None
+    status: Literal["idle", "running", "stop_requested", "completed", "failed", "stopped"] = "idle"
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    elapsed_seconds: float | None = None
+    total_places: int = 0
+    processed_places: int = 0
+    succeeded_places: int = 0
+    failed_places: int = 0
+    current_place_id: int | None = None
+    last_error: str | None = None
+    last_run_summary: str | None = None
+    stop_requested: bool = False
+
+
+class PlaceGeocodingStatusResponse(BaseModel):
+    """Live place geocoding status view for Admin controls."""
+
+    generated_at: datetime
+    pending_places: int
+    current: PlaceGeocodingRunStatus
+
+
+class PlaceGeocodingActionResponse(BaseModel):
+    """Run/stop action response payload for place geocoding."""
+
+    accepted: bool
+    message: str
+    status: PlaceGeocodingRunStatus
