@@ -2,17 +2,94 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.schemas.admin import AdminSummaryResponse
+from app.schemas.admin import (
+    AdminSummaryResponse,
+    DuplicateProcessingActionResponse,
+    DuplicateProcessingRunStatus,
+    DuplicateProcessingStatusResponse,
+)
 from app.services.admin import build_admin_summary
+from app.services.duplicates.processing_service import (
+    DuplicateProcessingAlreadyRunningError,
+    DuplicateProcessingStatusSnapshot,
+    get_duplicate_processing_status,
+    request_duplicate_processing_stop,
+    start_duplicate_processing_background,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def _to_run_status(snapshot: DuplicateProcessingStatusSnapshot) -> DuplicateProcessingRunStatus:
+    return DuplicateProcessingRunStatus(
+        run_id=snapshot.run_id,
+        status=snapshot.status,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        elapsed_seconds=snapshot.elapsed_seconds,
+        total_items=snapshot.total_items,
+        processed_items=snapshot.processed_items,
+        current_stage=snapshot.current_stage,
+        error_message=snapshot.error_message,
+        stop_requested=snapshot.stop_requested,
+        workset_cutoff=snapshot.workset_cutoff,
+        last_successful_cutoff=snapshot.last_successful_cutoff,
+    )
 
 
 @router.get("/summary", response_model=AdminSummaryResponse)
 def get_admin_summary(db: Session = Depends(get_db_session)) -> AdminSummaryResponse:
     """Return read-only system-level counts for Admin workspace cards."""
     return build_admin_summary(db)
+
+
+@router.get("/duplicate-processing/status", response_model=DuplicateProcessingStatusResponse)
+def get_duplicate_processing_run_status(db: Session = Depends(get_db_session)) -> DuplicateProcessingStatusResponse:
+    """Return duplicate processing status and pending-work estimate."""
+    status_view = get_duplicate_processing_status(db)
+    return DuplicateProcessingStatusResponse(
+        generated_at=status_view.generated_at,
+        pending_items=status_view.pending_items,
+        current=_to_run_status(status_view.current),
+    )
+
+
+@router.post("/duplicate-processing/run", response_model=DuplicateProcessingActionResponse)
+def run_duplicate_processing() -> DuplicateProcessingActionResponse | JSONResponse:
+    """Start duplicate processing in the background when no active run exists."""
+    try:
+        result = start_duplicate_processing_background(created_by="admin_api")
+    except DuplicateProcessingAlreadyRunningError as exc:
+        payload = DuplicateProcessingActionResponse(
+            accepted=False,
+            message="A duplicate-processing run is already active.",
+            status=_to_run_status(exc.status),
+        )
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+
+    accepted = result.status.status in {"running", "stop_requested"}
+    payload = DuplicateProcessingActionResponse(
+        accepted=accepted,
+        message=result.message,
+        status=_to_run_status(result.status),
+    )
+    if not accepted:
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+    return payload
+
+
+@router.post("/duplicate-processing/stop", response_model=DuplicateProcessingActionResponse)
+def stop_duplicate_processing(db: Session = Depends(get_db_session)) -> DuplicateProcessingActionResponse:
+    """Request graceful stop for the currently active duplicate processing run."""
+    result = request_duplicate_processing_stop(db)
+    accepted = result.status.status in {"stop_requested", "running"}
+    return DuplicateProcessingActionResponse(
+        accepted=accepted,
+        message=result.message,
+        status=_to_run_status(result.status),
+    )

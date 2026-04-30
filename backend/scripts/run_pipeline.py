@@ -219,7 +219,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-duplicate-lineage",
         action="store_true",
-        help="Skip duplicate-lineage backfill/grouping stage.",
+        help="Deprecated no-op. Duplicate lineage now runs separately via run_duplicate_processing.py.",
     )
     parser.add_argument(
         "--skip-event-clustering",
@@ -1606,7 +1606,7 @@ def _print_dry_run(args: RuntimeArgs, ctx: PipelineContext) -> None:
     print("  [9] RUN - metadata observations + canonicalization (scope=batch)")
     print("  [10] RUN - place grouping (scope=batch)")
     print("  [11] RUN - place geocoding enrichment (scope=batch)")
-    print(f"  [12] {'SKIP (--skip-duplicate-lineage)' if args.skip_duplicate_lineage else 'RUN'} - duplicate lineage (scope=batch)")
+    print("  [12] SKIP - duplicate lineage (decoupled; run scripts/run_duplicate_processing.py separately)")
     print(f"  [13] {'SKIP (--skip-face-processing)' if args.skip_face_processing else 'RUN'} - face detection + clustering (scope=batch unless rebuild)")
     print(f"  [14] {'SKIP (--skip-crop-generation)' if args.skip_crop_generation else 'RUN'} - review crop generation (scope=global)")
     print(f"  [15] {'SKIP (--skip-event-clustering)' if args.skip_event_clustering else 'RUN'} - event clustering (scope=global, intentional)")
@@ -1799,24 +1799,18 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
             outcomes=outcomes,
         )
 
-        if args.skip_duplicate_lineage:
-            _skip_stage(
-                key=f"{batch_label_prefix}_lineage",
-                index=6,
-                total=7,
-                label=f"{batch_label_prefix}: duplicate lineage",
-                reason="--skip-duplicate-lineage",
-                outcomes=outcomes,
-            )
-        else:
-            _execute_stage(
-                key=f"{batch_label_prefix}_lineage",
-                index=6,
-                total=7,
-                label=f"{batch_label_prefix}: duplicate lineage",
-                runner=lambda: _duplicate_lineage_stage(ctx),
-                outcomes=outcomes,
-            )
+        _skip_stage(
+            key=f"{batch_label_prefix}_lineage",
+            index=6,
+            total=7,
+            label=f"{batch_label_prefix}: duplicate lineage",
+            reason=(
+                "decoupled to scripts/run_duplicate_processing.py"
+                if not args.skip_duplicate_lineage
+                else "--skip-duplicate-lineage (deprecated; stage already decoupled)"
+            ),
+            outcomes=outcomes,
+        )
 
         if args.skip_face_processing:
             _skip_stage(

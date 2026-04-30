@@ -362,3 +362,185 @@ This milestone enables:
 - background processing (12.20)
 - cloud ingestion (future)
 - predictable system behavior at scale
+
+# Answers to Coder Questions — Milestone 12.19
+
+## 1. Batch size semantics
+
+Use `max_batch_size` as the **Drop Zone frozen batch file-count limit**.
+
+It should replace the old “new unique assets per batch” concept for this milestone.
+
+Do not preserve a second unique-asset batch limit unless already deeply required by existing code. The goal is simpler:
+
+> batch size = number of staged files selected from Drop Zone at run start.
+
+---
+
+## 2. Non-empty Drop Zone plus `--from-path`
+
+Fail fast.
+
+If Drop Zone already contains files and the user provides `--from-path`, the system must not mix them.
+
+Required behavior:
+
+- stop before staging anything new
+- report that Drop Zone already contains an active batch
+- require operator to process or clear existing Drop Zone first
+
+This preserves the rule:
+
+> Do not silently mix batches.
+
+---
+
+## 3. Success boundary for cleanup
+
+For 12.19, cleanup should occur after the **core ingestion persistence path succeeds**, not after every downstream enrichment stage.
+
+Core success means:
+
+- file accepted
+- hashed
+- copied/promoted to Vault or recognized as exact duplicate
+- Asset / Provenance persistence completed as applicable
+
+Do not wait for slower downstream systems such as:
+
+- duplicate lineage
+- event clustering
+- place grouping
+- face processing
+- content tagging
+
+Those will increasingly move toward background processing anyway.
+
+---
+
+## 4. Selected-but-rejected files
+
+Move selected-but-rejected or failed files out of Drop Zone into a separate inspection folder:
+
+```text
+storage/ingest_failures/
+```
+
+Use this for files that were part of the frozen batch but failed or were rejected before successful persistence, including:
+
+- failed hash
+- failed vault copy
+- unreadable file
+- unsupported/rejected by filter rules
+- other pre-persistence ingestion failure
+
+Required behavior:
+
+- do not leave these files in Drop Zone indefinitely
+- do not promote them to Vault
+- do not create Asset rows unless persistence already succeeded
+- preserve original filename/path if practical
+- make them inspectable by operator
+
+This keeps Drop Zone clean while preserving failed inputs for manual review.
+
+If current quarantine already serves this exact purpose, coder may reuse it only if semantics are clear. Otherwise, create/use `storage/ingest_failures/`.
+
+---
+
+## 5. Legacy `INGEST_BATCH_SIZE`
+
+Reuse the existing `INGEST_BATCH_SIZE` config if practical, but reinterpret it as:
+
+> maximum number of Drop Zone files selected for the frozen batch at run start.
+
+Do not introduce a second config unless required for backward compatibility.
+
+If renamed later, that can be a cleanup milestone. For 12.19, minimize churn.
+
+---
+
+## 6. Existing drop-zone records in `from-path` mode
+
+Yes — eliminate ambiguous scoped-subset behavior for 12.19.
+
+The active processing unit should be:
+
+> the frozen Drop Zone batch selected at run start.
+
+Current behavior that mixes “stage into Drop Zone” and “process newly staged subset only” should be replaced or constrained so the operator model is clear.
+
+Expected lifecycle:
+
+```text
+if --from-path:
+  require Drop Zone empty
+  stage up to batch limit into Drop Zone
+  freeze Drop Zone batch
+  process frozen batch
+else:
+  freeze existing Drop Zone contents up to batch limit
+  process frozen batch
+```
+
+Remaining unprocessed files stay in Drop Zone for the next run.
+
+---
+
+## Assumptions Confirmed
+
+### File ordering
+
+Sorted full path is acceptable and preferred.
+
+This gives deterministic selection.
+
+### Downstream systems
+
+Preserve current downstream ingestion systems.
+
+Only change:
+
+- batch boundary
+- file selection
+- Drop Zone staging
+- cleanup / failed-file disposition
+
+### Conflict handling
+
+If prompt behavior conflicts with current behavior in a non-low-risk way, pause and ask before changing it.
+
+That is correct.
+
+
+For now, do NOT implement skip-known-at-selection.
+
+That belongs in a separate design milestone because “already known” needs careful definition:
+- source + relative path
+- file size / modified time
+- SHA256
+- provenance records
+- renamed/moved files
+- iCloud placeholder behavior
+
+For 12.19, I only want a small operator-visibility follow-up if needed:
+
+## 12.19.1 — Ingestion Run Manifest
+
+Add a per-run manifest file that records:
+- source path, if any
+- Drop Zone path
+- ingest_batch_size
+- files selected from source
+- files staged into Drop Zone
+- files frozen for processing
+- files successfully persisted
+- files cleaned from Drop Zone
+- files moved to ingest_failures
+- failure/rejection reason if available
+
+The manifest can be written as JSON or Markdown/text, whichever is simplest and most useful.
+
+Do not change source selection behavior yet.
+
+Repeated `--from-path` runs reselecting the same first N is accepted as current behavior and will be addressed later under IN-014.

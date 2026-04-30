@@ -461,3 +461,30 @@ export interface AdminSummaryResponse {
   faces: AdminFacesSummary;
   places: AdminPlacesSummary;
 }
+
+export interface AdminDuplicateProcessingRunStatus {
+  run_id: number | null;
+  status: "idle" | "running" | "stop_requested" | "completed" | "failed" | "stopped";
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  total_items: number;
+  processed_items: number;
+  current_stage: string | null;
+  error_message: string | null;
+  stop_requested: boolean;
+  workset_cutoff: string | null;
+  last_successful_cutoff: string | null;
+}
+
+export interface AdminDuplicateProcessingStatusResponse {
+  generated_at: string;
+  pending_items: number;
+  current: AdminDuplicateProcessingRunStatus;
+}
+
+export interface AdminDuplicateProcessingActionResponse {
+  accepted: boolean;
+  message: string;
+  status: AdminDuplicateProcessingRunStatus;
+}

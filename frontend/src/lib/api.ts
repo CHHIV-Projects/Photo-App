@@ -1,4 +1,6 @@
 import type {
+  AdminDuplicateProcessingActionResponse,
+  AdminDuplicateProcessingStatusResponse,
   AdminSummaryResponse,
   AlbumDetail,
   AlbumMembershipSummary,
@@ -416,6 +418,22 @@ export function updatePlaceLabel(placeId: string, userLabel: string | null): Pro
 
 export function getAdminSummary(): Promise<AdminSummaryResponse> {
   return apiRequest<AdminSummaryResponse>("/api/admin/summary");
+}
+
+export function getDuplicateProcessingStatus(): Promise<AdminDuplicateProcessingStatusResponse> {
+  return apiRequest<AdminDuplicateProcessingStatusResponse>("/api/admin/duplicate-processing/status");
+}
+
+export function runDuplicateProcessing(): Promise<AdminDuplicateProcessingActionResponse> {
+  return apiRequest<AdminDuplicateProcessingActionResponse>("/api/admin/duplicate-processing/run", {
+    method: "POST"
+  });
+}
+
+export function stopDuplicateProcessing(): Promise<AdminDuplicateProcessingActionResponse> {
+  return apiRequest<AdminDuplicateProcessingActionResponse>("/api/admin/duplicate-processing/stop", {
+    method: "POST"
+  });
 }
 
 export function getAlbums(): Promise<ListResponse<AlbumSummary>> {

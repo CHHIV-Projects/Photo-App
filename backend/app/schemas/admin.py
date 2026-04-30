@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -54,3 +55,36 @@ class AdminSummaryResponse(BaseModel):
     duplicates: AdminDuplicatesSummary
     faces: AdminFacesSummary
     places: AdminPlacesSummary
+
+
+class DuplicateProcessingRunStatus(BaseModel):
+    """Current or last duplicate processing run snapshot."""
+
+    run_id: int | None = None
+    status: Literal["idle", "running", "stop_requested", "completed", "failed", "stopped"] = "idle"
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    elapsed_seconds: float | None = None
+    total_items: int = 0
+    processed_items: int = 0
+    current_stage: str | None = None
+    error_message: str | None = None
+    stop_requested: bool = False
+    workset_cutoff: datetime | None = None
+    last_successful_cutoff: datetime | None = None
+
+
+class DuplicateProcessingStatusResponse(BaseModel):
+    """Live duplicate processing status view for Admin controls."""
+
+    generated_at: datetime
+    pending_items: int
+    current: DuplicateProcessingRunStatus
+
+
+class DuplicateProcessingActionResponse(BaseModel):
+    """Run/stop action response payload."""
+
+    accepted: bool
+    message: str
+    status: DuplicateProcessingRunStatus

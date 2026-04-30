@@ -2,14 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { getAdminSummary } from "@/lib/api";
-import type { AdminSummaryResponse } from "@/types/ui-api";
+import { getAdminSummary, getDuplicateProcessingStatus, runDuplicateProcessing, stopDuplicateProcessing } from "@/lib/api";
+import type { AdminDuplicateProcessingStatusResponse, AdminSummaryResponse } from "@/types/ui-api";
 
 import styles from "./admin-view.module.css";
 
 export default function AdminView() {
   const [summary, setSummary] = useState<AdminSummaryResponse | null>(null);
+  const [duplicateStatus, setDuplicateStatus] = useState<AdminDuplicateProcessingStatusResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDuplicateActionLoading, setIsDuplicateActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const loadSummary = useCallback(async () => {
@@ -26,21 +28,80 @@ export default function AdminView() {
     }
   }, []);
 
+  const loadDuplicateStatus = useCallback(async () => {
+    try {
+      const response = await getDuplicateProcessingStatus();
+      setDuplicateStatus(response);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load duplicate processing status.");
+    }
+  }, []);
+
+  const runDuplicateJob = useCallback(async () => {
+    setIsDuplicateActionLoading(true);
+    setErrorMessage("");
+    try {
+      await runDuplicateProcessing();
+      await loadDuplicateStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to start duplicate processing.");
+    } finally {
+      setIsDuplicateActionLoading(false);
+    }
+  }, [loadDuplicateStatus]);
+
+  const stopDuplicateJob = useCallback(async () => {
+    setIsDuplicateActionLoading(true);
+    setErrorMessage("");
+    try {
+      await stopDuplicateProcessing();
+      await loadDuplicateStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to request duplicate processing stop.");
+    } finally {
+      setIsDuplicateActionLoading(false);
+    }
+  }, [loadDuplicateStatus]);
+
+  const loadAll = useCallback(async () => {
+    await Promise.all([loadSummary(), loadDuplicateStatus()]);
+  }, [loadDuplicateStatus, loadSummary]);
+
   useEffect(() => {
-    void loadSummary();
-  }, [loadSummary]);
+    void loadAll();
+  }, [loadAll]);
+
+  useEffect(() => {
+    // Start polling if status is running or stop requested
+    const isActive = duplicateStatus && ["running", "stop_requested"].includes(duplicateStatus.current.status);
+    
+    if (!isActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadDuplicateStatus();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [duplicateStatus?.current.status, loadDuplicateStatus]);
+
+  const duplicateRunState = duplicateStatus?.current.status ?? "idle";
+  const isDuplicateRunActive = duplicateRunState === "running" || duplicateRunState === "stop_requested";
 
   return (
     <section className={styles.adminRoot}>
       <header className={styles.header}>
         <div>
-          <p className={styles.kicker}>Milestone 12.18</p>
-          <h2 className={styles.title}>Admin Settings Foundation</h2>
+          <p className={styles.kicker}>Milestone 12.20</p>
+          <h2 className={styles.title}>Admin Operations</h2>
           <p className={styles.subtitle}>
-            Read-only operational summary with placeholder areas for future maintenance and settings controls.
+            Operational summary and manual controls for background duplicate lineage processing.
           </p>
         </div>
-        <button type="button" className={styles.refreshButton} onClick={() => void loadSummary()} disabled={isLoading}>
+        <button type="button" className={styles.refreshButton} onClick={() => void loadAll()} disabled={isLoading}>
           {isLoading ? "Refreshing..." : "Refresh"}
         </button>
       </header>
@@ -86,14 +147,37 @@ export default function AdminView() {
           <p className={styles.meta}>Empty places: {summary?.places.empty ?? 0}</p>
         </article>
 
-        <article className={`${styles.card} ${styles.placeholderCard}`.trim()}>
-          <h3 className={styles.cardTitle}>Maintenance</h3>
-          <p className={styles.placeholderText}>
-            Job triggers and integrity actions will be added in a later milestone.
+        <article className={`${styles.card} ${styles.duplicateCard}`.trim()}>
+          <h3 className={styles.cardTitle}>Duplicate Processing</h3>
+          <p className={styles.meta}>Status: {duplicateStatus?.current.status ?? "idle"}</p>
+          <p className={styles.meta}>Pending assets: {duplicateStatus?.pending_items ?? 0}</p>
+          <p className={styles.meta}>
+            Progress: {duplicateStatus?.current.processed_items ?? 0}/{duplicateStatus?.current.total_items ?? 0}
           </p>
-          <button type="button" className={styles.placeholderButton} disabled>
-            Run Maintenance Job (Coming Soon)
-          </button>
+          <p className={styles.meta}>Started: {duplicateStatus?.current.started_at ? new Date(duplicateStatus.current.started_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Finished: {duplicateStatus?.current.finished_at ? new Date(duplicateStatus.current.finished_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Elapsed: {duplicateStatus?.current.elapsed_seconds ? `${duplicateStatus.current.elapsed_seconds.toFixed(1)}s` : "-"}</p>
+          {duplicateStatus?.current.error_message && (
+            <p className={styles.errorText}>Error: {duplicateStatus.current.error_message}</p>
+          )}
+          <div className={styles.actionRow}>
+            <button
+              type="button"
+              className={styles.actionButton}
+              onClick={() => void runDuplicateJob()}
+              disabled={isDuplicateActionLoading || isDuplicateRunActive}
+            >
+              {isDuplicateActionLoading && !isDuplicateRunActive ? "Starting..." : "Run"}
+            </button>
+            <button
+              type="button"
+              className={styles.actionButtonSecondary}
+              onClick={() => void stopDuplicateJob()}
+              disabled={isDuplicateActionLoading || !isDuplicateRunActive}
+            >
+              {isDuplicateActionLoading && isDuplicateRunActive ? "Stopping..." : "Stop"}
+            </button>
+          </div>
         </article>
 
         <article className={`${styles.card} ${styles.placeholderCard}`.trim()}>
