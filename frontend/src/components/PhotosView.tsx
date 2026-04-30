@@ -1177,6 +1177,12 @@ export function PhotosView({
                       <span className={styles.metadataLabel}>Location</span>
                       <span className={styles.metadataValue}>{formatLocationSummary(photoDetail.location)}</span>
                     </div>
+                    {photoDetail.place && (
+                      <div className={styles.metadataRow}>
+                        <span className={styles.metadataLabel}>Place</span>
+                        <span className={styles.metadataValue}>{photoDetail.place.display_label}</span>
+                      </div>
+                    )}
                     <div className={styles.metadataRow}>
                       <span className={styles.metadataLabel}>Duplicate Group</span>
                       <span className={styles.metadataValue}>

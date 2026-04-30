@@ -15,6 +15,7 @@ from app.models.event import Event
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.person import Person
+from app.models.place import Place
 from app.models.provenance import Provenance
 from app.services.metadata.metadata_normalizer import get_effective_capture_classification
 from app.services.timeline.timeline_service import (
@@ -25,6 +26,20 @@ from app.services.timeline.timeline_service import (
 
 
 ALLOWED_DISPLAY_ROTATION_DEGREES = {0, 90, 180, 270}
+
+
+def _build_place_label(place: Place) -> str:
+    if place.city and place.state:
+        return f"{place.city}, {place.state}"
+    if place.city and place.country:
+        return f"{place.city}, {place.country}"
+    if place.state and place.country:
+        return f"{place.state}, {place.country}"
+    if place.country:
+        return place.country
+    if place.formatted_address:
+        return place.formatted_address
+    return f"{place.representative_latitude:.2f}, {place.representative_longitude:.2f}"
 
 
 def _to_utc_iso(value: datetime | None) -> str | None:
@@ -209,6 +224,20 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
             "longitude": asset.gps_longitude,
         }
 
+    place_summary: dict | None = None
+    if asset.place_id is not None:
+        place = db.get(Place, asset.place_id)
+        if place is not None and place.geocode_status == "success":
+            place_summary = {
+                "place_id": place.place_id,
+                "display_label": place.user_label or _build_place_label(place),
+                "geocode_status": place.geocode_status,
+                "city": place.city,
+                "state": place.state,
+                "country": place.country,
+                "formatted_address": place.formatted_address,
+            }
+
     canonical_metadata_summary = {
         "captured_at": _to_utc_iso(asset.captured_at),
         "camera_make": asset.camera_make,
@@ -298,6 +327,7 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
         "capture_time_trust": capture_time_trust,
         "event": event_summary,
         "location": location_summary,
+        "place": place_summary,
         "canonical_metadata": canonical_metadata_summary,
         "metadata_observations": metadata_observations,
         "provenance": provenance_summary,

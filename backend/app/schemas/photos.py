@@ -115,6 +115,16 @@ class ContentTagSummary(BaseModel):
     tag_type: str  # "object" | "scene"
 
 
+class PhotoPlaceSummary(BaseModel):
+    place_id: int
+    display_label: str
+    geocode_status: str
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    formatted_address: str | None = None
+
+
 class PhotoDetail(BaseModel):
     asset_sha256: str
     filename: str
@@ -125,6 +135,7 @@ class PhotoDetail(BaseModel):
     capture_time_trust: Literal["high", "low", "unknown"]
     event: PhotoEventSummary | None = None
     location: PhotoLocation | None = None
+    place: PhotoPlaceSummary | None = None
     canonical_metadata: CanonicalMetadataSummary | None = None
     metadata_observations: list[PhotoMetadataObservation] = []
     provenance: list[PhotoProvenance]

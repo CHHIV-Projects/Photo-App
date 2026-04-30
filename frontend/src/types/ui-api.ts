@@ -170,6 +170,16 @@ export interface PhotoLocation {
   longitude: number | null;
 }
 
+export interface PhotoPlaceSummary {
+  place_id: number;
+  display_label: string;
+  geocode_status: string;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  formatted_address: string | null;
+}
+
 export interface PhotoProvenance {
   source_path: string;
   source_label: string | null;
@@ -226,6 +236,7 @@ export interface PhotoDetail {
   capture_time_trust: "high" | "low" | "unknown";
   event: PhotoEventSummary | null;
   location: PhotoLocation | null;
+  place: PhotoPlaceSummary | null;
   canonical_metadata: CanonicalMetadataSummary | null;
   metadata_observations: PhotoMetadataObservation[];
   provenance: PhotoProvenance[];
