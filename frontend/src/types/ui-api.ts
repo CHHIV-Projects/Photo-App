@@ -527,3 +527,38 @@ export interface AdminPlaceGeocodingActionResponse {
   message: string;
   status: AdminPlaceGeocodingRunStatus;
 }
+
+export interface AdminFaceProcessingRunStatus {
+  run_id: number | null;
+  status: "idle" | "running" | "stop_requested" | "completed" | "failed" | "stopped";
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  assets_pending_detection: number;
+  assets_processed_detection: number;
+  faces_pending_embedding: number;
+  faces_processed_embedding: number;
+  faces_pending_clustering: number;
+  faces_processed_clustering: number;
+  crops_pending: number;
+  crops_generated: number;
+  current_stage: string | null;
+  last_error: string | null;
+  last_run_summary: string | null;
+  stop_requested: boolean;
+}
+
+export interface AdminFaceProcessingStatusResponse {
+  generated_at: string;
+  pending_detection: number;
+  pending_embedding: number;
+  pending_clustering: number;
+  pending_crops: number;
+  current: AdminFaceProcessingRunStatus;
+}
+
+export interface AdminFaceProcessingActionResponse {
+  accepted: boolean;
+  message: string;
+  status: AdminFaceProcessingRunStatus;
+}

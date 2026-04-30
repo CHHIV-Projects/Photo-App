@@ -1,6 +1,8 @@
 import type {
   AdminDuplicateProcessingActionResponse,
   AdminDuplicateProcessingStatusResponse,
+  AdminFaceProcessingActionResponse,
+  AdminFaceProcessingStatusResponse,
   AdminPlaceGeocodingActionResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse,
@@ -452,6 +454,22 @@ export function runPlaceGeocoding(): Promise<AdminPlaceGeocodingActionResponse> 
 
 export function stopPlaceGeocoding(): Promise<AdminPlaceGeocodingActionResponse> {
   return apiRequest<AdminPlaceGeocodingActionResponse>("/api/admin/place-geocoding/stop", {
+    method: "POST"
+  });
+}
+
+export function getFaceProcessingStatus(): Promise<AdminFaceProcessingStatusResponse> {
+  return apiRequest<AdminFaceProcessingStatusResponse>("/api/admin/face-processing/status");
+}
+
+export function runFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {
+  return apiRequest<AdminFaceProcessingActionResponse>("/api/admin/face-processing/run", {
+    method: "POST"
+  });
+}
+
+export function stopFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {
+  return apiRequest<AdminFaceProcessingActionResponse>("/api/admin/face-processing/stop", {
     method: "POST"
   });
 }

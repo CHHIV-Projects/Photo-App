@@ -122,3 +122,44 @@ class PlaceGeocodingActionResponse(BaseModel):
     accepted: bool
     message: str
     status: PlaceGeocodingRunStatus
+
+
+class FaceProcessingRunStatus(BaseModel):
+    """Current or last face processing run snapshot."""
+
+    run_id: int | None = None
+    status: Literal["idle", "running", "stop_requested", "completed", "failed", "stopped"] = "idle"
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    elapsed_seconds: float | None = None
+    assets_pending_detection: int = 0
+    assets_processed_detection: int = 0
+    faces_pending_embedding: int = 0
+    faces_processed_embedding: int = 0
+    faces_pending_clustering: int = 0
+    faces_processed_clustering: int = 0
+    crops_pending: int = 0
+    crops_generated: int = 0
+    current_stage: str | None = None
+    last_error: str | None = None
+    last_run_summary: str | None = None
+    stop_requested: bool = False
+
+
+class FaceProcessingStatusResponse(BaseModel):
+    """Live face processing status view for Admin controls."""
+
+    generated_at: datetime
+    pending_detection: int
+    pending_embedding: int
+    pending_clustering: int
+    pending_crops: int
+    current: FaceProcessingRunStatus
+
+
+class FaceProcessingActionResponse(BaseModel):
+    """Run/stop action response payload for face processing."""
+
+    accepted: bool
+    message: str
+    status: FaceProcessingRunStatus

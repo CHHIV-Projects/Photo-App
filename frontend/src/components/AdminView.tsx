@@ -9,10 +9,14 @@ import {
   stopDuplicateProcessing,
   getPlaceGeocodingStatus,
   runPlaceGeocoding,
-  stopPlaceGeocoding
+  stopPlaceGeocoding,
+  getFaceProcessingStatus,
+  runFaceProcessing,
+  stopFaceProcessing
 } from "@/lib/api";
 import type {
   AdminDuplicateProcessingStatusResponse,
+  AdminFaceProcessingStatusResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse
 } from "@/types/ui-api";
@@ -23,9 +27,11 @@ export default function AdminView() {
   const [summary, setSummary] = useState<AdminSummaryResponse | null>(null);
   const [duplicateStatus, setDuplicateStatus] = useState<AdminDuplicateProcessingStatusResponse | null>(null);
   const [placeGeocodingStatus, setPlaceGeocodingStatus] = useState<AdminPlaceGeocodingStatusResponse | null>(null);
+  const [faceProcessingStatus, setFaceProcessingStatus] = useState<AdminFaceProcessingStatusResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDuplicateActionLoading, setIsDuplicateActionLoading] = useState(false);
   const [isPlaceGeocodingActionLoading, setIsPlaceGeocodingActionLoading] = useState(false);
+  const [isFaceProcessingActionLoading, setIsFaceProcessingActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const loadSummary = useCallback(async () => {
@@ -112,9 +118,44 @@ export default function AdminView() {
     }
   }, [loadPlaceGeocodingStatus]);
 
+  const loadFaceProcessingStatus = useCallback(async () => {
+    try {
+      const response = await getFaceProcessingStatus();
+      setFaceProcessingStatus(response);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load face processing status.");
+    }
+  }, []);
+
+  const runFaceProcessingJob = useCallback(async () => {
+    setIsFaceProcessingActionLoading(true);
+    setErrorMessage("");
+    try {
+      await runFaceProcessing();
+      await loadFaceProcessingStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to start face processing.");
+    } finally {
+      setIsFaceProcessingActionLoading(false);
+    }
+  }, [loadFaceProcessingStatus]);
+
+  const stopFaceProcessingJob = useCallback(async () => {
+    setIsFaceProcessingActionLoading(true);
+    setErrorMessage("");
+    try {
+      await stopFaceProcessing();
+      await loadFaceProcessingStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to request face processing stop.");
+    } finally {
+      setIsFaceProcessingActionLoading(false);
+    }
+  }, [loadFaceProcessingStatus]);
+
   const loadAll = useCallback(async () => {
-    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus()]);
-  }, [loadDuplicateStatus, loadPlaceGeocodingStatus, loadSummary]);
+    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus(), loadFaceProcessingStatus()]);
+  }, [loadDuplicateStatus, loadFaceProcessingStatus, loadPlaceGeocodingStatus, loadSummary]);
 
   useEffect(() => {
     void loadAll();
@@ -154,11 +195,31 @@ export default function AdminView() {
     };
   }, [placeGeocodingStatus?.current.status, loadPlaceGeocodingStatus]);
 
+  useEffect(() => {
+    // Poll if face processing is running or stop requested
+    const isActive = faceProcessingStatus && ["running", "stop_requested"].includes(faceProcessingStatus.current.status);
+
+    if (!isActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadFaceProcessingStatus();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [faceProcessingStatus?.current.status, loadFaceProcessingStatus]);
+
   const duplicateRunState = duplicateStatus?.current.status ?? "idle";
   const isDuplicateRunActive = duplicateRunState === "running" || duplicateRunState === "stop_requested";
 
   const placeGeocodingRunState = placeGeocodingStatus?.current.status ?? "idle";
   const isPlaceGeocodingRunActive = placeGeocodingRunState === "running" || placeGeocodingRunState === "stop_requested";
+
+  const faceProcessingRunState = faceProcessingStatus?.current.status ?? "idle";
+  const isFaceProcessingRunActive = faceProcessingRunState === "running" || faceProcessingRunState === "stop_requested";
 
   return (
     <section className={styles.adminRoot}>
@@ -280,6 +341,52 @@ export default function AdminView() {
               disabled={isPlaceGeocodingActionLoading || !isPlaceGeocodingRunActive}
             >
               {isPlaceGeocodingActionLoading && isPlaceGeocodingRunActive ? "Stopping..." : "Stop"}
+            </button>
+          </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.duplicateCard}`.trim()}>
+          <h3 className={styles.cardTitle}>Face Processing</h3>
+          <p className={styles.meta}>Status: {faceProcessingStatus?.current.status ?? "idle"}</p>
+          <p className={styles.meta}>Stage: {faceProcessingStatus?.current.current_stage ?? "-"}</p>
+          <p className={styles.meta}>Pending detection: {faceProcessingStatus?.pending_detection ?? 0}</p>
+          <p className={styles.meta}>Pending embedding: {faceProcessingStatus?.pending_embedding ?? 0}</p>
+          <p className={styles.meta}>Pending clustering: {faceProcessingStatus?.pending_clustering ?? 0}</p>
+          <p className={styles.meta}>Pending crops: {faceProcessingStatus?.pending_crops ?? 0}</p>
+          <p className={styles.meta}>
+            Detection: {faceProcessingStatus?.current.assets_processed_detection ?? 0}/{faceProcessingStatus?.current.assets_pending_detection ?? 0}
+          </p>
+          <p className={styles.meta}>
+            Embedding: {faceProcessingStatus?.current.faces_processed_embedding ?? 0}/{faceProcessingStatus?.current.faces_pending_embedding ?? 0}
+          </p>
+          <p className={styles.meta}>
+            Clustering: {faceProcessingStatus?.current.faces_processed_clustering ?? 0}/{faceProcessingStatus?.current.faces_pending_clustering ?? 0}
+          </p>
+          <p className={styles.meta}>
+            Crops: {faceProcessingStatus?.current.crops_generated ?? 0}/{faceProcessingStatus?.current.crops_pending ?? 0}
+          </p>
+          <p className={styles.meta}>Started: {faceProcessingStatus?.current.started_at ? new Date(faceProcessingStatus.current.started_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Finished: {faceProcessingStatus?.current.finished_at ? new Date(faceProcessingStatus.current.finished_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Elapsed: {faceProcessingStatus?.current.elapsed_seconds ? `${faceProcessingStatus.current.elapsed_seconds.toFixed(1)}s` : "-"}</p>
+          {faceProcessingStatus?.current.last_error && (
+            <p className={styles.errorText}>Error: {faceProcessingStatus.current.last_error}</p>
+          )}
+          <div className={styles.actionRow}>
+            <button
+              type="button"
+              className={styles.actionButton}
+              onClick={() => void runFaceProcessingJob()}
+              disabled={isFaceProcessingActionLoading || isFaceProcessingRunActive}
+            >
+              {isFaceProcessingActionLoading && !isFaceProcessingRunActive ? "Starting..." : "Run"}
+            </button>
+            <button
+              type="button"
+              className={styles.actionButtonSecondary}
+              onClick={() => void stopFaceProcessingJob()}
+              disabled={isFaceProcessingActionLoading || !isFaceProcessingRunActive}
+            >
+              {isFaceProcessingActionLoading && isFaceProcessingRunActive ? "Stopping..." : "Stop"}
             </button>
           </div>
         </article>

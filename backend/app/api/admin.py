@@ -12,6 +12,9 @@ from app.schemas.admin import (
     DuplicateProcessingActionResponse,
     DuplicateProcessingRunStatus,
     DuplicateProcessingStatusResponse,
+    FaceProcessingActionResponse,
+    FaceProcessingRunStatus,
+    FaceProcessingStatusResponse,
     PlaceGeocodingActionResponse,
     PlaceGeocodingRunStatus,
     PlaceGeocodingStatusResponse,
@@ -30,6 +33,13 @@ from app.services.location.place_geocoding_service import (
     get_place_geocoding_status,
     request_place_geocoding_stop,
     start_place_geocoding_background,
+)
+from app.services.face.face_processing_service import (
+    FaceProcessingAlreadyRunningError,
+    FaceProcessingStatusSnapshot,
+    get_face_processing_status,
+    request_face_processing_stop,
+    start_face_processing_background,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -167,4 +177,76 @@ def stop_place_geocoding(db: Session = Depends(get_db_session)) -> PlaceGeocodin
         accepted=accepted,
         message=result.message,
         status=_to_place_geocoding_run_status(result.status),
+    )
+
+
+def _to_face_processing_run_status(snapshot: FaceProcessingStatusSnapshot) -> FaceProcessingRunStatus:
+    return FaceProcessingRunStatus(
+        run_id=snapshot.run_id,
+        status=snapshot.status,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        elapsed_seconds=snapshot.elapsed_seconds,
+        assets_pending_detection=snapshot.assets_pending_detection,
+        assets_processed_detection=snapshot.assets_processed_detection,
+        faces_pending_embedding=snapshot.faces_pending_embedding,
+        faces_processed_embedding=snapshot.faces_processed_embedding,
+        faces_pending_clustering=snapshot.faces_pending_clustering,
+        faces_processed_clustering=snapshot.faces_processed_clustering,
+        crops_pending=snapshot.crops_pending,
+        crops_generated=snapshot.crops_generated,
+        current_stage=snapshot.current_stage,
+        last_error=snapshot.last_error,
+        last_run_summary=snapshot.last_run_summary,
+        stop_requested=snapshot.stop_requested,
+    )
+
+
+@router.get("/face-processing/status", response_model=FaceProcessingStatusResponse)
+def get_face_processing_run_status(db: Session = Depends(get_db_session)) -> FaceProcessingStatusResponse:
+    """Return face processing status and pending-work counts."""
+    status_view = get_face_processing_status(db)
+    return FaceProcessingStatusResponse(
+        generated_at=status_view.generated_at,
+        pending_detection=status_view.pending_detection,
+        pending_embedding=status_view.pending_embedding,
+        pending_clustering=status_view.pending_clustering,
+        pending_crops=status_view.pending_crops,
+        current=_to_face_processing_run_status(status_view.current),
+    )
+
+
+@router.post("/face-processing/run", response_model=FaceProcessingActionResponse)
+def run_face_processing() -> FaceProcessingActionResponse | JSONResponse:
+    """Start face processing in the background when no active run exists."""
+    try:
+        result = start_face_processing_background(created_by="admin_api")
+    except FaceProcessingAlreadyRunningError as exc:
+        payload = FaceProcessingActionResponse(
+            accepted=False,
+            message="A face processing run is already active.",
+            status=_to_face_processing_run_status(exc.status),
+        )
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+
+    accepted = result.status.status in {"running", "stop_requested"}
+    payload = FaceProcessingActionResponse(
+        accepted=accepted,
+        message=result.message,
+        status=_to_face_processing_run_status(result.status),
+    )
+    if not accepted:
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+    return payload
+
+
+@router.post("/face-processing/stop", response_model=FaceProcessingActionResponse)
+def stop_face_processing(db: Session = Depends(get_db_session)) -> FaceProcessingActionResponse:
+    """Request graceful stop for the currently active face processing run."""
+    result = request_face_processing_stop(db)
+    accepted = result.status.status in {"stop_requested", "running"}
+    return FaceProcessingActionResponse(
+        accepted=accepted,
+        message=result.message,
+        status=_to_face_processing_run_status(result.status),
     )

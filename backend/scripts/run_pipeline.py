@@ -1778,32 +1778,22 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
             outcomes=outcomes,
         )
 
-        if args.skip_face_processing:
-            _skip_stage(
-                key=f"{batch_label_prefix}_faces",
-                index=7,
-                total=7,
-                label=f"{batch_label_prefix}: face detection + clustering",
-                reason="--skip-face-processing",
-                outcomes=outcomes,
-            )
-        else:
-            _execute_stage(
-                key=f"{batch_label_prefix}_face_detection",
-                index=7,
-                total=7,
-                label=f"{batch_label_prefix}: face detection",
-                runner=lambda: _face_detection_stage(ctx),
-                outcomes=outcomes,
-            )
-            _execute_stage(
-                key=f"{batch_label_prefix}_face_clustering",
-                index=8,
-                total=8,
-                label=f"{batch_label_prefix}: face embedding + clustering",
-                runner=lambda: _face_clustering_stage(ctx),
-                outcomes=outcomes,
-            )
+        _skip_stage(
+            key=f"{batch_label_prefix}_face_detection",
+            index=7,
+            total=7,
+            label=f"{batch_label_prefix}: face detection",
+            reason="decoupled to scripts/run_face_processing.py",
+            outcomes=outcomes,
+        )
+        _skip_stage(
+            key=f"{batch_label_prefix}_face_clustering",
+            index=8,
+            total=8,
+            label=f"{batch_label_prefix}: face embedding + clustering",
+            reason="decoupled to scripts/run_face_processing.py",
+            outcomes=outcomes,
+        )
 
 
 def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]:
@@ -1862,24 +1852,14 @@ def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]
 
         _run_batch_stages(ctx, args, outcomes)
 
-        if args.skip_crop_generation:
-            _skip_stage(
-                key="crop_generation",
-                index=1,
-                total=2,
-                label="review crop generation",
-                reason="--skip-crop-generation",
-                outcomes=outcomes,
-            )
-        else:
-            _execute_stage(
-                key="crop_generation",
-                index=1,
-                total=2,
-                label="review crop generation",
-                runner=lambda: _crop_generation_stage(ctx),
-                outcomes=outcomes,
-            )
+        _skip_stage(
+            key="crop_generation",
+            index=1,
+            total=2,
+            label="review crop generation",
+            reason="decoupled to scripts/run_face_processing.py",
+            outcomes=outcomes,
+        )
 
         if args.skip_event_clustering:
             _skip_stage(
