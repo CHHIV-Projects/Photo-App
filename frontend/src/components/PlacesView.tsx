@@ -27,6 +27,10 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
   const placeListRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const photoListRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
+  const formatCoordinates = (lat: number, lon: number) => {
+    return `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
+  };
+
   const visiblePlaces = useMemo(() => {
     const q = placeSearch.trim().toLowerCase();
     if (!q) return places;
@@ -177,10 +181,6 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
       });
     }
   }, [selectedPhotoId]);
-
-  const formatCoordinates = (lat: number, lon: number) => {
-    return `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
-  };
 
   return (
     <div className={styles.container}>
