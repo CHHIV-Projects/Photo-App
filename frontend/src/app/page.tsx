@@ -91,6 +91,7 @@ export default function HomePage() {
   const [photoCameraQuery, setPhotoCameraQuery] = useState("");
   const [photoStartDate, setPhotoStartDate] = useState("");
   const [photoEndDate, setPhotoEndDate] = useState("");
+  const [photoSortBy, setPhotoSortBy] = useState<"ingested_desc" | "captured_desc">("ingested_desc");
   const [photoTimelineYear, setPhotoTimelineYear] = useState<number | null>(null);
   const [photoTimelineMonth, setPhotoTimelineMonth] = useState("");
   const [photoTimelineDate, setPhotoTimelineDate] = useState("");
@@ -128,7 +129,7 @@ export default function HomePage() {
 
   useEffect(() => {
     void loadPhotos();
-  }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate, photoTimelineYear, photoTimelineMonth, photoTimelineDate, photoSearchOffset]);
+  }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate, photoSortBy, photoTimelineYear, photoTimelineMonth, photoTimelineDate, photoSearchOffset]);
 
   useEffect(() => {
     if (selectedClusterId === null) {
@@ -246,6 +247,7 @@ export default function HomePage() {
         camera: photoCameraQuery || undefined,
         startDate: photoStartDate || undefined,
         endDate: photoEndDate || undefined,
+        sortBy: photoSortBy,
         ...timelineFilter,
         offset: photoSearchOffset,
         limit: PHOTO_SEARCH_PAGE_SIZE,
@@ -264,17 +266,20 @@ export default function HomePage() {
     camera: string;
     startDate: string;
     endDate: string;
+    sortBy: "ingested_desc" | "captured_desc";
   }) => {
     const nextQuery = filters.query.trim();
     const nextCamera = filters.camera.trim();
     const nextStartDate = filters.startDate;
     const nextEndDate = filters.endDate;
+    const nextSortBy = filters.sortBy;
 
     const filtersChanged =
       nextQuery !== photoSearchQuery ||
       nextCamera !== photoCameraQuery ||
       nextStartDate !== photoStartDate ||
-      nextEndDate !== photoEndDate;
+      nextEndDate !== photoEndDate ||
+      nextSortBy !== photoSortBy;
 
     if (!filtersChanged) {
       return;
@@ -284,12 +289,13 @@ export default function HomePage() {
     setPhotoCameraQuery(nextCamera);
     setPhotoStartDate(nextStartDate);
     setPhotoEndDate(nextEndDate);
+    setPhotoSortBy(nextSortBy);
     setPhotos([]);
     latestPhotoDetailRequestShaRef.current = null;
     setSelectedPhotoSha256(null);
     setPhotoDetail(null);
     setPhotoSearchOffset(0);
-  }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate]);
+  }, [photoSearchQuery, photoCameraQuery, photoStartDate, photoEndDate, photoSortBy]);
 
   const handlePhotoSearchPageChange = useCallback((nextOffset: number) => {
     setPhotoSearchOffset(Math.max(0, nextOffset));
@@ -870,6 +876,7 @@ export default function HomePage() {
             cameraQuery={photoCameraQuery}
             startDate={photoStartDate}
             endDate={photoEndDate}
+            sortBy={photoSortBy}
             totalCount={photoSearchTotalCount}
             offset={photoSearchOffset}
             pageSize={PHOTO_SEARCH_PAGE_SIZE}

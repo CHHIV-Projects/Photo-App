@@ -49,6 +49,7 @@ export interface SearchPhotoQueryOptions extends PhotoQueryOptions {
   startDate?: string;
   endDate?: string;
   camera?: string;
+  sortBy?: "ingested_desc" | "captured_desc";
   hasLocation?: boolean;
   hasFaces?: boolean;
   hasUnassignedFaces?: boolean;
@@ -207,6 +208,7 @@ export function searchPhotos(options: SearchPhotoQueryOptions = {}): Promise<Sea
   if (options.startDate) params.set("start_date", options.startDate);
   if (options.endDate) params.set("end_date", options.endDate);
   if (options.camera?.trim()) params.set("camera", options.camera.trim());
+  if (options.sortBy) params.set("sort_by", options.sortBy);
   if (options.hasLocation !== undefined) params.set("has_location", String(options.hasLocation));
   if (options.hasFaces !== undefined) params.set("has_faces", String(options.hasFaces));
   if (options.hasUnassignedFaces !== undefined) {

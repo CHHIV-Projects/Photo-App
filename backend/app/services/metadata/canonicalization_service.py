@@ -183,22 +183,11 @@ def _extract_dimensions(path: Path, metadata: dict[str, object]) -> tuple[int | 
         return None, None
 
 
-def extract_metadata_observation_from_path(path: str) -> ExtractedMetadataObservation | None:
-    file_path = Path(path)
-    if not file_path.exists() or not file_path.is_file():
-        return None
-
+def _extract_observation_from_metadata(
+    file_path: Path, metadata: dict[str, object]
+) -> ExtractedMetadataObservation | None:
+    """Build an ExtractedMetadataObservation from a pre-fetched raw metadata dict."""
     extension = file_path.suffix.lower()
-    if extension not in IMAGE_EXTENSIONS:
-        return None
-
-    try:
-        with exiftool.ExifToolHelper() as helper:
-            metadata_list = helper.get_metadata(str(file_path))
-    except Exception:  # noqa: BLE001
-        return None
-
-    metadata = metadata_list[0] if metadata_list else {}
     exif_datetime_original = _parse_datetime(metadata.get("EXIF:DateTimeOriginal"))
     exif_create_date = _parse_datetime(metadata.get("EXIF:CreateDate"))
     gps_latitude = _parse_float(metadata.get("EXIF:GPSLatitude"))
@@ -246,6 +235,45 @@ def extract_metadata_observation_from_path(path: str) -> ExtractedMetadataObserv
         height=height,
         observed_extension=extension,
     )
+
+
+def _batch_extract_metadata(paths: list[str]) -> dict[str, dict[str, object]]:
+    """Open ExifTool once and extract raw metadata for all valid image paths.
+
+    Returns a mapping of source_path -> raw metadata dict.
+    Paths that are missing, non-image, or fail extraction are excluded.
+    """
+    valid = [
+        p for p in paths
+        if Path(p).exists() and Path(p).is_file() and Path(p).suffix.lower() in IMAGE_EXTENSIONS
+    ]
+    if not valid:
+        return {}
+    try:
+        with exiftool.ExifToolHelper() as helper:
+            results = helper.get_metadata(valid)  # pass as list, not *args
+        return {path: (result or {}) for path, result in zip(valid, results)}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def extract_metadata_observation_from_path(path: str) -> ExtractedMetadataObservation | None:
+    file_path = Path(path)
+    if not file_path.exists() or not file_path.is_file():
+        return None
+
+    extension = file_path.suffix.lower()
+    if extension not in IMAGE_EXTENSIONS:
+        return None
+
+    try:
+        with exiftool.ExifToolHelper() as helper:
+            metadata_list = helper.get_metadata(str(file_path))
+    except Exception:  # noqa: BLE001
+        return None
+
+    metadata = metadata_list[0] if metadata_list else {}
+    return _extract_observation_from_metadata(file_path, metadata)
 
 
 def build_legacy_observation_from_asset(asset: Asset) -> ExtractedMetadataObservation | None:
@@ -303,11 +331,16 @@ def persist_metadata_observation(
     observed_source_type: str | None,
     extracted: ExtractedMetadataObservation,
     is_legacy_seeded: bool,
+    _preloaded_observations: list[AssetMetadataObservation] | None = None,
 ) -> bool:
-    existing_observations = list(
-        db_session.scalars(
-            select(AssetMetadataObservation).where(AssetMetadataObservation.asset_sha256 == asset_sha256)
-        ).all()
+    existing_observations = (
+        _preloaded_observations
+        if _preloaded_observations is not None
+        else list(
+            db_session.scalars(
+                select(AssetMetadataObservation).where(AssetMetadataObservation.asset_sha256 == asset_sha256)
+            ).all()
+        )
     )
     incoming_signature = _observation_signature(extracted)
     incoming_scope = (provenance_id, observation_origin, observed_source_path)
@@ -575,8 +608,27 @@ def recompute_canonical_metadata_for_assets(db_session: Session, asset_sha256_li
     skipped = 0
     failed = 0
 
-    for sha256 in dict.fromkeys(asset_sha256_list):
-        asset = db_session.get(Asset, sha256)
+    unique_sha256s = list(dict.fromkeys(asset_sha256_list))
+    if not unique_sha256s:
+        return CanonicalizationSummary(processed=0, updated=0, skipped=0, failed=0)
+
+    # Batch-fetch all assets
+    assets_map: dict[str, Asset] = {
+        a.sha256: a
+        for a in db_session.scalars(select(Asset).where(Asset.sha256.in_(unique_sha256s))).all()
+    }
+
+    # Batch-fetch all observations for all assets in one query
+    observations_by_sha256: dict[str, list[AssetMetadataObservation]] = {}
+    for obs in db_session.scalars(
+        select(AssetMetadataObservation)
+        .where(AssetMetadataObservation.asset_sha256.in_(unique_sha256s))
+        .order_by(AssetMetadataObservation.id.asc())
+    ).all():
+        observations_by_sha256.setdefault(obs.asset_sha256, []).append(obs)
+
+    for sha256 in unique_sha256s:
+        asset = assets_map.get(sha256)
         if asset is None:
             skipped += 1
             continue
@@ -586,13 +638,7 @@ def recompute_canonical_metadata_for_assets(db_session: Session, asset_sha256_li
 
         processed += 1
         try:
-            observations = list(
-                db_session.scalars(
-                    select(AssetMetadataObservation)
-                    .where(AssetMetadataObservation.asset_sha256 == sha256)
-                    .order_by(AssetMetadataObservation.id.asc())
-                ).all()
-            )
+            observations = observations_by_sha256.get(sha256, [])
             if not observations:
                 skipped += 1
                 continue
@@ -633,6 +679,24 @@ def recompute_canonical_metadata_for_assets(db_session: Session, asset_sha256_li
 
     db_session.commit()
     return CanonicalizationSummary(processed=processed, updated=updated, skipped=skipped, failed=failed)
+
+
+def _resolve_provenance_from_batch(
+    provenance_rows_by_sha256: dict[str, list[Provenance]],
+    asset_sha256: str,
+    source_path: str,
+    run_id: int | None,
+) -> Provenance | None:
+    """In-memory equivalent of _find_matching_provenance using pre-fetched rows."""
+    rows = provenance_rows_by_sha256.get(asset_sha256, [])
+    sorted_rows = sorted(rows, key=lambda r: r.id, reverse=True)
+    # Primary match: sha256 + source_path [+ run_id if available]
+    for row in sorted_rows:
+        if row.source_path == source_path:
+            if run_id is None or row.ingestion_run_id == run_id:
+                return row
+    # Fallback: any provenance row for this asset (mirrors DB fallback query)
+    return sorted_rows[0] if sorted_rows else None
 
 
 def _find_matching_provenance(
@@ -682,21 +746,57 @@ def create_ingest_observations_for_batch(
     for item in duplicate_files:
         workload.append((item.duplicate.sha256, item.duplicate.record.original_source_path))
 
+    if not workload:
+        return IngestObservationSummary(inserted=0, skipped=0, failed=0, affected_asset_sha256=[])
+
+    all_sha256s = list(dict.fromkeys(sha256 for sha256, _ in workload))
+    run_id = provenance_context.ingestion_run_id if provenance_context is not None else None
+
+    # Batch-fetch assets
+    assets_map: dict[str, Asset] = {
+        a.sha256: a
+        for a in db_session.scalars(select(Asset).where(Asset.sha256.in_(all_sha256s))).all()
+    }
+
+    # Batch-fetch provenance rows (used by _resolve_provenance_from_batch)
+    provenance_rows_by_sha256: dict[str, list[Provenance]] = {}
+    for row in db_session.scalars(select(Provenance).where(Provenance.asset_sha256.in_(all_sha256s))).all():
+        provenance_rows_by_sha256.setdefault(row.asset_sha256, []).append(row)
+
+    # Batch-fetch existing observations (avoids per-item SELECT in persist_metadata_observation)
+    observations_by_sha256: dict[str, list[AssetMetadataObservation]] = {}
+    for obs in db_session.scalars(
+        select(AssetMetadataObservation).where(AssetMetadataObservation.asset_sha256.in_(all_sha256s))
+    ).all():
+        observations_by_sha256.setdefault(obs.asset_sha256, []).append(obs)
+
+    # Collect image source paths for batch ExifTool extraction
+    source_paths_for_extraction: list[str] = [
+        source_path
+        for asset_sha256, source_path in workload
+        if asset_sha256 in assets_map and _is_image_asset(assets_map[asset_sha256])
+    ]
+    batch_metadata = _batch_extract_metadata(source_paths_for_extraction)
+
     for asset_sha256, source_path in workload:
         try:
-            asset = db_session.get(Asset, asset_sha256)
+            asset = assets_map.get(asset_sha256)
             if asset is None or not _is_image_asset(asset):
                 skipped += 1
                 continue
 
-            provenance_row = _find_matching_provenance(
-                db_session,
-                asset_sha256=asset_sha256,
-                source_path=source_path,
-                provenance_context=provenance_context,
+            provenance_row = _resolve_provenance_from_batch(
+                provenance_rows_by_sha256, asset_sha256, source_path, run_id
             )
 
-            extracted = extract_metadata_observation_from_path(source_path)
+            # Use batch-extracted metadata; fall back to single ExifTool call for vault path
+            raw_metadata = batch_metadata.get(source_path)
+            extracted: ExtractedMetadataObservation | None
+            if raw_metadata is not None:
+                extracted = _extract_observation_from_metadata(Path(source_path), raw_metadata)
+            else:
+                extracted = None
+
             observation_origin = "provenance"
             observed_source_path = source_path
             observed_source_type = provenance_row.source_type if provenance_row is not None else None
@@ -720,6 +820,7 @@ def create_ingest_observations_for_batch(
                 observed_source_type=observed_source_type,
                 extracted=extracted,
                 is_legacy_seeded=False,
+                _preloaded_observations=observations_by_sha256.get(asset_sha256),
             )
             if was_added:
                 inserted += 1

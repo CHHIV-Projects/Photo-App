@@ -41,6 +41,7 @@ interface Props {
   cameraQuery?: string;
   startDate?: string;
   endDate?: string;
+  sortBy?: "ingested_desc" | "captured_desc";
   totalCount?: number;
   offset?: number;
   pageSize?: number;
@@ -58,6 +59,7 @@ interface Props {
     camera: string;
     startDate: string;
     endDate: string;
+    sortBy: "ingested_desc" | "captured_desc";
   }) => void;
   onPageChange?: (nextOffset: number) => void;
   onTimelineChange?: (selection: {
@@ -75,6 +77,7 @@ export function PhotosView({
   cameraQuery = "",
   startDate = "",
   endDate = "",
+  sortBy = "ingested_desc",
   totalCount = 0,
   offset = 0,
   pageSize = 50,
@@ -100,6 +103,7 @@ export function PhotosView({
   const [cameraSearch, setCameraSearch] = useState(cameraQuery);
   const [startDateFilter, setStartDateFilter] = useState(startDate);
   const [endDateFilter, setEndDateFilter] = useState(endDate);
+  const [sortByFilter, setSortByFilter] = useState<"ingested_desc" | "captured_desc">(sortBy);
   const [albums, setAlbums] = useState<AlbumSummary[]>([]);
   const [eventOptions, setEventOptions] = useState<EventSummary[]>([]);
   const [selectedEventTargetId, setSelectedEventTargetId] = useState<number | null>(null);
@@ -144,6 +148,10 @@ export function PhotosView({
   }, [endDate]);
 
   useEffect(() => {
+    setSortByFilter(sortBy);
+  }, [sortBy]);
+
+  useEffect(() => {
     if (!onSearchFiltersChange) return;
     const debounceHandle = window.setTimeout(() => {
       onSearchFiltersChange({
@@ -151,13 +159,14 @@ export function PhotosView({
         camera: cameraSearch,
         startDate: startDateFilter,
         endDate: endDateFilter,
+        sortBy: sortByFilter,
       });
     }, 300);
 
     return () => {
       window.clearTimeout(debounceHandle);
     };
-  }, [photoSearch, cameraSearch, startDateFilter, endDateFilter, onSearchFiltersChange]);
+  }, [photoSearch, cameraSearch, startDateFilter, endDateFilter, sortByFilter, onSearchFiltersChange]);
 
   useEffect(() => {
     if (photos.length === 0) {
@@ -543,7 +552,7 @@ export function PhotosView({
       const response = await removePhotoFromEvent(photoDetail.asset_sha256);
       applyEventImpactSummary(response.old_event);
       applyEventImpactSummary(response.new_event);
-      onPhotoDetailUpdated({
+      onPhotoDetailUpdated?.({
         ...photoDetail,
         event: response.event,
       });
@@ -574,7 +583,7 @@ export function PhotosView({
       const response = await assignPhotoToEvent(photoDetail.asset_sha256, selectedEventTargetId);
       applyEventImpactSummary(response.old_event);
       applyEventImpactSummary(response.new_event);
-      onPhotoDetailUpdated({
+      onPhotoDetailUpdated?.({
         ...photoDetail,
         event: response.event,
       });
@@ -631,7 +640,7 @@ export function PhotosView({
       const assetSha256 = photoDetail.asset_sha256;
       const updated = await setPhotoRotation(assetSha256, nextRotation);
       setDisplayRotationDegrees(updated.display_rotation_degrees);
-      onPhotoDetailUpdated({
+      onPhotoDetailUpdated?.({
         ...photoDetail,
         display_rotation_degrees: updated.display_rotation_degrees,
       });
@@ -675,7 +684,7 @@ export function PhotosView({
     try {
       const refreshedDetail = await getPhotoDetail(selectedPhotoSha256);
       setDisplayRotationDegrees(refreshedDetail.display_rotation_degrees);
-      onPhotoDetailUpdated(refreshedDetail);
+      onPhotoDetailUpdated?.(refreshedDetail);
     } catch {
       // Keep current state if refresh fails; next photo selection will reload detail.
     }
@@ -767,7 +776,7 @@ export function PhotosView({
       setDuplicateMergeSuccessMessage(buildDuplicateMergeSuccessMessage(response));
 
       const refreshed = await getPhotoDetail(photoDetail.asset_sha256);
-      onPhotoDetailUpdated(refreshed);
+      onPhotoDetailUpdated?.(refreshed);
     } catch (error) {
       setDuplicateMergeErrorMessage(getErrorMessage(error, "Failed to merge duplicate lineage."));
     } finally {
@@ -863,6 +872,15 @@ export function PhotosView({
                   aria-label="End date"
                 />
               </div>
+              <select
+                className={styles.searchInput}
+                value={sortByFilter}
+                onChange={(e) => setSortByFilter(e.target.value as "ingested_desc" | "captured_desc")}
+                aria-label="Sort photos"
+              >
+                <option value="ingested_desc">Sort: Newest Ingested</option>
+                <option value="captured_desc">Sort: Newest Captured</option>
+              </select>
               <p className={styles.searchHint}>Year: set 01-01 to 12-31. Month: set first to last day (for example 2024-05-01 to 2024-05-31).</p>
             </div>
           )}

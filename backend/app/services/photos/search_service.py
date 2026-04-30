@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.asset import Asset
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
+from app.models.provenance import Provenance
 from app.services.photos.photos_service import _build_asset_url
 from app.services.timeline.timeline_service import TimelineFilter, apply_asset_time_filters, effective_capture_time_trust_expr
 
@@ -98,11 +99,21 @@ def search_photos(
     has_faces: bool | None = None,
     has_unassigned_faces: bool | None = None,
     canonical_first: bool = False,
+    sort_by: str = "ingested_desc",
     timeline_filters: TimelineFilter | None = None,
     offset: int = 0,
     limit: int = 100,
 ) -> SearchPhotoListResult:
     """Search photos by canonical metadata fields with deterministic ordering."""
+    latest_ingest_subq = (
+        select(
+            Provenance.asset_sha256.label("asset_sha256"),
+            func.max(Provenance.ingested_at).label("latest_ingested_at"),
+        )
+        .group_by(Provenance.asset_sha256)
+        .subquery()
+    )
+
     face_count_subq = (
         select(
             Face.asset_sha256,
@@ -131,7 +142,10 @@ def search_photos(
         func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
         func.coalesce(face_count_subq.c.assigned_face_count, 0).label("assigned_face_count"),
         func.coalesce(face_count_subq.c.unassigned_face_count, 0).label("unassigned_face_count"),
-    ).outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
+    ).outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256).outerjoin(
+        latest_ingest_subq,
+        Asset.sha256 == latest_ingest_subq.c.asset_sha256,
+    )
 
     active_timeline_filters = timeline_filters or TimelineFilter()
     base_query = apply_asset_time_filters(base_query, active_timeline_filters)
@@ -162,6 +176,9 @@ def search_photos(
     if has_unassigned_faces is True:
         base_query = base_query.where(func.coalesce(face_count_subq.c.unassigned_face_count, 0) > 0)
 
+    if sort_by not in {"ingested_desc", "captured_desc"}:
+        raise ValueError("sort_by must be one of: ingested_desc, captured_desc.")
+
     start_bound_utc, end_bound_utc_exclusive = _build_local_day_bounds(
         start_date=start_date,
         end_date=end_date,
@@ -179,10 +196,20 @@ def search_photos(
     if canonical_first:
         ordering.append(case((Asset.is_canonical.is_(True), 0), else_=1).asc())
 
+    if sort_by == "captured_desc":
+        ordering.extend([
+            Asset.captured_at.desc().nullslast(),
+            latest_ingest_subq.c.latest_ingested_at.desc().nullslast(),
+        ])
+    else:
+        ordering.extend([
+            latest_ingest_subq.c.latest_ingested_at.desc().nullslast(),
+            Asset.captured_at.desc().nullslast(),
+        ])
+
     rows = db.execute(
         base_query.order_by(
             *ordering,
-            Asset.captured_at.desc().nullslast(),
             Asset.created_at_utc.desc(),
             Asset.sha256.asc(),
         )
