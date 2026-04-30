@@ -41,6 +41,26 @@ class DuplicateLineageSummary:
 
 
 @dataclass(frozen=True)
+class AssetLineageMetrics:
+    """Per-asset performance and outcome metrics for one lineage update call."""
+
+    sha256: str
+    mode: str  # "baseline" or "optimized"
+    phash_computed: bool
+    candidates_queried: int
+    candidates_after_python_filter: int
+    hamming_comparisons: int
+    match_found: bool
+    best_distance: int | None
+    action: str
+    db_query_seconds: float
+    python_filter_seconds: float
+    hamming_seconds: float
+    db_write_seconds: float
+    total_seconds: float
+
+
+@dataclass(frozen=True)
 class ProvenanceContext:
     """Optional ingestion context attached to a provenance write."""
 
@@ -163,6 +183,81 @@ def _hamming_distance_int(hash_a: int, hash_b: int) -> int:
     return (hash_a ^ hash_b).bit_count()
 
 
+def _candidate_query_baseline(asset_sha256: str):  # type: ignore[return]
+    """Unfiltered candidate query: all phash-populated assets except self."""
+    return select(Asset).where(
+        Asset.sha256 != asset_sha256,
+        Asset.phash.is_not(None),
+    )
+
+
+def _candidate_query_optimized(asset: Asset):  # type: ignore[return]
+    """SQL-prefiltered candidate query with NULL fallthrough on all filters.
+
+    Pushes orientation, resolution band, and capture-time window into SQL
+    to reduce candidates before Python-level comparison.  Any filter that
+    cannot be evaluated due to missing data (NULL width/height/captured_at)
+    falls through conservatively so no valid duplicates are excluded.
+    """
+    base_clauses = [
+        Asset.sha256 != asset.sha256,
+        Asset.phash.is_not(None),
+    ]
+
+    # Allow exact pHash match to bypass all other filters.
+    exact_phash = (Asset.phash == asset.phash) if asset.phash else None
+
+    filter_parts = []
+
+    if asset.width is not None and asset.height is not None:
+        w, h = asset.width, asset.height
+
+        # Orientation filter (NULL = pass through)
+        if w > h:
+            orient_ok = or_(Asset.width.is_(None), Asset.height.is_(None), Asset.width > Asset.height)
+        elif h > w:
+            orient_ok = or_(Asset.width.is_(None), Asset.height.is_(None), Asset.height > Asset.width)
+        else:
+            orient_ok = or_(Asset.width.is_(None), Asset.height.is_(None), Asset.width == Asset.height)
+        filter_parts.append(orient_ok)
+
+        # Resolution band filter (NULL = pass through)
+        band = max(0.0, settings.duplicate_resolution_band_ratio)
+        current_pixels = max(1, w * h)
+        low_px = int(current_pixels * (1.0 - band))
+        high_px = int(current_pixels * (1.0 + band))
+        res_ok = or_(
+            Asset.width.is_(None),
+            Asset.height.is_(None),
+            and_(
+                (Asset.width * Asset.height) >= low_px,
+                (Asset.width * Asset.height) <= high_px,
+            ),
+        )
+        filter_parts.append(res_ok)
+
+    # Capture-time window filter (NULL = pass through)
+    if settings.duplicate_capture_window_enabled and asset.captured_at is not None:
+        hours = max(1, settings.duplicate_capture_window_hours)
+        window = timedelta(hours=hours)
+        low_t = asset.captured_at - window
+        high_t = asset.captured_at + window
+        time_ok = or_(
+            Asset.captured_at.is_(None),
+            and_(Asset.captured_at >= low_t, Asset.captured_at <= high_t),
+        )
+        filter_parts.append(time_ok)
+
+    if filter_parts:
+        combined = and_(*filter_parts)
+        if exact_phash is not None:
+            base_clauses.append(or_(exact_phash, combined))
+        else:
+            base_clauses.append(combined)
+
+    return select(Asset).where(and_(*base_clauses))
+
+
 def _is_candidate_match(
     current: Asset,
     candidate: Asset,
@@ -278,73 +373,141 @@ def upsert_provenance(
     return True
 
 
-def update_asset_lineage(db_session: Session, asset: Asset) -> AssetLineageUpdate:
-    """Compute lineage fields for one asset and update canonical assignment as needed."""
+def update_asset_lineage_instrumented(
+    db_session: Session,
+    asset: Asset,
+    *,
+    mode: str = "optimized",
+) -> tuple[AssetLineageUpdate, AssetLineageMetrics]:
+    """Compute lineage for one asset and return detailed performance metrics.
+
+    mode="optimized" uses SQL-prefiltered candidate query.
+    mode="baseline" uses the original unfiltered query.
+    Production behavior (best-match selection logic) is unchanged.
+    """
+    import time
+
+    t_start = time.perf_counter()
+    phash_computed = False
+
     if asset.phash is None:
         asset.phash = _compute_phash(asset)
+        phash_computed = True
     if asset.quality_score is None:
         asset.quality_score = compute_quality_score(asset)
 
-    # Non-image assets and assets without pHash stay outside duplicate groups.
     if not asset.phash:
         asset.duplicate_group_id = None
         asset.is_canonical = True
         db_session.flush()
-        return AssetLineageUpdate(sha256=asset.sha256, action="no-phash")
+        t_end = time.perf_counter()
+        return (
+            AssetLineageUpdate(sha256=asset.sha256, action="no-phash"),
+            AssetLineageMetrics(
+                sha256=asset.sha256,
+                mode=mode,
+                phash_computed=phash_computed,
+                candidates_queried=0,
+                candidates_after_python_filter=0,
+                hamming_comparisons=0,
+                match_found=False,
+                best_distance=None,
+                action="no-phash",
+                db_query_seconds=0.0,
+                python_filter_seconds=0.0,
+                hamming_seconds=0.0,
+                db_write_seconds=0.0,
+                total_seconds=t_end - t_start,
+            ),
+        )
 
     dimensions_cache: dict[str, tuple[int, int] | None] = {}
-    candidates = list(
-        db_session.scalars(
-            select(Asset).where(
-                and_(
-                    Asset.sha256 != asset.sha256,
-                    Asset.phash.is_not(None),
-                )
-            )
-        ).all()
-    )
+    threshold = max(0, settings.duplicate_hamming_threshold)
 
+    # --- DB candidate query ---
+    t_q0 = time.perf_counter()
+    if mode == "optimized":
+        candidates = list(db_session.scalars(_candidate_query_optimized(asset)).all())
+    else:
+        candidates = list(db_session.scalars(_candidate_query_baseline(asset.sha256)).all())
+    db_query_seconds = time.perf_counter() - t_q0
+    candidates_queried = len(candidates)
+
+    # --- Python filter + Hamming ---
+    t_f0 = time.perf_counter()
     best_match: Asset | None = None
     best_distance: int | None = None
-    threshold = max(0, settings.duplicate_hamming_threshold)
+    candidates_after_python_filter = 0
+    hamming_comparisons = 0
+    hamming_seconds_acc = 0.0
 
     for candidate in candidates:
         if not candidate.phash:
             continue
         if not _is_candidate_match(asset, candidate, dimensions_cache):
             continue
-
+        candidates_after_python_filter += 1
         try:
+            t_h0 = time.perf_counter()
             distance = _hamming_distance(asset.phash, candidate.phash)
+            hamming_seconds_acc += time.perf_counter() - t_h0
+            hamming_comparisons += 1
         except Exception:  # noqa: BLE001
             continue
-
         if distance > threshold:
             continue
-
         if best_distance is None or distance < best_distance:
             best_distance = distance
             best_match = candidate
 
+    python_filter_seconds = (time.perf_counter() - t_f0) - hamming_seconds_acc
+
+    # --- DB write ---
+    t_w0 = time.perf_counter()
     if best_match is None:
         asset.duplicate_group_id = None
         asset.is_canonical = True
         db_session.flush()
-        return AssetLineageUpdate(sha256=asset.sha256, action="standalone")
+        action = "standalone"
+    else:
+        group_id = _ensure_group_for_candidate(db_session, best_match)
+        asset.duplicate_group_id = group_id
+        # Flush before recompute so the new group assignment is visible to the
+        # SELECT inside recompute_group_canonical. The session uses autoflush=False,
+        # so without this flush the incoming asset is invisible to the query and
+        # keeps its default is_canonical=True, producing two canonicals per group.
+        db_session.flush()
+        winner = recompute_group_canonical(db_session, group_id)
+        db_session.flush()
+        action = "promoted-canonical" if winner == asset.sha256 else "grouped-noncanonical"
+    db_write_seconds = time.perf_counter() - t_w0
 
-    group_id = _ensure_group_for_candidate(db_session, best_match)
-    asset.duplicate_group_id = group_id
-    # Flush before recompute so the new group assignment is visible to the
-    # SELECT inside recompute_group_canonical. The session uses autoflush=False,
-    # so without this flush the incoming asset is invisible to the query and
-    # keeps its default is_canonical=True, producing two canonicals per group.
-    db_session.flush()
-    winner = recompute_group_canonical(db_session, group_id)
-    db_session.flush()
+    t_end = time.perf_counter()
+    return (
+        AssetLineageUpdate(sha256=asset.sha256, action=action),
+        AssetLineageMetrics(
+            sha256=asset.sha256,
+            mode=mode,
+            phash_computed=phash_computed,
+            candidates_queried=candidates_queried,
+            candidates_after_python_filter=candidates_after_python_filter,
+            hamming_comparisons=hamming_comparisons,
+            match_found=best_match is not None,
+            best_distance=best_distance,
+            action=action,
+            db_query_seconds=db_query_seconds,
+            python_filter_seconds=python_filter_seconds,
+            hamming_seconds=hamming_seconds_acc,
+            db_write_seconds=db_write_seconds,
+            total_seconds=t_end - t_start,
+        ),
+    )
 
-    if winner == asset.sha256:
-        return AssetLineageUpdate(sha256=asset.sha256, action="promoted-canonical")
-    return AssetLineageUpdate(sha256=asset.sha256, action="grouped-noncanonical")
+
+def update_asset_lineage(db_session: Session, asset: Asset) -> AssetLineageUpdate:
+    """Compute lineage fields for one asset and update canonical assignment as needed."""
+    update, _ = update_asset_lineage_instrumented(db_session, asset, mode="optimized")
+    return update
 
 
 def _build_feature_rows(db_session: Session) -> tuple[list[_FeatureRow], dict[str, Asset]]:

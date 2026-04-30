@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 
 from sqlalchemy import Select, func, select
@@ -13,8 +15,16 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.duplicate_processing_run import DuplicateProcessingRun
-from app.services.duplicates.lineage import IMAGE_EXTENSIONS, update_asset_lineage
+from app.services.duplicates.lineage import (
+    IMAGE_EXTENSIONS,
+    AssetLineageMetrics,
+    update_asset_lineage_instrumented,
+)
 from app.services.duplicates.processing_schema import ensure_duplicate_processing_schema
+
+# Reports are written to storage/logs/duplicate_processing_reports/ relative to project root.
+_BACKEND_ROOT = Path(__file__).resolve().parents[4]
+REPORT_DIR: Path = _BACKEND_ROOT / "storage" / "logs" / "duplicate_processing_reports"
 
 STATUS_IDLE = "idle"
 STATUS_RUNNING = "running"
@@ -230,6 +240,78 @@ def _create_run_record(db_session: Session, *, created_by: str | None) -> tuple[
     return run, workset
 
 
+def _write_processing_report(
+    run: DuplicateProcessingRun,
+    metrics_list: list[AssetLineageMetrics],
+    report_dir: Path,
+) -> None:
+    """Write a JSON performance report for a completed/stopped/failed run."""
+    try:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        total = len(metrics_list)
+
+        def _avg(key: str) -> float:
+            return round(sum(getattr(m, key) for m in metrics_list) / max(1, total), 6)
+
+        action_counts: dict[str, int] = {}
+        for m in metrics_list:
+            action_counts[m.action] = action_counts.get(m.action, 0) + 1
+
+        report = {
+            "report_type": "duplicate_processing_run",
+            "run_id": run.id,
+            "mode": metrics_list[0].mode if metrics_list else "optimized",
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "run_summary": {
+                "status": run.status,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "elapsed_seconds": run.elapsed_seconds,
+                "total_assets": int(run.total_items or 0),
+                "processed_assets": int(run.processed_items or 0),
+                "stopped_early": run.status in (STATUS_STOPPED, STATUS_FAILED),
+            },
+            "performance_summary": {
+                "total_candidates_queried": sum(m.candidates_queried for m in metrics_list),
+                "total_candidates_after_python_filter": sum(m.candidates_after_python_filter for m in metrics_list),
+                "total_hamming_comparisons": sum(m.hamming_comparisons for m in metrics_list),
+                "total_matches_found": sum(1 for m in metrics_list if m.match_found),
+                "avg_candidates_per_asset": round(sum(m.candidates_queried for m in metrics_list) / max(1, total), 1),
+                "avg_hamming_per_asset": round(sum(m.hamming_comparisons for m in metrics_list) / max(1, total), 1),
+                "avg_db_query_seconds": _avg("db_query_seconds"),
+                "avg_python_filter_seconds": _avg("python_filter_seconds"),
+                "avg_hamming_seconds": _avg("hamming_seconds"),
+                "avg_db_write_seconds": _avg("db_write_seconds"),
+                "avg_total_seconds_per_asset": _avg("total_seconds"),
+            },
+            "action_summary": action_counts,
+            "per_asset_metrics": [
+                {
+                    "sha256": m.sha256,
+                    "action": m.action,
+                    "phash_computed": m.phash_computed,
+                    "candidates_queried": m.candidates_queried,
+                    "candidates_after_python_filter": m.candidates_after_python_filter,
+                    "hamming_comparisons": m.hamming_comparisons,
+                    "match_found": m.match_found,
+                    "best_distance": m.best_distance,
+                    "db_query_seconds": round(m.db_query_seconds, 6),
+                    "python_filter_seconds": round(m.python_filter_seconds, 6),
+                    "hamming_seconds": round(m.hamming_seconds, 6),
+                    "db_write_seconds": round(m.db_write_seconds, 6),
+                    "total_seconds": round(m.total_seconds, 6),
+                }
+                for m in metrics_list
+            ],
+        }
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        path = report_dir / f"dup_run_{run.id}_{ts}Z.json"
+        path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass  # Never fail a run due to report writing
+
+
 def _finalize_run(
     db_session: Session,
     run: DuplicateProcessingRun,
@@ -256,6 +338,7 @@ def _run_existing_workset(
     progress_callback: Callable[[DuplicateProcessingStatusSnapshot], None] | None,
 ) -> DuplicateProcessingStatusSnapshot:
     processed = 0
+    metrics_list: list[AssetLineageMetrics] = []
 
     for asset_sha256 in workset:
         db_session.refresh(run)
@@ -268,6 +351,7 @@ def _run_existing_workset(
                 error_message=None,
             )
             db_session.refresh(run)
+            _write_processing_report(run, metrics_list, REPORT_DIR)
             snapshot = _to_snapshot(run)
             if progress_callback is not None:
                 progress_callback(snapshot)
@@ -276,7 +360,8 @@ def _run_existing_workset(
         try:
             asset = db_session.get(Asset, asset_sha256)
             if asset is not None:
-                update_asset_lineage(db_session, asset)
+                _, asset_metrics = update_asset_lineage_instrumented(db_session, asset, mode="optimized")
+                metrics_list.append(asset_metrics)
             processed += 1
             run.processed_items = processed
             run.current_stage = "lineage_update"
@@ -295,6 +380,7 @@ def _run_existing_workset(
                 error_message=str(exc) or exc.__class__.__name__,
             )
             db_session.refresh(run)
+            _write_processing_report(run, metrics_list, REPORT_DIR)
             snapshot = _to_snapshot(run)
             if progress_callback is not None:
                 progress_callback(snapshot)
@@ -308,6 +394,7 @@ def _run_existing_workset(
         error_message=None,
     )
     db_session.refresh(run)
+    _write_processing_report(run, metrics_list, REPORT_DIR)
     snapshot = _to_snapshot(run)
     if progress_callback is not None:
         progress_callback(snapshot)
