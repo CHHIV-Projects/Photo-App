@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pillow_heif
 from PIL import Image
+
+# Register pillow-heif so PIL.Image.open() can handle .heic / .heif files.
+pillow_heif.register_heif_opener()
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 

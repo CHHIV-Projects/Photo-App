@@ -15,6 +15,9 @@ from app.schemas.admin import (
     FaceProcessingActionResponse,
     FaceProcessingRunStatus,
     FaceProcessingStatusResponse,
+    HeicPreviewActionResponse,
+    HeicPreviewRunStatus,
+    HeicPreviewStatusResponse,
     PlaceGeocodingActionResponse,
     PlaceGeocodingRunStatus,
     PlaceGeocodingStatusResponse,
@@ -40,6 +43,13 @@ from app.services.face.face_processing_service import (
     get_face_processing_status,
     request_face_processing_stop,
     start_face_processing_background,
+)
+from app.services.previews.heic_preview_processing_service import (
+    HeicPreviewAlreadyRunningError,
+    HeicPreviewStatusSnapshot,
+    get_heic_preview_status,
+    request_heic_preview_stop,
+    start_heic_preview_background,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -249,4 +259,68 @@ def stop_face_processing(db: Session = Depends(get_db_session)) -> FaceProcessin
         accepted=accepted,
         message=result.message,
         status=_to_face_processing_run_status(result.status),
+    )
+
+
+def _to_heic_preview_run_status(snapshot: HeicPreviewStatusSnapshot) -> HeicPreviewRunStatus:
+    return HeicPreviewRunStatus(
+        run_id=snapshot.run_id,
+        status=snapshot.status,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        elapsed_seconds=snapshot.elapsed_seconds,
+        assets_pending=snapshot.assets_pending,
+        assets_processed=snapshot.assets_processed,
+        assets_succeeded=snapshot.assets_succeeded,
+        assets_failed=snapshot.assets_failed,
+        last_error=snapshot.last_error,
+        last_run_summary=snapshot.last_run_summary,
+        stop_requested=snapshot.stop_requested,
+    )
+
+
+@router.get("/heic-preview/status", response_model=HeicPreviewStatusResponse)
+def get_heic_preview_run_status(db: Session = Depends(get_db_session)) -> HeicPreviewStatusResponse:
+    """Return HEIC preview generation status and pending-work count."""
+    status_view = get_heic_preview_status(db)
+    return HeicPreviewStatusResponse(
+        generated_at=status_view.generated_at,
+        pending_previews=status_view.pending_previews,
+        current=_to_heic_preview_run_status(status_view.current),
+    )
+
+
+@router.post("/heic-preview/run", response_model=HeicPreviewActionResponse)
+def run_heic_preview_generation() -> HeicPreviewActionResponse | JSONResponse:
+    """Start HEIC preview generation in the background when no active run exists."""
+    try:
+        result = start_heic_preview_background(created_by="admin_api")
+    except HeicPreviewAlreadyRunningError as exc:
+        payload = HeicPreviewActionResponse(
+            accepted=False,
+            message="A HEIC preview generation run is already active.",
+            status=_to_heic_preview_run_status(exc.status),
+        )
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+
+    accepted = result.status.status in {"running", "stop_requested"}
+    payload = HeicPreviewActionResponse(
+        accepted=accepted,
+        message=result.message,
+        status=_to_heic_preview_run_status(result.status),
+    )
+    if not accepted:
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+    return payload
+
+
+@router.post("/heic-preview/stop", response_model=HeicPreviewActionResponse)
+def stop_heic_preview_generation(db: Session = Depends(get_db_session)) -> HeicPreviewActionResponse:
+    """Request graceful stop for the currently active HEIC preview generation run."""
+    result = request_heic_preview_stop(db)
+    accepted = result.status.status in {"stop_requested", "running"}
+    return HeicPreviewActionResponse(
+        accepted=accepted,
+        message=result.message,
+        status=_to_heic_preview_run_status(result.status),
     )

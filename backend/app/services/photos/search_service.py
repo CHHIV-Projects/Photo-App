@@ -132,6 +132,7 @@ def search_photos(
         Asset.sha256,
         Asset.original_filename,
         Asset.extension,
+        Asset.display_preview_path,
         Asset.captured_at,
         Asset.camera_make,
         Asset.camera_model,
@@ -221,7 +222,7 @@ def search_photos(
         SearchPhotoSummary(
             asset_sha256=row.sha256,
             filename=row.original_filename,
-            image_url=_build_asset_url(row.sha256, row.extension),
+            image_url=_build_asset_url(row.sha256, row.extension, row.display_preview_path),
             captured_at=_to_utc_iso(row.captured_at),
             camera_make=row.camera_make,
             camera_model=row.camera_model,

@@ -32,6 +32,7 @@ from app.models.asset import Asset
 from app.models.face import Face
 from app.models.face_processing_run import FaceProcessingRun
 from app.services.face.face_processing_schema import ensure_face_processing_schema
+from app.services.vision.face_detector import load_image_for_cv2
 
 # Reports written to storage/logs/face_processing_reports/ relative to project root.
 _BACKEND_ROOT = Path(__file__).resolve().parents[4]
@@ -533,7 +534,7 @@ def _background_face_processing_run(run_id: int) -> None:
             if not source_path.exists():
                 continue
 
-            image = cv2.imread(str(source_path))
+            image = load_image_for_cv2(source_path)
             if image is None:
                 continue
 

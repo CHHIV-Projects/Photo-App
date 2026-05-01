@@ -55,6 +55,7 @@ class Asset(Base):
 		index=True,
 	)
 	display_rotation_degrees: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+	display_preview_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 	source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
 	place_id: Mapped[int | None] = mapped_column(ForeignKey("places.place_id"), nullable=True, index=True)
 	event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)

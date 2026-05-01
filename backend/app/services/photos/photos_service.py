@@ -98,12 +98,20 @@ def _validate_display_rotation_degrees(rotation_degrees: int) -> int:
     return rotation_degrees
 
 
-def _build_asset_url(sha256: str, extension: str) -> str:
+def _build_asset_url(sha256: str, extension: str, display_preview_path: str | None = None) -> str:
     """Build a browser-accessible URL for a vault asset.
 
-    Vault layout: storage/vault/{sha256[:2]}/{sha256}.{ext}
-    Served at:    /media/assets/{sha256[:2]}/{sha256}.{ext}
+    When *display_preview_path* is set the preview URL is returned directly —
+    this covers HEIC assets that have had a JPEG derivative generated.
+    Falls back to the raw vault URL for all other assets and for HEIC assets
+    that have not been previewed yet.
+
+    Vault layout:   storage/vault/{sha256[:2]}/{sha256}.{ext}
+    Served at:      /media/assets/{sha256[:2]}/{sha256}.{ext}
+    Preview served: /media/previews/{sha256[:2]}/{sha256}.jpg
     """
+    if display_preview_path:
+        return display_preview_path
     ext = extension.lower()
     if not ext.startswith("."):
         ext = f".{ext}"
@@ -127,6 +135,7 @@ def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[d
         Asset.sha256,
         Asset.original_filename,
         Asset.extension,
+        Asset.display_preview_path,
         Asset.captured_at,
         trust_expr.label("capture_time_trust"),
         func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
@@ -146,7 +155,7 @@ def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[d
         {
             "asset_sha256": row.sha256,
             "filename": row.original_filename,
-            "image_url": _build_asset_url(row.sha256, row.extension),
+            "image_url": _build_asset_url(row.sha256, row.extension, row.display_preview_path),
             "captured_at": _to_utc_iso(row.captured_at),
             "capture_time_trust": row.capture_time_trust,
             "face_count": row.face_count,
@@ -320,7 +329,7 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
     return {
         "asset_sha256": sha256,
         "filename": asset.original_filename,
-        "image_url": _build_asset_url(asset.sha256, asset.extension),
+        "image_url": _build_asset_url(asset.sha256, asset.extension, asset.display_preview_path),
         "display_rotation_degrees": _validate_display_rotation_degrees(int(asset.display_rotation_degrees or 0)),
         "is_scan": capture_type == "scan",
         "capture_type": capture_type,
@@ -373,7 +382,7 @@ def get_duplicate_group_detail(db: Session, group_id: int) -> dict | None:
             {
                 "asset_sha256": asset.sha256,
                 "filename": asset.original_filename,
-                "image_url": _build_asset_url(asset.sha256, asset.extension),
+                "image_url": _build_asset_url(asset.sha256, asset.extension, asset.display_preview_path),
                 "is_canonical": asset.is_canonical,
                 "visibility_status": asset.visibility_status,
                 "quality_score": asset.quality_score,

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 CURRENT_FILE = Path(__file__).resolve()
@@ -25,12 +26,13 @@ from app.db.session import SessionLocal
 from app.services.face.face_processing_schema import ensure_face_processing_schema
 from app.services.face.face_processing_service import (
     FaceProcessingAlreadyRunningError,
+    get_face_processing_status,
     start_face_processing_background,
 )
 
 
 def main() -> int:
-    """Start face processing in the background and print initial status."""
+    """Start face processing and wait for completion."""
     db_session = SessionLocal()
     try:
         schema_summary = ensure_face_processing_schema(db_session)
@@ -40,13 +42,42 @@ def main() -> int:
         payload = {
             "status": result.status.status,
             "run_id": result.status.run_id,
-            "message": result.message,
+            "message": f"{result.message} Waiting for completion...",
             "schema_created_tables": schema_summary.created_tables,
             "face_incremental_columns_added": schema_summary.face_incremental_columns_added,
         }
 
         print(json.dumps(payload, indent=2))
-        return 0
+
+        while True:
+            time.sleep(3)
+            poll_db = SessionLocal()
+            try:
+                status_view = get_face_processing_status(poll_db)
+            finally:
+                poll_db.close()
+
+            snap = status_view.current
+            print(
+                json.dumps(
+                    {
+                        "run_id": snap.run_id,
+                        "status": snap.status,
+                        "current_stage": snap.current_stage,
+                        "assets_processed_detection": snap.assets_processed_detection,
+                        "assets_pending_detection": snap.assets_pending_detection,
+                        "faces_processed_embedding": snap.faces_processed_embedding,
+                        "faces_pending_embedding": snap.faces_pending_embedding,
+                        "faces_processed_clustering": snap.faces_processed_clustering,
+                        "faces_pending_clustering": snap.faces_pending_clustering,
+                        "crops_generated": snap.crops_generated,
+                        "crops_pending": snap.crops_pending,
+                    }
+                )
+            )
+
+            if snap.status not in ("running", "stop_requested"):
+                return 0 if snap.status == "completed" else 1
 
     except FaceProcessingAlreadyRunningError as exc:
         error_payload = {

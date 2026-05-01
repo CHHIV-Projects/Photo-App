@@ -562,3 +562,30 @@ export interface AdminFaceProcessingActionResponse {
   message: string;
   status: AdminFaceProcessingRunStatus;
 }
+
+export interface AdminHeicPreviewRunStatus {
+  run_id: number | null;
+  status: "idle" | "running" | "stop_requested" | "completed" | "failed" | "stopped";
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  assets_pending: number;
+  assets_processed: number;
+  assets_succeeded: number;
+  assets_failed: number;
+  last_error: string | null;
+  last_run_summary: string | null;
+  stop_requested: boolean;
+}
+
+export interface AdminHeicPreviewStatusResponse {
+  generated_at: string;
+  pending_previews: number;
+  current: AdminHeicPreviewRunStatus;
+}
+
+export interface AdminHeicPreviewActionResponse {
+  accepted: boolean;
+  message: string;
+  status: AdminHeicPreviewRunStatus;
+}

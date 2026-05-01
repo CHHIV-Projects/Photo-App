@@ -12,11 +12,15 @@ import {
   stopPlaceGeocoding,
   getFaceProcessingStatus,
   runFaceProcessing,
-  stopFaceProcessing
+  stopFaceProcessing,
+  getHeicPreviewStatus,
+  runHeicPreviewGeneration,
+  stopHeicPreviewGeneration
 } from "@/lib/api";
 import type {
   AdminDuplicateProcessingStatusResponse,
   AdminFaceProcessingStatusResponse,
+  AdminHeicPreviewStatusResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse
 } from "@/types/ui-api";
@@ -28,10 +32,12 @@ export default function AdminView() {
   const [duplicateStatus, setDuplicateStatus] = useState<AdminDuplicateProcessingStatusResponse | null>(null);
   const [placeGeocodingStatus, setPlaceGeocodingStatus] = useState<AdminPlaceGeocodingStatusResponse | null>(null);
   const [faceProcessingStatus, setFaceProcessingStatus] = useState<AdminFaceProcessingStatusResponse | null>(null);
+  const [heicPreviewStatus, setHeicPreviewStatus] = useState<AdminHeicPreviewStatusResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDuplicateActionLoading, setIsDuplicateActionLoading] = useState(false);
   const [isPlaceGeocodingActionLoading, setIsPlaceGeocodingActionLoading] = useState(false);
   const [isFaceProcessingActionLoading, setIsFaceProcessingActionLoading] = useState(false);
+  const [isHeicPreviewActionLoading, setIsHeicPreviewActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const loadSummary = useCallback(async () => {
@@ -153,9 +159,44 @@ export default function AdminView() {
     }
   }, [loadFaceProcessingStatus]);
 
+  const loadHeicPreviewStatus = useCallback(async () => {
+    try {
+      const response = await getHeicPreviewStatus();
+      setHeicPreviewStatus(response);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load HEIC preview status.");
+    }
+  }, []);
+
+  const runHeicPreviewJob = useCallback(async () => {
+    setIsHeicPreviewActionLoading(true);
+    setErrorMessage("");
+    try {
+      await runHeicPreviewGeneration();
+      await loadHeicPreviewStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to start HEIC preview generation.");
+    } finally {
+      setIsHeicPreviewActionLoading(false);
+    }
+  }, [loadHeicPreviewStatus]);
+
+  const stopHeicPreviewJob = useCallback(async () => {
+    setIsHeicPreviewActionLoading(true);
+    setErrorMessage("");
+    try {
+      await stopHeicPreviewGeneration();
+      await loadHeicPreviewStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to request HEIC preview stop.");
+    } finally {
+      setIsHeicPreviewActionLoading(false);
+    }
+  }, [loadHeicPreviewStatus]);
+
   const loadAll = useCallback(async () => {
-    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus(), loadFaceProcessingStatus()]);
-  }, [loadDuplicateStatus, loadFaceProcessingStatus, loadPlaceGeocodingStatus, loadSummary]);
+    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus(), loadFaceProcessingStatus(), loadHeicPreviewStatus()]);
+  }, [loadDuplicateStatus, loadFaceProcessingStatus, loadHeicPreviewStatus, loadPlaceGeocodingStatus, loadSummary]);
 
   useEffect(() => {
     void loadAll();
@@ -212,6 +253,22 @@ export default function AdminView() {
     };
   }, [faceProcessingStatus?.current.status, loadFaceProcessingStatus]);
 
+  useEffect(() => {
+    const isActive = heicPreviewStatus && ["running", "stop_requested"].includes(heicPreviewStatus.current.status);
+
+    if (!isActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadHeicPreviewStatus();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [heicPreviewStatus?.current.status, loadHeicPreviewStatus]);
+
   const duplicateRunState = duplicateStatus?.current.status ?? "idle";
   const isDuplicateRunActive = duplicateRunState === "running" || duplicateRunState === "stop_requested";
 
@@ -220,6 +277,9 @@ export default function AdminView() {
 
   const faceProcessingRunState = faceProcessingStatus?.current.status ?? "idle";
   const isFaceProcessingRunActive = faceProcessingRunState === "running" || faceProcessingRunState === "stop_requested";
+
+  const heicPreviewRunState = heicPreviewStatus?.current.status ?? "idle";
+  const isHeicPreviewRunActive = heicPreviewRunState === "running" || heicPreviewRunState === "stop_requested";
 
   return (
     <section className={styles.adminRoot}>
@@ -387,6 +447,41 @@ export default function AdminView() {
               disabled={isFaceProcessingActionLoading || !isFaceProcessingRunActive}
             >
               {isFaceProcessingActionLoading && isFaceProcessingRunActive ? "Stopping..." : "Stop"}
+            </button>
+          </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.duplicateCard}`.trim()}>
+          <h3 className={styles.cardTitle}>HEIC Preview Generation</h3>
+          <p className={styles.meta}>Status: {heicPreviewStatus?.current.status ?? "idle"}</p>
+          <p className={styles.meta}>Pending previews: {heicPreviewStatus?.pending_previews ?? 0}</p>
+          <p className={styles.meta}>
+            Progress: {heicPreviewStatus?.current.assets_processed ?? 0}/{heicPreviewStatus?.current.assets_pending ?? 0}
+          </p>
+          <p className={styles.meta}>Succeeded: {heicPreviewStatus?.current.assets_succeeded ?? 0}</p>
+          <p className={styles.meta}>Failed: {heicPreviewStatus?.current.assets_failed ?? 0}</p>
+          <p className={styles.meta}>Started: {heicPreviewStatus?.current.started_at ? new Date(heicPreviewStatus.current.started_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Finished: {heicPreviewStatus?.current.finished_at ? new Date(heicPreviewStatus.current.finished_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Elapsed: {heicPreviewStatus?.current.elapsed_seconds ? `${heicPreviewStatus.current.elapsed_seconds.toFixed(1)}s` : "-"}</p>
+          {heicPreviewStatus?.current.last_error && (
+            <p className={styles.errorText}>Error: {heicPreviewStatus.current.last_error}</p>
+          )}
+          <div className={styles.actionRow}>
+            <button
+              type="button"
+              className={styles.actionButton}
+              onClick={() => void runHeicPreviewJob()}
+              disabled={isHeicPreviewActionLoading || isHeicPreviewRunActive}
+            >
+              {isHeicPreviewActionLoading && !isHeicPreviewRunActive ? "Starting..." : "Run"}
+            </button>
+            <button
+              type="button"
+              className={styles.actionButtonSecondary}
+              onClick={() => void stopHeicPreviewJob()}
+              disabled={isHeicPreviewActionLoading || !isHeicPreviewRunActive}
+            >
+              {isHeicPreviewActionLoading && isHeicPreviewRunActive ? "Stopping..." : "Stop"}
             </button>
           </div>
         </article>

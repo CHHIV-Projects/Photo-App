@@ -28,6 +28,7 @@ from app.services.metadata.metadata_canonicalization_schema import ensure_metada
 from app.services.duplicates.suggestion_schema import ensure_duplicate_suggestion_schema
 from app.services.places.place_schema import ensure_place_schema
 from app.services.photos.display_adjustment_schema import ensure_display_adjustment_schema
+from app.services.previews.heic_preview_schema import ensure_heic_preview_schema
 from app.services.vision.face_incremental_schema import ensure_face_incremental_schema
 
 
@@ -40,6 +41,9 @@ def create_app() -> FastAPI:
 	vault_media_dir = (Path(__file__).resolve().parents[2] / "storage" / "vault").resolve()
 	if vault_media_dir.exists():
 		app.mount("/media/assets", StaticFiles(directory=str(vault_media_dir)), name="assets-media")
+	previews_media_dir = (Path(__file__).resolve().parents[2] / "storage" / "previews").resolve()
+	previews_media_dir.mkdir(parents=True, exist_ok=True)
+	app.mount("/media/previews", StaticFiles(directory=str(previews_media_dir)), name="previews-media")
 	app.add_middleware(
 		CORSMiddleware,
 		allow_origins=list(settings.frontend_allowed_origins),
@@ -74,6 +78,7 @@ def create_app() -> FastAPI:
 			ensure_place_schema(db_session)
 			ensure_display_adjustment_schema(db_session)
 			ensure_face_incremental_schema(db_session)
+			ensure_heic_preview_schema(db_session)
 		finally:
 			db_session.close()
 

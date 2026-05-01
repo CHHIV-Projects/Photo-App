@@ -630,6 +630,33 @@ export function PhotosView({
     };
   }
 
+  function getFaceOverlayReferenceDims(): { w: number; h: number } | null {
+    if (!photoDetail || !naturalDims || naturalDims.w <= 0 || naturalDims.h <= 0) {
+      return null;
+    }
+
+    const canonicalWidth = photoDetail.canonical_metadata?.width;
+    const canonicalHeight = photoDetail.canonical_metadata?.height;
+
+    if (!canonicalWidth || !canonicalHeight || canonicalWidth <= 0 || canonicalHeight <= 0) {
+      return naturalDims;
+    }
+
+    let referenceWidth = canonicalWidth;
+    let referenceHeight = canonicalHeight;
+
+    // HEIC previews can be orientation-corrected while metadata dimensions
+    // remain in raw sensor orientation; swap when orientation does not match.
+    const naturalIsLandscape = naturalDims.w >= naturalDims.h;
+    const canonicalIsLandscape = canonicalWidth >= canonicalHeight;
+    if (naturalIsLandscape !== canonicalIsLandscape) {
+      referenceWidth = canonicalHeight;
+      referenceHeight = canonicalWidth;
+    }
+
+    return { w: referenceWidth, h: referenceHeight };
+  }
+
   async function persistRotation(nextRotation: 0 | 90 | 180 | 270) {
     if (!photoDetail) return;
 
@@ -786,6 +813,7 @@ export function PhotosView({
 
   const areFaceOverlaysSuppressed = displayRotationDegrees !== 0;
   const isQuarterTurnRotation = displayRotationDegrees === 90 || displayRotationDegrees === 270;
+  const faceOverlayReferenceDims = getFaceOverlayReferenceDims();
   const allExifObservations = photoDetail?.metadata_observations ?? [];
   const provenanceExifObservations = allExifObservations.filter(
     (item) => item.observation_origin === "provenance"
@@ -1054,7 +1082,7 @@ export function PhotosView({
                         />
                       )}
                       {!areFaceOverlaysSuppressed &&
-                        naturalDims &&
+                        faceOverlayReferenceDims &&
                         photoDetail.faces.map((face) => (
                           <div
                             key={face.face_id}
@@ -1065,10 +1093,10 @@ export function PhotosView({
                               `${styles.faceBox} ${selectedFaceId === face.face_id ? styles.faceBoxActive : ""}`.trim()
                             }
                             style={{
-                              left: `${(face.bbox.x / naturalDims.w) * 100}%`,
-                              top: `${(face.bbox.y / naturalDims.h) * 100}%`,
-                              width: `${(face.bbox.w / naturalDims.w) * 100}%`,
-                              height: `${(face.bbox.h / naturalDims.h) * 100}%`,
+                              left: `${(face.bbox.x / faceOverlayReferenceDims.w) * 100}%`,
+                              top: `${(face.bbox.y / faceOverlayReferenceDims.h) * 100}%`,
+                              width: `${(face.bbox.w / faceOverlayReferenceDims.w) * 100}%`,
+                              height: `${(face.bbox.h / faceOverlayReferenceDims.h) * 100}%`,
                             }}
                             onClick={() => toggleFace(face.face_id)}
                             onKeyDown={(e) => {

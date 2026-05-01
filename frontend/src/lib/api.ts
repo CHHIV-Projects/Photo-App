@@ -3,6 +3,8 @@ import type {
   AdminDuplicateProcessingStatusResponse,
   AdminFaceProcessingActionResponse,
   AdminFaceProcessingStatusResponse,
+  AdminHeicPreviewActionResponse,
+  AdminHeicPreviewStatusResponse,
   AdminPlaceGeocodingActionResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse,
@@ -470,6 +472,22 @@ export function runFaceProcessing(): Promise<AdminFaceProcessingActionResponse> 
 
 export function stopFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {
   return apiRequest<AdminFaceProcessingActionResponse>("/api/admin/face-processing/stop", {
+    method: "POST"
+  });
+}
+
+export function getHeicPreviewStatus(): Promise<AdminHeicPreviewStatusResponse> {
+  return apiRequest<AdminHeicPreviewStatusResponse>("/api/admin/heic-preview/status");
+}
+
+export function runHeicPreviewGeneration(): Promise<AdminHeicPreviewActionResponse> {
+  return apiRequest<AdminHeicPreviewActionResponse>("/api/admin/heic-preview/run", {
+    method: "POST"
+  });
+}
+
+export function stopHeicPreviewGeneration(): Promise<AdminHeicPreviewActionResponse> {
+  return apiRequest<AdminHeicPreviewActionResponse>("/api/admin/heic-preview/stop", {
     method: "POST"
   });
 }
