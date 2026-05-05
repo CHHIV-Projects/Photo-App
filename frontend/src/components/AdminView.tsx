@@ -277,6 +277,10 @@ export default function AdminView() {
 
   const faceProcessingRunState = faceProcessingStatus?.current.status ?? "idle";
   const isFaceProcessingRunActive = faceProcessingRunState === "running" || faceProcessingRunState === "stop_requested";
+  const displayedPendingDetection = isFaceProcessingRunActive ? (faceProcessingStatus?.pending_detection ?? 0) : 0;
+  const displayedPendingEmbedding = isFaceProcessingRunActive ? (faceProcessingStatus?.pending_embedding ?? 0) : 0;
+  const displayedPendingClustering = isFaceProcessingRunActive ? (faceProcessingStatus?.pending_clustering ?? 0) : 0;
+  const displayedPendingCrops = isFaceProcessingRunActive ? (faceProcessingStatus?.pending_crops ?? 0) : 0;
 
   const heicPreviewRunState = heicPreviewStatus?.current.status ?? "idle";
   const isHeicPreviewRunActive = heicPreviewRunState === "running" || heicPreviewRunState === "stop_requested";
@@ -409,10 +413,10 @@ export default function AdminView() {
           <h3 className={styles.cardTitle}>Face Processing</h3>
           <p className={styles.meta}>Status: {faceProcessingStatus?.current.status ?? "idle"}</p>
           <p className={styles.meta}>Stage: {faceProcessingStatus?.current.current_stage ?? "-"}</p>
-          <p className={styles.meta}>Pending detection: {faceProcessingStatus?.pending_detection ?? 0}</p>
-          <p className={styles.meta}>Pending embedding: {faceProcessingStatus?.pending_embedding ?? 0}</p>
-          <p className={styles.meta}>Pending clustering: {faceProcessingStatus?.pending_clustering ?? 0}</p>
-          <p className={styles.meta}>Pending crops: {faceProcessingStatus?.pending_crops ?? 0}</p>
+          <p className={styles.meta}>Pending detection: {displayedPendingDetection}</p>
+          <p className={styles.meta}>Pending embedding: {displayedPendingEmbedding}</p>
+          <p className={styles.meta}>Pending clustering: {displayedPendingClustering}</p>
+          <p className={styles.meta}>Pending crops: {displayedPendingCrops}</p>
           <p className={styles.meta}>
             Detection: {faceProcessingStatus?.current.assets_processed_detection ?? 0}/{faceProcessingStatus?.current.assets_pending_detection ?? 0}
           </p>

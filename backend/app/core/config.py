@@ -33,9 +33,11 @@ class Settings:
 	quarantine_path: str = os.getenv("QUARANTINE_PATH", "../storage/quarantine")
 	ingest_failures_path: str = os.getenv("INGEST_FAILURES_PATH", "../storage/ingest_failures")
 	ingest_batch_size: int = int(os.getenv("INGEST_BATCH_SIZE", "50"))
-	ingest_total_limit: int | None = (
-		int(os.getenv("INGEST_TOTAL_LIMIT", "").strip())
-		if os.getenv("INGEST_TOTAL_LIMIT", "").strip()
+	ingest_source_limit: int | None = (
+		int(
+			(os.getenv("INGEST_SOURCE_LIMIT") or os.getenv("INGEST_TOTAL_LIMIT") or "").strip()
+		)
+		if (os.getenv("INGEST_SOURCE_LIMIT") or os.getenv("INGEST_TOTAL_LIMIT") or "").strip()
 		else None
 	)
 	event_cluster_gap_seconds: int = int(os.getenv("EVENT_CLUSTER_GAP_SECONDS", "14400"))

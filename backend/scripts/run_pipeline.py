@@ -24,6 +24,7 @@ from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.face import Face
 from app.models.place import Place
+from app.models.provenance import Provenance
 from app.services.duplicates.lineage import ProvenanceContext
 from app.services.ingestion.deduplicator import DeduplicationResult, DuplicateFile
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
@@ -61,7 +62,7 @@ class PipelineContext:
     quarantine_path: Path
     ingest_failures_path: Path
     ingest_batch_size: int
-    ingest_total_limit: int | None
+    ingest_source_limit: int | None
     source_label: str | None
     source_type: str | None
     source_scan_result: ScanResult | None = None
@@ -89,6 +90,14 @@ class PipelineContext:
     run_face_detection_rebuild: bool = False
     run_face_clustering_rebuild: bool = False
     resolved_ingestion_context: ResolvedIngestionContext | None = None
+    # Source intake session tracking
+    source_files_scanned_total: int = 0
+    source_files_skipped_known: int = 0
+    source_files_eligible: int = 0
+    source_files_selected: int = 0
+    source_files_remaining_unknown: int = 0
+    source_skipped_known_sample: list[str] = field(default_factory=list)
+    source_intake_report_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -117,7 +126,7 @@ class RuntimeArgs:
     run_face_clustering_rebuild: bool
     skip_crop_generation: bool
     ingest_batch_size: int
-    ingest_total_limit: int | None
+    ingest_source_limit: int | None
     source_label: str | None
     source_type: str | None
 
@@ -180,9 +189,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Batch size for newly ingested unique assets.",
     )
     parser.add_argument(
+        "--source-limit",
+        type=int,
+        dest="source_limit",
+        help="Max new source files staged from --from-path per session (INGEST_SOURCE_LIMIT).",
+    )
+    parser.add_argument(
         "--ingest-total-limit",
         type=int,
-        help="Optional total limit for newly ingested unique assets in this run.",
+        dest="ingest_total_limit",
+        help="Deprecated alias for --source-limit. Use --source-limit instead.",
     )
     parser.add_argument(
         "--from-path",
@@ -268,7 +284,8 @@ def _has_non_interactive_flags(parsed: argparse.Namespace) -> bool:
     return any(
         [
             parsed.ingest_batch_size is not None,
-            parsed.ingest_total_limit is not None,
+            getattr(parsed, "source_limit", None) is not None,
+            getattr(parsed, "ingest_total_limit", None) is not None,
             parsed.from_path is not None,
             bool(parsed.source_label),
             bool(parsed.source_type),
@@ -322,7 +339,7 @@ def _build_runtime_args(
     run_face_clustering_rebuild: bool,
     run_crop_generation_override: bool,
     ingest_batch_size: int,
-    ingest_total_limit: int | None,
+    ingest_source_limit: int | None,
     source_label: str | None,
     source_type: str | None,
 ) -> RuntimeArgs:
@@ -342,7 +359,7 @@ def _build_runtime_args(
         run_face_clustering_rebuild=run_face_clustering_rebuild,
         skip_crop_generation=effective_skip_crop_generation,
         ingest_batch_size=ingest_batch_size,
-        ingest_total_limit=ingest_total_limit,
+        ingest_source_limit=ingest_source_limit,
         source_label=source_label,
         source_type=source_type,
     )
@@ -365,11 +382,11 @@ def _validate_rebuild_confirmation(
         )
 
 
-def _validate_ingest_controls(ingest_batch_size: int, ingest_total_limit: int | None) -> None:
+def _validate_ingest_controls(ingest_batch_size: int, ingest_source_limit: int | None) -> None:
     if ingest_batch_size <= 0:
         raise ValueError("Ingest batch size must be greater than zero.")
-    if ingest_total_limit is not None:
-        raise ValueError("INGEST_TOTAL_LIMIT is not supported in milestone 12.19. Use INGEST_BATCH_SIZE only.")
+    if ingest_source_limit is not None and ingest_source_limit <= 0:
+        raise ValueError("INGEST_SOURCE_LIMIT must be greater than zero.")
 
 
 def _prompt_yes_no(question: str) -> bool:
@@ -444,14 +461,19 @@ def _get_user_input() -> Any:
     from_path = None
     source_label = None
     source_type = None
+    ingest_source_limit = None
     if source_path:
         from_path = Path(source_path).expanduser().resolve()
         if not from_path.exists():
             print(f"  Warning: Path does not exist: {from_path}")
-        source_label = input(
-            "Source label for this ingestion run? (examples: Chuck PC, External Drive 1, iCloud Export): "
-        ).strip()
+        raw_label = input("Source label (stable name for this source, e.g. icloud_export_primary): ").strip()
+        if not raw_label:
+            raise ValueError("Source label is required when ingesting from a source folder.")
+        source_label = raw_label
         source_type = "local_folder"
+        ingest_source_limit = _prompt_optional_int(
+            "Max new source files to stage this session (INGEST_SOURCE_LIMIT)?",
+        )
     print()
 
     ingest_batch_size = _prompt_int_default(
@@ -459,8 +481,6 @@ def _get_user_input() -> Any:
         settings.ingest_batch_size,
     )
     print()
-
-    ingest_total_limit = None
 
     confirmation_value = _maybe_confirm_rebuild_interactive(
         run_face_detection_rebuild or run_face_clustering_rebuild
@@ -470,7 +490,7 @@ def _get_user_input() -> Any:
         run_face_clustering_rebuild=run_face_clustering_rebuild,
         confirmation_value=confirmation_value,
     )
-    _validate_ingest_controls(ingest_batch_size, ingest_total_limit)
+    _validate_ingest_controls(ingest_batch_size, ingest_source_limit)
 
     return _build_runtime_args(
         dry_run=dry_run,
@@ -485,7 +505,7 @@ def _get_user_input() -> Any:
         run_face_clustering_rebuild=run_face_clustering_rebuild,
         run_crop_generation_override=False,
         ingest_batch_size=ingest_batch_size,
-        ingest_total_limit=ingest_total_limit,
+        ingest_source_limit=ingest_source_limit,
         source_label=source_label,
         source_type=source_type,
     )
@@ -501,10 +521,20 @@ def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
         confirmation_value=parsed.confirm_rebuild,
     )
     ingest_batch_size = parsed.ingest_batch_size or settings.ingest_batch_size
-    ingest_total_limit = parsed.ingest_total_limit if parsed.ingest_total_limit is not None else settings.ingest_total_limit
-    if from_path is None and parsed.source_type and not parsed.source_label:
+
+    # --source-limit is primary; --ingest-total-limit is deprecated alias; env var INGEST_SOURCE_LIMIT as fallback
+    cli_source_limit = getattr(parsed, "source_limit", None) or getattr(parsed, "ingest_total_limit", None)
+    ingest_source_limit = cli_source_limit if cli_source_limit is not None else settings.ingest_source_limit
+
+    source_label = parsed.source_label
+    if from_path is not None and not source_label:
+        raise ValueError(
+            "--source-label is required when --from-path is provided.\n"
+            "Use a stable, operator-defined label, e.g.: --source-label icloud_export_primary"
+        )
+    if from_path is None and parsed.source_type and not source_label:
         raise ValueError("--source-type requires --source-label when --from-path is not provided.")
-    _validate_ingest_controls(ingest_batch_size, ingest_total_limit)
+    _validate_ingest_controls(ingest_batch_size, ingest_source_limit)
 
     return _build_runtime_args(
         dry_run=parsed.dry_run,
@@ -519,8 +549,8 @@ def _get_cli_input(parsed: argparse.Namespace) -> RuntimeArgs:
         run_face_clustering_rebuild=parsed.run_face_clustering_rebuild,
         run_crop_generation_override=parsed.run_crop_generation,
         ingest_batch_size=ingest_batch_size,
-        ingest_total_limit=ingest_total_limit,
-        source_label=parsed.source_label,
+        ingest_source_limit=ingest_source_limit,
+        source_label=source_label,
         source_type=parsed.source_type,
     )
 
@@ -534,7 +564,46 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
             )
 
         source_scan_result = scan_folder(ctx.from_path)
-        selected_source_records = list(source_scan_result.files[: ctx.ingest_batch_size])
+
+        # --- Skip-known: filter out source files already represented in provenance ---
+        known_relative_paths: set[str] = set()
+        if ctx.resolved_ingestion_context is not None:
+            db_session = SessionLocal()
+            try:
+                rows = db_session.scalars(
+                    select(Provenance.source_relative_path).where(
+                        Provenance.ingestion_source_id == ctx.resolved_ingestion_context.ingestion_source_id,
+                        Provenance.source_relative_path.is_not(None),
+                    )
+                ).all()
+                known_relative_paths = {r for r in rows if r}
+            finally:
+                db_session.close()
+
+        unknown_records: list[FileScanRecord] = []
+        skipped_known_records: list[FileScanRecord] = []
+        for record in source_scan_result.files:
+            try:
+                rel = str(Path(record.full_path).resolve().relative_to(ctx.from_path.resolve()))
+            except ValueError:
+                rel = record.full_path
+            if rel in known_relative_paths:
+                skipped_known_records.append(record)
+            else:
+                unknown_records.append(record)
+
+        # Select up to source_limit from unknown records (no limit = take all unknown)
+        source_limit = ctx.ingest_source_limit
+        selected_source_records = list(unknown_records[:source_limit] if source_limit is not None else unknown_records)
+        remaining_unknown = unknown_records[source_limit:] if source_limit is not None else []
+
+        ctx.source_files_scanned_total = len(source_scan_result.files)
+        ctx.source_files_skipped_known = len(skipped_known_records)
+        ctx.source_files_eligible = len(unknown_records)
+        ctx.source_files_selected = len(selected_source_records)
+        ctx.source_files_remaining_unknown = len(remaining_unknown)
+        ctx.source_skipped_known_sample = [r.full_path for r in skipped_known_records[:20]]
+
         stage_result = stage_source_records_to_dropzone(
             selected_source_records,
             ctx.drop_zone_path,
@@ -558,8 +627,11 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
             "source_path": str(ctx.from_path),
             "source_files_scanned": len(source_scan_result.files),
             "source_scan_errors": len(source_scan_result.errors),
-            "source_files_selected_for_batch": len(selected_source_records),
-            "source_files_deferred": max(0, len(source_scan_result.files) - len(selected_source_records)),
+            "source_files_skipped_known": ctx.source_files_skipped_known,
+            "source_files_eligible_unknown": ctx.source_files_eligible,
+            "source_files_selected_for_session": ctx.source_files_selected,
+            "source_files_remaining_unknown": ctx.source_files_remaining_unknown,
+            "source_limit": ctx.ingest_source_limit,
             "files_staged": len(stage_result.staged_files),
             "stage_failures": len(stage_result.failures),
             "drop_zone_records_total": len(dropzone_scan_result.files),
@@ -622,12 +694,6 @@ def _load_place_ids_for_assets(asset_sha256_list: list[str]) -> list[int]:
         db_session.close()
 
     return [int(row.place_id) for row in rows if row.place_id is not None]
-
-
-def _remaining_new_asset_slots(ctx: PipelineContext) -> int | None:
-    if ctx.ingest_total_limit is None:
-        return None
-    return max(0, ctx.ingest_total_limit - ctx.total_new_unique_ingested)
 
 
 def _select_next_batch(ctx: PipelineContext) -> IngestionBatch | None:
@@ -1013,6 +1079,7 @@ def _build_ingestion_run_manifest(
             "drop_zone_path": str(ctx.drop_zone_path),
             "ingest_failures_path": str(ctx.ingest_failures_path),
             "ingest_batch_size": ctx.ingest_batch_size,
+            "ingest_source_limit": ctx.ingest_source_limit,
             "ingestion_run_id": (
                 ctx.resolved_ingestion_context.ingestion_run_id
                 if ctx.resolved_ingestion_context is not None
@@ -1084,6 +1151,60 @@ def _write_ingestion_run_manifest(
     manifest_path.write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
     ctx.manifest_path = manifest_path
     return manifest_path
+
+
+def _write_source_intake_report(ctx: PipelineContext) -> Path | None:
+    """Write a durable JSON report for a source intake session (from-path runs only)."""
+    if ctx.from_path is None:
+        return None
+
+    report_root = _resolve_runtime_path("../storage/logs/source_intake_reports")
+    report_root.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = (
+        str(ctx.resolved_ingestion_context.ingestion_run_id)
+        if ctx.resolved_ingestion_context is not None
+        else ts
+    )
+    report_path = report_root / f"source_intake_{run_id}.json"
+
+    payload = {
+        "report_type": "source_intake_session",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source_path": str(ctx.from_path),
+        "source_label": (
+            ctx.resolved_ingestion_context.source_label if ctx.resolved_ingestion_context else None
+        ),
+        "ingestion_source_id": (
+            ctx.resolved_ingestion_context.ingestion_source_id if ctx.resolved_ingestion_context else None
+        ),
+        "ingestion_run_id": (
+            ctx.resolved_ingestion_context.ingestion_run_id if ctx.resolved_ingestion_context else None
+        ),
+        "config": {
+            "ingest_source_limit": ctx.ingest_source_limit,
+            "ingest_batch_size": ctx.ingest_batch_size,
+        },
+        "counts": {
+            "total_files_scanned": ctx.source_files_scanned_total,
+            "skipped_already_known": ctx.source_files_skipped_known,
+            "eligible_unknown_files": ctx.source_files_eligible,
+            "selected_for_session": ctx.source_files_selected,
+            "staged_to_dropzone": len(ctx.stage_result.staged_files) if ctx.stage_result else 0,
+            "processed_new_unique": ctx.total_new_unique_ingested,
+            "failed_or_rejected": len(ctx.moved_to_ingest_failures),
+            "remaining_unknown_eligible": ctx.source_files_remaining_unknown,
+        },
+        "source_complete": ctx.source_files_remaining_unknown == 0,
+        "selected_files": [r.full_path for r in ctx.source_selected_records],
+        "skipped_known_count": ctx.source_files_skipped_known,
+        "skipped_known_sample": ctx.source_skipped_known_sample,
+        "failure_details": list(ctx.moved_to_ingest_failures),
+    }
+    report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    ctx.source_intake_report_path = report_path
+    return report_path
 
 
 def _exif_extraction_stage(ctx: PipelineContext) -> dict[str, Any]:
@@ -1640,7 +1761,7 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
     if next_batch is None:
         return
 
-    ctx.total_batches_run = 1
+    ctx.total_batches_run += 1
     ctx.current_batch_records = next_batch.records
     ctx.filter_result = next_batch.filter_result
     ctx.hash_result = next_batch.hash_result
@@ -1796,17 +1917,29 @@ def _run_batch_stages(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[St
         )
 
 
+def _run_batch_loop(ctx: PipelineContext, args: RuntimeArgs, outcomes: list[StageOutcome]) -> None:
+    """Drive batch processing.
+
+    For from-path source sessions: loops until all staged Drop Zone records are processed,
+    advancing by batch_size each iteration (supporting source_limit > batch_size).
+
+    For drop-zone-only sessions: processes one batch then stops (preserves 12.19 behavior).
+    """
+    while ctx.processing_records:
+        _run_batch_stages(ctx, args, outcomes)
+        if not ctx.current_batch_records:
+            break  # no progress made (safety guard)
+        if ctx.from_path is not None:
+            # Trim the records that were just processed so the next iteration advances
+            batch_paths = {r.full_path for r in ctx.current_batch_records}
+            ctx.processing_records = [r for r in ctx.processing_records if r.full_path not in batch_paths]
+        else:
+            break  # drop-zone-only: single batch per run (12.19 behavior)
+
+
 def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]:
     outcomes: list[StageOutcome] = []
     try:
-        _execute_stage(
-            key="collect_input",
-            index=1,
-            total=1,
-            label="collect input",
-            runner=lambda: _collect_input(ctx),
-            outcomes=outcomes,
-        )
         _execute_stage(
             key="ingestion_context_schema_sync",
             index=1,
@@ -1831,12 +1964,21 @@ def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]
             runner=lambda: _place_schema_sync_stage(ctx),
             outcomes=outcomes,
         )
+        # Resolve ingestion context BEFORE collect_input so skip-known logic can query provenance
         _execute_stage(
             key="ingestion_context_resolve",
             index=1,
             total=1,
             label="ingestion context resolve",
             runner=lambda: _resolve_ingestion_context_stage(ctx),
+            outcomes=outcomes,
+        )
+        _execute_stage(
+            key="collect_input",
+            index=1,
+            total=1,
+            label="collect input",
+            runner=lambda: _collect_input(ctx),
             outcomes=outcomes,
         )
         _load_known_asset_sha256(ctx)
@@ -1850,7 +1992,7 @@ def _run_pipeline(ctx: PipelineContext, args: RuntimeArgs) -> list[StageOutcome]
             outcomes=outcomes,
         )
 
-        _run_batch_stages(ctx, args, outcomes)
+        _run_batch_loop(ctx, args, outcomes)
 
         _skip_stage(
             key="crop_generation",
@@ -1895,16 +2037,26 @@ def _print_summary(ctx: PipelineContext, outcomes: list[StageOutcome], total_ela
     print(f"  Stages run: {completed}")
     print(f"  Stages skipped: {skipped}")
     print(f"  Total elapsed: {_format_duration(total_elapsed_seconds)}")
-    print(f"  Source files scanned: {len(ctx.processing_records)}")
     print(f"  New unique assets ingested: {ctx.total_new_unique_ingested}")
     print(f"  Duplicates/already-known absorbed: {ctx.total_existing_or_duplicate_processed}")
     print(f"  Ingest batch size used: {ctx.ingest_batch_size}")
+    if ctx.ingest_source_limit is not None:
+        print(f"  Source intake limit: {ctx.ingest_source_limit}")
     print(f"  Batches run: {ctx.total_batches_run}")
     print(f"  Drop zone files cleaned: {ctx.total_dropzone_files_cleaned}")
     print(f"  Drop zone files remaining: {remaining_dropzone_files}")
     print(f"  Ingest failures path: {ctx.ingest_failures_path}")
     if ctx.manifest_path is not None:
         print(f"  Ingestion manifest: {ctx.manifest_path}")
+    if ctx.from_path is not None:
+        print(f"  Source files scanned: {ctx.source_files_scanned_total}")
+        print(f"  Known files skipped: {ctx.source_files_skipped_known}")
+        print(f"  Eligible unknown files: {ctx.source_files_eligible}")
+        print(f"  Selected for this session: {ctx.source_files_selected}")
+        print(f"  Remaining unknown eligible: {ctx.source_files_remaining_unknown}")
+        print(f"  Source complete: {'Yes' if ctx.source_files_remaining_unknown == 0 else 'No'}")
+    if ctx.source_intake_report_path is not None:
+        print(f"  Source intake report: {ctx.source_intake_report_path}")
     if ctx.resolved_ingestion_context is not None:
         print(f"  Source label: {ctx.resolved_ingestion_context.source_label}")
         print(f"  Source type: {ctx.resolved_ingestion_context.source_type}")
@@ -1942,7 +2094,7 @@ def main() -> int:
         quarantine_path=_resolve_runtime_path(settings.quarantine_path),
         ingest_failures_path=_resolve_runtime_path(settings.ingest_failures_path),
         ingest_batch_size=args.ingest_batch_size,
-        ingest_total_limit=args.ingest_total_limit,
+        ingest_source_limit=args.ingest_source_limit,
         source_label=args.source_label,
         source_type=args.source_type,
         run_face_detection_rebuild=args.run_face_detection_rebuild,
@@ -1965,6 +2117,8 @@ def main() -> int:
     print(f"  Vault path: {ctx.vault_path}")
     print(f"  Ingest failures path: {ctx.ingest_failures_path}")
     print(f"  Ingest batch size: {ctx.ingest_batch_size}")
+    if ctx.ingest_source_limit is not None:
+        print(f"  Source intake limit: {ctx.ingest_source_limit}")
     print()
 
     started_at = time.perf_counter()
@@ -1976,6 +2130,10 @@ def main() -> int:
         _write_ingestion_run_manifest(ctx, outcomes, total_elapsed_seconds, status)
     except OSError as error:
         print(f"Warning: could not write ingestion manifest: {error}")
+    try:
+        _write_source_intake_report(ctx)
+    except OSError as error:
+        print(f"Warning: could not write source intake report: {error}")
     return _print_summary(ctx, outcomes, total_elapsed_seconds)
 
 

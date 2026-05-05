@@ -524,3 +524,170 @@ Future milestones may add:
 - advanced image viewer
 - mobile-native workflows
   ```
+# 12.21 HEIC Clarification Answers
+## 1. Preview generation — library/output choiceApproved.Use Pillow + pillow-heif in a new preview service.Generate JPEG derivatives for 12.21.Preferred approach:- preserve original HEIC unchanged in Vault- generate browser-compatible JPEG preview- store preview under `storage/previews`- serve through endpoint similar to:```text/media/previews/{sha256}.jpg
+JPEG is acceptable for 12.21 because it is universally browser-compatible and simple.
+WebP can be considered later if storage/performance warrants it.
+
+2. Preview generation — when it runs
+Use background generation as the primary model.
+Preferred:
+(b) Background job
+Add Admin/script-triggered preview generation for HEIC assets missing previews.
+Reason:
+
+
+consistent with background enrichment architecture
+
+
+avoids adding latency to ingestion
+
+
+keeps ingestion fast
+
+
+allows regeneration later if needed
+
+
+If preview generation is very fast, coder may optionally support on-demand fallback later, but do not make ingestion wait on preview generation.
+For 12.21:
+
+
+ingestion should not block on HEIC preview generation
+
+
+HEIC assets without previews may show placeholder until preview job runs
+
+
+Admin should provide a way to generate missing HEIC previews if low-risk
+
+
+
+3. DB field for preview path
+Yes, add a nullable preview path field to Asset if low-risk.
+Suggested field:
+preview_path
+or more explicit:
+display_preview_path
+Use whichever naming fits existing model conventions.
+Reason:
+
+
+avoids repeated filesystem scans
+
+
+makes preview availability queryable
+
+
+supports Admin pending counts
+
+
+fits long-term derivative tracking
+
+
+Important:
+
+
+this field points to a derivative/cache artifact
+
+
+it is not canonical truth
+
+
+original Vault path remains authoritative
+
+
+
+4. Face detection on HEIC
+Include this in 12.21.
+HEIC viewing should behave like other image files, including:
+
+
+face detection
+
+
+face boxes
+
+
+face thumbnails/crops
+
+
+So yes, update face image loading so HEIC can be read.
+Approved approach:
+
+
+add _load_image(path) helper in face_detector.py
+
+
+first try OpenCV as today
+
+
+if OpenCV returns None, fall back to Pillow + pillow-heif
+
+
+convert to NumPy array for detector
+
+
+Also apply equivalent HEIC loading fix for crop generation in face processing.
+Important:
+
+
+preserve existing JPG/PNG behavior
+
+
+do not rewrite face detection logic
+
+
+only fix image loading compatibility
+
+
+
+5. Content tagger HEIC fix
+Yes, include the one-line pillow_heif.register_heif_opener() fix in 12.21.
+This is low-risk and consistent with HEIC pipeline compatibility.
+
+6. Background process behavior
+Background processes should run independently of normal user workflows.
+While preview generation, face processing, duplicate processing, or geocoding are running, the user should still be able to:
+
+
+browse photos
+
+
+view already-available previews
+
+
+adjust face clusters already processed
+
+
+label places
+
+
+review duplicates
+
+
+use Admin
+
+
+The only caveat:
+
+
+assets not yet processed by a specific background job may not yet have that enrichment available
+
+
+Examples:
+
+
+HEIC preview not generated yet → placeholder/fallback
+
+
+face processing not complete → no face boxes/thumbnails yet
+
+
+geocoding not complete → coordinate/fallback place label
+
+
+duplicate processing not complete → duplicate status may be pending
+
+
+Do not block normal UI use while background jobs run.

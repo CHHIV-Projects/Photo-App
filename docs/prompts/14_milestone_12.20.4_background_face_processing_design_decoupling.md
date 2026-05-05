@@ -534,3 +534,85 @@ Future milestones may add:
 - improved face review UX
 - bulk face operations
 - model/runtime optimization
+
+
+# 12.20.4 Clarification Answers
+
+## 1. Clustering mode
+
+The background job must only ever use **incremental clustering**.
+
+Do not allow rebuild clustering from the background service.
+
+Please make the rebuild path unreachable from the background service, not merely documented.
+
+Reason:
+
+- rebuild deletes clusters/faces
+- rebuild can destroy human identity work
+- background jobs must be safe by construction
+
+The rebuild path may continue to exist elsewhere if already present, but it must not be callable through:
+
+- Admin face-processing controls
+- background face-processing service
+- `run_face_processing.py`
+
+---
+
+## 2. Crop generation subprocess vs inline logic
+
+Yes, inline the crop-generation logic if needed.
+
+This is acceptable because:
+
+- it enables stop checks per crop
+- it avoids subprocess opacity
+- it makes the background service more consistent with other job stages
+
+Constraints:
+
+- preserve existing crop-generation behavior
+- generate missing crops only
+- do not overwrite existing crops unless current safe logic already does so
+- avoid broad crop-regeneration behavior
+
+If practical, refactor shared crop logic into an importable helper rather than duplicating script code.
+
+---
+
+## 3. Schema sync
+
+The background job should call `ensure_face_incremental_schema()` at startup.
+
+Do not assume the ingestion pipeline has already run.
+
+Reason:
+
+- Admin jobs should be independently safe
+- manual script should work cleanly
+- background service should fail less mysteriously
+
+This should be a low-risk safety step.
+
+---
+
+## 4. Stop granularity
+
+Per-item stop checks are preferred.
+
+Approved:
+
+- per asset for detection
+- per face for embedding
+- per face for clustering
+- per crop for crop generation
+
+This is better than stopping only between stages.
+
+Required behavior:
+
+- finish the current safe unit
+- commit/flush cleanly as existing logic requires
+- stop before starting the next item
+- leave remaining work pending for next run
