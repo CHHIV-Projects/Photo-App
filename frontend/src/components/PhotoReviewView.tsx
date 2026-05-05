@@ -106,6 +106,12 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   const [hasLocation, setHasLocation] = useState(false);
   const [hasFaces, setHasFaces] = useState(false);
   const [hasUnassignedFaces, setHasUnassignedFaces] = useState(false);
+  const [selectedTrusts, setSelectedTrusts] = useState<Array<"high" | "low" | "unknown">>([
+    "high",
+    "low",
+    "unknown",
+  ]);
+  const [undated, setUndated] = useState(false);
   const [yearOptions, setYearOptions] = useState<string[]>([]);
   const [monthOptions, setMonthOptions] = useState<Array<{ value: string; label: string }>>([])
 
@@ -251,6 +257,8 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
         hasLocation: hasLocation ? true : undefined,
         hasFaces: hasFaces ? true : undefined,
         hasUnassignedFaces: hasUnassignedFaces ? true : undefined,
+        trust: selectedTrusts.length < 3 ? selectedTrusts : undefined,
+        undated: undated || undefined,
         canonicalFirst: true,
         offset: nextOffset,
         limit: PAGE_SIZE,
@@ -289,7 +297,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
   useEffect(() => {
     void reloadFromStart();
-  }, [year, month, camera, hasLocation, hasFaces, hasUnassignedFaces]);
+  }, [year, month, camera, hasLocation, hasFaces, hasUnassignedFaces, selectedTrusts, undated]);
 
   const hasMore = items.length < totalCount;
 
@@ -311,7 +319,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
     observer.observe(sentinelRef.current);
     return () => observer.disconnect();
-  }, [offset, hasMore, isLoading, year, month, camera, hasLocation, hasFaces, hasUnassignedFaces]);
+  }, [offset, hasMore, isLoading, year, month, camera, hasLocation, hasFaces, hasUnassignedFaces, selectedTrusts, undated]);
 
   async function handleSetCanonical(assetSha256: string): Promise<void> {
     setBusyAssetSha256(assetSha256);
@@ -350,6 +358,27 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     } finally {
       setBusyAssetSha256(null);
     }
+  }
+
+  function handleToggleTrust(value: "high" | "low" | "unknown"): void {
+    setSelectedTrusts((current) => {
+      if (current.includes(value)) {
+        if (current.length === 1) return current;
+        return current.filter((v) => v !== value);
+      }
+      return [...current, value] as Array<"high" | "low" | "unknown">;
+    });
+  }
+
+  function removeTrustChip(value: "high" | "low" | "unknown"): void {
+    setSelectedTrusts((current) => {
+      if (current.length === 1) return current;
+      return current.filter((v) => v !== value);
+    });
+  }
+
+  function removeUndatedFilter(): void {
+    setUndated(false);
   }
 
   function handleYearDropdownChange(newYear: string): void {
@@ -392,7 +421,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
           />
         </div>
 
-        {(year || month || camera) && (
+        {(year || month || camera || selectedTrusts.length < 3 || undated) && (
           <div className={styles.chipRow}>
             {year && (
               <span className={styles.chip}>
@@ -428,6 +457,32 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
                   className={styles.chipRemove}
                   onClick={removeCameraChip}
                   aria-label="Remove camera filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {selectedTrusts.length < 3 && selectedTrusts.map((value) => (
+              <span key={value} className={styles.chip}>
+                Trust: {value.charAt(0).toUpperCase() + value.slice(1)}
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  onClick={() => removeTrustChip(value)}
+                  aria-label={`Remove ${value} trust filter`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {undated && (
+              <span className={styles.chip}>
+                Undated
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  onClick={removeUndatedFilter}
+                  aria-label="Remove undated filter"
                 >
                   ×
                 </button>
@@ -495,6 +550,31 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
               onChange={(event) => setHasUnassignedFaces(event.target.checked)}
             />
             Unassigned Faces
+          </label>
+
+          <div className={styles.trustGroup}>
+            <span className={styles.trustGroupLabel}>Date Trust</span>
+            <div className={styles.trustButtons}>
+              {(["high", "low", "unknown"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`${styles.trustToggle}${selectedTrusts.includes(value) ? ` ${styles.trustToggleActive}` : ""}`}
+                  onClick={() => handleToggleTrust(value)}
+                >
+                  {value.charAt(0).toUpperCase() + value.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className={styles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={undated}
+              onChange={(event) => setUndated(event.target.checked)}
+            />
+            Undated
           </label>
         </div>
 

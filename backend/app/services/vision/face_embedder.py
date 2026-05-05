@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
 from app.models.face import Face
+from app.services.vision.face_detector import load_image_for_cv2
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,7 @@ def generate_face_embeddings(
 
     for face, asset in face_asset_rows:
         try:
-            image = cv2.imread(asset.vault_path)
+            image = load_image_for_cv2(asset.vault_path)
             if image is None:
                 failures.append(
                     FaceEmbeddingFailure(

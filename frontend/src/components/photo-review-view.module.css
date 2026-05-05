@@ -261,3 +261,48 @@
 .chipRemove:hover {
   color: #9f2133;
 }
+
+.trustGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+}
+
+.trustGroupLabel {
+  font-weight: 700;
+  color: #314152;
+}
+
+.trustButtons {
+  display: flex;
+  gap: 4px;
+}
+
+.trustToggle {
+  border: 1px solid #becad6;
+  border-radius: 6px;
+  background: #f4f8fb;
+  color: #314152;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 30px;
+}
+
+.trustToggle:hover {
+  border-color: #5b9ac9;
+  background: #edf4fb;
+}
+
+.trustToggleActive {
+  background: #2563a8;
+  border-color: #2563a8;
+  color: #ffffff;
+}
+
+.trustToggleActive:hover {
+  background: #1a4f8c;
+  border-color: #1a4f8c;
+}
