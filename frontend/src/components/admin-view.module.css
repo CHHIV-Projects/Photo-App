@@ -169,3 +169,142 @@
   color: #617486;
   font-size: 0.85rem;
 }
+
+/* Source Intake section (12.24) */
+
+.sourceIntakeSection {
+  display: grid;
+  gap: 20px;
+  margin-top: 8px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #103d60;
+}
+
+.sourceIntakeBlock {
+  background: #ffffff;
+  border: 1px solid #d7e1ea;
+  border-radius: 14px;
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.blockTitle {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #314152;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.intakeTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  color: #1d2b39;
+}
+
+.intakeTable th {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid #d7e1ea;
+  font-weight: 700;
+  color: #314152;
+  white-space: nowrap;
+}
+
+.intakeTable td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #edf2f7;
+  vertical-align: top;
+}
+
+.intakeTable tr:last-child td {
+  border-bottom: none;
+}
+
+.intakeTable tr:hover td {
+  background: #f6f9fc;
+}
+
+.pathCell {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: #516274;
+}
+
+.emptyState {
+  margin: 0;
+  color: #617486;
+  font-size: 0.88rem;
+  padding: 6px 0;
+}
+
+.detailToggle {
+  border: 1px solid #9fb5c9;
+  background: #edf5fb;
+  color: #1f4e75;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.detailToggle:hover {
+  background: #d9ecf8;
+}
+
+.detailCell {
+  background: #f6f9fc;
+  padding: 12px 14px !important;
+}
+
+.detailPanel {
+  display: grid;
+  gap: 4px;
+}
+
+.detailCounts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 2px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #edf4fb;
+  border-radius: 8px;
+}
+
+.fileSample {
+  margin-top: 8px;
+}
+
+.fileList {
+  margin: 6px 0 0 16px;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-family: monospace;
+  font-size: 0.76rem;
+}

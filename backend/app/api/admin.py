@@ -21,8 +21,16 @@ from app.schemas.admin import (
     PlaceGeocodingActionResponse,
     PlaceGeocodingRunStatus,
     PlaceGeocodingStatusResponse,
+    SourceIntakeReportDetail,
+    SourceIntakeReportsResponse,
+    SourceIntakeSourcesResponse,
 )
-from app.services.admin import build_admin_summary
+from app.services.admin import (
+    build_admin_summary,
+    get_report_detail,
+    list_recent_reports,
+    list_sources_with_latest_info,
+)
 from app.services.duplicates.processing_service import (
     DuplicateProcessingAlreadyRunningError,
     DuplicateProcessingStatusSnapshot,
@@ -324,3 +332,50 @@ def stop_heic_preview_generation(db: Session = Depends(get_db_session)) -> HeicP
         message=result.message,
         status=_to_heic_preview_run_status(result.status),
     )
+
+
+# ---------------------------------------------------------------------------
+# Source Intake visibility routes (12.24 — read-only)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/source-intake/sources", response_model=SourceIntakeSourcesResponse)
+def get_source_intake_sources(db: Session = Depends(get_db_session)) -> SourceIntakeSourcesResponse:
+    """Return known ingestion sources with latest run and report information."""
+    from datetime import datetime, timezone
+    sources = list_sources_with_latest_info(db)
+    return SourceIntakeSourcesResponse(
+        generated_at=datetime.now(timezone.utc),
+        sources=sources,
+    )
+
+
+@router.get("/source-intake/reports", response_model=SourceIntakeReportsResponse)
+def get_source_intake_reports() -> SourceIntakeReportsResponse:
+    """Return recent source intake session report summaries."""
+    from datetime import datetime, timezone
+    reports = list_recent_reports(limit=50)
+    return SourceIntakeReportsResponse(
+        generated_at=datetime.now(timezone.utc),
+        reports=reports,
+    )
+
+
+@router.get("/source-intake/reports/{report_filename}", response_model=SourceIntakeReportDetail)
+def get_source_intake_report_detail(
+    report_filename: str,
+) -> SourceIntakeReportDetail | JSONResponse:
+    """Return full parsed content of a single source intake report file."""
+    try:
+        detail = get_report_detail(report_filename)
+    except ValueError:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "Invalid report filename."},
+        )
+    if detail is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Report not found or could not be parsed."},
+        )
+    return detail

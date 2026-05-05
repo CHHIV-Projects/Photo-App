@@ -178,6 +178,74 @@ These are **approved for near-term execution**
 
 ---
 
+PX-017 — Location Intelligence System (Master Track)
+
+Includes:
+
+- geographic hierarchy
+- user-defined places (12.17 started)
+- landmark recognition
+- image-based inference
+- learned place recognition
+
+⚠️ multi-phase system
+
+---
+
+## PX-018 — Manual Date Trust Override / Physical Media Detection
+
+### Problem
+
+Some assets have valid digital EXIF timestamps but are actually photos of physical media, such as:
+
+- slides
+- printed photos
+- documents
+- albums
+- negatives
+
+The system currently classifies these as high trust because the camera timestamp is valid, but the timestamp reflects digitization date, not the original capture date.
+
+### Desired
+
+Allow the user to manually override capture-time trust from Photo Review.
+
+Examples:
+
+- High → Low
+- High → Unknown
+- Low → High, if user confirms correctness
+
+### Design Considerations
+
+- use existing `capture_time_trust_override`
+- preserve original EXIF metadata
+- do not rewrite source files
+- show both original system trust and user override
+- optionally allow notes/reason later
+
+### Future Intelligence Option
+
+Later AI/ML or visual heuristics may suggest likely physical-media photos, but should not automatically change trust.
+
+Possible signals:
+
+- visible slide borders
+- photos of printed photographs
+- scanner bed/background
+- document-like framing
+- camera model/date mismatch with image content
+
+### Status
+
+Deferred — manual workflow first, AI-assisted detection later.
+
+### Importance
+
+Improves date quality and timeline trust without changing original metadata.
+
+---
+
 ## AQ-005 — Hamming Distance Threshold Tuning
 
 ### Problem
@@ -346,19 +414,7 @@ Separate UI into:
 
 ---
 
-## PX-017 — Location Intelligence System (Master Track)
-
-Includes:
-
-- geographic hierarchy
-- user-defined places (12.17 started)
-- landmark recognition
-- image-based inference
-- learned place recognition
-
-⚠️ multi-phase system
-
----
+## 
 
 ## PL-007 — Provenance vs Location Reconciliation
 

@@ -8,6 +8,9 @@ import type {
   AdminPlaceGeocodingActionResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse,
+  SourceIntakeReportDetail,
+  SourceIntakeReportsResponse,
+  SourceIntakeSourcesResponse,
   AlbumDetail,
   AlbumMembershipSummary,
   AlbumSummary,
@@ -490,6 +493,18 @@ export function stopHeicPreviewGeneration(): Promise<AdminHeicPreviewActionRespo
   return apiRequest<AdminHeicPreviewActionResponse>("/api/admin/heic-preview/stop", {
     method: "POST"
   });
+}
+
+export function getSourceIntakeSources(): Promise<SourceIntakeSourcesResponse> {
+  return apiRequest<SourceIntakeSourcesResponse>("/api/admin/source-intake/sources");
+}
+
+export function getSourceIntakeReports(): Promise<SourceIntakeReportsResponse> {
+  return apiRequest<SourceIntakeReportsResponse>("/api/admin/source-intake/reports");
+}
+
+export function getSourceIntakeReportDetail(reportFilename: string): Promise<SourceIntakeReportDetail> {
+  return apiRequest<SourceIntakeReportDetail>(`/api/admin/source-intake/reports/${encodeURIComponent(reportFilename)}`);
 }
 
 export function getAlbums(): Promise<ListResponse<AlbumSummary>> {

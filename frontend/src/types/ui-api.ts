@@ -589,3 +589,57 @@ export interface AdminHeicPreviewActionResponse {
   message: string;
   status: AdminHeicPreviewRunStatus;
 }
+
+// Source Intake visibility types (12.24)
+
+export interface SourceIntakeReportCounts {
+  total_files_scanned: number | null;
+  skipped_already_known: number | null;
+  eligible_unknown_files: number | null;
+  selected_for_session: number | null;
+  staged_to_dropzone: number | null;
+  processed_new_unique: number | null;
+  failed_or_rejected: number | null;
+  remaining_unknown_eligible: number | null;
+}
+
+export interface SourceIntakeSourceSummary {
+  source_id: number;
+  source_label: string;
+  source_type: string;
+  source_root_path: string | null;
+  first_seen_at: string | null;
+  last_run_at: string | null;
+  latest_report_filename: string | null;
+  latest_counts: SourceIntakeReportCounts | null;
+  source_complete: boolean | null;
+}
+
+export interface SourceIntakeSourcesResponse {
+  generated_at: string;
+  sources: SourceIntakeSourceSummary[];
+}
+
+export interface SourceIntakeReportSummary {
+  report_filename: string;
+  generated_at_utc: string | null;
+  source_label: string | null;
+  source_path: string | null;
+  ingestion_source_id: number | null;
+  ingestion_run_id: number | null;
+  ingest_source_limit: number | null;
+  ingest_batch_size: number | null;
+  source_complete: boolean | null;
+  counts: SourceIntakeReportCounts | null;
+}
+
+export interface SourceIntakeReportsResponse {
+  generated_at: string;
+  reports: SourceIntakeReportSummary[];
+}
+
+export interface SourceIntakeReportDetail {
+  report_filename: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  raw: Record<string, any>;
+}

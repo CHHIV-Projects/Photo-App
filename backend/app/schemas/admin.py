@@ -196,3 +196,71 @@ class HeicPreviewActionResponse(BaseModel):
     accepted: bool
     message: str
     status: HeicPreviewRunStatus
+
+
+# ---------------------------------------------------------------------------
+# Source Intake visibility schemas (12.24)
+# ---------------------------------------------------------------------------
+
+
+class SourceIntakeReportCounts(BaseModel):
+    """Counts from a single source intake session report."""
+
+    total_files_scanned: int | None = None
+    skipped_already_known: int | None = None
+    eligible_unknown_files: int | None = None
+    selected_for_session: int | None = None
+    staged_to_dropzone: int | None = None
+    processed_new_unique: int | None = None
+    failed_or_rejected: int | None = None
+    remaining_unknown_eligible: int | None = None
+
+
+class SourceIntakeSourceSummary(BaseModel):
+    """Known ingestion source with latest intake information."""
+
+    source_id: int
+    source_label: str
+    source_type: str
+    source_root_path: str | None = None
+    first_seen_at: datetime | None = None
+    last_run_at: datetime | None = None
+    latest_report_filename: str | None = None
+    latest_counts: SourceIntakeReportCounts | None = None
+    source_complete: bool | None = None
+
+
+class SourceIntakeSourcesResponse(BaseModel):
+    """List of known ingestion sources with latest intake info."""
+
+    generated_at: datetime
+    sources: list[SourceIntakeSourceSummary]
+
+
+class SourceIntakeReportSummary(BaseModel):
+    """Summary of one source intake session report."""
+
+    report_filename: str
+    generated_at_utc: str | None = None
+    source_label: str | None = None
+    source_path: str | None = None
+    ingestion_source_id: int | None = None
+    ingestion_run_id: int | None = None
+    ingest_source_limit: int | None = None
+    ingest_batch_size: int | None = None
+    source_complete: bool | None = None
+    counts: SourceIntakeReportCounts | None = None
+
+
+class SourceIntakeReportsResponse(BaseModel):
+    """List of recent source intake session reports."""
+
+    generated_at: datetime
+    reports: list[SourceIntakeReportSummary]
+
+
+class SourceIntakeReportDetail(BaseModel):
+    """Full parsed content of a source intake session report."""
+
+    report_filename: str
+    raw: dict
