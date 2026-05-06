@@ -696,3 +696,39 @@ ensure startup/init can create the table idempotently
 run init_db.py once if that is the current project convention
 
 Keep the table minimal and consistent with prior run/status models.
+
+The overall 12.25 UI direction is aligned, but two issues need attention.
+
+## 1. Runtime bug
+
+Admin-launched intake currently fails with:
+
+RuntimeArgs.__init__() got an unexpected keyword argument 'run_crop_generation_override'
+
+Please fix the Admin source-intake invocation so it matches the current RuntimeArgs signature, or update RuntimeArgs if that argument is still required.
+
+This is a 12.25 implementation bug.
+
+## 2. Source dropdown clarity
+
+The Run Source Intake dropdown currently shows repeated labels such as:
+
+Chuck PC (local_folder)
+
+This is not enough because multiple registered sources may share the same label/type but have different root paths.
+
+Please update the Run Source Intake UI so the operator can clearly see which source path is selected.
+
+Preferred:
+- dropdown option displays label + type + root path, or label + final folder name
+- selected source detail panel shows full root path
+- known sources table continues to show full label/type/path
+- order with most recent first
+
+Do not change the backend source identity model yet.
+
+For 12.25, keep the source identity as:
+
+source_label + source_type + source_root_path
+
+But make the UI clearer so repeated labels are not ambiguous.

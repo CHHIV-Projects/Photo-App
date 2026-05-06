@@ -652,6 +652,7 @@ export interface SourceCreateRequest {
   source_label: string;
   source_type: string;
   source_root_path: string;
+  create_new_label?: boolean;
 }
 
 export interface SourceCreateResponse {

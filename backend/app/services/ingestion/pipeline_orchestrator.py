@@ -1648,5 +1648,12 @@ def _run_pipeline(
             )
     except Exception:
         return outcomes
+    finally:
+        # Persist source-intake session report for from-path runs (best effort).
+        if ctx.from_path is not None and ctx.source_intake_report_path is None:
+            try:
+                _write_source_intake_report(ctx)
+            except Exception:  # noqa: BLE001
+                pass
 
     return outcomes

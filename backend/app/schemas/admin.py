@@ -275,6 +275,7 @@ class SourceCreateRequest(BaseModel):
     source_label: str
     source_type: str
     source_root_path: str
+    create_new_label: bool = False
 
 
 class SourceCreateResponse(BaseModel):

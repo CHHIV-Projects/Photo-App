@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   getAdminSummary,
@@ -59,7 +59,9 @@ export default function AdminView() {
   const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
 
   // Source Registry
-  const [regLabel, setRegLabel] = useState("");
+  const [regLabelMode, setRegLabelMode] = useState<"existing" | "new">("existing");
+  const [regExistingLabel, setRegExistingLabel] = useState("");
+  const [regNewLabel, setRegNewLabel] = useState("");
   const [regType, setRegType] = useState("local_folder");
   const [regPath, setRegPath] = useState("");
   const [regResult, setRegResult] = useState<SourceCreateResponse | null>(null);
@@ -73,6 +75,41 @@ export default function AdminView() {
   const [intakeStatus, setIntakeStatus] = useState<SourceIntakeStatusSnapshot | null>(null);
   const [intakeError, setIntakeError] = useState("");
   const [isIntakeActionLoading, setIsIntakeActionLoading] = useState(false);
+
+  const existingLabelOptions = useMemo(() => {
+    const optionsByNormalized = new Map<string, { normalized: string; label: string; sourceCount: number; firstSeen: number }>();
+
+    for (const source of sourceIntakeSources?.sources ?? []) {
+      const rawLabel = source.source_label?.trim() ?? "";
+      if (!rawLabel) {
+        continue;
+      }
+      const normalized = rawLabel.toLowerCase();
+      const firstSeen = source.first_seen_at ? Date.parse(source.first_seen_at) : Number.POSITIVE_INFINITY;
+      const existing = optionsByNormalized.get(normalized);
+
+      if (!existing) {
+        optionsByNormalized.set(normalized, {
+          normalized,
+          label: rawLabel,
+          sourceCount: 1,
+          firstSeen,
+        });
+      } else {
+        existing.sourceCount += 1;
+        if (firstSeen < existing.firstSeen) {
+          existing.firstSeen = firstSeen;
+          existing.label = rawLabel;
+        }
+      }
+    }
+
+    return Array.from(optionsByNormalized.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [sourceIntakeSources?.sources]);
+
+  const existingLabelSet = useMemo(() => {
+    return new Set(existingLabelOptions.map((opt) => opt.normalized));
+  }, [existingLabelOptions]);
 
   const loadSummary = useCallback(async () => {
     setIsLoading(true);
@@ -365,6 +402,49 @@ export default function AdminView() {
     };
   }, [intakeStatus?.status, loadIntakeStatus]);
 
+  useEffect(() => {
+    // Keep Source Intake tables fresh while an intake run is active.
+    const isActive = intakeStatus && ["running", "stop_requested"].includes(intakeStatus.status);
+
+    if (!isActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadSourceIntake();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [intakeStatus?.status, loadSourceIntake]);
+
+  useEffect(() => {
+    // Run one final refresh when the run reaches a terminal state.
+    const isTerminal = intakeStatus && ["completed", "failed", "stopped"].includes(intakeStatus.status);
+
+    if (!isTerminal) {
+      return;
+    }
+
+    void loadSourceIntake();
+  }, [intakeStatus?.run_id, intakeStatus?.status, loadSourceIntake]);
+
+  useEffect(() => {
+    if (existingLabelOptions.length === 0) {
+      setRegLabelMode("new");
+      setRegExistingLabel("");
+      return;
+    }
+
+    if (regLabelMode === "existing") {
+      const hasSelected = existingLabelOptions.some((opt) => opt.label === regExistingLabel);
+      if (!hasSelected) {
+        setRegExistingLabel(existingLabelOptions[0].label);
+      }
+    }
+  }, [existingLabelOptions, regExistingLabel, regLabelMode]);
+
   const duplicateRunState = duplicateStatus?.current.status ?? "idle";
   const isDuplicateRunActive = duplicateRunState === "running" || duplicateRunState === "stop_requested";
 
@@ -634,8 +714,8 @@ export default function AdminView() {
                 </thead>
                 <tbody>
                   {sourceIntakeReports.reports.map((report) => (
-                    <>
-                      <tr key={report.report_filename}>
+                    <Fragment key={report.report_filename}>
+                      <tr>
                         <td>{report.generated_at_utc ? new Date(report.generated_at_utc).toLocaleString() : "-"}</td>
                         <td>{report.source_label ?? "-"}</td>
                         <td>{report.counts?.total_files_scanned ?? "-"}</td>
@@ -655,7 +735,7 @@ export default function AdminView() {
                         </td>
                       </tr>
                       {expandedReportFilename === report.report_filename && (
-                        <tr key={`${report.report_filename}-detail`}>
+                        <tr>
                           <td colSpan={9} className={styles.detailCell}>
                             {isReportDetailLoading ? (
                               <p className={styles.meta}>Loading...</p>
@@ -689,7 +769,7 @@ export default function AdminView() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -749,14 +829,45 @@ export default function AdminView() {
           <div className={styles.registryForm}>
             <label className={styles.formLabel}>
               Source Label
-              <input
+              <select
                 className={styles.formInput}
-                type="text"
-                value={regLabel}
-                onChange={e => setRegLabel(e.target.value)}
-                placeholder="e.g. My iPhone Photos 2023"
-              />
+                value={regLabelMode === "existing" ? regExistingLabel : "__new__"}
+                onChange={e => {
+                  const selected = e.target.value;
+                  setRegError("");
+                  setRegResult(null);
+                  if (selected === "__new__") {
+                    setRegLabelMode("new");
+                  } else {
+                    setRegLabelMode("existing");
+                    setRegExistingLabel(selected);
+                  }
+                }}
+              >
+                {existingLabelOptions.length === 0 ? (
+                  <option value="__new__">No existing labels</option>
+                ) : (
+                  existingLabelOptions.map((opt) => (
+                    <option key={opt.normalized} value={opt.label}>
+                      {opt.label}{opt.sourceCount > 1 ? ` (${opt.sourceCount})` : ""}
+                    </option>
+                  ))
+                )}
+                <option value="__new__">+ Create New Label</option>
+              </select>
             </label>
+            {regLabelMode === "new" && (
+              <label className={styles.formLabel}>
+                New Source Label
+                <input
+                  className={styles.formInput}
+                  type="text"
+                  value={regNewLabel}
+                  onChange={e => setRegNewLabel(e.target.value)}
+                  placeholder="e.g. My iPhone Photos 2023"
+                />
+              </label>
+            )}
             <label className={styles.formLabel}>
               Source Type
               <select
@@ -784,14 +895,40 @@ export default function AdminView() {
             <button
               type="button"
               className={styles.actionButton}
-              disabled={isRegLoading || !regLabel.trim() || !regPath.trim()}
+              disabled={
+                isRegLoading
+                || !(regLabelMode === "new" ? regNewLabel.trim() : regExistingLabel.trim())
+                || !regPath.trim()
+              }
               onClick={() => {
                 setRegError("");
                 setRegResult(null);
+
+                const selectedLabel = (regLabelMode === "new" ? regNewLabel : regExistingLabel).trim();
+                if (!selectedLabel) {
+                  setRegError("Source label is required.");
+                  return;
+                }
+
+                if (regLabelMode === "new" && existingLabelSet.has(selectedLabel.toLowerCase())) {
+                  setRegError("This label already exists. Please select it from the existing label dropdown.");
+                  return;
+                }
+
                 setIsRegLoading(true);
-                createOrGetIntakeSource({ source_label: regLabel, source_type: regType, source_root_path: regPath })
+                createOrGetIntakeSource({
+                  source_label: selectedLabel,
+                  source_type: regType,
+                  source_root_path: regPath,
+                  create_new_label: regLabelMode === "new",
+                })
                   .then(res => {
                     setRegResult(res);
+                    setRegExistingLabel(res.source_label);
+                    if (regLabelMode === "new") {
+                      setRegNewLabel("");
+                      setRegLabelMode("existing");
+                    }
                     void loadSourceIntake();
                   })
                   .catch(err => setRegError(err instanceof Error ? err.message : "Failed to register source."))

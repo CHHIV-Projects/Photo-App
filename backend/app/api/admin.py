@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
+from app.models.ingestion_source import IngestionSource
 from app.schemas.admin import (
     AdminSummaryResponse,
     DuplicateProcessingActionResponse,
@@ -41,6 +43,7 @@ from app.services.admin import (
     request_source_intake_stop,
     start_source_intake,
 )
+from app.services.ingestion.ingestion_context_service import normalize_source_label
 from app.services.admin.source_intake_execution_service import (
     SourceIntakeAlreadyRunningError,
 )
@@ -403,8 +406,23 @@ def get_source_intake_report_detail(
 def create_intake_source(
     body: SourceCreateRequest,
     db: Session = Depends(get_db_session),
-) -> SourceCreateResponse:
+) -> SourceCreateResponse | JSONResponse:
     """Register or retrieve an ingestion source."""
+    if body.create_new_label:
+        normalized_label = normalize_source_label(body.source_label)
+        existing = db.scalar(
+            select(IngestionSource.id).where(
+                IngestionSource.source_label_normalized == normalized_label,
+            ).limit(1)
+        )
+        if existing is not None:
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={
+                    "detail": "This label already exists. Please select it from the existing label dropdown.",
+                },
+            )
+
     source, was_existing = create_or_get_ingestion_source(
         db,
         source_label=body.source_label,
