@@ -115,3 +115,44 @@ def resolve_ingestion_context(
         source_type=source.source_type,
         source_root_path=source.source_root_path,
     )
+
+
+def create_or_get_ingestion_source(
+    db_session: Session,
+    *,
+    source_label: str,
+    source_type: str,
+    source_root_path: str,
+) -> tuple[IngestionSource, bool]:
+    """Register a new source or return the existing one.
+
+    Returns a (source, was_existing) tuple. Does NOT create an IngestionRun.
+    Path validation is deferred to runtime (intake launch).
+    """
+    resolved_label = source_label.strip() or "Unnamed Source"
+    normalized_label = normalize_source_label(resolved_label)
+    resolved_type = coerce_source_type(source_type)
+    normalized_root = normalize_source_root_path(source_root_path)
+
+    source = db_session.scalar(
+        select(IngestionSource).where(
+            IngestionSource.source_label_normalized == normalized_label,
+            IngestionSource.source_type == resolved_type,
+            IngestionSource.source_root_path_normalized == normalized_root,
+        )
+    )
+    if source is not None:
+        return source, True
+
+    resolved_root = str(Path(source_root_path).expanduser().resolve()) if source_root_path.strip() else None
+    source = IngestionSource(
+        source_label=resolved_label,
+        source_label_normalized=normalized_label,
+        source_type=resolved_type,
+        source_root_path=resolved_root,
+        source_root_path_normalized=normalized_root,
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.commit()
+    return source, False

@@ -19,6 +19,10 @@ import {
   getSourceIntakeSources,
   getSourceIntakeReports,
   getSourceIntakeReportDetail,
+  createOrGetIntakeSource,
+  startSourceIntake,
+  getSourceIntakeRunStatus,
+  stopSourceIntake,
 } from "@/lib/api";
 import type {
   AdminDuplicateProcessingStatusResponse,
@@ -29,6 +33,8 @@ import type {
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
   SourceIntakeSourcesResponse,
+  SourceCreateResponse,
+  SourceIntakeStatusSnapshot,
 } from "@/types/ui-api";
 
 import styles from "./admin-view.module.css";
@@ -51,6 +57,22 @@ export default function AdminView() {
   const [reportDetail, setReportDetail] = useState<SourceIntakeReportDetail | null>(null);
   const [isSourceIntakeLoading, setIsSourceIntakeLoading] = useState(false);
   const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
+
+  // Source Registry
+  const [regLabel, setRegLabel] = useState("");
+  const [regType, setRegType] = useState("local_folder");
+  const [regPath, setRegPath] = useState("");
+  const [regResult, setRegResult] = useState<SourceCreateResponse | null>(null);
+  const [regError, setRegError] = useState("");
+  const [isRegLoading, setIsRegLoading] = useState(false);
+
+  // Admin-launched Intake
+  const [intakeSourceId, setIntakeSourceId] = useState<number | "">("");
+  const [intakeLimit, setIntakeLimit] = useState("");
+  const [intakeBatchSize, setIntakeBatchSize] = useState("500");
+  const [intakeStatus, setIntakeStatus] = useState<SourceIntakeStatusSnapshot | null>(null);
+  const [intakeError, setIntakeError] = useState("");
+  const [isIntakeActionLoading, setIsIntakeActionLoading] = useState(false);
 
   const loadSummary = useCallback(async () => {
     setIsLoading(true);
@@ -196,6 +218,15 @@ export default function AdminView() {
     }
   }, []);
 
+  const loadIntakeStatus = useCallback(async () => {
+    try {
+      const response = await getSourceIntakeRunStatus();
+      setIntakeStatus(response);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load intake status.");
+    }
+  }, []);
+
   const toggleReportDetail = useCallback(async (filename: string) => {
     if (expandedReportFilename === filename) {
       setExpandedReportFilename(null);
@@ -243,8 +274,8 @@ export default function AdminView() {
   }, [loadHeicPreviewStatus]);
 
   const loadAll = useCallback(async () => {
-    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus(), loadFaceProcessingStatus(), loadHeicPreviewStatus(), loadSourceIntake()]);
-  }, [loadDuplicateStatus, loadFaceProcessingStatus, loadHeicPreviewStatus, loadPlaceGeocodingStatus, loadSourceIntake, loadSummary]);
+    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus(), loadFaceProcessingStatus(), loadHeicPreviewStatus(), loadSourceIntake(), loadIntakeStatus()]);
+  }, [loadDuplicateStatus, loadFaceProcessingStatus, loadHeicPreviewStatus, loadPlaceGeocodingStatus, loadSourceIntake, loadSummary, loadIntakeStatus]);
 
   useEffect(() => {
     void loadAll();
@@ -316,6 +347,23 @@ export default function AdminView() {
       window.clearInterval(timer);
     };
   }, [heicPreviewStatus?.current.status, loadHeicPreviewStatus]);
+
+  useEffect(() => {
+    // Start polling if intake status is running or stop requested
+    const isActive = intakeStatus && ["running", "stop_requested"].includes(intakeStatus.status);
+
+    if (!isActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadIntakeStatus();
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [intakeStatus?.status, loadIntakeStatus]);
 
   const duplicateRunState = duplicateStatus?.current.status ?? "idle";
   const isDuplicateRunActive = duplicateRunState === "running" || duplicateRunState === "stop_requested";
@@ -687,6 +735,198 @@ export default function AdminView() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className={styles.sourceIntakeSection}>
+        <div className={styles.sectionHeader}>
+          <h3 className={styles.sectionTitle}>Source Registry</h3>
+        </div>
+        <div className={styles.sourceIntakeBlock}>
+          <h4 className={styles.blockTitle}>Register New Source</h4>
+          <div className={styles.registryForm}>
+            <label className={styles.formLabel}>
+              Source Label
+              <input
+                className={styles.formInput}
+                type="text"
+                value={regLabel}
+                onChange={e => setRegLabel(e.target.value)}
+                placeholder="e.g. My iPhone Photos 2023"
+              />
+            </label>
+            <label className={styles.formLabel}>
+              Source Type
+              <select
+                className={styles.formInput}
+                value={regType}
+                onChange={e => setRegType(e.target.value)}
+              >
+                <option value="local_folder">local_folder</option>
+                <option value="external_drive">external_drive</option>
+                <option value="cloud_export">cloud_export</option>
+                <option value="scan_batch">scan_batch</option>
+                <option value="other">other</option>
+              </select>
+            </label>
+            <label className={styles.formLabel}>
+              Source Root Path
+              <input
+                className={styles.formInput}
+                type="text"
+                value={regPath}
+                onChange={e => setRegPath(e.target.value)}
+                placeholder="/absolute/path/to/source"
+              />
+            </label>
+            <button
+              type="button"
+              className={styles.actionButton}
+              disabled={isRegLoading || !regLabel.trim() || !regPath.trim()}
+              onClick={() => {
+                setRegError("");
+                setRegResult(null);
+                setIsRegLoading(true);
+                createOrGetIntakeSource({ source_label: regLabel, source_type: regType, source_root_path: regPath })
+                  .then(res => {
+                    setRegResult(res);
+                    void loadSourceIntake();
+                  })
+                  .catch(err => setRegError(err instanceof Error ? err.message : "Failed to register source."))
+                  .finally(() => setIsRegLoading(false));
+              }}
+            >
+              {isRegLoading ? "Registering..." : "Register Source"}
+            </button>
+            {regError && <p className={styles.errorText}>{regError}</p>}
+            {regResult && (
+              <p className={styles.successText}>
+                {regResult.was_existing ? "Source already exists" : "Source registered"}: #{regResult.ingestion_source_id} — {regResult.source_label}
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.sourceIntakeSection}>
+        <div className={styles.sectionHeader}>
+          <h3 className={styles.sectionTitle}>Run Source Intake</h3>
+          <button
+            type="button"
+            className={styles.refreshButton}
+            onClick={() => {
+              setIntakeError("");
+              setIsIntakeActionLoading(true);
+              getSourceIntakeRunStatus()
+                .then(snap => setIntakeStatus(snap))
+                .catch(err => setIntakeError(err instanceof Error ? err.message : "Failed to fetch status."))
+                .finally(() => setIsIntakeActionLoading(false));
+            }}
+            disabled={isIntakeActionLoading}
+          >
+            Refresh Status
+          </button>
+        </div>
+        <div className={styles.sourceIntakeBlock}>
+          <div className={styles.registryForm}>
+            <label className={styles.formLabel}>
+              Ingestion Source
+              <select
+                className={styles.formInput}
+                value={intakeSourceId}
+                onChange={e => setIntakeSourceId(e.target.value === "" ? "" : Number(e.target.value))}
+              >
+                <option value="">— select a source —</option>
+                {(sourceIntakeSources?.sources ?? []).sort((a, b) => (b.last_run_at || "").localeCompare(a.last_run_at || "")).map(src => {
+                  const folderName = src.source_root_path ? src.source_root_path.split(/[\\\/]/).filter(Boolean).pop() : "(no path)";
+                  return (
+                    <option key={src.source_id} value={src.source_id}>
+                      {src.source_label} • {src.source_type} • {folderName}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            {intakeSourceId && (sourceIntakeSources?.sources ?? []).find(src => src.source_id === intakeSourceId) && (
+              <div className={styles.selectedSourceDetail}>
+                <p className={styles.meta}><strong>Selected path:</strong> <code>{((sourceIntakeSources?.sources ?? []).find(src => src.source_id === intakeSourceId))?.source_root_path || "(none)"}</code></p>
+              </div>
+            )}
+            <label className={styles.formLabel}>
+              Intake Limit (optional)
+              <input
+                className={styles.formInput}
+                type="number"
+                min={1}
+                value={intakeLimit}
+                onChange={e => setIntakeLimit(e.target.value)}
+                placeholder="leave blank for no limit"
+              />
+            </label>
+            <label className={styles.formLabel}>
+              Batch Size
+              <input
+                className={styles.formInput}
+                type="number"
+                min={1}
+                value={intakeBatchSize}
+                onChange={e => setIntakeBatchSize(e.target.value)}
+              />
+            </label>
+            <div className={styles.intakeActions}>
+              <button
+                type="button"
+                className={styles.actionButton}
+                disabled={isIntakeActionLoading || intakeSourceId === ""}
+                onClick={() => {
+                  setIntakeError("");
+                  setIsIntakeActionLoading(true);
+                  startSourceIntake({
+                    ingestion_source_id: intakeSourceId as number,
+                    source_intake_limit: intakeLimit ? Number(intakeLimit) : null,
+                    ingest_batch_size: Number(intakeBatchSize) || 500,
+                  })
+                    .then(res => setIntakeStatus(res.current))
+                    .catch(err => setIntakeError(err instanceof Error ? err.message : "Failed to start intake."))
+                    .finally(() => setIsIntakeActionLoading(false));
+                }}
+              >
+                {isIntakeActionLoading ? "Working..." : "Run Intake"}
+              </button>
+              <button
+                type="button"
+                className={styles.stopButton}
+                disabled={isIntakeActionLoading || !intakeStatus || !(["running", "stop_requested"].includes(intakeStatus.status))}
+                onClick={() => {
+                  setIntakeError("");
+                  setIsIntakeActionLoading(true);
+                  stopSourceIntake()
+                    .then(res => setIntakeStatus(res.current))
+                    .catch(err => setIntakeError(err instanceof Error ? err.message : "Failed to stop."))
+                    .finally(() => setIsIntakeActionLoading(false));
+                }}
+              >
+                Stop
+              </button>
+            </div>
+            {intakeError && <p className={styles.errorText}>{intakeError}</p>}
+          </div>
+          {intakeStatus && (
+            <div className={styles.intakeStatusPanel}>
+              <p className={styles.meta}><strong>Status:</strong> <span className={styles[`status_${intakeStatus.status}`] ?? styles.statusBadge}>{intakeStatus.status}</span></p>
+              {intakeStatus.ingestion_run_id && <p className={styles.meta}><strong>Ingestion run:</strong> #{intakeStatus.ingestion_run_id}</p>}
+              {intakeStatus.source_label && (
+                <>
+                  <p className={styles.meta}><strong>Source:</strong> {intakeStatus.source_label} ({intakeStatus.source_type})</p>
+                  {intakeStatus.source_root_path && <p className={styles.meta}><strong>Path:</strong> <code>{intakeStatus.source_root_path}</code></p>}
+                </>
+              )}
+              {intakeStatus.elapsed_seconds !== null && <p className={styles.meta}><strong>Elapsed:</strong> {intakeStatus.elapsed_seconds.toFixed(1)}s</p>}
+              <p className={styles.meta}><strong>Scanned:</strong> {intakeStatus.files_scanned} &nbsp; <strong>Skipped known:</strong> {intakeStatus.skipped_known} &nbsp; <strong>Selected:</strong> {intakeStatus.selected}</p>
+              <p className={styles.meta}><strong>New unique:</strong> {intakeStatus.processed_new_unique} &nbsp; <strong>Remaining:</strong> {intakeStatus.remaining_unknown}</p>
+              {intakeStatus.error_message && <p className={styles.errorText}>{intakeStatus.error_message}</p>}
             </div>
           )}
         </div>

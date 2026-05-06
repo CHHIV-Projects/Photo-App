@@ -428,3 +428,98 @@ with:
 - report link after completion
 
 Keeping these separate reduces risk and preserves operational clarity.
+
+# 12.24 Clarification Answers## 1. Latest intake per source — DB join vs report filesUse the hybrid approach.Approved:- use DB records for stable source identity:  - source ID  - source label  - source type  - source root path  - created/first-seen timestamp if available  - latest ingestion run timestamp from `ingestion_runs`- use source intake JSON reports for rich intake counts:  - scanned  - skipped known  - eligible  - selected  - staged  - failed  - remaining unknownThis is the right model because the DB contains durable source identity, while report files contain operational run detail.If matching by `ingestion_run_id` is available/reliable, use that.If a matching report cannot be found, the source row should still display with DB-only information and blank / unknown count fields.Do not make source visibility dependent on report-file availability.---## 2. Report-detail endpointYes, implement the report-detail endpoint if low-risk.Approved endpoint concept:```textGET /api/admin/source-intake/reports/{report_filename}
+It should return the parsed JSON content of that report.
+Safety requirements:
+
+
+only allow files from storage/logs/source_intake_reports/
+
+
+prevent path traversal
+
+
+handle missing/malformed report files gracefully
+
+
+This will be useful for Admin visibility and future troubleshooting.
+
+3. Source registration
+Defer source registration to 12.25.
+Keep 12.24 read-only.
+Reason:
+
+
+12.24 is visibility-first
+
+
+source registration introduces write behavior and validation rules
+
+
+12.25 will likely include source dropdown / run intake / source creation flow together
+
+
+For 12.24:
+
+
+list existing sources only
+
+
+do not add create/edit/delete source controls
+
+
+
+4. Expand/collapse report details in UI
+Use a simple summary table plus a low-risk detail view if practical.
+Preferred:
+
+
+recent reports table shows summary counts
+
+
+each row has a “View Details” action
+
+
+clicking expands inline or opens a detail panel
+
+
+Either inline expansion or a detail panel is acceptable.
+Do not overbuild the UI.
+A flat table with key columns is sufficient if detail view adds too much complexity, as long as the backend detail endpoint exists.
+
+5. selected_files in reports
+Do not show full selected_files lists by default in the Admin table.
+Reason:
+
+
+lists may contain hundreds/thousands of paths
+
+
+it can clutter the UI
+
+
+full paths may be too verbose for normal Admin review
+
+
+Admin summary should show counts.
+In detail view, it is acceptable to show:
+
+
+selected file count
+
+
+staged file count
+
+
+failed file count
+
+
+maybe first 10–25 file paths as a sample
+
+
+note that full details are available in the raw report file
+
+
+Do not render huge full file lists in the UI by default.
+The raw JSON report remains the durable full audit artifact.

@@ -24,12 +24,25 @@ from app.schemas.admin import (
     SourceIntakeReportDetail,
     SourceIntakeReportsResponse,
     SourceIntakeSourcesResponse,
+    SourceCreateRequest,
+    SourceCreateResponse,
+    SourceIntakeRunRequest,
+    SourceIntakeRunResponse,
+    SourceIntakeStatusSchema,
+    SourceIntakeStopResponse,
 )
 from app.services.admin import (
     build_admin_summary,
+    create_or_get_ingestion_source,
     get_report_detail,
+    get_source_intake_status,
     list_recent_reports,
     list_sources_with_latest_info,
+    request_source_intake_stop,
+    start_source_intake,
+)
+from app.services.admin.source_intake_execution_service import (
+    SourceIntakeAlreadyRunningError,
 )
 from app.services.duplicates.processing_service import (
     DuplicateProcessingAlreadyRunningError,
@@ -379,3 +392,111 @@ def get_source_intake_report_detail(
             content={"detail": "Report not found or could not be parsed."},
         )
     return detail
+
+
+# ---------------------------------------------------------------------------
+# Source Registry
+# ---------------------------------------------------------------------------
+
+
+@router.post("/source-intake/sources", response_model=SourceCreateResponse)
+def create_intake_source(
+    body: SourceCreateRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceCreateResponse:
+    """Register or retrieve an ingestion source."""
+    source, was_existing = create_or_get_ingestion_source(
+        db,
+        source_label=body.source_label,
+        source_type=body.source_type,
+        source_root_path=body.source_root_path,
+    )
+    return SourceCreateResponse(
+        ingestion_source_id=source.id,
+        source_label=source.source_label,
+        source_type=source.source_type,
+        source_root_path=source.source_root_path,
+        created_at=source.created_at,
+        was_existing=was_existing,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin-launched Source Intake
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_to_schema(snap) -> SourceIntakeStatusSchema:
+    return SourceIntakeStatusSchema(
+        run_id=snap.run_id,
+        status=snap.status,
+        ingestion_run_id=snap.ingestion_run_id,
+        source_label=snap.source_label,
+        source_type=snap.source_type,
+        source_root_path=snap.source_root_path,
+        source_intake_limit=snap.source_intake_limit,
+        ingest_batch_size=snap.ingest_batch_size,
+        started_at=snap.started_at,
+        finished_at=snap.finished_at,
+        elapsed_seconds=snap.elapsed_seconds,
+        files_scanned=snap.files_scanned,
+        skipped_known=snap.skipped_known,
+        selected=snap.selected,
+        staged=snap.staged,
+        processed_new_unique=snap.processed_new_unique,
+        failed_or_rejected=snap.failed_or_rejected,
+        remaining_unknown=snap.remaining_unknown,
+        report_path=snap.report_path,
+        error_message=snap.error_message,
+        stop_requested=snap.stop_requested,
+    )
+
+
+@router.post("/source-intake/run", response_model=SourceIntakeRunResponse)
+def launch_source_intake(
+    body: SourceIntakeRunRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceIntakeRunResponse | JSONResponse:
+    """Start an admin-launched source intake run."""
+    try:
+        snapshot = start_source_intake(
+            db,
+            ingestion_source_id=body.ingestion_source_id,
+            source_intake_limit=body.source_intake_limit,
+            ingest_batch_size=body.ingest_batch_size,
+        )
+    except SourceIntakeAlreadyRunningError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": "A source intake run is already active.", "current": _snapshot_to_schema(exc.snapshot).model_dump(mode='json')},
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+    return SourceIntakeRunResponse(
+        status="started",
+        message="Source intake started.",
+        current=_snapshot_to_schema(snapshot),
+    )
+
+
+@router.get("/source-intake/run/status", response_model=SourceIntakeStatusSchema)
+def source_intake_run_status(db: Session = Depends(get_db_session)) -> SourceIntakeStatusSchema:
+    """Return current source intake run status."""
+    snapshot = get_source_intake_status(db)
+    return _snapshot_to_schema(snapshot)
+
+
+@router.post("/source-intake/run/stop", response_model=SourceIntakeStopResponse)
+def stop_source_intake(
+    db: Session = Depends(get_db_session),
+) -> SourceIntakeStopResponse:
+    """Request graceful stop of the active source intake run."""
+    snapshot = request_source_intake_stop(db)
+    return SourceIntakeStopResponse(
+        status="stop_requested",
+        message="Stop requested. Run will finish current batch and exit.",
+        current=_snapshot_to_schema(snapshot),
+    )

@@ -11,6 +11,12 @@ import type {
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
   SourceIntakeSourcesResponse,
+  SourceCreateRequest,
+  SourceCreateResponse,
+  SourceIntakeRunRequest,
+  SourceIntakeRunResponse,
+  SourceIntakeStatusSnapshot,
+  SourceIntakeStopResponse,
   AlbumDetail,
   AlbumMembershipSummary,
   AlbumSummary,
@@ -562,5 +568,37 @@ export function removeAssetsFromAlbum(
   return apiRequest<{ success: boolean }>(`/api/albums/${albumId}/assets`, {
     method: "DELETE",
     body: JSON.stringify({ asset_sha256_list: assetSha256List })
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Source Registry
+// ---------------------------------------------------------------------------
+
+export function createOrGetIntakeSource(req: SourceCreateRequest): Promise<SourceCreateResponse> {
+  return apiRequest<SourceCreateResponse>("/api/admin/source-intake/sources", {
+    method: "POST",
+    body: JSON.stringify(req)
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Admin-launched Source Intake
+// ---------------------------------------------------------------------------
+
+export function startSourceIntake(req: SourceIntakeRunRequest): Promise<SourceIntakeRunResponse> {
+  return apiRequest<SourceIntakeRunResponse>("/api/admin/source-intake/run", {
+    method: "POST",
+    body: JSON.stringify(req)
+  });
+}
+
+export function getSourceIntakeRunStatus(): Promise<SourceIntakeStatusSnapshot> {
+  return apiRequest<SourceIntakeStatusSnapshot>("/api/admin/source-intake/run/status");
+}
+
+export function stopSourceIntake(): Promise<SourceIntakeStopResponse> {
+  return apiRequest<SourceIntakeStopResponse>("/api/admin/source-intake/run/stop", {
+    method: "POST"
   });
 }

@@ -264,3 +264,70 @@ class SourceIntakeReportDetail(BaseModel):
 
     report_filename: str
     raw: dict
+
+
+# ---------------------------------------------------------------------------
+# Source Registry
+# ---------------------------------------------------------------------------
+
+
+class SourceCreateRequest(BaseModel):
+    source_label: str
+    source_type: str
+    source_root_path: str
+
+
+class SourceCreateResponse(BaseModel):
+    ingestion_source_id: int
+    source_label: str
+    source_type: str
+    source_root_path: str | None
+    created_at: datetime
+    was_existing: bool
+
+
+# ---------------------------------------------------------------------------
+# Admin-launched Source Intake
+# ---------------------------------------------------------------------------
+
+
+class SourceIntakeRunRequest(BaseModel):
+    ingestion_source_id: int
+    source_intake_limit: int | None = None
+    ingest_batch_size: int = 500
+
+
+class SourceIntakeStatusSchema(BaseModel):
+    run_id: int | None
+    status: str
+    ingestion_run_id: int | None
+    source_label: str | None
+    source_type: str | None
+    source_root_path: str | None
+    source_intake_limit: int | None
+    ingest_batch_size: int | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    elapsed_seconds: float | None
+    files_scanned: int
+    skipped_known: int
+    selected: int
+    staged: int
+    processed_new_unique: int
+    failed_or_rejected: int
+    remaining_unknown: int
+    report_path: str | None
+    error_message: str | None
+    stop_requested: bool
+
+
+class SourceIntakeRunResponse(BaseModel):
+    status: str
+    message: str
+    current: SourceIntakeStatusSchema
+
+
+class SourceIntakeStopResponse(BaseModel):
+    status: str
+    message: str
+    current: SourceIntakeStatusSchema

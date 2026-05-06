@@ -30,6 +30,8 @@ from app.services.places.place_schema import ensure_place_schema
 from app.services.photos.display_adjustment_schema import ensure_display_adjustment_schema
 from app.services.previews.heic_preview_schema import ensure_heic_preview_schema
 from app.services.vision.face_incremental_schema import ensure_face_incremental_schema
+from app.services.admin.source_intake_schema import ensure_source_intake_schema
+from app.services.admin.source_intake_execution_service import _reset_stale_runs
 
 
 def create_app() -> FastAPI:
@@ -47,7 +49,7 @@ def create_app() -> FastAPI:
 	app.add_middleware(
 		CORSMiddleware,
 		allow_origins=list(settings.frontend_allowed_origins),
-		allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\\d+)?$",
+		allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$",
 		allow_credentials=True,
 		allow_methods=["*"],
 		allow_headers=["*"],
@@ -79,6 +81,8 @@ def create_app() -> FastAPI:
 			ensure_display_adjustment_schema(db_session)
 			ensure_face_incremental_schema(db_session)
 			ensure_heic_preview_schema(db_session)
+			ensure_source_intake_schema(db_session)
+			_reset_stale_runs(db_session)
 		finally:
 			db_session.close()
 

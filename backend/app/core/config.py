@@ -65,7 +65,7 @@ class Settings:
 	face_embedding_crop_margin_ratio: float = float(os.getenv("FACE_EMBEDDING_CROP_MARGIN_RATIO", "0.1"))
 	frontend_allowed_origins_csv: str = os.getenv(
 		"FRONTEND_ALLOWED_ORIGINS",
-		"http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
+		"http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3002,http://127.0.0.1:3002",
 	)
 	google_maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
 	place_geocode_max_calls_per_run: int = int(os.getenv("PLACE_GEOCODE_MAX_CALLS_PER_RUN", "100"))

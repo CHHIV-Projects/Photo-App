@@ -308,3 +308,150 @@
   font-family: monospace;
   font-size: 0.76rem;
 }
+
+/* Source Registry & Run Intake forms */
+
+.registryForm {
+  display: grid;
+  gap: 14px;
+  max-width: 520px;
+}
+
+.formLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.84rem;
+  font-weight: 500;
+  color: #374151;
+}
+
+.formInput {
+  padding: 7px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: #fff;
+  color: #111;
+}
+
+.formInput:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.intakeActions {
+  display: flex;
+  gap: 10px;
+}
+
+.stopButton {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: #dc2626;
+  color: #fff;
+  transition: opacity 0.15s;
+}
+
+.stopButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.intakeStatusPanel {
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.selectedSourceDetail {
+  padding: 10px 12px;
+  background: #eff6ff;
+  border-left: 3px solid #3b82f6;
+  border-radius: 4px;
+  margin: 4px 0;
+}
+
+.successText {
+  font-size: 0.84rem;
+  color: #15803d;
+  font-weight: 500;
+}
+
+.statusBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.status_running {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status_stop_requested {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status_completed {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.status_failed {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status_stopped {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.status_idle {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: #f3f4f6;
+  color: #6b7280;
+}

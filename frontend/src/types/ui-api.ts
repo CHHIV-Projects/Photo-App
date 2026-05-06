@@ -643,3 +643,68 @@ export interface SourceIntakeReportDetail {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   raw: Record<string, any>;
 }
+
+// ---------------------------------------------------------------------------
+// Source Registry
+// ---------------------------------------------------------------------------
+
+export interface SourceCreateRequest {
+  source_label: string;
+  source_type: string;
+  source_root_path: string;
+}
+
+export interface SourceCreateResponse {
+  ingestion_source_id: number;
+  source_label: string;
+  source_type: string;
+  source_root_path: string | null;
+  created_at: string;
+  was_existing: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Admin-launched Source Intake
+// ---------------------------------------------------------------------------
+
+export interface SourceIntakeRunRequest {
+  ingestion_source_id: number;
+  source_intake_limit: number | null;
+  ingest_batch_size: number;
+}
+
+export interface SourceIntakeStatusSnapshot {
+  run_id: number | null;
+  status: string;
+  ingestion_run_id: number | null;
+  source_label: string | null;
+  source_type: string | null;
+  source_root_path: string | null;
+  source_intake_limit: number | null;
+  ingest_batch_size: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  files_scanned: number;
+  skipped_known: number;
+  selected: number;
+  staged: number;
+  processed_new_unique: number;
+  failed_or_rejected: number;
+  remaining_unknown: number;
+  report_path: string | null;
+  error_message: string | null;
+  stop_requested: boolean;
+}
+
+export interface SourceIntakeRunResponse {
+  status: string;
+  message: string;
+  current: SourceIntakeStatusSnapshot;
+}
+
+export interface SourceIntakeStopResponse {
+  status: string;
+  message: string;
+  current: SourceIntakeStatusSnapshot;
+}
