@@ -1,7 +1,8 @@
-"""JPEG preview generation for assets.
+"""JPEG preview generation and eligibility inspection for assets.
 
-Converts non-browser-renderable formats (e.g. HEIC) to JPEG derivatives.
-Originals in the vault are never modified.
+Converts non-browser-renderable formats (e.g. HEIC, TIFF) or known
+extension/content mismatch cases to JPEG derivatives. Originals in the vault are
+never modified.
 
 Preview layout: storage/previews/{sha256[:2]}/{sha256}.jpg
 Served at:      /media/previews/{sha256[:2]}/{sha256}.jpg
@@ -9,6 +10,7 @@ Served at:      /media/previews/{sha256[:2]}/{sha256}.jpg
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pillow_heif
@@ -23,6 +25,54 @@ _PREVIEWS_ROOT: Path = _BACKEND_ROOT / "storage" / "previews"
 
 # Longest-side cap for generated previews (keeps file size reasonable).
 _MAX_PREVIEW_LONGEST_SIDE = 2048
+
+_HEIC_EXTENSIONS = frozenset({".heic", ".heif"})
+_TIFF_EXTENSIONS = frozenset({".tif", ".tiff"})
+_MISMATCH_SNIFF_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png"})
+
+
+@dataclass(frozen=True)
+class PreviewEligibility:
+    requires_preview: bool
+    preview_kind: str | None = None
+    actual_format: str | None = None
+
+
+def _normalize_extension(extension: str | None) -> str:
+    if not extension:
+        return ""
+    normalized = extension.strip().lower()
+    return normalized if normalized.startswith(".") else f".{normalized}"
+
+
+def inspect_preview_eligibility(vault_path: str | Path, extension: str | None) -> PreviewEligibility:
+    """Determine whether an asset should receive a browser-safe preview.
+
+    Rules for 12.29:
+    - HEIC/HEIF by extension always require preview.
+    - TIFF/TIF by extension always require preview.
+    - JPG/JPEG/PNG only require preview when Pillow reports TIFF content.
+    """
+    normalized_extension = _normalize_extension(extension)
+
+    if normalized_extension in _HEIC_EXTENSIONS:
+        return PreviewEligibility(requires_preview=True, preview_kind="heic")
+    if normalized_extension in _TIFF_EXTENSIONS:
+        return PreviewEligibility(requires_preview=True, preview_kind="tiff")
+    if normalized_extension not in _MISMATCH_SNIFF_EXTENSIONS:
+        return PreviewEligibility(requires_preview=False)
+
+    with Image.open(Path(vault_path)) as img:
+        actual_format = (img.format or "").upper() or None
+
+    if actual_format == "TIFF":
+        return PreviewEligibility(
+            requires_preview=True,
+            preview_kind="mismatch",
+            actual_format=actual_format,
+        )
+
+    return PreviewEligibility(requires_preview=False, actual_format=actual_format)
 
 
 def build_preview_path(sha256: str) -> Path:
@@ -50,6 +100,9 @@ def generate_preview(vault_path: str | Path, sha256: str) -> Path:
 
     source = Path(vault_path)
     with Image.open(source) as img:
+        # For multi-page TIFF, generate from the first page only in 12.29.
+        if getattr(img, "n_frames", 1) > 1:
+            img.seek(0)
         img = img.convert("RGB")
 
         w, h = img.size

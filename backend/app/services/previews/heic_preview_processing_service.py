@@ -1,8 +1,9 @@
-"""Background HEIC preview generation controls and execution.
+"""Background preview generation controls and execution.
 
-Finds HEIC assets whose display_preview_path is NULL and generates JPEG
-derivatives stored under storage/previews/.  Follows the same
-run/stop/status pattern as face processing and place geocoding.
+Keeps the existing HEIC-preview job surface for 12.29, but broadens backend
+eligibility to include TIFF/TIF and TIFF-content mismatch cases. Generates JPEG
+derivatives stored under storage/previews/. Follows the same run/stop/status
+pattern as face processing and place geocoding.
 
 Safety guarantees:
   - Vault originals are never modified.
@@ -25,7 +26,11 @@ from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.heic_preview_run import HeicPreviewRun
 from app.services.previews.heic_preview_schema import ensure_heic_preview_schema
-from app.services.previews.preview_service import build_preview_url, generate_preview
+from app.services.previews.preview_service import (
+    build_preview_url,
+    generate_preview,
+    inspect_preview_eligibility,
+)
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[4]
 REPORT_DIR: Path = _BACKEND_ROOT / "storage" / "logs" / "heic_preview_reports"
@@ -40,6 +45,8 @@ STATUS_STOPPED = "stopped"
 RUNNING_STATUSES = (STATUS_RUNNING, STATUS_STOP_REQUESTED)
 
 _HEIC_EXTENSIONS = frozenset({".heic", ".heif"})
+_TIFF_EXTENSIONS = frozenset({".tif", ".tiff"})
+_MISMATCH_SNIFF_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png"})
 
 _runner_lock = threading.Lock()
 _runner_thread: threading.Thread | None = None
@@ -138,17 +145,50 @@ def _latest_run_stmt():
     return select(HeicPreviewRun).order_by(HeicPreviewRun.id.desc()).limit(1)
 
 
-def _count_pending_previews(db: Session) -> int:
-    """Count HEIC assets that do not yet have a display_preview_path."""
-    return (
-        db.query(Asset)
-        .filter(
-            Asset.extension.in_([ext.lstrip(".") for ext in _HEIC_EXTENSIONS]
-                                  + list(_HEIC_EXTENSIONS)),
-            Asset.display_preview_path.is_(None),
-        )
-        .count()
+def _sql_extensions(extensions: frozenset[str]) -> list[str]:
+    values = set()
+    for ext in extensions:
+        normalized = ext.lower()
+        values.add(normalized)
+        values.add(normalized.lstrip("."))
+    return sorted(values)
+
+
+def _preview_candidate_assets(db: Session) -> list[tuple[Asset, str]]:
+    """Return assets that currently require a generated display preview."""
+    previewable_extensions = (
+        _HEIC_EXTENSIONS
+        | _TIFF_EXTENSIONS
+        | _MISMATCH_SNIFF_EXTENSIONS
     )
+    rows = list(
+        db.scalars(
+            select(Asset)
+            .where(
+                Asset.extension.in_(_sql_extensions(previewable_extensions)),
+                Asset.display_preview_path.is_(None),
+            )
+            .order_by(Asset.created_at_utc.asc(), Asset.sha256.asc())
+        ).all()
+    )
+
+    candidates: list[tuple[Asset, str]] = []
+    for asset in rows:
+        source_path = Path(asset.vault_path)
+        if not source_path.exists():
+            continue
+        try:
+            eligibility = inspect_preview_eligibility(source_path, asset.extension)
+        except Exception:  # noqa: BLE001
+            continue
+        if eligibility.requires_preview and eligibility.preview_kind is not None:
+            candidates.append((asset, eligibility.preview_kind))
+    return candidates
+
+
+def _count_pending_previews(db: Session) -> int:
+    """Count assets that currently require a generated browser-safe preview."""
+    return len(_preview_candidate_assets(db))
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +295,7 @@ def _check_stop(db: Session, run_id: int) -> bool:
 
 
 def _background_heic_preview_run(run_id: int) -> None:
-    """Generate JPEG previews for all HEIC assets missing display_preview_path."""
+    """Generate JPEG previews for all eligible assets missing display_preview_path."""
     db = SessionLocal()
     run: HeicPreviewRun | None = None
     try:
@@ -263,36 +303,40 @@ def _background_heic_preview_run(run_id: int) -> None:
         if run is None:
             return
 
-        # Query HEIC assets that still need a preview.  Extension may be stored
-        # with or without the leading dot depending on the ingestion path.
-        heic_assets: list[Asset] = list(
-            db.scalars(
-                select(Asset)
-                .where(
-                    Asset.extension.in_(
-                        [ext.lstrip(".") for ext in _HEIC_EXTENSIONS]
-                        + list(_HEIC_EXTENSIONS)
-                    ),
-                    Asset.display_preview_path.is_(None),
-                )
-                .order_by(Asset.created_at_utc.asc(), Asset.sha256.asc())
-            ).all()
-        )
+        preview_assets = _preview_candidate_assets(db)
 
-        run.assets_pending = len(heic_assets)
+        run.assets_pending = len(preview_assets)
         db.commit()
 
         processed = 0
         succeeded = 0
         failed = 0
+        heic_generated = 0
+        tiff_generated = 0
+        mismatch_generated = 0
+        failed_samples: list[str] = []
 
-        for asset in heic_assets:
+        for asset, preview_kind in preview_assets:
             if _check_stop(db, run_id):
                 run.status = STATUS_STOPPED
                 run.finished_at = _utc_now()
                 run.assets_processed = processed
                 run.assets_succeeded = succeeded
                 run.assets_failed = failed
+                run.last_run_summary = json.dumps(
+                    {
+                        "status": STATUS_STOPPED,
+                        "assets_pending": run.assets_pending,
+                        "assets_processed": processed,
+                        "assets_succeeded": succeeded,
+                        "assets_failed": failed,
+                        "heic_generated": heic_generated,
+                        "tiff_generated": tiff_generated,
+                        "mismatch_generated": mismatch_generated,
+                        "failed": failed,
+                        "failed_samples": failed_samples,
+                    }
+                )
                 db.commit()
                 _write_report(run)
                 return
@@ -314,9 +358,17 @@ def _background_heic_preview_run(run_id: int) -> None:
                 asset.display_preview_path = preview_url
                 db.commit()
                 succeeded += 1
+                if preview_kind == "heic":
+                    heic_generated += 1
+                elif preview_kind == "tiff":
+                    tiff_generated += 1
+                elif preview_kind == "mismatch":
+                    mismatch_generated += 1
             except Exception as exc:  # noqa: BLE001
                 run.last_error = f"sha256={asset.sha256}: {exc}"
                 failed += 1
+                if len(failed_samples) < 10:
+                    failed_samples.append(f"{asset.sha256}:{asset.original_filename}")
 
             processed += 1
             run.assets_processed = processed
@@ -333,6 +385,11 @@ def _background_heic_preview_run(run_id: int) -> None:
                 "assets_processed": processed,
                 "assets_succeeded": succeeded,
                 "assets_failed": failed,
+                "heic_generated": heic_generated,
+                "tiff_generated": tiff_generated,
+                "mismatch_generated": mismatch_generated,
+                "failed": failed,
+                "failed_samples": failed_samples,
             }
         )
         db.commit()
@@ -378,6 +435,7 @@ def _write_report(run: HeicPreviewRun) -> None:
         "assets_succeeded": run.assets_succeeded,
         "assets_failed": run.assets_failed,
         "last_error": run.last_error,
+        "last_run_summary": run.last_run_summary,
         "created_by": run.created_by,
     }
 

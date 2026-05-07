@@ -111,6 +111,24 @@ export default function AdminView() {
     return new Set(existingLabelOptions.map((opt) => opt.normalized));
   }, [existingLabelOptions]);
 
+  const heicPreviewSummary = useMemo(() => {
+    const raw = heicPreviewStatus?.current.last_run_summary;
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return {
+        heicGenerated: typeof parsed.heic_generated === "number" ? parsed.heic_generated : null,
+        tiffGenerated: typeof parsed.tiff_generated === "number" ? parsed.tiff_generated : null,
+        mismatchGenerated: typeof parsed.mismatch_generated === "number" ? parsed.mismatch_generated : null,
+      };
+    } catch {
+      return null;
+    }
+  }, [heicPreviewStatus?.current.last_run_summary]);
+
   const loadSummary = useCallback(async () => {
     setIsLoading(true);
     setErrorMessage("");
@@ -636,6 +654,13 @@ export default function AdminView() {
           </p>
           <p className={styles.meta}>Succeeded: {heicPreviewStatus?.current.assets_succeeded ?? 0}</p>
           <p className={styles.meta}>Failed: {heicPreviewStatus?.current.assets_failed ?? 0}</p>
+          {heicPreviewSummary && (
+            <>
+              <p className={styles.meta}>HEIC generated: {heicPreviewSummary.heicGenerated ?? 0}</p>
+              <p className={styles.meta}>TIFF generated: {heicPreviewSummary.tiffGenerated ?? 0}</p>
+              <p className={styles.meta}>Mismatch generated: {heicPreviewSummary.mismatchGenerated ?? 0}</p>
+            </>
+          )}
           <p className={styles.meta}>Started: {heicPreviewStatus?.current.started_at ? new Date(heicPreviewStatus.current.started_at).toLocaleString() : "-"}</p>
           <p className={styles.meta}>Finished: {heicPreviewStatus?.current.finished_at ? new Date(heicPreviewStatus.current.finished_at).toLocaleString() : "-"}</p>
           <p className={styles.meta}>Elapsed: {heicPreviewStatus?.current.elapsed_seconds ? `${heicPreviewStatus.current.elapsed_seconds.toFixed(1)}s` : "-"}</p>

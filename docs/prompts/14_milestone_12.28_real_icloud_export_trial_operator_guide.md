@@ -420,3 +420,69 @@ Manual Date Trust Override
 This milestone should prioritize observation and documentation.
 
 Do not expand scope into large new implementation unless real iCloud test files expose a blocking defect.
+
+
+# 12.28 Clarification Answers## 1. Source labelUse the exact milestone label:```textchuck_icloud_test
+If that label/source already exists and has prior history, report it before proceeding. Otherwise use it as written.
+
+2. Two-step intake
+Yes.
+Use the two-step intake test.
+For the 19-file folder:
+Run 1:Source limit = 10Batch size = 10Run 2:Source limit = 25Batch size = 10
+Expected:
+Run 1:selects approximately 10 filesremaining unknown approximately 9 if no deferredRun 2:skips known filesprocesses remaining files
+
+3. Optional third run
+Yes, include the third run.
+Run 3 should validate full skip-known behavior.
+Run 3:Source limit = 25Batch size = 10
+Expected:
+selected = 0skipped-known ≈ total successfully ingested filesremaining unknown = 0 unless deferred/unready files remain
+This gives stronger repeat-proof validation.
+
+4. Background jobs
+Run the post-intake/background jobs after Run 2, not after every run.
+After Run 2 completes, run:
+HEIC Preview GenerationDuplicate ProcessingFace ProcessingPlace Geocoding
+Run 3 is only to validate skip-known/repeat behavior.
+
+5. TIFF/TIF behavior
+Yes.
+If TIFF/TIF is present, treat display failure as a documented follow-up only unless intake itself fails.
+Expected handling:
+TIFF intake succeeds but visualization fails→ document follow-upTIFF intake/provenance fails unexpectedly→ report as possible 12.28 issue
+
+6. Operator guide location
+Yes.
+Create/update:
+docs/operations/icloud_export_intake_guide.md
+
+7. Real trial example in guide
+Include the real trial as a concrete example table with actual counts from the 19-file test.
+Also keep the guide generic enough for future use.
+Preferred structure:
+General operator workflowRecommended settingsReal 12.28 trial exampleTroubleshooting / known limitations
+
+Proceed
+Please execute the full 12.28 trial and return:
+
+
+run-by-run counts
+
+
+validation checklist results
+
+
+background job results
+
+
+TIFF/TIF observations, if any
+
+
+known gaps/follow-ups
+
+
+completed operator guide path
+
+
