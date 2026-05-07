@@ -90,7 +90,7 @@ class HeicPreviewAlreadyRunningError(RuntimeError):
     """Raised when a preview generation job is requested while one is already active."""
 
     def __init__(self, status: HeicPreviewStatusSnapshot) -> None:
-        super().__init__("A HEIC preview generation run is already active.")
+        super().__init__("A display preview generation run is already active.")
         self.status = status
 
 
@@ -197,7 +197,7 @@ def _count_pending_previews(db: Session) -> int:
 
 
 def get_heic_preview_status(db: Session) -> HeicPreviewStatusView:
-    """Get current HEIC preview generation status and pending-work count."""
+    """Get current display preview generation status and pending-work count."""
     ensure_heic_preview_schema(db)
 
     latest_run = db.scalars(_latest_run_stmt()).first()
@@ -219,7 +219,7 @@ def request_heic_preview_stop(db: Session) -> HeicPreviewRunResult:
         snapshot = _to_snapshot(latest_run)
         return HeicPreviewRunResult(
             status=snapshot,
-            message="No active HEIC preview generation run to stop.",
+            message="No active display preview generation run to stop.",
         )
 
     latest_run.stop_requested = True
@@ -233,7 +233,7 @@ def request_heic_preview_stop(db: Session) -> HeicPreviewRunResult:
 
 
 def start_heic_preview_background(created_by: str = "manual") -> HeicPreviewRunResult:
-    """Start HEIC preview generation in the background. Rejects if already running."""
+    """Start display preview generation in the background. Rejects if already running."""
     global _runner_thread
 
     with _runner_lock:
@@ -277,7 +277,7 @@ def start_heic_preview_background(created_by: str = "manual") -> HeicPreviewRunR
             snapshot = _to_snapshot(run)
             return HeicPreviewRunResult(
                 status=snapshot,
-                message="HEIC preview generation started in the background.",
+                message="Display preview generation started in the background.",
             )
         finally:
             db.close()

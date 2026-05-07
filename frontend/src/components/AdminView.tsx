@@ -309,7 +309,7 @@ export default function AdminView() {
       await runHeicPreviewGeneration();
       await loadHeicPreviewStatus();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to start HEIC preview generation.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to start display preview generation.");
     } finally {
       setIsHeicPreviewActionLoading(false);
     }
@@ -322,7 +322,7 @@ export default function AdminView() {
       await stopHeicPreviewGeneration();
       await loadHeicPreviewStatus();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to request HEIC preview stop.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to request display preview stop.");
     } finally {
       setIsHeicPreviewActionLoading(false);
     }
@@ -646,7 +646,8 @@ export default function AdminView() {
         </article>
 
         <article className={`${styles.card} ${styles.duplicateCard}`.trim()}>
-          <h3 className={styles.cardTitle}>HEIC Preview Generation</h3>
+          <h3 className={styles.cardTitle}>Display Preview Generation</h3>
+          <p className={styles.meta}>Generate browser-safe previews for HEIC / HEIF, TIFF / TIF, and mislabeled TIFF-content images.</p>
           <p className={styles.meta}>Status: {heicPreviewStatus?.current.status ?? "idle"}</p>
           <p className={styles.meta}>Pending previews: {heicPreviewStatus?.pending_previews ?? 0}</p>
           <p className={styles.meta}>

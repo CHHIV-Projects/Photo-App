@@ -1,4 +1,4 @@
-"""CLI entry point for HEIC preview generation.
+"""CLI entry point for display preview generation.
 
 Usage:
     python -m scripts.run_heic_preview_generation [--created-by NAME]
@@ -23,7 +23,7 @@ from app.services.previews.heic_preview_processing_service import (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate JPEG previews for HEIC assets.")
+    parser = argparse.ArgumentParser(description="Generate browser-safe JPEG display previews.")
     parser.add_argument(
         "--created-by",
         default="cli",
@@ -37,9 +37,9 @@ def main() -> None:
     finally:
         db.close()
 
-    print(f"Pending HEIC previews: {status_view.pending_previews}")
+    print(f"Pending display previews: {status_view.pending_previews}")
     if status_view.pending_previews == 0:
-        print("Nothing to do — all HEIC assets already have previews.")
+        print("Nothing to do — all eligible assets already have display previews.")
         return
 
     try:

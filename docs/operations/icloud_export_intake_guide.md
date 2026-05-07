@@ -54,7 +54,7 @@ For small trial folders, use a staged repeat pattern:
 3. Run intake with configured limit and batch size.
 4. Review Source Intake report counts and details.
 5. Run background jobs:
-   - HEIC Preview Generation
+   - Display Preview Generation
    - Duplicate Processing
    - Face Processing
    - Place Geocoding
@@ -109,7 +109,7 @@ Why Run 3 selected 1 instead of 0:
 
 ## Background Job Results (Post-Intake Validation)
 
-- HEIC Preview Generation: completed, processed 0, failed 0, pending 0
+- Display Preview Generation: completed, processed 0, failed 0, pending 0
 - Duplicate Processing: completed, no pending work
 - Face Processing: completed; detection queue processed in this run
 - Place Geocoding: completed, no pending places

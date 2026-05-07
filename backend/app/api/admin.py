@@ -305,7 +305,7 @@ def _to_heic_preview_run_status(snapshot: HeicPreviewStatusSnapshot) -> HeicPrev
 
 @router.get("/heic-preview/status", response_model=HeicPreviewStatusResponse)
 def get_heic_preview_run_status(db: Session = Depends(get_db_session)) -> HeicPreviewStatusResponse:
-    """Return HEIC preview generation status and pending-work count."""
+    """Return display preview generation status and pending-work count."""
     status_view = get_heic_preview_status(db)
     return HeicPreviewStatusResponse(
         generated_at=status_view.generated_at,
@@ -316,13 +316,13 @@ def get_heic_preview_run_status(db: Session = Depends(get_db_session)) -> HeicPr
 
 @router.post("/heic-preview/run", response_model=HeicPreviewActionResponse)
 def run_heic_preview_generation() -> HeicPreviewActionResponse | JSONResponse:
-    """Start HEIC preview generation in the background when no active run exists."""
+    """Start display preview generation in the background when no active run exists."""
     try:
         result = start_heic_preview_background(created_by="admin_api")
     except HeicPreviewAlreadyRunningError as exc:
         payload = HeicPreviewActionResponse(
             accepted=False,
-            message="A HEIC preview generation run is already active.",
+            message="A display preview generation run is already active.",
             status=_to_heic_preview_run_status(exc.status),
         )
         return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
@@ -340,7 +340,7 @@ def run_heic_preview_generation() -> HeicPreviewActionResponse | JSONResponse:
 
 @router.post("/heic-preview/stop", response_model=HeicPreviewActionResponse)
 def stop_heic_preview_generation(db: Session = Depends(get_db_session)) -> HeicPreviewActionResponse:
-    """Request graceful stop for the currently active HEIC preview generation run."""
+    """Request graceful stop for the currently active display preview generation run."""
     result = request_heic_preview_stop(db)
     accepted = result.status.status in {"stop_requested", "running"}
     return HeicPreviewActionResponse(
