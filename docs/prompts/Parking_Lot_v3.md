@@ -553,6 +553,31 @@ Support optional canonical “lock” behavior where:
 
 ## PR-001 → PR-008
 
+
+
+## PR-009 — Cloud Provenance Identity Model
+
+### Problem
+
+Export-folder intake uses source-relative paths for known-file tracking, but cloud providers may expose stronger identities such as remote asset IDs. Export paths may change across downloads, and the same cloud photo may appear as original, edited derivative, sidecar, or Live Photo companion.
+
+### Desired
+
+Design a cloud-aware provenance model that can track:
+
+- provider
+- cloud account/source
+- remote asset ID
+- remote version ID if available
+- original filename
+- exported/staged path
+- asset role: original, edited, sidecar, video companion
+- relationship to local Vault asset
+
+### Importance
+
+Required before robust direct iCloud/API intake and long-term cloud synchronization.
+
 ---
 
 # 🧩 12. DEMOTION SYSTEM (NON-DUPLICATE)

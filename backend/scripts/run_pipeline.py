@@ -505,10 +505,10 @@ def main() -> int:
     from_path = args.from_path
     ctx = PipelineContext(
         from_path=from_path,
-        drop_zone_path=_resolve_runtime_path(settings.drop_zone_path),
-        vault_path=_resolve_runtime_path(settings.vault_path),
-        quarantine_path=_resolve_runtime_path(settings.quarantine_path),
-        ingest_failures_path=_resolve_runtime_path(settings.ingest_failures_path),
+        drop_zone_path=resolve_runtime_path(settings.drop_zone_path),
+        vault_path=resolve_runtime_path(settings.vault_path),
+        quarantine_path=resolve_runtime_path(settings.quarantine_path),
+        ingest_failures_path=resolve_runtime_path(settings.ingest_failures_path),
         ingest_batch_size=args.ingest_batch_size,
         ingest_source_limit=args.ingest_source_limit,
         source_label=args.source_label,

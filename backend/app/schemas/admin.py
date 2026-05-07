@@ -213,6 +213,7 @@ class SourceIntakeReportCounts(BaseModel):
     staged_to_dropzone: int | None = None
     processed_new_unique: int | None = None
     failed_or_rejected: int | None = None
+    deferred_unready_count: int | None = None
     remaining_unknown_eligible: int | None = None
 
 

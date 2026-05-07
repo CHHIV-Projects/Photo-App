@@ -372,33 +372,25 @@ Future milestones may add:
 - iCloud account/source registry
 
 # 12.25.1 Clarification Answers## 1. New Label conflict behaviorUse hard reject.If the operator chooses “New Label” and enters a label that normalizes to an existing label, do not allow creation.Show a clear message:```textThis label already exists. Please select it from the existing label dropdown.
-Reason:
 
+Reason:
 
 source labels should be stable
 
-
 this milestone exists specifically to prevent typo-driven variants
-
 
 soft confirm still allows accidental fragmentation
 
-
-
 2. Canonical label display
-Show one deduped canonical label in the dropdown.
-Do not show every raw historical variant.
-Preferred display rule:
-
+   Show one deduped canonical label in the dropdown.
+   Do not show every raw historical variant.
+   Preferred display rule:
 
 group by normalized label
 
-
 show the best/first existing display value as the label text
 
-
 optionally show count if there are multiple sources using that label
-
 
 Example:
 Chuck PC
@@ -407,57 +399,43 @@ Chuck PCchuck pcCHUCK PC
 If historical variants already exist, do not fix/merge them in 12.25.1. Just avoid making the dropdown worse.
 
 3. Label source for dropdown
-Use the existing /source-intake/sources response.
-No new endpoint required unless implementation becomes awkward.
-Reason:
-
+   Use the existing /source-intake/sources response.
+   No new endpoint required unless implementation becomes awkward.
+   Reason:
 
 no schema change
 
-
 no new API surface
-
 
 source list already contains labels
 
-
 frontend can derive distinct labels safely
 
-
-
 4. Source Type scope
-Keep the current type options:
-local_folderexternal_drivecloud_exportscan_batchother
-Do not constrain to local_folder only.
-Reason:
-
+   Keep the current type options:
+   local_folderexternal_drivecloud_exportscan_batchother
+   Do not constrain to local_folder only.
+   Reason:
 
 type options already exist
 
-
 source registry should remain flexible
 
-
 future iCloud/cloud export work benefits from preserving type vocabulary
-
 
 But do not add new source types in this milestone.
 
 5. UX preference
-Use:
-dropdown + explicit New Label toggle
-This is preferred over a combo box.
-Reason:
-
+   Use:
+   dropdown + explicit New Label toggle
+   This is preferred over a combo box.
+   Reason:
 
 clearer distinction between reusing a known label and creating a new label
 
-
 reduces accidental typo labels
 
-
 easier for the operator to understand
-
 
 Expected flow:
 Source Label:  [dropdown of existing labels][Create New Label]  → reveals text input
@@ -465,19 +443,12 @@ Source Label:  [dropdown of existing labels][Create New Label]  → reveals text
 Approved implementation approach
 Proceed with your recommendation:
 
-
 frontend + backend validation
-
 
 no schema changes
 
-
 reuse existing /source-intake/sources response for labels
-
 
 hard block duplicate-normalized label only in New Label mode
 
-
 show message directing user to select the existing label instead
-
-

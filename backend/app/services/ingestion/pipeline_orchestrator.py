@@ -48,6 +48,7 @@ from app.services.ingestion.failure_manager import move_record_to_ingest_failure
 from app.services.ingestion.filter import FilterResult, filter_records
 from app.services.ingestion.hasher import HashResult, HashedFile, hash_records
 from app.services.ingestion.scanner import FileScanRecord, ScanResult, scan_folder
+from app.services.ingestion.source_readiness import classify_source_readiness
 from app.services.ingestion.storage_manager import StorageResult, copy_unique_files_to_vault
 from app.services.persistence.asset_repository import (
     DuplicateProvenanceResult,
@@ -102,6 +103,9 @@ class PipelineContext:
     source_files_eligible: int = 0
     source_files_selected: int = 0
     source_files_remaining_unknown: int = 0
+    source_files_deferred_unready: int = 0
+    source_deferred_unready_reasons: dict[str, int] = field(default_factory=dict)
+    source_deferred_unready_sample: list[str] = field(default_factory=list)
     source_skipped_known_sample: list[str] = field(default_factory=list)
     source_intake_report_path: Path | None = None
 
@@ -222,16 +226,36 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
             else:
                 unknown_records.append(record)
 
-        # Select up to source_limit from unknown records (no limit = take all unknown)
+        if (ctx.source_type or "").lower() == "cloud_export":
+            readiness = classify_source_readiness(
+                unknown_records,
+                approved_extensions=settings.approved_extensions,
+            )
+            ready_unknown_records = readiness.ready_records
+            deferred_unready_records = readiness.deferred_records
+            deferred_reason_counts = readiness.deferred_reason_counts
+        else:
+            ready_unknown_records = list(unknown_records)
+            deferred_unready_records = []
+            deferred_reason_counts = {}
+
+        # Select up to source_limit from ready unknown records (no limit = take all ready unknown)
         source_limit = ctx.ingest_source_limit
-        selected_source_records = list(unknown_records[:source_limit] if source_limit is not None else unknown_records)
-        remaining_unknown = unknown_records[source_limit:] if source_limit is not None else []
+        selected_source_records = list(
+            ready_unknown_records[:source_limit] if source_limit is not None else ready_unknown_records
+        )
+        remaining_ready_unknown = ready_unknown_records[source_limit:] if source_limit is not None else []
 
         ctx.source_files_scanned_total = len(source_scan_result.files)
         ctx.source_files_skipped_known = len(skipped_known_records)
-        ctx.source_files_eligible = len(unknown_records)
+        ctx.source_files_eligible = len(ready_unknown_records)
         ctx.source_files_selected = len(selected_source_records)
-        ctx.source_files_remaining_unknown = len(remaining_unknown)
+        ctx.source_files_deferred_unready = len(deferred_unready_records)
+        ctx.source_deferred_unready_reasons = dict(sorted(deferred_reason_counts.items()))
+        ctx.source_deferred_unready_sample = [
+            item.record.full_path for item in deferred_unready_records[:20]
+        ]
+        ctx.source_files_remaining_unknown = len(remaining_ready_unknown) + ctx.source_files_deferred_unready
         ctx.source_skipped_known_sample = [r.full_path for r in skipped_known_records[:20]]
 
         stage_result = stage_source_records_to_dropzone(
@@ -258,8 +282,9 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
             "source_files_scanned": len(source_scan_result.files),
             "source_scan_errors": len(source_scan_result.errors),
             "source_files_skipped_known": ctx.source_files_skipped_known,
-            "source_files_eligible_unknown": ctx.source_files_eligible,
+            "source_files_eligible_ready_unknown": ctx.source_files_eligible,
             "source_files_selected_for_session": ctx.source_files_selected,
+            "source_files_deferred_unready": ctx.source_files_deferred_unready,
             "source_files_remaining_unknown": ctx.source_files_remaining_unknown,
             "source_limit": ctx.ingest_source_limit,
             "files_staged": len(stage_result.staged_files),
@@ -824,12 +849,15 @@ def _write_source_intake_report(ctx: PipelineContext) -> Path | None:
             "staged_to_dropzone": len(ctx.stage_result.staged_files) if ctx.stage_result else 0,
             "processed_new_unique": ctx.total_new_unique_ingested,
             "failed_or_rejected": len(ctx.moved_to_ingest_failures),
+            "deferred_unready_count": ctx.source_files_deferred_unready,
             "remaining_unknown_eligible": ctx.source_files_remaining_unknown,
         },
         "source_complete": ctx.source_files_remaining_unknown == 0,
         "selected_files": [r.full_path for r in ctx.source_selected_records],
         "skipped_known_count": ctx.source_files_skipped_known,
         "skipped_known_sample": ctx.source_skipped_known_sample,
+        "deferred_unready_reasons": ctx.source_deferred_unready_reasons,
+        "deferred_unready_sample": ctx.source_deferred_unready_sample,
         "failure_details": list(ctx.moved_to_ingest_failures),
     }
     report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

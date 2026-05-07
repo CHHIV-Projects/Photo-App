@@ -39,6 +39,7 @@ def _parse_report_counts(counts_dict: dict) -> SourceIntakeReportCounts:
         staged_to_dropzone=counts_dict.get("staged_to_dropzone"),
         processed_new_unique=counts_dict.get("processed_new_unique"),
         failed_or_rejected=counts_dict.get("failed_or_rejected"),
+        deferred_unready_count=counts_dict.get("deferred_unready_count"),
         remaining_unknown_eligible=counts_dict.get("remaining_unknown_eligible"),
     )
 

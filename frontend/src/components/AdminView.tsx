@@ -706,6 +706,7 @@ export default function AdminView() {
                     <th>Scanned</th>
                     <th>Skipped</th>
                     <th>Selected</th>
+                    <th>Deferred</th>
                     <th>Failed</th>
                     <th>Remaining</th>
                     <th>Complete?</th>
@@ -721,6 +722,7 @@ export default function AdminView() {
                         <td>{report.counts?.total_files_scanned ?? "-"}</td>
                         <td>{report.counts?.skipped_already_known ?? "-"}</td>
                         <td>{report.counts?.selected_for_session ?? "-"}</td>
+                        <td>{report.counts?.deferred_unready_count ?? "-"}</td>
                         <td>{report.counts?.failed_or_rejected ?? "-"}</td>
                         <td>{report.counts?.remaining_unknown_eligible ?? "-"}</td>
                         <td>{report.source_complete === null ? "-" : report.source_complete ? "Yes" : "No"}</td>
@@ -752,10 +754,32 @@ export default function AdminView() {
                                     ))}
                                   </div>
                                 )}
+                                {reportDetail.raw.deferred_unready_reasons && (
+                                  <div className={styles.detailCounts}>
+                                    <p className={styles.meta}><strong>Deferred / Unready reasons</strong></p>
+                                    {Object.entries(reportDetail.raw.deferred_unready_reasons as Record<string, number>).map(([k, v]) => (
+                                      <p key={k} className={styles.meta}>{k.replace(/_/g, " ")}: {v}</p>
+                                    ))}
+                                  </div>
+                                )}
+                                {Array.isArray(reportDetail.raw.deferred_unready_sample) && (reportDetail.raw.deferred_unready_sample as string[]).length > 0 ? (
+                                  <details className={styles.fileSample}>
+                                    <summary className={styles.meta}>
+                                      Deferred / Unready sample ({(reportDetail.raw.deferred_unready_sample as string[]).length} shown)
+                                    </summary>
+                                    <ul className={styles.fileList}>
+                                      {(reportDetail.raw.deferred_unready_sample as string[]).map((f, i) => (
+                                        <li key={i} className={styles.meta}>{f}</li>
+                                      ))}
+                                    </ul>
+                                  </details>
+                                ) : (
+                                  <p className={styles.meta}><strong>Deferred / Unready sample:</strong> none</p>
+                                )}
                                 {Array.isArray(reportDetail.raw.selected_files) && (reportDetail.raw.selected_files as string[]).length > 0 && (
                                   <details className={styles.fileSample}>
                                     <summary className={styles.meta}>
-                                      Sample files ({(reportDetail.raw.selected_files as string[]).length} shown{reportDetail.raw._selected_files_truncated ? ", truncated" : ""})
+                                      Selected for intake (not deferred) ({(reportDetail.raw.selected_files as string[]).length} shown{reportDetail.raw._selected_files_truncated ? ", truncated" : ""})
                                     </summary>
                                     <ul className={styles.fileList}>
                                       {(reportDetail.raw.selected_files as string[]).map((f, i) => (

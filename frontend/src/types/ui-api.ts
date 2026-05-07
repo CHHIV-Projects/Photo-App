@@ -600,6 +600,7 @@ export interface SourceIntakeReportCounts {
   staged_to_dropzone: number | null;
   processed_new_unique: number | null;
   failed_or_rejected: number | null;
+  deferred_unready_count: number | null;
   remaining_unknown_eligible: number | null;
 }
 
