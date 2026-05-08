@@ -932,3 +932,176 @@ unpaired MOV does not show Live Photo Motion badge
 frontend build passes
 
 
+# 12.32 Addendum Clarification Answers## Part 1 — Admin Live Photo Pairing Control### 1. Backend Admin Service PatternUse the lightweight direct-call pattern.The Admin endpoint may directly call the existing Live Photo pairing service/function.Do not build a full background job manager unless coder determines pairing can become long-running.Reason:- current pairing completes quickly- this is not expected to be a heavy recurring job- lower risk than adding another full run table/thread/stop system- pairing service already writes reports and is idempotentPreferred behavior:```textAdmin Run → call existing pairing service → return latest summary/status
+
+2. Stop Endpoint
+Defer Stop endpoint.
+No stop endpoint is required for 12.32.
+Reason:
+
+
+pairing is expected to complete in seconds
+
+
+stop adds unnecessary complexity
+
+
+this can be revisited if pairing becomes long-running later
+
+
+
+3. Admin Response Schema Fields
+Use a practical summary, not every internal metric.
+Include:
+statuslast_run_atlast_report_pathpairs_created / insertedalready_paired / unchangedupdatedremoved_stale, if already trackedskipped_ambiguousskipped_suspicious_deltaskipped_missing_sourceerrors / last_error
+If scanned_rows and candidate_groups are already easy to include, include them as diagnostic fields, but do not clutter the UI.
+Admin UI should emphasize:
+createdalready pairedambiguous skippedsuspicious skippederrorsreport
+
+4. Report Path Display
+Show timestamp + summary in the Admin card.
+Also show report path in detail/small text if available.
+Preferred UI:
+Last run: 2026-xx-xx xx:xxCreated: 0Already paired: 22Ambiguous skipped: 0Suspicious skipped: 0Report: live_photo_pairing_...
+Do not make the full file path the primary display item.
+
+5. Endpoint Route Naming
+Use:
+/api/admin/live-photo-pairing/run/api/admin/live-photo-pairing/status
+Reason:
+
+
+this names the operation, not only the table
+
+
+consistent with “processing/pairing” admin action language
+
+
+clearer to the operator
+
+
+
+Part 2 — MOV Companion Asset Tagging
+6. MOV Badge Label
+Use:
+Live Photo Motion
+Reason:
+
+
+clear
+
+
+short
+
+
+distinguishes MOV companion from the still-side Live Photo badge
+
+
+Still asset badge:
+Live Photo
+MOV companion badge:
+Live Photo Motion
+
+7. MOV Badge Styling
+Use a related but distinguishable style.
+Do not make it visually alarming.
+Suggested:
+
+
+same badge family/style as Live Photo
+
+
+slightly different tone/color if existing CSS pattern supports it
+
+
+If styling complexity is unnecessary, using the same badge style is acceptable for 12.32.
+Primary requirement is clear text.
+
+8. MOV Detail Metadata Row
+Yes.
+Add a detail metadata row for MOV companion assets if low-risk.
+Suggested label:
+Live Photo Still
+Value:
+still asset SHA or filename if easily available
+Preferred if available:
+still filename
+Fallback:
+still asset SHA
+Do not build navigation/linking unless trivial.
+
+9. Deferred MOV Features
+Defer filtering/hiding parameters.
+Do not add:
+exclude_live_photo_motion=true
+in 12.32.
+Reason:
+
+
+hiding/filtering companion MOVs is a future UX decision
+
+
+we first need visibility and pairing correctness
+
+
+query/filter behavior has broader implications
+
+
+Park for future:
+Live Photo Motion Companion Filtering / Hide from Normal Browsing
+
+10. Search API MOV Tagging
+Yes.
+Expose is_live_photo_motion_companion in /api/search/photos as well as direct photo/detail endpoints.
+Reason:
+
+
+search/list views need to show the badge consistently
+
+
+otherwise MOV companions will still appear untagged in some UI paths
+
+
+For MOV companion assets, expose:
+is_live_photo_motion_companion: truelive_photo_still_asset_sha256: <still sha>
+For still assets, continue exposing:
+has_live_photo_motion_companion: truelive_photo_motion_asset_sha256: <motion sha>
+Use exact field names that best match existing API conventions.
+
+Approved Implementation Direction
+Proceed with:
+
+
+lightweight Admin run/status only
+
+
+no stop endpoint
+
+
+direct reuse of existing pairing service
+
+
+endpoint path /api/admin/live-photo-pairing/...
+
+
+practical summary metrics in Admin
+
+
+still badge: Live Photo
+
+
+MOV badge: Live Photo Motion
+
+
+expose MOV companion fields in photo and search APIs
+
+
+add MOV detail metadata row if low-risk
+
+
+no hiding/filtering behavior yet
+
+
+no playback
+
+
