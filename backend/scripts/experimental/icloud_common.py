@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from getpass import getpass, getuser
 from pathlib import Path
+import time
 from typing import Any
 
 
@@ -19,6 +20,8 @@ except ImportError as exc:  # pragma: no cover - defensive import guard for oper
 
 
 DEFAULT_SOURCE_LABEL = "chuck_icloud_direct_test"
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_DELAYS_SECONDS = (0.5, 1.0)
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,51 @@ class AuthSummary:
     requires_2sa: bool
     trusted_session: bool
     cookie_directory: str
+
+
+@dataclass(frozen=True)
+class RetryOutcome:
+    value: Any
+    retries_used: int
+    attempts_made: int
+
+
+def retry_call(
+    operation_name: str,
+    func,
+    *,
+    attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    delays_seconds: tuple[float, ...] = DEFAULT_RETRY_DELAYS_SECONDS,
+) -> RetryOutcome:
+    """Execute one call with conservative retry/backoff behavior."""
+    safe_attempts = max(1, int(attempts))
+    last_exc: Exception | None = None
+
+    for attempt in range(1, safe_attempts + 1):
+        try:
+            value = func()
+            return RetryOutcome(value=value, retries_used=attempt - 1, attempts_made=attempt)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= safe_attempts:
+                break
+            delay_index = min(attempt - 1, max(0, len(delays_seconds) - 1))
+            delay_seconds = delays_seconds[delay_index] if delays_seconds else 0.0
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+
+    if last_exc is None:
+        raise RuntimeError(f"{operation_name} failed without exception details.")
+    raise last_exc
+
+
+def source_intake_command_hint(staging_path: Path, source_label: str, *, limit: int = 10, batch_size: int = 10) -> str:
+    """Return a copy/paste Source Intake command using the standard cloud_export flow."""
+    return (
+        f'python scripts/run_pipeline.py --from-path "{staging_path}" '
+        f"--source-label {source_label} --source-type cloud_export "
+        f"--source-limit {int(limit)} --ingest-batch-size {int(batch_size)}"
+    )
 
 
 def workspace_root() -> Path:

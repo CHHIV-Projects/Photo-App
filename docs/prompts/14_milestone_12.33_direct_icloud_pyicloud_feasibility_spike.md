@@ -638,3 +638,120 @@ If PyiCloud proves fragile or unsuitable, next step should return to:
 ```text
 Larger iCloud Export Folder Trial
 ```
+
+# 12.33 Clarification Answers## 1. Temporary install of PyiCloudApproved.Temporarily install `pyicloud` in the project virtual environment for the feasibility spike.Do not add it to permanent `requirements.txt` yet.Reason:- 12.33 is still feasibility testing- we need to prove authentication, listing, metadata, and download behavior first- permanent dependency should wait until we decide PyiCloud is viableCoder should document:- installed version- dependency changes observed- whether install caused conflicts- whether it works with Python 3.11.9---## 2. Default staging rootApproved.Use:```textstorage/exports/icloud/<source_label>/
+
+Default test source label:
+chuck_icloud_direct_test
+Expected staging folder:
+storage/exports/icloud/chuck_icloud_direct_test/
+This keeps iCloud acquisition separate from:
+Drop ZoneVault
+and lets Source Intake remain the authority for ingestion.
+
+3. Reports and operator note location
+   Approved.
+   Create reports under:
+   storage/logs/icloud_connector_reports/
+   Add operator notes under:
+   docs/operations/
+   Suggested file:
+   docs/operations/icloud_direct_feasibility_notes.md
+   The report should document:
+
+authentication result
+
+inventory/listing result
+
+available photo object fields
+
+stable ID candidates
+
+download attempts
+
+downloaded filenames/paths
+
+errors
+
+whether Live Photo companions are visible/downloadable
+
+whether source intake successfully ingested downloaded files
+
+4. CLI-only spike
+   Approved.
+   Keep 12.33 strictly CLI-based.
+   Do not add Admin UI for PyiCloud yet.
+   Reason:
+
+we do not yet know if PyiCloud is viable
+
+authentication/2FA is sensitive
+
+credential/session behavior needs to be understood first
+
+Admin integration should come only after feasibility is proven
+
+The CLI spike should download files into the exports staging folder, then use existing Admin Source Intake or CLI Source Intake to ingest them.
+
+Approved implementation direction
+Proceed with 12.33 as a controlled CLI-based feasibility spike:
+
+temporarily install PyiCloud in the venv
+
+create diagnostic inventory script
+
+create limited download test script
+
+use storage/exports/icloud/<source_label>/ as staging
+
+write reports to storage/logs/icloud_connector_reports/
+
+add operator feasibility notes under docs/operations/
+
+do not store credentials permanently
+
+do not add Admin UI
+
+do not write directly to Drop Zone or Vault
+
+do not add PyiCloud to permanent requirements until feasibility is proven
+
+## Important noteThe biggest unknowns are exactly the right ones:```textstable asset IDsoriginal download behaviorLive Photo resource modelsession/2FA behavior
+
+Basic authentication/listing seems plausible based on your earlier script, but the real decision point is whether PyiCloud can safely download originals and expose enough identity information to support future skip-known/cloud provenance.
+
+# 12.33 Final Validation Request
+
+The direct PyiCloud feasibility result looks good.
+
+Before closing 12.33, please validate the final handoff into the existing Source Intake framework.
+
+Use the downloaded staging folder:
+
+storage/exports/icloud/chuck_icloud_direct_test
+
+Register or use source:
+
+Source Label: chuck_icloud_direct_test
+Source Type: cloud_export
+Root Path: <absolute path to storage/exports/icloud/chuck_icloud_direct_test>
+
+Run Source Intake with conservative settings:
+
+Source Intake Limit: 10
+Ingest Batch Size: 10
+
+Please report:
+
+- source intake report filename
+- scanned count
+- selected count
+- staged count
+- processed_new_unique count
+- failed_or_rejected count
+- deferred_unready count
+- provenance rows created
+- whether files landed in Vault only through normal intake
+- whether source files in exports remained untouched
+
+Also note whether Display Preview Generation / Live Photo Pairing should be run afterward, but they do not need to be part of this final 12.33 closeout unless already convenient.

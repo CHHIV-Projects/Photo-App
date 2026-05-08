@@ -23,7 +23,10 @@ from scripts.experimental.icloud_common import (
     item_type_from_photo,
     now_stamp,
     now_utc_iso,
+    DEFAULT_RETRY_ATTEMPTS,
+    DEFAULT_RETRY_DELAYS_SECONDS,
     report_root,
+    retry_call,
     safe_identifier_candidates,
 )
 
@@ -43,6 +46,12 @@ def _parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Optional full report path override.",
+    )
+    parser.add_argument(
+        "--retry-attempts",
+        type=int,
+        default=DEFAULT_RETRY_ATTEMPTS,
+        help=f"Retry attempts for fragile metadata fields (default: {DEFAULT_RETRY_ATTEMPTS}).",
     )
     return parser.parse_args()
 
@@ -67,7 +76,33 @@ def _safe_iso_datetime(value: Any) -> str | None:
     return str(value)
 
 
-def _scan_inventory(limit: int, username: str | None, cookie_directory: str | None) -> tuple[dict[str, Any], int]:
+def _version_key_flags(version_keys: list[str]) -> dict[str, bool]:
+    lowered = [key.lower() for key in version_keys]
+    has_original = "original" in lowered
+    likely_video_resource = any(
+        token in key
+        for key in lowered
+        for token in ("video", "mov", "movie")
+    )
+    likely_live_photo_resource = any(
+        token in key
+        for key in lowered
+        for token in ("paired", "live", "video")
+    )
+    return {
+        "downloadable_original_available": has_original,
+        "has_video_resource_keys": likely_video_resource,
+        "has_live_photo_companion_hints": likely_live_photo_resource,
+    }
+
+
+def _scan_inventory(
+    limit: int,
+    username: str | None,
+    cookie_directory: str | None,
+    *,
+    retry_attempts: int,
+) -> tuple[dict[str, Any], int]:
     api, auth = authenticate_interactive(username=username, cookie_directory=cookie_directory)
 
     extension_counts: dict[str, int] = {}
@@ -76,6 +111,15 @@ def _scan_inventory(limit: int, username: str | None, cookie_directory: str | No
     identifier_fields: set[str] = set()
     errors: list[str] = []
     error_details: list[dict[str, Any]] = []
+    retry_events: list[dict[str, Any]] = []
+    retry_totals = {
+        "filename": 0,
+        "size": 0,
+        "created": 0,
+        "versions": 0,
+        "item_type": 0,
+        "identifier_candidates": 0,
+    }
 
     scanned = 0
     total_bytes = 0
@@ -86,7 +130,6 @@ def _scan_inventory(limit: int, username: str | None, cookie_directory: str | No
             break
 
         scanned += 1
-        step = "init"
         filename: str | None = None
         extension = ""
         size: int | None = None
@@ -94,79 +137,161 @@ def _scan_inventory(limit: int, username: str | None, cookie_directory: str | No
         item_type: str | None = None
         versions: list[str] = []
         id_candidates: dict[str, Any] = {}
+        field_errors: list[dict[str, Any]] = []
+        item_retry_count = 0
+
+        def _record_failure(field: str, exc: Exception) -> None:
+            error_line = f"item_{scanned} [{field}] {type(exc).__name__}: {exc}"
+            errors.append(error_line)
+            detail = {
+                "index": scanned,
+                "field": field,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "filename": filename,
+                "extension": extension,
+                "size_bytes": size,
+                "created": created_iso,
+                "item_type": item_type,
+                "version_keys": versions,
+                "identifier_candidates": id_candidates,
+            }
+            error_details.append(detail)
+            field_errors.append(detail)
 
         try:
-            step = "filename"
-            filename = getattr(photo, "filename", None)
+            filename_outcome = retry_call(
+                "filename",
+                lambda: getattr(photo, "filename", None),
+                attempts=retry_attempts,
+                delays_seconds=DEFAULT_RETRY_DELAYS_SECONDS,
+            )
+            filename = filename_outcome.value
+            retry_totals["filename"] += filename_outcome.retries_used
+            item_retry_count += filename_outcome.retries_used
+        except Exception as exc:
+            _record_failure("filename", exc)
 
-            step = "extension"
-            extension = extract_extension(filename)
+        extension = extract_extension(filename)
 
-            step = "size"
-            size = _normalize_size(getattr(photo, "size", None))
+        try:
+            size_outcome = retry_call(
+                "size",
+                lambda: getattr(photo, "size", None),
+                attempts=retry_attempts,
+                delays_seconds=DEFAULT_RETRY_DELAYS_SECONDS,
+            )
+            size = _normalize_size(size_outcome.value)
+            retry_totals["size"] += size_outcome.retries_used
+            item_retry_count += size_outcome.retries_used
+        except Exception as exc:
+            _record_failure("size", exc)
 
-            step = "created"
-            created = getattr(photo, "created", None)
+        try:
+            created_outcome = retry_call(
+                "created",
+                lambda: getattr(photo, "created", None),
+                attempts=retry_attempts,
+                delays_seconds=DEFAULT_RETRY_DELAYS_SECONDS,
+            )
+            created_iso = _safe_iso_datetime(created_outcome.value)
+            retry_totals["created"] += created_outcome.retries_used
+            item_retry_count += created_outcome.retries_used
+        except Exception as exc:
+            created_iso = None
+            _record_failure("created", exc)
 
-            step = "versions"
-            versions = sorted(list((getattr(photo, "versions", {}) or {}).keys()))
+        try:
+            versions_outcome = retry_call(
+                "versions",
+                lambda: getattr(photo, "versions", {}) or {},
+                attempts=retry_attempts,
+                delays_seconds=DEFAULT_RETRY_DELAYS_SECONDS,
+            )
+            versions = sorted(list(versions_outcome.value.keys()))
+            retry_totals["versions"] += versions_outcome.retries_used
+            item_retry_count += versions_outcome.retries_used
+        except Exception as exc:
+            versions = []
+            _record_failure("versions", exc)
 
-            step = "identifiers"
-            id_candidates = safe_identifier_candidates(photo)
+        try:
+            item_type_outcome = retry_call(
+                "item_type",
+                lambda: item_type_from_photo(photo),
+                attempts=retry_attempts,
+                delays_seconds=DEFAULT_RETRY_DELAYS_SECONDS,
+            )
+            item_type = item_type_outcome.value
+            retry_totals["item_type"] += item_type_outcome.retries_used
+            item_retry_count += item_type_outcome.retries_used
+        except Exception as exc:
+            item_type = None
+            _record_failure("item_type", exc)
+
+        try:
+            id_outcome = retry_call(
+                "identifier_candidates",
+                lambda: safe_identifier_candidates(photo),
+                attempts=retry_attempts,
+                delays_seconds=DEFAULT_RETRY_DELAYS_SECONDS,
+            )
+            id_candidates = id_outcome.value
+            retry_totals["identifier_candidates"] += id_outcome.retries_used
+            item_retry_count += id_outcome.retries_used
             for key, value in id_candidates.items():
                 if value is not None and value != []:
                     identifier_fields.add(key)
+        except Exception as exc:
+            id_candidates = {}
+            _record_failure("identifier_candidates", exc)
 
-            step = "item_type"
-            item_type = item_type_from_photo(photo)
+        extension_counts[extension or ""] = extension_counts.get(extension or "", 0) + 1
+        if size is not None:
+            extension_bytes[extension or ""] = extension_bytes.get(extension or "", 0) + size
+            total_bytes += size
 
-            step = "totals"
-            extension_counts[extension or ""] = extension_counts.get(extension or "", 0) + 1
-            if size is not None:
-                extension_bytes[extension or ""] = extension_bytes.get(extension or "", 0) + size
-                total_bytes += size
-
-            step = "record"
-            created_iso = _safe_iso_datetime(created)
-
-            sample_metadata.append(
+        if item_retry_count > 0:
+            retry_events.append(
                 {
                     "index": scanned,
                     "filename": filename,
-                    "extension": extension,
-                    "size_bytes": size,
-                    "created": created_iso,
-                    "item_type": item_type,
-                    "version_keys": versions,
-                    "identifier_candidates": id_candidates,
+                    "retries_used": item_retry_count,
                 }
             )
-        except Exception as exc:  # keep scanning remaining assets
-            if item_type is None:
-                item_type = item_type_from_photo(photo)
 
-            if not id_candidates:
-                try:
-                    id_candidates = safe_identifier_candidates(photo)
-                except Exception:
-                    id_candidates = {}
+        version_flags = _version_key_flags(versions)
+        looks_like_video = bool(
+            (item_type or "").lower() in {"movie", "video"}
+            or (extension or "").lower() in {".mov", ".mp4", ".m4v"}
+            or version_flags["has_video_resource_keys"]
+        )
 
-            errors.append(f"item_{scanned} [{step}] {type(exc).__name__}: {exc}")
-            error_details.append(
-                {
-                    "index": scanned,
-                    "step": step,
-                    "error_type": type(exc).__name__,
-                    "error_message": str(exc),
-                    "filename": filename,
-                    "extension": extension,
-                    "size_bytes": size,
-                    "created": created_iso,
-                    "item_type": item_type,
-                    "version_keys": versions,
-                    "identifier_candidates": id_candidates,
-                }
-            )
+        sample_metadata.append(
+            {
+                "index": scanned,
+                "filename": filename,
+                "extension": extension,
+                "size_bytes": size,
+                "created": created_iso,
+                "item_type": item_type,
+                "version_keys": versions,
+                "resource_key_names": versions,
+                "identifier_candidates": id_candidates,
+                "is_video_like": looks_like_video,
+                "downloadable_original_available": version_flags["downloadable_original_available"],
+                "has_live_photo_companion_hints": version_flags["has_live_photo_companion_hints"],
+                "retries_used": item_retry_count,
+                "field_errors": [
+                    {
+                        "field": entry["field"],
+                        "error_type": entry["error_type"],
+                        "error_message": entry["error_message"],
+                    }
+                    for entry in field_errors
+                ],
+            }
+        )
 
     payload: dict[str, Any] = {
         "generated_at_utc": now_utc_iso(),
@@ -185,10 +310,20 @@ def _scan_inventory(limit: int, username: str | None, cookie_directory: str | No
             "extension_counts": extension_counts,
             "extension_bytes": extension_bytes,
             "available_identifier_fields": sorted(identifier_fields),
+            "retry_policy": {
+                "attempts": retry_attempts,
+                "backoff_seconds": list(DEFAULT_RETRY_DELAYS_SECONDS),
+            },
+            "retry_totals_by_field": retry_totals,
         },
         "sample_metadata": sample_metadata,
+        "raw_keys_sample": {
+            "sample_identifier_fields": sorted(identifier_fields),
+            "sample_version_key_names": sorted({key for item in sample_metadata for key in item.get("version_keys", [])}),
+        },
         "errors": errors,
         "error_details": error_details,
+        "retry_events": retry_events,
     }
     return payload, scanned
 
@@ -207,7 +342,12 @@ def main() -> int:
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        payload, scanned = _scan_inventory(limit, args.username, args.cookie_directory)
+        payload, scanned = _scan_inventory(
+            limit,
+            args.username,
+            args.cookie_directory,
+            retry_attempts=max(1, int(args.retry_attempts)),
+        )
     except Exception as exc:
         failure_payload = {
             "generated_at_utc": now_utc_iso(),
