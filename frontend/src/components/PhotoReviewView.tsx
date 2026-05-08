@@ -599,6 +599,12 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
               />
             </button>
             <div className={styles.filename} title={item.filename}>{item.filename}</div>
+            {(item.has_live_photo_motion_companion || item.is_live_photo_motion_companion) && (
+              <div className={styles.badgeRow}>
+                {item.has_live_photo_motion_companion ? <span className={styles.badgeLivePhoto}>Live Photo</span> : null}
+                {item.is_live_photo_motion_companion ? <span className={styles.badgeLivePhotoMotion}>Live Photo Motion</span> : null}
+              </div>
+            )}
             {item.face_count > 0 && (
               <div className={styles.badgeRow}>
                 <span className={styles.badgeNeutral}>{item.face_count} face{item.face_count !== 1 ? "s" : ""}</span>

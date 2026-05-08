@@ -362,3 +362,104 @@ Future related work may include:
 - RAW preview support
 - PDF/document preview support
 - video thumbnail generation
+
+
+
+# 12.30 Clarification Answers## 1. Display-preview route aliasesDefer route aliases.For 12.30, keep the API surface unchanged:```text/api/admin/heic-preview/status/api/admin/heic-preview/run/api/admin/heic-preview/stop
+Reason:
+
+
+this milestone is operator-facing naming cleanup
+
+
+existing routes work
+
+
+adding aliases is not necessary yet
+
+
+fewer moving parts means lower risk
+
+
+We can add /display-preview/* aliases later if/when we do internal naming cleanup.
+
+2. Documentation scope
+Update only current operator-facing documentation.
+Required:
+icloud_export_intake_guide.md
+Also update any active/current non-historical operator docs if they clearly describe the current Admin workflow.
+Do not rewrite old historical milestone prompt files.
+Historical files can retain the names that were true at the time.
+
+3. Frontend internal type/function names
+Keep internal frontend type/function names unchanged for 12.30.
+Do not rename:
+AdminHeicPreview*getHeicPreview*runHeicPreview*stopHeicPreview*
+Reason:
+
+
+internal names are compatibility details
+
+
+renaming them adds churn with little user benefit
+
+
+the operator-facing UI is what matters in this milestone
+
+
+
+Approved 12.30 Implementation Direction
+Proceed with the lowest-risk path:
+
+
+Rename Admin operator-facing card title to:
+
+
+Display Preview Generation
+
+
+Update Admin card description to mention:
+
+
+HEIC / HEIFTIFF / TIFmislabeled TIFF-content images
+
+
+Update visible error/status/help text where low-risk.
+
+
+Keep existing backend routes.
+
+
+Keep existing backend model/table/schema names.
+
+
+Keep existing frontend internal type/function names.
+
+
+Update current operator guide wording.
+
+
+No schema changes.
+
+
+No preview behavior changes.
+
+
+No route changes.
+
+
+Validation:
+
+
+frontend build/typecheck
+
+
+manual Admin smoke test
+
+
+confirm status/run/stop still work
+
+
+confirm HEIC/TIFF/mismatch counters still render
+
+

@@ -7,6 +7,8 @@ import {
   getDuplicateProcessingStatus,
   runDuplicateProcessing,
   stopDuplicateProcessing,
+  getLivePhotoPairingStatus,
+  runLivePhotoPairing,
   getPlaceGeocodingStatus,
   runPlaceGeocoding,
   stopPlaceGeocoding,
@@ -28,6 +30,7 @@ import type {
   AdminDuplicateProcessingStatusResponse,
   AdminFaceProcessingStatusResponse,
   AdminHeicPreviewStatusResponse,
+  AdminLivePhotoPairingStatusResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse,
   SourceIntakeReportDetail,
@@ -45,11 +48,13 @@ export default function AdminView() {
   const [placeGeocodingStatus, setPlaceGeocodingStatus] = useState<AdminPlaceGeocodingStatusResponse | null>(null);
   const [faceProcessingStatus, setFaceProcessingStatus] = useState<AdminFaceProcessingStatusResponse | null>(null);
   const [heicPreviewStatus, setHeicPreviewStatus] = useState<AdminHeicPreviewStatusResponse | null>(null);
+  const [livePhotoPairingStatus, setLivePhotoPairingStatus] = useState<AdminLivePhotoPairingStatusResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isDuplicateActionLoading, setIsDuplicateActionLoading] = useState(false);
   const [isPlaceGeocodingActionLoading, setIsPlaceGeocodingActionLoading] = useState(false);
   const [isFaceProcessingActionLoading, setIsFaceProcessingActionLoading] = useState(false);
   const [isHeicPreviewActionLoading, setIsHeicPreviewActionLoading] = useState(false);
+  const [isLivePhotoPairingActionLoading, setIsLivePhotoPairingActionLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [sourceIntakeSources, setSourceIntakeSources] = useState<SourceIntakeSourcesResponse | null>(null);
   const [sourceIntakeReports, setSourceIntakeReports] = useState<SourceIntakeReportsResponse | null>(null);
@@ -257,6 +262,15 @@ export default function AdminView() {
     }
   }, []);
 
+  const loadLivePhotoPairingStatus = useCallback(async () => {
+    try {
+      const response = await getLivePhotoPairingStatus();
+      setLivePhotoPairingStatus(response);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load Live Photo pairing status.");
+    }
+  }, []);
+
   const loadSourceIntake = useCallback(async () => {
     setIsSourceIntakeLoading(true);
     try {
@@ -328,9 +342,23 @@ export default function AdminView() {
     }
   }, [loadHeicPreviewStatus]);
 
+  const runLivePhotoPairingJob = useCallback(async () => {
+    setIsLivePhotoPairingActionLoading(true);
+    setErrorMessage("");
+    try {
+      await runLivePhotoPairing();
+      await loadLivePhotoPairingStatus();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to run Live Photo pairing.");
+      await loadLivePhotoPairingStatus();
+    } finally {
+      setIsLivePhotoPairingActionLoading(false);
+    }
+  }, [loadLivePhotoPairingStatus]);
+
   const loadAll = useCallback(async () => {
-    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus(), loadFaceProcessingStatus(), loadHeicPreviewStatus(), loadSourceIntake(), loadIntakeStatus()]);
-  }, [loadDuplicateStatus, loadFaceProcessingStatus, loadHeicPreviewStatus, loadPlaceGeocodingStatus, loadSourceIntake, loadSummary, loadIntakeStatus]);
+    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus(), loadFaceProcessingStatus(), loadHeicPreviewStatus(), loadLivePhotoPairingStatus(), loadSourceIntake(), loadIntakeStatus()]);
+  }, [loadDuplicateStatus, loadFaceProcessingStatus, loadHeicPreviewStatus, loadLivePhotoPairingStatus, loadPlaceGeocodingStatus, loadSourceIntake, loadSummary, loadIntakeStatus]);
 
   useEffect(() => {
     void loadAll();
@@ -404,6 +432,22 @@ export default function AdminView() {
   }, [heicPreviewStatus?.current.status, loadHeicPreviewStatus]);
 
   useEffect(() => {
+    const isActive = livePhotoPairingStatus && livePhotoPairingStatus.current.status === "running";
+
+    if (!isActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadLivePhotoPairingStatus();
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [livePhotoPairingStatus?.current.status, loadLivePhotoPairingStatus]);
+
+  useEffect(() => {
     // Start polling if intake status is running or stop requested
     const isActive = intakeStatus && ["running", "stop_requested"].includes(intakeStatus.status);
 
@@ -474,6 +518,9 @@ export default function AdminView() {
 
   const heicPreviewRunState = heicPreviewStatus?.current.status ?? "idle";
   const isHeicPreviewRunActive = heicPreviewRunState === "running" || heicPreviewRunState === "stop_requested";
+  const livePhotoPairingRunState = livePhotoPairingStatus?.current.status ?? "idle";
+  const isLivePhotoPairingRunActive = livePhotoPairingRunState === "running";
+  const livePhotoPairingReportName = livePhotoPairingStatus?.current.last_report_path?.split(/[\\/]/).pop() ?? null;
 
   return (
     <section className={styles.adminRoot}>
@@ -684,6 +731,39 @@ export default function AdminView() {
               disabled={isHeicPreviewActionLoading || !isHeicPreviewRunActive}
             >
               {isHeicPreviewActionLoading && isHeicPreviewRunActive ? "Stopping..." : "Stop"}
+            </button>
+          </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.duplicateCard}`.trim()}>
+          <h3 className={styles.cardTitle}>Live Photo Pairing</h3>
+          <p className={styles.meta}>Status: {livePhotoPairingStatus?.current.status ?? "idle"}</p>
+          <p className={styles.meta}>Last run: {livePhotoPairingStatus?.current.finished_at ? new Date(livePhotoPairingStatus.current.finished_at).toLocaleString() : "-"}</p>
+          <p className={styles.meta}>Created: {livePhotoPairingStatus?.current.pairs_created ?? 0}</p>
+          <p className={styles.meta}>Already paired: {livePhotoPairingStatus?.current.already_paired ?? 0}</p>
+          <p className={styles.meta}>Updated: {livePhotoPairingStatus?.current.updated ?? 0}</p>
+          <p className={styles.meta}>Ambiguous skipped: {livePhotoPairingStatus?.current.skipped_ambiguous ?? 0}</p>
+          <p className={styles.meta}>Suspicious skipped: {livePhotoPairingStatus?.current.skipped_suspicious_delta ?? 0}</p>
+          <p className={styles.meta}>Missing source skipped: {livePhotoPairingStatus?.current.skipped_missing_source ?? 0}</p>
+          <p className={styles.meta}>Scanned rows: {livePhotoPairingStatus?.current.scanned_rows ?? 0}</p>
+          <p className={styles.meta}>Candidate groups: {livePhotoPairingStatus?.current.candidate_groups ?? 0}</p>
+          <p className={styles.meta}>Removed stale: {livePhotoPairingStatus?.current.removed_stale ?? 0}</p>
+          <p className={styles.meta}>Elapsed: {livePhotoPairingStatus?.current.elapsed_seconds ? `${livePhotoPairingStatus.current.elapsed_seconds.toFixed(1)}s` : "-"}</p>
+          <p className={styles.meta}>Report: {livePhotoPairingReportName ?? "-"}</p>
+          {livePhotoPairingStatus?.current.last_report_path && (
+            <p className={styles.metaSmall}>{livePhotoPairingStatus.current.last_report_path}</p>
+          )}
+          {livePhotoPairingStatus?.current.last_error && (
+            <p className={styles.errorText}>Error: {livePhotoPairingStatus.current.last_error}</p>
+          )}
+          <div className={styles.actionRow}>
+            <button
+              type="button"
+              className={styles.actionButton}
+              onClick={() => void runLivePhotoPairingJob()}
+              disabled={isLivePhotoPairingActionLoading || isLivePhotoPairingRunActive}
+            >
+              {isLivePhotoPairingActionLoading ? "Running..." : "Run"}
             </button>
           </div>
         </article>

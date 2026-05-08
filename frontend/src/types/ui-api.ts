@@ -87,6 +87,9 @@ export interface PhotoSummary {
   captured_at: string | null;
   capture_time_trust: "high" | "low" | "unknown";
   face_count: number;
+  has_live_photo_motion_companion: boolean;
+  is_live_photo_motion_companion: boolean;
+  live_photo_still_asset_sha256: string | null;
 }
 
 export interface SearchPhotoSummary {
@@ -103,6 +106,9 @@ export interface SearchPhotoSummary {
   duplicate_group_id: number | null;
   is_canonical: boolean;
   visibility_status: "visible" | "demoted";
+  has_live_photo_motion_companion: boolean;
+  is_live_photo_motion_companion: boolean;
+  live_photo_still_asset_sha256: string | null;
 }
 
 export interface SearchPhotoListResponse {
@@ -246,6 +252,10 @@ export interface PhotoDetail {
   quality_score: number | null;
   duplicate_count: number;
   canonical_asset_sha256: string | null;
+  has_live_photo_motion_companion: boolean;
+  live_photo_motion_asset_sha256: string | null;
+  is_live_photo_motion_companion: boolean;
+  live_photo_still_asset_sha256: string | null;
   faces: FaceInPhoto[];
   content_tags: ContentTagSummary[];
 }
@@ -588,6 +598,35 @@ export interface AdminHeicPreviewActionResponse {
   accepted: boolean;
   message: string;
   status: AdminHeicPreviewRunStatus;
+}
+
+export interface AdminLivePhotoPairingRunStatus {
+  status: "idle" | "running" | "completed" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  scanned_rows: number;
+  candidate_groups: number;
+  pairs_created: number;
+  already_paired: number;
+  updated: number;
+  removed_stale: number;
+  skipped_missing_source: number;
+  skipped_ambiguous: number;
+  skipped_suspicious_delta: number;
+  last_report_path: string | null;
+  last_error: string | null;
+}
+
+export interface AdminLivePhotoPairingStatusResponse {
+  generated_at: string;
+  current: AdminLivePhotoPairingRunStatus;
+}
+
+export interface AdminLivePhotoPairingActionResponse {
+  accepted: boolean;
+  message: string;
+  status: AdminLivePhotoPairingRunStatus;
 }
 
 // Source Intake visibility types (12.24)

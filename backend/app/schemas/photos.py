@@ -80,6 +80,9 @@ class PhotoSummary(BaseModel):
     captured_at: str | None = None
     capture_time_trust: Literal["high", "low", "unknown"] = "unknown"
     face_count: int
+    has_live_photo_motion_companion: bool = False
+    is_live_photo_motion_companion: bool = False
+    live_photo_still_asset_sha256: str | None = None
 
 
 class PhotoListResponse(BaseModel):
@@ -101,6 +104,9 @@ class SearchPhotoSummary(BaseModel):
     duplicate_group_id: int | None = None
     is_canonical: bool
     visibility_status: Literal["visible", "demoted"] = "visible"
+    has_live_photo_motion_companion: bool = False
+    is_live_photo_motion_companion: bool = False
+    live_photo_still_asset_sha256: str | None = None
 
 
 class SearchPhotoListResponse(BaseModel):
@@ -146,6 +152,10 @@ class PhotoDetail(BaseModel):
     quality_score: float | None = None
     duplicate_count: int
     canonical_asset_sha256: str | None = None
+    has_live_photo_motion_companion: bool = False
+    live_photo_motion_asset_sha256: str | None = None
+    is_live_photo_motion_companion: bool = False
+    live_photo_still_asset_sha256: str | None = None
     faces: list[FaceInPhoto]
     content_tags: list[ContentTagSummary] = []
 

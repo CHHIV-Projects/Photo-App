@@ -20,6 +20,9 @@ from app.schemas.admin import (
     HeicPreviewActionResponse,
     HeicPreviewRunStatus,
     HeicPreviewStatusResponse,
+    LivePhotoPairingActionResponse,
+    LivePhotoPairingRunStatus,
+    LivePhotoPairingStatusResponse,
     PlaceGeocodingActionResponse,
     PlaceGeocodingRunStatus,
     PlaceGeocodingStatusResponse,
@@ -67,6 +70,11 @@ from app.services.face.face_processing_service import (
     get_face_processing_status,
     request_face_processing_stop,
     start_face_processing_background,
+)
+from app.services.live_photo.pairing_admin_service import (
+    LivePhotoPairingStatusSnapshot,
+    get_live_photo_pairing_status,
+    run_live_photo_pairing_admin,
 )
 from app.services.previews.heic_preview_processing_service import (
     HeicPreviewAlreadyRunningError,
@@ -303,6 +311,26 @@ def _to_heic_preview_run_status(snapshot: HeicPreviewStatusSnapshot) -> HeicPrev
     )
 
 
+def _to_live_photo_pairing_run_status(snapshot: LivePhotoPairingStatusSnapshot) -> LivePhotoPairingRunStatus:
+    return LivePhotoPairingRunStatus(
+        status=snapshot.status,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        elapsed_seconds=snapshot.elapsed_seconds,
+        scanned_rows=snapshot.scanned_rows,
+        candidate_groups=snapshot.candidate_groups,
+        pairs_created=snapshot.pairs_created,
+        already_paired=snapshot.already_paired,
+        updated=snapshot.updated,
+        removed_stale=snapshot.removed_stale,
+        skipped_missing_source=snapshot.skipped_missing_source,
+        skipped_ambiguous=snapshot.skipped_ambiguous,
+        skipped_suspicious_delta=snapshot.skipped_suspicious_delta,
+        last_report_path=snapshot.last_report_path,
+        last_error=snapshot.last_error,
+    )
+
+
 @router.get("/heic-preview/status", response_model=HeicPreviewStatusResponse)
 def get_heic_preview_run_status(db: Session = Depends(get_db_session)) -> HeicPreviewStatusResponse:
     """Return display preview generation status and pending-work count."""
@@ -347,6 +375,27 @@ def stop_heic_preview_generation(db: Session = Depends(get_db_session)) -> HeicP
         accepted=accepted,
         message=result.message,
         status=_to_heic_preview_run_status(result.status),
+    )
+
+
+@router.get("/live-photo-pairing/status", response_model=LivePhotoPairingStatusResponse)
+def get_live_photo_pairing_run_status() -> LivePhotoPairingStatusResponse:
+    """Return Live Photo pairing status and latest summary."""
+    status_view = get_live_photo_pairing_status()
+    return LivePhotoPairingStatusResponse(
+        generated_at=status_view.generated_at,
+        current=_to_live_photo_pairing_run_status(status_view.current),
+    )
+
+
+@router.post("/live-photo-pairing/run", response_model=LivePhotoPairingActionResponse)
+def run_live_photo_pairing_from_admin(db: Session = Depends(get_db_session)) -> LivePhotoPairingActionResponse:
+    """Run Live Photo pairing immediately and return the final summary."""
+    result = run_live_photo_pairing_admin(db)
+    return LivePhotoPairingActionResponse(
+        accepted=result.status.status == "completed",
+        message=result.message,
+        status=_to_live_photo_pairing_run_status(result.status),
     )
 
 

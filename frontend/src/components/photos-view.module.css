@@ -118,6 +118,32 @@
   color: #526274;
 }
 
+.livePhotoBadge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid #9ed7bc;
+  background: #eaf8f0;
+  color: #20563d;
+  font-size: 0.69rem;
+  font-weight: 700;
+}
+
+.livePhotoMotionBadge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid #9ec8d7;
+  background: #ecf6fa;
+  color: #1d5360;
+  font-size: 0.69rem;
+  font-weight: 700;
+}
+
 /* ── Detail area ────────────────────────────────────────────────── */
 
 .detailArea {
@@ -227,6 +253,34 @@
   margin: 4px 16px 14px;
   font-size: 0.78rem;
   color: #526274;
+}
+
+.imageLivePhotoBadge {
+  margin: 0 16px 14px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #20563d;
+  background: #eaf8f0;
+  border: 1px solid #9ed7bc;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  width: fit-content;
+}
+
+.imageLivePhotoMotionBadge {
+  margin: 0 16px 14px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #1d5360;
+  background: #ecf6fa;
+  border: 1px solid #9ec8d7;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  width: fit-content;
 }
 
 .metadataBody {

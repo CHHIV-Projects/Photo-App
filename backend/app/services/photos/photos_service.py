@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import func, nullslast, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models.asset import Asset
 from app.models.asset_content_tag import AssetContentTag
@@ -14,6 +14,7 @@ from app.models.duplicate_group import DuplicateGroup
 from app.models.event import Event
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
+from app.models.live_photo_pair import LivePhotoPair
 from app.models.person import Person
 from app.models.place import Place
 from app.models.provenance import Provenance
@@ -127,6 +128,8 @@ def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[d
         .group_by(Face.asset_sha256)
         .subquery()
     )
+    still_pair = aliased(LivePhotoPair)
+    motion_pair = aliased(LivePhotoPair)
 
     active_filters = filters or TimelineFilter()
     trust_expr = effective_capture_time_trust_expr()
@@ -139,7 +142,15 @@ def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[d
         Asset.captured_at,
         trust_expr.label("capture_time_trust"),
         func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
-    ).outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256)
+        still_pair.motion_asset_sha256.label("live_photo_motion_asset_sha256"),
+        motion_pair.still_asset_sha256.label("live_photo_still_asset_sha256"),
+    ).outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256).outerjoin(
+        still_pair,
+        still_pair.still_asset_sha256 == Asset.sha256,
+    ).outerjoin(
+        motion_pair,
+        motion_pair.motion_asset_sha256 == Asset.sha256,
+    )
 
     query = apply_asset_time_filters(query, active_filters)
 
@@ -159,6 +170,9 @@ def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[d
             "captured_at": _to_utc_iso(row.captured_at),
             "capture_time_trust": row.capture_time_trust,
             "face_count": row.face_count,
+            "has_live_photo_motion_companion": row.live_photo_motion_asset_sha256 is not None,
+            "is_live_photo_motion_companion": row.live_photo_still_asset_sha256 is not None,
+            "live_photo_still_asset_sha256": row.live_photo_still_asset_sha256,
         }
         for row in rows
     ]
@@ -179,6 +193,9 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
     asset = db.get(Asset, sha256)
     if asset is None:
         return None
+
+    live_photo_pair = db.scalar(select(LivePhotoPair).where(LivePhotoPair.still_asset_sha256 == sha256).limit(1))
+    motion_companion_pair = db.scalar(select(LivePhotoPair).where(LivePhotoPair.motion_asset_sha256 == sha256).limit(1))
 
     face_rows = db.execute(
         select(
@@ -347,6 +364,10 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
         "quality_score": asset.quality_score,
         "duplicate_count": duplicate_count,
         "canonical_asset_sha256": canonical_asset_sha256,
+        "has_live_photo_motion_companion": live_photo_pair is not None,
+        "live_photo_motion_asset_sha256": live_photo_pair.motion_asset_sha256 if live_photo_pair is not None else None,
+        "is_live_photo_motion_companion": motion_companion_pair is not None,
+        "live_photo_still_asset_sha256": motion_companion_pair.still_asset_sha256 if motion_companion_pair is not None else None,
         "faces": faces,
         "content_tags": _get_content_tags(db, sha256),
     }

@@ -5,6 +5,8 @@ import type {
   AdminFaceProcessingStatusResponse,
   AdminHeicPreviewActionResponse,
   AdminHeicPreviewStatusResponse,
+  AdminLivePhotoPairingActionResponse,
+  AdminLivePhotoPairingStatusResponse,
   AdminPlaceGeocodingActionResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse,
@@ -248,6 +250,16 @@ export function searchPhotos(options: SearchPhotoQueryOptions = {}): Promise<Sea
 
 export function getPhotoDetail(sha256: string): Promise<PhotoDetail> {
   return apiRequest<PhotoDetail>(`/api/photos/${sha256}`);
+}
+
+export function getLivePhotoPairingStatus(): Promise<AdminLivePhotoPairingStatusResponse> {
+  return apiRequest<AdminLivePhotoPairingStatusResponse>("/api/admin/live-photo-pairing/status");
+}
+
+export function runLivePhotoPairing(): Promise<AdminLivePhotoPairingActionResponse> {
+  return apiRequest<AdminLivePhotoPairingActionResponse>("/api/admin/live-photo-pairing/run", {
+    method: "POST"
+  });
 }
 
 export function setPhotoRotation(

@@ -90,6 +90,15 @@
   font-size: 0.92rem;
 }
 
+.metaSmall {
+  margin: 0;
+  color: #617486;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .breakdownList {
   display: grid;
   gap: 4px;

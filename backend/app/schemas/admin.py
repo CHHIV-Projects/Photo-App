@@ -198,6 +198,41 @@ class HeicPreviewActionResponse(BaseModel):
     status: HeicPreviewRunStatus
 
 
+class LivePhotoPairingRunStatus(BaseModel):
+    """Current or last Live Photo pairing run snapshot."""
+
+    status: Literal["idle", "running", "completed", "failed"] = "idle"
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    elapsed_seconds: float | None = None
+    scanned_rows: int = 0
+    candidate_groups: int = 0
+    pairs_created: int = 0
+    already_paired: int = 0
+    updated: int = 0
+    removed_stale: int = 0
+    skipped_missing_source: int = 0
+    skipped_ambiguous: int = 0
+    skipped_suspicious_delta: int = 0
+    last_report_path: str | None = None
+    last_error: str | None = None
+
+
+class LivePhotoPairingStatusResponse(BaseModel):
+    """Live Photo pairing status view for Admin controls."""
+
+    generated_at: datetime
+    current: LivePhotoPairingRunStatus
+
+
+class LivePhotoPairingActionResponse(BaseModel):
+    """Run action response payload for Live Photo pairing."""
+
+    accepted: bool
+    message: str
+    status: LivePhotoPairingRunStatus
+
+
 # ---------------------------------------------------------------------------
 # Source Intake visibility schemas (12.24)
 # ---------------------------------------------------------------------------

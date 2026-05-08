@@ -32,6 +32,7 @@ from app.services.previews.heic_preview_schema import ensure_heic_preview_schema
 from app.services.vision.face_incremental_schema import ensure_face_incremental_schema
 from app.services.admin.source_intake_schema import ensure_source_intake_schema
 from app.services.admin.source_intake_execution_service import _reset_stale_runs
+from app.services.live_photo.pairing_schema import ensure_live_photo_pairing_schema
 
 
 def create_app() -> FastAPI:
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
 			ensure_face_incremental_schema(db_session)
 			ensure_heic_preview_schema(db_session)
 			ensure_source_intake_schema(db_session)
+			ensure_live_photo_pairing_schema(db_session)
 			_reset_stale_runs(db_session)
 		finally:
 			db_session.close()

@@ -120,6 +120,9 @@ def search_photos_endpoint(
                 duplicate_group_id=item.duplicate_group_id,
                 is_canonical=item.is_canonical,
                 visibility_status=item.visibility_status,
+                has_live_photo_motion_companion=item.has_live_photo_motion_companion,
+                is_live_photo_motion_companion=item.is_live_photo_motion_companion,
+                live_photo_still_asset_sha256=item.live_photo_still_asset_sha256,
             )
             for item in result.items
         ],

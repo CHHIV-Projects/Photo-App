@@ -942,6 +942,8 @@ export function PhotosView({
                   </div>
                   <div className={styles.photoMeta}>
                     <span className={styles.photoFilename}>{photo.filename}</span>
+                    {photo.has_live_photo_motion_companion ? <span className={styles.livePhotoBadge}>Live Photo</span> : null}
+                    {photo.is_live_photo_motion_companion ? <span className={styles.livePhotoMotionBadge}>Live Photo Motion</span> : null}
                     <span className={styles.photoFaceCount}>
                       {photo.face_count} {photo.face_count === 1 ? "face" : "faces"}
                     </span>
@@ -1112,6 +1114,12 @@ export function PhotosView({
                   ) : null}
                 </div>
                 <p className={styles.imageFilename}>{photoDetail.filename}</p>
+                {photoDetail.has_live_photo_motion_companion ? (
+                  <p className={styles.imageLivePhotoBadge}>Live Photo companion linked</p>
+                ) : null}
+                {photoDetail.is_live_photo_motion_companion ? (
+                  <p className={styles.imageLivePhotoMotionBadge}>Live Photo Motion</p>
+                ) : null}
               </div>
 
               <div className={styles.panel}>
@@ -1139,6 +1147,24 @@ export function PhotosView({
                       <span className={styles.metadataLabel}>Capture Time</span>
                       <span className={styles.metadataValue}>{getCaptureTrustLabel(photoDetail.capture_time_trust)}</span>
                     </div>
+                    <div className={styles.metadataRow}>
+                      <span className={styles.metadataLabel}>Live Photo</span>
+                      <span className={styles.metadataValue}>
+                        {photoDetail.has_live_photo_motion_companion
+                          ? `Yes${photoDetail.live_photo_motion_asset_sha256 ? ` (${photoDetail.live_photo_motion_asset_sha256})` : ""}`
+                          : photoDetail.is_live_photo_motion_companion
+                            ? "Motion companion"
+                            : "No"}
+                      </span>
+                    </div>
+                    {photoDetail.is_live_photo_motion_companion ? (
+                      <div className={styles.metadataRow}>
+                        <span className={styles.metadataLabel}>Live Photo Still</span>
+                        <span className={`${styles.metadataValue} ${styles.metadataWrap}`}>
+                          {photoDetail.live_photo_still_asset_sha256 ?? "-"}
+                        </span>
+                      </div>
+                    ) : null}
                     <div className={styles.metadataRow}>
                       <span className={styles.metadataLabel}>Face Count</span>
                       <span className={styles.metadataValue}>{photoDetail.faces.length}</span>

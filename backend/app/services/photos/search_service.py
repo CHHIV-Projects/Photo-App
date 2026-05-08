@@ -7,11 +7,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import case, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models.asset import Asset
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
+from app.models.live_photo_pair import LivePhotoPair
 from app.models.provenance import Provenance
 from app.services.photos.photos_service import _build_asset_url
 from app.services.timeline.timeline_service import TimelineFilter, apply_asset_time_filters, effective_capture_time_trust_expr
@@ -32,6 +33,9 @@ class SearchPhotoSummary:
     duplicate_group_id: int | None
     is_canonical: bool
     visibility_status: str
+    has_live_photo_motion_companion: bool
+    is_live_photo_motion_companion: bool
+    live_photo_still_asset_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -127,6 +131,8 @@ def search_photos(
     )
 
     trust_expr = effective_capture_time_trust_expr()
+    still_pair = aliased(LivePhotoPair)
+    motion_pair = aliased(LivePhotoPair)
 
     base_query: Any = select(
         Asset.sha256,
@@ -143,7 +149,15 @@ def search_photos(
         func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
         func.coalesce(face_count_subq.c.assigned_face_count, 0).label("assigned_face_count"),
         func.coalesce(face_count_subq.c.unassigned_face_count, 0).label("unassigned_face_count"),
+        still_pair.motion_asset_sha256.label("live_photo_motion_asset_sha256"),
+        motion_pair.still_asset_sha256.label("live_photo_still_asset_sha256"),
     ).outerjoin(face_count_subq, Asset.sha256 == face_count_subq.c.asset_sha256).outerjoin(
+        still_pair,
+        still_pair.still_asset_sha256 == Asset.sha256,
+    ).outerjoin(
+        motion_pair,
+        motion_pair.motion_asset_sha256 == Asset.sha256,
+    ).outerjoin(
         latest_ingest_subq,
         Asset.sha256 == latest_ingest_subq.c.asset_sha256,
     )
@@ -233,6 +247,9 @@ def search_photos(
             duplicate_group_id=row.duplicate_group_id,
             is_canonical=bool(row.is_canonical),
             visibility_status=row.visibility_status,
+            has_live_photo_motion_companion=row.live_photo_motion_asset_sha256 is not None,
+            is_live_photo_motion_companion=row.live_photo_still_asset_sha256 is not None,
+            live_photo_still_asset_sha256=row.live_photo_still_asset_sha256,
         )
         for row in rows
     ]
