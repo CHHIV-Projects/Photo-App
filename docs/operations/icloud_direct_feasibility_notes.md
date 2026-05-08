@@ -1,7 +1,7 @@
-# iCloud Direct Feasibility Notes (Milestones 12.33-12.34)
+# iCloud Direct Feasibility Notes (Milestones 12.33-12.35)
 
 ## Purpose
-This document captures direct iCloud / PyiCloud feasibility and hardening findings for Milestones 12.33 and 12.34.
+This document captures direct iCloud / PyiCloud feasibility and hardening findings for Milestones 12.33, 12.34, and 12.35.
 
 This is an experimental, CLI-only spike and is not a production iCloud connector.
 
@@ -20,6 +20,7 @@ This is an experimental, CLI-only spike and is not a production iCloud connector
 - Python version in environment: `3.11.9`.
 - `pyicloud` was not added to permanent `backend/requirements.txt` in 12.33.
 - `pyicloud` remains out of permanent `backend/requirements.txt` in 12.34.
+- `pyicloud` remains out of permanent `backend/requirements.txt` in 12.35.
 
 Observed dependency additions by temporary install:
 - cryptography
@@ -50,6 +51,16 @@ Observed dependency additions by temporary install:
   - `backend/scripts/experimental/icloud_download_test.py`
 - Source Intake provenance verifier:
   - `backend/scripts/experimental/verify_source_intake_provenance.py`
+- Staging adapter wrapper (single-session scan + download + handoff guidance):
+  - `backend/scripts/experimental/icloud_staging_adapter.py`
+
+## 12.35 Adapter Workflow Behavior
+- Wrapper keeps the existing scan/download scripts intact and orchestrates them in one auth session.
+- `--source-label` is mandatory and has no default.
+- Hard cap is enforced at `25` downloads unless `--allow-large-test` is provided.
+- Default existing-file policy remains `skip`.
+- Wrapper performs read-only source registration lookup and reports whether a matching source exists.
+- Wrapper does not auto-run Source Intake; it prints a recommended command only.
 
 ## 12.34 Hardening Behavior
 - Metadata retrieval is non-blocking per field.
@@ -64,14 +75,27 @@ Observed dependency additions by temporary install:
   - `renamed_for_collision`
 
 ## Recommended Operator Sequence
-1. Run inventory scan (report-only):
+1. Run staging adapter wrapper (preferred):
+
+```powershell
+Set-Location "backend"
+& "../.venv/Scripts/python.exe" scripts/experimental/icloud_staging_adapter.py --source-label chuck_icloud_direct_adapter_test --scan-limit 25 --download-limit 10
+```
+
+Optional wrapper flags:
+- `--allow-large-test` (required when `--download-limit` is above hard cap)
+- `--existing-policy skip|rename` (default: `skip`)
+- `--retry-attempts 3`
+- `--output-root <absolute path>`
+
+2. (Optional legacy flow) Run inventory scan (report-only):
 
 ```powershell
 Set-Location "backend"
 & "../.venv/Scripts/python.exe" scripts/experimental/icloud_scan.py --limit 25
 ```
 
-2. Run controlled download test:
+3. (Optional legacy flow) Run controlled download test:
 
 ```powershell
 Set-Location "backend"
@@ -82,7 +106,7 @@ Optional flags:
 - `--existing-policy skip|rename` (default: `skip`)
 - `--retry-attempts 3`
 
-3. Register source and run existing Source Intake:
+4. Register source and run existing Source Intake:
 - Source label: `chuck_icloud_direct_test`
 - Source type: `cloud_export`
 - Source root path: `storage/exports/icloud/chuck_icloud_direct_test/`
@@ -96,14 +120,14 @@ Set-Location "backend"
 & "../.venv/Scripts/python.exe" scripts/run_pipeline.py --from-path "<absolute staging path>" --source-label "<label>" --source-type cloud_export --source-limit 10 --ingest-batch-size 10
 ```
 
-4. Verify strict per-file provenance for the intake run:
+5. Verify strict per-file provenance for the intake run:
 
 ```powershell
 Set-Location "backend"
 & "../.venv/Scripts/python.exe" scripts/experimental/verify_source_intake_provenance.py --source-intake-report "storage/logs/source_intake_reports/source_intake_<run_id>.json"
 ```
 
-5. Review reports under:
+6. Review reports under:
 - `storage/logs/icloud_connector_reports/`
 
 ## Authentication and Session Notes
