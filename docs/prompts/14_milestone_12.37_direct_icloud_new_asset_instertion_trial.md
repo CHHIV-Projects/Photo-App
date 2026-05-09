@@ -582,3 +582,199 @@ Automatic source cleanup
 This milestone proves true new-asset insertion from direct iCloud.
 
 It is the final small-volume confidence step before considering larger direct iCloud trials.
+
+
+# 12.37 Clarification Answers## 1. Fresh iCloud assetsI will create a fresh set of new iPhone assets before you run the trial.Target set:```text15 normal photos3 Live Photos2 short videos
+I will wait until they appear synced to iCloud before you proceed.
+The intent is for these to be new-to-system so the trial can prove true new unique insertion.
+
+2. Source label
+Use a clean timestamped/source-specific variant to avoid prior artifacts.
+Preferred label:
+chuck_icloud_direct_new_asset_test_12_37
+If that already exists or has prior files, stop and report before proceeding.
+Do not reuse old labels from 12.33–12.36 for this trial.
+
+3. Asset targeting
+Use recent/newest assets if the adapter can reasonably target or sort by newest.
+If the adapter cannot reliably target newest-only assets, do not blindly run a random/first-N test.
+Instead:
+
+
+report the limitation
+
+
+perform a limited scan showing available ordering/metadata
+
+
+ask before downloading
+
+
+Reason:
+12.37 depends on getting new-to-system assets, not merely exercising the same path again.
+
+4. Existing staging folder behavior
+If the staging folder for the chosen 12.37 label already exists and contains files, stop and ask before proceeding.
+Do not automatically mix new test files with prior artifacts.
+A clean staging folder is preferred for this milestone.
+Expected staging folder:
+storage/exports/icloud/chuck_icloud_direct_new_asset_test_12_37/
+
+5. Success threshold
+Strict minimum:
+processed_new_unique > 0
+Preferred success:
+5+ new unique inserts
+Interpretation:
+
+
+processed_new_unique = 0 → inconclusive
+
+
+processed_new_unique >= 1 → technically conclusive
+
+
+processed_new_unique >= 5 → strong success
+
+
+Please report the exact number.
+
+6. Source Intake execution
+Keep Source Intake CLI-first, consistent with 12.36.
+Admin smoke check is optional only if quick and low-risk.
+Priority:
+CLI validation firstAdmin smoke only if convenient
+
+7. If trial is inconclusive
+If the first run produces:
+processed_new_unique = 0
+then stop after documenting root cause unless recent-asset targeting is clearly available and safe.
+Do not keep downloading repeated batches blindly.
+If recent targeting is available, you may propose one second curated download pass, but pause before running it.
+
+8. Pre-check downloaded files
+If feasible, pre-check downloaded staged files against existing DB/Vault by SHA before Source Intake.
+Report:
+downloaded filesalready known by SHAlikely new by SHA
+This will help predict whether Source Intake should insert new assets.
+
+Approved execution path
+
+
+Wait for user confirmation that new iPhone assets were created and synced.
+
+
+Use clean label:
+
+
+chuck_icloud_direct_new_asset_test_12_37
+
+
+Use clean staging folder.
+
+
+Prefer newest/recent iCloud assets.
+
+
+Download small capped set.
+
+
+Pre-check SHA against existing DB/Vault if feasible.
+
+
+Run Source Intake via CLI.
+
+
+Require processed_new_unique > 0 for conclusive success.
+
+
+Run post-intake jobs once if new assets are inserted.
+
+
+Document exact results.
+
+
+After you take the photos/videos and confirm they are synced, tell coder to proceed with the above.
+
+
+# 12.37 Direction — Add Newest-First TargetingI prefer to modify the adapter to support newest/recent asset targeting before continuing the 12.37 trial.This is not only for testing. It is also the expected long-term operating model: after initial historical intake, ongoing iCloud intake should pick up the newest few photos/videos rather than repeatedly scanning/downloading from the oldest/default library order.Please treat this as a 12.37 scope adjustment.## GoalAdd a safe experimental selection option to the direct iCloud staging adapter so it can download recent/newest assets.## Required BehaviorAdd support for:```text--order-by newest
+Preferred if feasible:
+--created-after YYYY-MM-DD
+But --order-by newest is the priority.
+Selection Semantics
+The adapter should:
+
+
+scan enough iCloud assets to find recent candidates
+
+
+extract the best available date field per asset
+
+
+sort candidates newest-first
+
+
+download up to the requested download limit
+
+
+report which date field was used for ordering
+
+
+report assets skipped because date was unavailable or invalid
+
+
+Important Existing Issue
+PyiCloud created access can be flaky and has previously raised:
+OSError [Errno 22] Invalid argument
+So date extraction must remain non-blocking per asset.
+If created fails for an asset:
+created = nullrecord error detailcontinue processing
+Do not let one bad date field break the scan.
+Date Field Preference
+Use best available fields in this approximate order, depending on what PyiCloud exposes reliably:
+created / captured dateasset date metadatafilename/date metadata if exposedfallback: unavailable
+Do not use filesystem date from the local staging folder for iCloud ordering.
+Scan Limit vs Download Limit
+We may need to scan more than we download.
+Example:
+scan-limit = 250download-limit = 25order-by = newest
+The adapter should sort the scanned candidate pool and download the newest N.
+Do not full-library scan by default.
+Safety
+Keep existing guardrails:
+
+
+no iCloud mutation
+
+
+no direct Drop Zone/Vault writes
+
+
+staging only under storage/exports/icloud/<source_label>/
+
+
+source label required
+
+
+skip existing by default
+
+
+hard cap remains unless explicit override is used
+
+
+no credential persistence
+
+
+Report Updates
+Add/report:
+order_bydate_field_usedcandidate_count_with_datecandidate_count_without_datenewest_candidate_dateoldest_candidate_dateselected_candidate_datesdate_extraction_errors
+12.37 Rerun After Change
+After newest-first support is implemented, rerun 12.37 using the fresh test assets.
+Suggested command shape:
+python scripts/experimental/icloud_staging_adapter.py --source-label chuck_icloud_direct_new_asset_test_12_37 --scan-limit 250 --download-limit 25 --order-by newest --username <apple_id_email>
+Then rerun Source Intake and verify:
+processed_new_unique > 0
+Preferred success:
+processed_new_unique >= 5
+If newest-first still does not reach today’s new assets, report why and what metadata/order PyiCloud exposes.
+## My bottom lineDo **not** document 12.37 as merely inconclusive and move on yet.The inconclusive result taught us something valuable: **newest-first selection is required**. Fix that now, then rerun the trial.Set-Location "c:/Users/chhen/My Drive/AI Photo Organizer/Photo Organizer_v1/backend"

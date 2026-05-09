@@ -464,3 +464,225 @@ The core issue is not download or Source Intake.
 The core issue is selecting the right iCloud assets.
 
 Album/collection targeting is the next safest way to solve that without building production sync or scanning the full library.
+
+# 12.37.1 Clarification Answers## 1. Source label requirement in list mode`--list-albums` should run without requiring `--source-label`.Reason:- list mode is read-only- no download happens- no staging folder is created- no Source Intake handoff is involvedFor download mode, `--source-label` remains required.---## 2. Album name matchingUse case-insensitive exact matching.If not found, show a helpful list of available album names.Do not use fuzzy matching to automatically choose an album.Example:```textAlbum "recents" matched available album "Recents"
+If no exact case-insensitive match exists:
+Album not found. Available albums:- Recents- Favorites- Videos...
+
+3. Selection precedence
+When --album is provided, album order should fully control selection.
+Ignore --order-by for selection in album mode.
+Date fields should be diagnostic/report-only.
+If both are provided, either:
+
+
+warn that --order-by is ignored in album mode, or
+
+
+fail fast with a clear message
+
+
+Preferred:
+warn and ignore --order-by
+
+4. Missing or empty album behavior
+If album is missing:
+status = failedreason = album_not_foundno download
+If album exists but has zero items:
+status = completedselected = 0downloaded = 0warning = album_empty
+Reason:
+
+
+missing album is an invalid request
+
+
+empty album is a valid request with no available work
+
+
+
+5. Staging folder with existing files
+For the 12.37.1 rerun, be strict.
+If this folder is non-empty:
+storage/exports/icloud/chuck_icloud_direct_new_asset_test_12_37/
+stop and report before proceeding.
+Reason:
+
+
+this trial is specifically trying to prove new unique insertion
+
+
+mixing prior artifacts can make the result ambiguous
+
+
+skip-existing behavior was already validated in earlier milestones
+
+
+Do not delete anything automatically.
+If the folder is non-empty, report contents and ask for approval before proceeding.
+
+6. Album listing output detail
+Do not include sample filenames by default in console output.
+Use a flag for samples, such as:
+--include-album-samples
+or similar.
+Reason:
+
+
+album listing can expose personal/sensitive filenames
+
+
+default output should be minimal
+
+
+Default list mode should show:
+album nameitem count if available
+Report file may include samples only if the flag is used.
+
+7. Recents fallback workflow
+Do not automatically attempt Photo Organizer Test 12.37.
+If Recents is absent or unusable:
+
+
+stop after listing/reporting available albums
+
+
+recommend the operator choose or create a fallback album
+
+
+wait for the selected album name
+
+
+Reason:
+
+
+we should not guess which album contains the test files
+
+
+no automatic album selection beyond explicit user/coder choice
+
+
+
+8. Execution scope now
+Implement --list-albums and --album targeting first.
+Then run --list-albums and report what albums/collections are available.
+Do not proceed through the full 12.37 rerun until the target album is confirmed.
+If Recents is clearly present and appears to contain the new test assets, report that and ask before downloading.
+If not clear, pause and ask for the fallback album name.
+
+Approved Implementation Direction
+Proceed with:
+
+
+--list-albums without source label requirement
+
+
+case-insensitive exact album matching
+
+
+helpful available-albums list when not found
+
+
+album order controls selection
+
+
+date fields diagnostic only
+
+
+missing album fails safely
+
+
+empty album completes with warning and zero selected
+
+
+strict clean staging folder requirement for 12.37.1 rerun
+
+
+no sample filenames in default console output
+
+
+optional sample flag
+
+
+no automatic fallback album selection
+
+
+implementation + list-albums run only before full rerun
+
+
+# 12.37.1 Follow-Up — Verify PyiCloud Added-Date / Library OrderingPlease pause before treating album targeting as insufficient.I did some targeted review and found that PyiCloud appears to expose an `added_date` property, and documentation/source references indicate that the `All Photos` collection is sorted by `added_date` with most recently added photos first, while other albums may be sorted by `asset_date`.In this account, `--list-albums` showed:```textLibrary (18399)Live (1255)Videos (595)Favorites (12)
+but not Recents.
+It is possible that Library is the account’s exposed equivalent of All Photos.
+Please verify before proceeding
+
+
+Inspect whether PyiCloud photo objects expose:
+
+
+photo.added_date
+
+
+Inspect whether the album object for:
+
+
+Library
+is equivalent to or behaves like PyiCloud’s documented All Photos.
+
+
+Run a read-only diagnostic against the first 25–100 items from Library and report:
+
+
+indexfilenameadded_dateasset_date / created date if availableidsizeextension
+
+
+Do not sort by created for this diagnostic.
+
+
+Report whether the first items from Library appear newest-added or old/default order.
+
+
+Selection rule adjustment
+For ongoing direct iCloud acquisition, prefer:
+added_date / library-added order
+over:
+capture date / created / asset_date
+Reason:
+
+
+ongoing sync needs newly added iCloud assets
+
+
+old scans may have old capture dates but be newly added
+
+
+created has already proven unreliable in our runs
+
+
+Updated target strategy
+Try this order:
+
+
+Use Library natural order if it is newest-added first.
+
+
+If not, sort scanned Library candidates by photo.added_date, if available.
+
+
+If added_date is unavailable/unreliable, use a manually curated album such as Photo Organizer Test 12.37.
+
+
+Do not use photo.created as primary selection.
+
+
+Report additions
+Please add/report:
+added_date_availableadded_date_values_samplelibrary_order_observationselection_date_field = added_date | library_order | album_order | unavailable
+Important
+The question is not “newest capture date.”
+The question is:
+Which assets were most recently added to iCloud and should be acquired next?
+## My recommendationBefore making you create a custom album, have coder run this **read-only `added_date` / Library order diagnostic**.If `Library` really is newest-added first, then we should target:```text--album "Library"
+or use the library’s natural order.
+If added_date is present but ordering is not right, sort by added_date.
+If neither works, then create the manual album:
+Photo Organizer Test 12.37
+That should be the fallback, not the first move.
