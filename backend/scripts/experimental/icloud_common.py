@@ -141,9 +141,32 @@ def authenticate_interactive(
     username: str | None = None,
     cookie_directory: str | None = None,
 ) -> tuple[PyiCloudService, AuthSummary]:
-    """Authenticate to iCloud with interactive password and verification prompts."""
+    """Authenticate to iCloud with interactive password and verification prompts.
+    
+    Attempts to use cached credentials first (from previous sessions).
+    Falls back to password prompt only if needed.
+    """
     resolved_username = prompt_username(username)
-    password = prompt_password()
+    
+    # Try cached credentials first
+    try:
+        api = PyiCloudService(
+            resolved_username,
+            password=None,  # No password; will use cached session if available
+            cookie_directory=cookie_directory,
+        )
+        # If we got here without exception, cached credentials worked
+        summary = AuthSummary(
+            authenticated=True,
+            requires_2fa=bool(api.requires_2fa),
+            requires_2sa=bool(api.requires_2sa),
+            trusted_session=bool(getattr(api, "is_trusted_session", False)),
+            cookie_directory=resolve_cookie_directory(cookie_directory),
+        )
+        return api, summary
+    except Exception:
+        # Cached credentials failed or don't exist; prompt for password
+        password = prompt_password()
 
     api = PyiCloudService(
         resolved_username,

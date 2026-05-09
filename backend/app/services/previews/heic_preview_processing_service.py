@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.asset import Asset
+from app.models import duplicate_group as _duplicate_group_model
 from app.models.heic_preview_run import HeicPreviewRun
 from app.services.previews.heic_preview_schema import ensure_heic_preview_schema
 from app.services.previews.preview_service import (
