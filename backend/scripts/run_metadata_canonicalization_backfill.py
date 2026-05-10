@@ -1,4 +1,4 @@
-"""Backfill metadata observations and recompute canonical metadata for image assets."""
+"""Backfill metadata observations and recompute canonical metadata for supported image/video assets."""
 
 from __future__ import annotations
 
@@ -10,6 +10,15 @@ CURRENT_FILE = Path(__file__).resolve()
 BACKEND_ROOT = CURRENT_FILE.parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
+
+import app.models.asset  # noqa: F401
+import app.models.asset_metadata_observation  # noqa: F401
+import app.models.duplicate_group  # noqa: F401
+import app.models.event  # noqa: F401
+import app.models.ingestion_run  # noqa: F401
+import app.models.ingestion_source  # noqa: F401
+import app.models.place  # noqa: F401
+import app.models.provenance  # noqa: F401
 
 from app.db.session import SessionLocal
 from app.services.metadata.canonicalization_service import backfill_observations_and_canonicalize

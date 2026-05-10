@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import exiftool  # type: ignore[import-not-found]
 
 from app.models.asset import Asset
+
+VIDEO_EXTENSIONS = {".mov", ".mp4", ".m4v"}
+# Video-native date priority for 12.40 stays narrow and deterministic.
+VIDEO_PRIMARY_DATE_FIELDS = (
+	"QuickTime:CreationDate",
+	"Keys:CreationDate",
+	"com.apple.quicktime.creationdate",
+)
+VIDEO_SECONDARY_DATE_FIELDS = (
+	"QuickTime:CreateDate",
+	"QuickTime:MediaCreateDate",
+	"QuickTime:TrackCreateDate",
+)
 
 
 @dataclass(frozen=True)
@@ -52,16 +65,64 @@ class ExifExtractionResult:
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
-	"""Parse EXIF date/time format like '2024:03:25 14:05:30'."""
+	"""Parse EXIF/QuickTime date formats and normalize aware values to naive UTC."""
 	if not value:
 		return None
 
-	cleaned = value.split("+")[0].strip()
-	cleaned = cleaned.split("-")[0].strip() if "+" not in value and value.count(":") > 2 else cleaned
-	try:
-		return datetime.strptime(cleaned, "%Y:%m:%d %H:%M:%S")
-	except ValueError:
+	raw = str(value).strip()
+	if not raw:
 		return None
+
+	for candidate in (raw, raw.replace("Z", "+00:00")):
+		for fmt in (
+			"%Y:%m:%d %H:%M:%S%z",
+			"%Y-%m-%d %H:%M:%S%z",
+			"%Y:%m:%d %H:%M:%S",
+			"%Y-%m-%d %H:%M:%S",
+		):
+			try:
+				parsed = datetime.strptime(candidate, fmt)
+				if parsed.tzinfo is not None:
+					return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+				return parsed
+			except ValueError:
+				continue
+
+	cleaned = raw.split("+")[0].strip()
+	if raw.count(":") > 2 and "-" in raw[10:]:
+		cleaned = raw.rsplit("-", 1)[0].strip()
+	for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+		try:
+			return datetime.strptime(cleaned, fmt)
+		except ValueError:
+			continue
+	return None
+
+
+def _first_metadata_value(metadata: dict[str, object], field_names: tuple[str, ...]) -> object | None:
+	lookup = {str(key).casefold(): value for key, value in metadata.items()}
+	for field_name in field_names:
+		value = lookup.get(field_name.casefold())
+		if value not in (None, ""):
+			return value
+	return None
+
+
+def _extract_video_dates(metadata: dict[str, object]) -> tuple[datetime | None, datetime | None]:
+	primary_value = _first_metadata_value(metadata, VIDEO_PRIMARY_DATE_FIELDS)
+	primary_date = _parse_datetime(str(primary_value)) if primary_value is not None else None
+
+	secondary_date = None
+	for field_name in VIDEO_SECONDARY_DATE_FIELDS:
+		value = _first_metadata_value(metadata, (field_name,))
+		candidate = _parse_datetime(str(value)) if value is not None else None
+		if candidate is not None:
+			secondary_date = candidate
+			break
+
+	if primary_date is not None:
+		return primary_date, secondary_date
+	return secondary_date, None
 
 
 def _parse_float(value: object) -> float | None:
@@ -89,6 +150,7 @@ def _apply_gps_ref(value: float | None, ref: object, *, positive_refs: set[str],
 
 def _extract_single_metadata(metadata: dict[str, object], asset: Asset) -> ExtractedExifData | None:
 	"""Build extracted EXIF structure from one ExifTool metadata dict."""
+	asset_extension = (asset.extension or "").lower()
 	exif_datetime_original = _parse_datetime(metadata.get("EXIF:DateTimeOriginal") if isinstance(metadata, dict) else None)  # type: ignore[arg-type]
 	exif_create_date = _parse_datetime(metadata.get("EXIF:CreateDate") if isinstance(metadata, dict) else None)  # type: ignore[arg-type]
 	gps_latitude = _parse_float(metadata.get("EXIF:GPSLatitude") if isinstance(metadata, dict) else None)  # type: ignore[arg-type]
@@ -109,6 +171,15 @@ def _extract_single_metadata(metadata: dict[str, object], asset: Asset) -> Extra
 	camera_model = str(metadata.get("EXIF:Model")).strip() if metadata.get("EXIF:Model") else None
 	lens_model = str(metadata.get("EXIF:LensModel")).strip() if metadata.get("EXIF:LensModel") else None
 	software = str(metadata.get("EXIF:Software")).strip() if metadata.get("EXIF:Software") else None
+
+	if asset_extension in VIDEO_EXTENSIONS:
+		video_primary, video_secondary = _extract_video_dates(metadata)
+		exif_datetime_original = video_primary or exif_datetime_original
+		exif_create_date = video_secondary or exif_create_date
+		camera_make = camera_make or (str(_first_metadata_value(metadata, ("QuickTime:Make",))).strip() if _first_metadata_value(metadata, ("QuickTime:Make",)) else None)
+		camera_model = camera_model or (str(_first_metadata_value(metadata, ("QuickTime:Model",))).strip() if _first_metadata_value(metadata, ("QuickTime:Model",)) else None)
+		lens_model = lens_model or (str(_first_metadata_value(metadata, ("QuickTime:LensModel",))).strip() if _first_metadata_value(metadata, ("QuickTime:LensModel",)) else None)
+		software = software or (str(_first_metadata_value(metadata, ("QuickTime:Software",))).strip() if _first_metadata_value(metadata, ("QuickTime:Software",)) else None)
 
 	if not any(
 		[

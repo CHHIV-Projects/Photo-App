@@ -45,6 +45,8 @@ DSLR_MARKERS = (
     "panasonic",
 )
 
+VIDEO_EXTENSIONS = {".mov", ".mp4", ".m4v"}
+
 VALID_CAPTURE_TYPES = {"digital", "scan", "unknown"}
 VALID_CAPTURE_TIME_TRUST = {"high", "low", "unknown"}
 
@@ -107,6 +109,10 @@ def _choose_captured_at(asset: Asset) -> datetime:
     return chosen
 
 
+def _is_video_asset(asset: Asset) -> bool:
+    return (asset.extension or "").lower() in VIDEO_EXTENSIONS
+
+
 def _has_valid_exif_date(asset: Asset) -> bool:
     """Return True when EXIF date exists and is not clearly invalid."""
     for candidate in (asset.exif_datetime_original, asset.exif_create_date):
@@ -130,6 +136,14 @@ def _classify_source_type(asset: Asset, is_scan: bool) -> str:
 
 def classify_asset_capture_type(asset: Asset) -> tuple[str, str]:
     """Classify capture type and capture-time trust using explainable heuristics."""
+    if _is_video_asset(asset):
+        has_valid_container_date = _has_valid_exif_date(asset)
+        if has_valid_container_date:
+            return "digital", "high"
+        if asset.modified_timestamp_utc is not None:
+            return "digital", "low"
+        return "unknown", "unknown"
+
     make_and_model = " ".join(filter(None, [asset.camera_make, asset.camera_model]))
     has_camera_metadata = bool(make_and_model.strip())
     has_scan_brand = _contains_any(make_and_model, SCANNER_BRANDS)

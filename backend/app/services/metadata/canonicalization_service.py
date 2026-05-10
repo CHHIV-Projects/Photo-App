@@ -20,9 +20,22 @@ from app.services.ingestion.deduplicator import DuplicateFile
 from app.services.persistence.asset_repository import InsertedAsset
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".heic", ".webp"}
+VIDEO_EXTENSIONS = {".mov", ".mp4", ".m4v"}
+OBSERVATION_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 PREFERRED_EXTENSIONS = {".heic", ".heif", ".dng", ".arw", ".cr2", ".cr3", ".nef", ".orf", ".rw2", ".raf"}
 GENERIC_CAMERA_VALUES = {"unknown", "none", "null", "camera", "digital camera", "-", "n/a"}
 GPS_DECIMAL_PLACES = 6
+# Video-native date priority for 12.40 matches the approved milestone order.
+VIDEO_PRIMARY_DATE_FIELDS = (
+    "QuickTime:CreationDate",
+    "Keys:CreationDate",
+    "com.apple.quicktime.creationdate",
+)
+VIDEO_SECONDARY_DATE_FIELDS = (
+    "QuickTime:CreateDate",
+    "QuickTime:MediaCreateDate",
+    "QuickTime:TrackCreateDate",
+)
 
 
 @dataclass(frozen=True)
@@ -70,6 +83,10 @@ def _is_image_asset(asset: Asset) -> bool:
     return (asset.extension or "").lower() in IMAGE_EXTENSIONS
 
 
+def _supports_metadata_observation(asset: Asset) -> bool:
+    return (asset.extension or "").lower() in OBSERVATION_EXTENSIONS
+
+
 def _normalize_string(value: str | None) -> str | None:
     if value is None:
         return None
@@ -81,12 +98,57 @@ def _parse_datetime(value: object) -> datetime | None:
     if not value:
         return None
     raw = str(value)
+    raw = raw.strip()
+    for candidate in (raw, raw.replace("Z", "+00:00")):
+        for fmt in (
+            "%Y:%m:%d %H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y:%m:%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+        ):
+            try:
+                parsed = datetime.strptime(candidate, fmt)
+                if parsed.tzinfo is not None:
+                    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+                return parsed
+            except ValueError:
+                continue
+
     cleaned = raw.split("+")[0].strip()
-    cleaned = cleaned.split("-")[0].strip() if "+" not in raw and raw.count(":") > 2 else cleaned
-    try:
-        return datetime.strptime(cleaned, "%Y:%m:%d %H:%M:%S")
-    except ValueError:
-        return None
+    if raw.count(":") > 2 and "-" in raw[10:]:
+        cleaned = raw.rsplit("-", 1)[0].strip()
+    for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _first_metadata_value(metadata: dict[str, object], field_names: tuple[str, ...]) -> object | None:
+    lookup = {str(key).casefold(): value for key, value in metadata.items()}
+    for field_name in field_names:
+        value = lookup.get(field_name.casefold())
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _extract_video_dates(metadata: dict[str, object]) -> tuple[datetime | None, datetime | None]:
+    primary_value = _first_metadata_value(metadata, VIDEO_PRIMARY_DATE_FIELDS)
+    primary_date = _parse_datetime(primary_value)
+
+    secondary_date = None
+    for field_name in VIDEO_SECONDARY_DATE_FIELDS:
+        value = _first_metadata_value(metadata, (field_name,))
+        candidate = _parse_datetime(value)
+        if candidate is not None:
+            secondary_date = candidate
+            break
+
+    if primary_date is not None:
+        return primary_date, secondary_date
+    return secondary_date, None
 
 
 def _parse_int(value: object) -> int | None:
@@ -166,6 +228,8 @@ def _extract_dimensions(path: Path, metadata: dict[str, object]) -> tuple[int | 
     width = None
     height = None
     for width_key, height_key in (
+        ("QuickTime:ImageWidth", "QuickTime:ImageHeight"),
+        ("QuickTime:SourceImageWidth", "QuickTime:SourceImageHeight"),
         ("EXIF:ExifImageWidth", "EXIF:ExifImageHeight"),
         ("EXIF:ImageWidth", "EXIF:ImageHeight"),
         ("File:ImageWidth", "File:ImageHeight"),
@@ -174,6 +238,9 @@ def _extract_dimensions(path: Path, metadata: dict[str, object]) -> tuple[int | 
         height = _parse_int(metadata.get(height_key))
         if width and height:
             return width, height
+
+    if path.suffix.lower() not in IMAGE_EXTENSIONS:
+        return None, None
 
     try:
         with Image.open(path) as image:
@@ -206,6 +273,14 @@ def _extract_observation_from_metadata(
     )
     camera_make = _normalize_string(str(metadata.get("EXIF:Make"))) if metadata.get("EXIF:Make") else None
     camera_model = _normalize_string(str(metadata.get("EXIF:Model"))) if metadata.get("EXIF:Model") else None
+
+    if extension in VIDEO_EXTENSIONS:
+        video_primary, video_secondary = _extract_video_dates(metadata)
+        exif_datetime_original = video_primary or exif_datetime_original
+        exif_create_date = video_secondary or exif_create_date
+        camera_make = camera_make or (_normalize_string(str(_first_metadata_value(metadata, ("QuickTime:Make",)))) if _first_metadata_value(metadata, ("QuickTime:Make",)) else None)
+        camera_model = camera_model or (_normalize_string(str(_first_metadata_value(metadata, ("QuickTime:Model",)))) if _first_metadata_value(metadata, ("QuickTime:Model",)) else None)
+
     width, height = _extract_dimensions(file_path, metadata)
 
     captured_at_observed = _normalize_datetime_utc(exif_datetime_original or exif_create_date)
@@ -245,7 +320,7 @@ def _batch_extract_metadata(paths: list[str]) -> dict[str, dict[str, object]]:
     """
     valid = [
         p for p in paths
-        if Path(p).exists() and Path(p).is_file() and Path(p).suffix.lower() in IMAGE_EXTENSIONS
+        if Path(p).exists() and Path(p).is_file() and Path(p).suffix.lower() in OBSERVATION_EXTENSIONS
     ]
     if not valid:
         return {}
@@ -263,7 +338,7 @@ def extract_metadata_observation_from_path(path: str) -> ExtractedMetadataObserv
         return None
 
     extension = file_path.suffix.lower()
-    if extension not in IMAGE_EXTENSIONS:
+    if extension not in OBSERVATION_EXTENSIONS:
         return None
 
     try:
@@ -277,7 +352,7 @@ def extract_metadata_observation_from_path(path: str) -> ExtractedMetadataObserv
 
 
 def build_legacy_observation_from_asset(asset: Asset) -> ExtractedMetadataObservation | None:
-    if not _is_image_asset(asset):
+    if not _supports_metadata_observation(asset):
         return None
 
     payload = ExtractedMetadataObservation(
@@ -632,7 +707,7 @@ def recompute_canonical_metadata_for_assets(db_session: Session, asset_sha256_li
         if asset is None:
             skipped += 1
             continue
-        if not _is_image_asset(asset):
+        if not _supports_metadata_observation(asset):
             skipped += 1
             continue
 
@@ -774,14 +849,14 @@ def create_ingest_observations_for_batch(
     source_paths_for_extraction: list[str] = [
         source_path
         for asset_sha256, source_path in workload
-        if asset_sha256 in assets_map and _is_image_asset(assets_map[asset_sha256])
+        if asset_sha256 in assets_map and _supports_metadata_observation(assets_map[asset_sha256])
     ]
     batch_metadata = _batch_extract_metadata(source_paths_for_extraction)
 
     for asset_sha256, source_path in workload:
         try:
             asset = assets_map.get(asset_sha256)
-            if asset is None or not _is_image_asset(asset):
+            if asset is None or not _supports_metadata_observation(asset):
                 skipped += 1
                 continue
 
@@ -851,7 +926,7 @@ def backfill_observations_and_canonicalize(db_session: Session) -> BackfillCanon
     affected_asset_sha256: list[str] = []
 
     for asset in assets:
-        if not _is_image_asset(asset):
+        if not _supports_metadata_observation(asset):
             continue
 
         assets_considered += 1
