@@ -36,7 +36,11 @@ def build_report_payload(
             "removed_stale": result.removed_stale,
             "skipped_missing_source": result.skipped_missing_source,
             "skipped_ambiguous": result.skipped_ambiguous,
+            "ambiguous_skipped": result.skipped_ambiguous,
             "skipped_suspicious_delta": result.skipped_suspicious_delta,
+            "pairs_created_simple_basename": result.pairs_created_simple_basename,
+            "pairs_created_motion_suffix": result.pairs_created_motion_suffix,
+            "motion_suffixes_seen": result.motion_suffixes_seen,
         },
         "sample_pairs": result.sample_pairs,
     }

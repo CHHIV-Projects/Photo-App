@@ -16,6 +16,7 @@ from app.models.provenance import Provenance
 STILL_EXTENSIONS = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 MOTION_EXTENSIONS = {".mov"}
 PAIRING_METHOD = "basename"
+APPROVED_MOTION_SUFFIXES = ("_hevc",)
 HIGH_CONFIDENCE_MAX_SECONDS = 10
 SUSPICIOUS_MAX_SECONDS = 60
 
@@ -27,6 +28,7 @@ class PairCandidate:
     source_basename: str
     still_asset_sha256: str
     motion_asset_sha256: str
+    match_variant: str
     time_delta_seconds: int | None
     confidence: str
 
@@ -42,6 +44,9 @@ class LivePhotoPairingResult:
     skipped_missing_source: int
     skipped_ambiguous: int
     skipped_suspicious_delta: int
+    pairs_created_simple_basename: int
+    pairs_created_motion_suffix: int
+    motion_suffixes_seen: dict[str, int]
     generated_at_utc: str
     sample_pairs: list[dict[str, str | int | None]]
 
@@ -68,6 +73,20 @@ def _extract_group_parts(relative_path: str) -> tuple[str, str] | None:
     parent = str(posix_path.parent)
     source_relative_dir = "" if parent == "." else parent.lower()
     return source_relative_dir, basename
+
+
+def _normalize_still_basename(basename: str) -> str:
+    return basename
+
+
+def _normalize_motion_basename(basename: str) -> tuple[str, str, str | None]:
+    """Return normalized key, match variant, and stripped suffix label (if any)."""
+    for suffix in APPROVED_MOTION_SUFFIXES:
+        if basename.endswith(suffix):
+            normalized = basename[: -len(suffix)]
+            if normalized:
+                return normalized, "motion_suffix_hevc", suffix
+    return basename, "simple_basename", None
 
 
 def _role_for_extension(extension: str | None) -> str | None:
@@ -129,6 +148,7 @@ def _build_row_sample(candidate: PairCandidate) -> dict[str, str | int | None]:
         "source_basename": candidate.source_basename,
         "still_asset_sha256": candidate.still_asset_sha256,
         "motion_asset_sha256": candidate.motion_asset_sha256,
+        "match_variant": candidate.match_variant,
         "confidence": candidate.confidence,
         "time_delta_seconds": candidate.time_delta_seconds,
     }
@@ -147,9 +167,10 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
         ).join(Asset, Asset.sha256 == Provenance.asset_sha256)
     ).all()
 
-    grouped: dict[tuple[int, str, str], dict[str, dict[str, tuple[datetime | None, str | None]]]] = {}
+    grouped: dict[tuple[int, str, str], dict[str, dict[str, tuple[datetime | None, str | None, str]]]] = {}
     scanned_rows = 0
     skipped_missing_source = 0
+    motion_suffixes_seen: dict[str, int] = {}
 
     for row in rows:
         role = _role_for_extension(row.extension)
@@ -170,13 +191,24 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
             continue
 
         source_relative_dir, source_basename = parts
-        key = (int(row.ingestion_source_id), source_relative_dir, source_basename)
+        match_variant = "simple_basename"
+        if role == "still":
+            normalized_basename = _normalize_still_basename(source_basename)
+        else:
+            normalized_basename, match_variant, stripped_suffix = _normalize_motion_basename(source_basename)
+            if stripped_suffix is not None:
+                motion_suffixes_seen[stripped_suffix] = motion_suffixes_seen.get(stripped_suffix, 0) + 1
+
+        if not normalized_basename:
+            continue
+
+        key = (int(row.ingestion_source_id), source_relative_dir, normalized_basename)
         bucket = grouped.setdefault(key, {"still": {}, "motion": {}})
 
         bucket_for_role = bucket[role]
         existing_value = bucket_for_role.get(row.sha256)
         if existing_value is None:
-            bucket_for_role[row.sha256] = (row.captured_at, row.capture_time_trust)
+            bucket_for_role[row.sha256] = (row.captured_at, row.capture_time_trust, match_variant)
 
     candidates: list[PairCandidate] = []
     skipped_ambiguous = 0
@@ -192,8 +224,8 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
 
         still_sha, still_info = still_items[0]
         motion_sha, motion_info = motion_items[0]
-        still_captured_at, still_capture_time_trust = still_info
-        motion_captured_at, motion_capture_time_trust = motion_info
+        still_captured_at, still_capture_time_trust, _ = still_info
+        motion_captured_at, motion_capture_time_trust, match_variant = motion_info
 
         confidence, delta_seconds, is_suspicious = _pair_confidence(
             still_captured_at,
@@ -212,6 +244,7 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
                 source_basename=key[2],
                 still_asset_sha256=still_sha,
                 motion_asset_sha256=motion_sha,
+                match_variant=match_variant,
                 time_delta_seconds=delta_seconds,
                 confidence=confidence,
             )
@@ -247,6 +280,8 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
     inserted = 0
     updated = 0
     unchanged = 0
+    pairs_created_simple_basename = 0
+    pairs_created_motion_suffix = 0
 
     for candidate in deduped_candidates:
         existing = existing_by_still.get(candidate.still_asset_sha256)
@@ -264,6 +299,10 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
                 )
             )
             inserted += 1
+            if candidate.match_variant == "motion_suffix_hevc":
+                pairs_created_motion_suffix += 1
+            else:
+                pairs_created_simple_basename += 1
             continue
 
         if (
@@ -323,6 +362,9 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
         skipped_missing_source=skipped_missing_source,
         skipped_ambiguous=skipped_ambiguous,
         skipped_suspicious_delta=skipped_suspicious_delta,
+        pairs_created_simple_basename=pairs_created_simple_basename,
+        pairs_created_motion_suffix=pairs_created_motion_suffix,
+        motion_suffixes_seen=motion_suffixes_seen,
         generated_at_utc=_iso_utc_now(),
         sample_pairs=[_build_row_sample(item) for item in deduped_candidates[:25]],
     )
