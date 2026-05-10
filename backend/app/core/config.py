@@ -40,6 +40,11 @@ class Settings:
 		if (os.getenv("INGEST_SOURCE_LIMIT") or os.getenv("INGEST_TOTAL_LIMIT") or "").strip()
 		else None
 	)
+	icloudpd_executable_path: str = os.getenv("ICLOUDPD_EXECUTABLE_PATH", "").strip()
+	icloudpd_helper_env_root: str = os.getenv("ICLOUDPD_HELPER_ENV_ROOT", "../.tools/icloudpd")
+	icloudpd_run_timeout_seconds: int = int(os.getenv("ICLOUDPD_RUN_TIMEOUT_SECONDS", "7200"))
+	icloudpd_probe_timeout_seconds: int = int(os.getenv("ICLOUDPD_PROBE_TIMEOUT_SECONDS", "30"))
+	icloudpd_min_version: str = os.getenv("ICLOUDPD_MIN_VERSION", "1.32.0").strip()
 	event_cluster_gap_seconds: int = int(os.getenv("EVENT_CLUSTER_GAP_SECONDS", "14400"))
 	duplicate_hamming_threshold: int = int(os.getenv("DUPLICATE_HAMMING_THRESHOLD", "10"))
 	duplicate_resolution_band_ratio: float = float(os.getenv("DUPLICATE_RESOLUTION_BAND_RATIO", "0.25"))

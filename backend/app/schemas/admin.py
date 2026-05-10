@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AdminDuplicateTypeCount(BaseModel):
@@ -368,3 +368,76 @@ class SourceIntakeStopResponse(BaseModel):
     status: str
     message: str
     current: SourceIntakeStatusSchema
+
+
+# ---------------------------------------------------------------------------
+# icloudpd acquisition (12.42)
+# ---------------------------------------------------------------------------
+
+
+class IcloudAcquisitionRunStatus(BaseModel):
+    """Current or last icloudpd acquisition run snapshot."""
+
+    run_id: int | None = None
+    status: Literal[
+        "idle",
+        "running",
+        "stop_requested",
+        "completed",
+        "completed_with_warnings",
+        "failed",
+        "stopped",
+    ] = "idle"
+    source_label: str | None = None
+    source_type: str | None = None
+    source_root_path: str | None = None
+    source_registration_status: str | None = None
+    username: str | None = None
+    staging_path: str | None = None
+    recent_count: int | None = None
+    resolved_executable: str | None = None
+    icloudpd_version: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    elapsed_seconds: float | None = None
+    downloaded_count: int = 0
+    skipped_existing_count: int = 0
+    failed_count: int = 0
+    stdout_tail: str | None = None
+    stderr_tail: str | None = None
+    report_path: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    stop_requested: bool = False
+
+
+class IcloudAcquisitionStatusResponse(BaseModel):
+    """Live icloudpd acquisition status view for Admin controls."""
+
+    generated_at: datetime
+    current: IcloudAcquisitionRunStatus
+
+
+class IcloudAcquisitionRunResponse(BaseModel):
+    """Run action response payload for icloudpd acquisition."""
+
+    status: str
+    message: str
+    current: IcloudAcquisitionRunStatus
+
+
+class IcloudAcquisitionStopResponse(BaseModel):
+    """Stop action response payload for icloudpd acquisition."""
+
+    status: str
+    message: str
+    current: IcloudAcquisitionRunStatus
+
+
+class IcloudAcquisitionRunRequest(BaseModel):
+    """Input payload for launching an icloudpd acquisition run."""
+
+    source_label: str
+    username: str
+    recent_count: int = Field(default=25, ge=1, le=500)
+    source_type: str = "cloud_export"

@@ -630,3 +630,75 @@ Automatic source cleanup
 This milestone evaluates `icloudpd` as the cloud acquisition tool only.
 
 The Photo Organizer’s Source Intake pipeline remains the authoritative ingestion path.
+
+# 12.38 Clarification Answers## 1. Environment for evaluationUse a separate temporary evaluation virtual environment.Do not install `icloudpd` directly into the main project venv yet.Reason:- 12.38 is an evaluation milestone- we do not yet know whether `icloudpd` will become part of the supported workflow- isolated install avoids dependency or PATH contamination- if successful, we can later decide whether to add it as a project dependency, external tool, or subprocess requirementPlease document:- eval environment path- installed `icloudpd` version- exact install command- whether it creates any project-level dependency conflicts---## 2. Apple login / 2FAYes, assume I am ready to complete interactive Apple login and 2FA during the run.Do not store credentials in repo/config/DB/logs.Interactive login is acceptable for this evaluation.---## 3. Session artifactsYes, it is acceptable if session/cookie artifacts are temporarily created under my user profile.Please document exactly:- where session/cookie files are created- whether they are inside or outside the project repo- whether they contain sensitive auth material- how to manually clean them upDo not auto-delete session artifacts.Do not copy them into the project folder.---## 4. Hard capConfirmed.Keep the first recent test capped at:```text25 assets maximum
+
+Run one repeat test only.
+Expected:
+Run 1: recent-limited downloadRun 2: repeat same command to observe skip-existing / no-redownload behavior
+Do not run a large download.
+Do not exceed 25 without explicit approval.
+
+5. Live Photo coverage
+   If the recent set has no Live Photos, stop there for the main 12.38 recent-download evaluation.
+   Do not add an album-targeted follow-up automatically.
+   Reason:
+
+12.38 is primarily evaluating icloudpd as a recent acquisition adapter
+
+Live Photo handling is important, but should not expand the first evaluation run
+
+we already have internal Live Photo pairing support validated
+
+However, please document:
+No Live Photos appeared in the recent 25 sample
+and include as a follow-up:
+Optional icloudpd Live Photo targeted test
+If icloudpd help clearly shows Live Photo-specific flags or behavior, document them.
+
+Approved execution path
+Proceed with coder’s recommended next step:
+
+Create isolated temporary eval environment.
+
+Install icloudpd.
+
+Capture authoritative:
+
+version
+
+help output
+
+relevant options
+
+Run authentication smoke test.
+
+Document session/cookie artifact locations.
+
+Run recent-limited download into:
+
+storage/exports/icloud/chuck_icloudpd_test/
+
+Run repeat command to validate skip-existing behavior.
+
+Run Source Intake against the staging folder.
+
+Verify provenance.
+
+Run post-intake jobs if Source Intake succeeds.
+
+Produce docs/operations/icloudpd_evaluation_12_38.md.
+
+Safety reminders
+
+no direct Drop Zone writes
+
+no direct Vault writes
+
+no DB/provenance writes outside Source Intake
+
+no iCloud mutation
+
+no credential persistence in repo/config/DB
+
+no full-library download

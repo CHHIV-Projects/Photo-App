@@ -561,16 +561,107 @@ This milestone is about metadata correctness, not video viewing.
 
 Video files are first-class archived assets, but they require different metadata rules than still images.
 
-
-
 This milestone is video-general, but validation is focused on currently available/common formats:
 MOV, MP4, and M4V, especially iPhone/iCloud videos and Live Photo motion companions.
 
 Older camcorder formats are not excluded architecturally, but broad legacy video support is deferred until representative samples are available.
 
-
-
 Do not hard-code this as iCloud-only.
 Build video metadata handling generally.
 Validate first on iPhone/iCloud MOV and MP4 because that is what we have.
 Do not overbuild for old camcorder formats yet.
+
+# 12.40 Clarification Answers## 1. Trust vocabularyKeep trust values within the existing model for 12.40:```texthighlowunknown
+
+Do not introduce medium or new trust values yet.
+Reason:
+
+current API/search/timeline layers already expect the existing vocabulary
+
+widening the trust model is a cross-layer contract change
+
+12.40 should focus on video-aware metadata extraction, not trust taxonomy redesign
+
+Recommended 12.40 mapping:
+high:  video-native QuickTime/container creation date successfully extracted and parsedlow:  filesystem fallback onlyunknown:  no usable date
+If there is a slightly ambiguous QuickTime field, keep the logic deterministic and document it in code/reporting.
+
+2. Live Photo motion fallback-to-still
+   Defer fallback-to-still for this milestone.
+   Do not derive MOV captured_at from the paired still image in 12.40 unless you find a real, important MOV case with no usable QuickTime date and stop to report first.
+   Reason:
+
+current real MOV/iCloud samples already expose usable QuickTime dates
+
+deriving from still is a separate semantic layer
+
+it requires clear source labeling such as derived_from_live_photo_still
+
+that should be designed intentionally later
+
+For 12.40:
+Prefer video-native metadata.Do not inherit still date yet.
+
+3. Observation table / source-field columns
+   Use the current observation table for 12.40.
+   Do not add source-field columns now.
+   I am comfortable with the selected video date being explainable through:
+   code priority orderreports/logscloseout summary
+   even if the exact raw field name is not preserved in the DB yet.
+   Reason:
+
+no schema change is needed for the core fix
+
+this keeps 12.40 small and safe
+
+richer field-level provenance can be a later metadata audit enhancement
+
+Please document the chosen field priority in code comments and closeout notes.
+
+Approved implementation direction
+Proceed with:
+
+existing ExifTool integration only
+
+no new dependency
+
+video-aware extraction alongside image logic
+
+supported first-pass video extensions:
+
+.mov
+
+.mp4
+
+.m4v if already supported or low-risk
+
+priority order:
+
+QuickTime:CreationDatecom.apple.quicktime.creationdate, if exposedQuickTime:CreateDateQuickTime:MediaCreateDateQuickTime:TrackCreateDatefilesystem modified time as low-trust fallback only
+
+trust values remain:
+
+high
+
+low
+
+unknown
+
+no Live Photo still-date fallback yet
+
+no schema changes
+
+no changes to image metadata preference rules
+
+validate on:
+
+Live Photo motion MOV
+
+ordinary MOV
+
+ordinary MP4
+
+image regression samples
+
+Expected outcome:
+MOV/MP4 files should no longer be low/unknown merely because image EXIF is absent.If QuickTime/container creation date exists, captured_at should be populated with high trust.

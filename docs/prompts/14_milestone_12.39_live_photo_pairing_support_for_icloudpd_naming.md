@@ -525,3 +525,93 @@ This milestone adapts pairing to the acquisition behavior observed from `icloudp
 It does not commit to full production iCloud sync by itself.
 
 It removes one compatibility gap before `icloudpd` is promoted from evaluation path to supported iCloud acquisition workflow.
+
+
+# 12.39 Clarification Answers## 1. Report additionsUse the fuller report fields listed in the milestone if they are low-risk and do not require schema changes.Preferred fields:```textpairs_created_simple_basenamepairs_created_motion_suffixmotion_suffixes_seenambiguous_skippedunchanged
+At minimum, include:
+pairs_created_motion_suffixmotion_suffixes_seen
+Reason:
+
+
+this behavior should be auditable
+
+
+we want to know that _HEVC normalization actually caused the expected pair creation
+
+
+JSON report extension is low-risk
+
+
+
+2. Pairing method label
+Keep the persisted pairing_method stable unless changing it is clearly useful and low-risk.
+Preferred:
+pairing_method = basename_source
+or whatever the existing method value is today.
+Do not introduce a new DB-level method value solely for _HEVC.
+However, in the report rows/details, it is useful to identify the match subtype.
+Report-level label may be:
+match_variant = simple_basename
+or:
+match_variant = motion_suffix_hevc
+So:
+DB/persistence method: stable existing valueReport/audit detail: distinguish suffix-based match
+
+3. Suffix stripping scope
+Yes.
+For 12.39, limit suffix stripping to trailing _hevc exactly, case-insensitive, and only on MOV/motion candidates.
+Approved examples:
+IMG_5637_HEVC.MOV → IMG_5637IMG_5637_hevc.mov → IMG_5637
+Do not strip broader variants yet, such as:
+_HEVC_1-MOV_motion_live
+Those can be added later only if observed in real data.
+
+Approved implementation direction
+Proceed with coder’s suggested approach:
+
+
+add explicit motion-only normalization helper
+
+
+approved motion suffix list: ["_hevc"]
+
+
+preserve still-side normalization unchanged
+
+
+preserve strict 1:1 ambiguity policy
+
+
+preserve existing simple basename pairing
+
+
+no schema changes
+
+
+extend JSON reporting with suffix-based visibility
+
+
+add targeted tests for:
+
+
+simple basename pair
+
+
+_HEVC suffix pair
+
+
+ambiguous still
+
+
+ambiguous motion
+
+
+idempotency
+
+
+
+
+Expected existing-data validation:
+3 new candidate pairs from:IMG_5634_HEVC.MOVIMG_5635_HEVC.MOVIMG_5637_HEVC.MOV
+Expected result:
+3 pairs created or recognized0 ambiguous for current icloudpd test data

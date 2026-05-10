@@ -35,6 +35,11 @@ from app.schemas.admin import (
     SourceIntakeRunResponse,
     SourceIntakeStatusSchema,
     SourceIntakeStopResponse,
+    IcloudAcquisitionRunRequest,
+    IcloudAcquisitionRunResponse,
+    IcloudAcquisitionRunStatus,
+    IcloudAcquisitionStatusResponse,
+    IcloudAcquisitionStopResponse,
 )
 from app.services.admin import (
     build_admin_summary,
@@ -75,6 +80,16 @@ from app.services.live_photo.pairing_admin_service import (
     LivePhotoPairingStatusSnapshot,
     get_live_photo_pairing_status,
     run_live_photo_pairing_admin,
+)
+from app.services.icloud_acquisition.execution_service import (
+    IcloudAcquisitionAlreadyRunningError,
+    IcloudAcquisitionLaunchError,
+    IcloudAcquisitionSourceNotRegisteredError,
+    IcloudAcquisitionStatusSnapshot,
+    IcloudAcquisitionStatusView,
+    get_icloud_acquisition_status,
+    request_icloud_acquisition_stop,
+    start_icloud_acquisition_background,
 )
 from app.services.previews.heic_preview_processing_service import (
     HeicPreviewAlreadyRunningError,
@@ -331,6 +346,34 @@ def _to_live_photo_pairing_run_status(snapshot: LivePhotoPairingStatusSnapshot) 
     )
 
 
+def _to_icloud_acquisition_run_status(snapshot: IcloudAcquisitionStatusSnapshot) -> IcloudAcquisitionRunStatus:
+    return IcloudAcquisitionRunStatus(
+        run_id=snapshot.run_id,
+        status=snapshot.status,
+        source_label=snapshot.source_label,
+        source_type=snapshot.source_type,
+        source_root_path=snapshot.source_root_path,
+        source_registration_status=snapshot.source_registration_status,
+        username=snapshot.username,
+        staging_path=snapshot.staging_path,
+        recent_count=snapshot.recent_count,
+        resolved_executable=snapshot.resolved_executable,
+        icloudpd_version=snapshot.icloudpd_version,
+        started_at=snapshot.started_at,
+        completed_at=snapshot.completed_at,
+        elapsed_seconds=snapshot.elapsed_seconds,
+        downloaded_count=snapshot.downloaded_count,
+        skipped_existing_count=snapshot.skipped_existing_count,
+        failed_count=snapshot.failed_count,
+        stdout_tail=snapshot.stdout_tail,
+        stderr_tail=snapshot.stderr_tail,
+        report_path=snapshot.report_path,
+        error_code=snapshot.error_code,
+        error_message=snapshot.error_message,
+        stop_requested=snapshot.stop_requested,
+    )
+
+
 @router.get("/heic-preview/status", response_model=HeicPreviewStatusResponse)
 def get_heic_preview_run_status(db: Session = Depends(get_db_session)) -> HeicPreviewStatusResponse:
     """Return display preview generation status and pending-work count."""
@@ -396,6 +439,69 @@ def run_live_photo_pairing_from_admin(db: Session = Depends(get_db_session)) -> 
         accepted=result.status.status == "completed",
         message=result.message,
         status=_to_live_photo_pairing_run_status(result.status),
+    )
+
+
+@router.get("/icloud-acquisition/status", response_model=IcloudAcquisitionStatusResponse)
+def get_icloud_acquisition_run_status(db: Session = Depends(get_db_session)) -> IcloudAcquisitionStatusResponse:
+    """Return current icloudpd acquisition status and pending-run metadata."""
+    status_view: IcloudAcquisitionStatusView = get_icloud_acquisition_status(db)
+    return IcloudAcquisitionStatusResponse(
+        generated_at=status_view.generated_at,
+        current=_to_icloud_acquisition_run_status(status_view.current),
+    )
+
+
+@router.post("/icloud-acquisition/run", response_model=IcloudAcquisitionRunResponse)
+def run_icloud_acquisition(body: IcloudAcquisitionRunRequest, db: Session = Depends(get_db_session)) -> IcloudAcquisitionRunResponse | JSONResponse:
+    """Launch an icloudpd acquisition background run."""
+    try:
+        result = start_icloud_acquisition_background(
+            db,
+            source_label=body.source_label,
+            username=body.username,
+            recent_count=body.recent_count,
+            source_type=body.source_type,
+            created_by="admin_api",
+        )
+    except IcloudAcquisitionAlreadyRunningError as exc:
+        payload = IcloudAcquisitionRunResponse(
+            status=exc.status.status,
+            message=exc.message,
+            current=_to_icloud_acquisition_run_status(exc.status),
+        )
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content=payload.model_dump(mode="json"))
+    except IcloudAcquisitionLaunchError as exc:
+        payload = IcloudAcquisitionRunResponse(
+            status=exc.status.status,
+            message=exc.message,
+            current=_to_icloud_acquisition_run_status(exc.status),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": exc.message,
+                "error_code": exc.error_code,
+                "current": payload.current.model_dump(mode="json"),
+            },
+        )
+
+    payload = IcloudAcquisitionRunResponse(
+        status="started",
+        message=result.message,
+        current=_to_icloud_acquisition_run_status(result.status),
+    )
+    return payload
+
+
+@router.post("/icloud-acquisition/stop", response_model=IcloudAcquisitionStopResponse)
+def stop_icloud_acquisition(db: Session = Depends(get_db_session)) -> IcloudAcquisitionStopResponse:
+    """Request graceful stop for the currently active icloudpd acquisition run."""
+    result = request_icloud_acquisition_stop(db)
+    return IcloudAcquisitionStopResponse(
+        status="stop_requested",
+        message=result.message,
+        current=_to_icloud_acquisition_run_status(result.status),
     )
 
 
