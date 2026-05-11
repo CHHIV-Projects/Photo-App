@@ -19,6 +19,18 @@ const POLL_INTERVAL_MS = 3000;
 const ACTIVE_STATUSES = new Set(["running", "stop_requested"]);
 const AUTH_ERROR_CODES = new Set(["AUTH_REQUIRED", "SESSION_EXPIRED"]);
 
+export interface IcloudAcquisitionSourceIntakeHandoff {
+  sourceLabel: string;
+  sourceRootPath: string | null;
+  fileInventoryCount: number | null;
+  recentCount: number | null;
+  recommendedSourceIntakeCommand: string | null;
+}
+
+interface IcloudAcquisitionCardProps {
+  onPrepareSourceIntake?: (handoff: IcloudAcquisitionSourceIntakeHandoff) => void;
+}
+
 function StatusBadge({ status }: { status: string }) {
   const cls = styles[`status_${status}` as keyof typeof styles] ?? "";
   return (
@@ -36,7 +48,7 @@ function elapsed(seconds: number | null): string {
   return `${m}m ${s}s`;
 }
 
-export default function IcloudAcquisitionCard() {
+export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudAcquisitionCardProps) {
   // ── State ──────────────────────────────────────────────────────────────────
   const [status, setStatus] = useState<IcloudAcquisitionRunStatus | null>(null);
   const [sources, setSources] = useState<SourceIntakeSourceSummary[]>([]);
@@ -297,6 +309,26 @@ export default function IcloudAcquisitionCard() {
               <p className={styles.successText}>
                 Acquisition complete. Next step: Run Source Intake for this same registered source using the Source Intake section below.
               </p>
+              <p className={styles.metaSmall}>
+                Staged files remain after Source Intake for now. Cleanup will be handled separately in 12.44.1.
+              </p>
+              {onPrepareSourceIntake && (
+                <button
+                  type="button"
+                  className={styles.detailToggle}
+                  onClick={() =>
+                    onPrepareSourceIntake({
+                      sourceLabel: status.source_label ?? sourceLabel,
+                      sourceRootPath: status.source_root_path ?? selectedSource?.source_root_path ?? null,
+                      fileInventoryCount: status.file_inventory_count ?? null,
+                      recentCount: status.recent_count ?? null,
+                      recommendedSourceIntakeCommand: status.recommended_source_intake_command ?? null,
+                    })
+                  }
+                >
+                  Prepare Source Intake
+                </button>
+              )}
               {status.recommended_source_intake_command && (
                 <>
                   <button

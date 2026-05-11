@@ -389,21 +389,26 @@ def _build_file_inventory(folder: Path) -> dict[str, object]:
 
 
 def _extract_best_effort_counts(output_text: str | None) -> tuple[int, int, int]:
+    """Parse icloudpd output for skipped and failed counts.
+
+    downloaded_count is intentionally not parsed here — icloudpd emits summary
+    lines like "Downloading 25 original photos" and "have been downloaded" that
+    contain the word "download" but are not per-file download events. The caller
+    always uses the filesystem inventory delta as the ground truth for downloads.
+    """
     if not output_text:
         return 0, 0, 0
 
-    downloaded = 0
     skipped = 0
     failed = 0
     for line in output_text.splitlines():
         lowered = line.lower()
-        if "skip" in lowered:
+        # icloudpd emits "<path> already exists" for each file it skips
+        if "already exists" in lowered:
             skipped += 1
-        if "download" in lowered and "skip" not in lowered:
-            downloaded += 1
         if "fail" in lowered or "error" in lowered:
             failed += 1
-    return downloaded, skipped, failed
+    return 0, skipped, failed
 
 
 def _classify_process_error(returncode: int | None, stdout_text: str | None, stderr_text: str | None, *, timed_out: bool) -> tuple[str, str]:
@@ -973,10 +978,11 @@ def _run_background_job(
                 status = STATUS_FAILED
                 error_code, error_message = _classify_process_error(exit_code, stdout_text, stderr_text, timed_out=False)
 
-        downloaded_count, skipped_existing_count, failed_count = _extract_best_effort_counts((stdout_text or "") + "\n" + (stderr_text or ""))
+        _dummy, skipped_existing_count, failed_count = _extract_best_effort_counts((stdout_text or "") + "\n" + (stderr_text or ""))
         final_inventory = _build_file_inventory(staging_root)
-        if downloaded_count == 0:
-            downloaded_count = max(0, int(final_inventory["total_files"]) - int(initial_inventory["total_files"]))
+        # Always use filesystem delta as ground truth — log parsing is unreliable
+        # (icloudpd summary lines contain "download" but are not per-file events)
+        downloaded_count = max(0, int(final_inventory["total_files"]) - int(initial_inventory["total_files"]))
         if failed_count == 0 and status == STATUS_FAILED:
             failed_count = 1
 

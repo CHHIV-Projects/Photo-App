@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   getAdminSummary,
@@ -41,7 +41,15 @@ import type {
 } from "@/types/ui-api";
 
 import styles from "./admin-view.module.css";
-import IcloudAcquisitionCard from "./IcloudAcquisitionCard";
+import IcloudAcquisitionCard, { type IcloudAcquisitionSourceIntakeHandoff } from "./IcloudAcquisitionCard";
+
+function normalizeSourceLabelForMatch(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function normalizeSourcePathForMatch(value: string | null | undefined): string {
+  return (value ?? "").trim().replaceAll("\\", "/").toLowerCase();
+}
 
 export default function AdminView() {
   const [summary, setSummary] = useState<AdminSummaryResponse | null>(null);
@@ -63,6 +71,9 @@ export default function AdminView() {
   const [reportDetail, setReportDetail] = useState<SourceIntakeReportDetail | null>(null);
   const [isSourceIntakeLoading, setIsSourceIntakeLoading] = useState(false);
   const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
+  const [sourceIntakePreparedNotice, setSourceIntakePreparedNotice] = useState<string | null>(null);
+  const [sourceIntakePrepHighlighted, setSourceIntakePrepHighlighted] = useState(false);
+  const sourceIntakeFormRef = useRef<HTMLDivElement | null>(null);
 
   // Source Registry
   const [regLabelMode, setRegLabelMode] = useState<"existing" | "new">("existing");
@@ -272,7 +283,7 @@ export default function AdminView() {
     }
   }, []);
 
-  const loadSourceIntake = useCallback(async () => {
+  const loadSourceIntake = useCallback(async (): Promise<SourceIntakeSourcesResponse | null> => {
     setIsSourceIntakeLoading(true);
     try {
       const [sourcesRes, reportsRes] = await Promise.all([
@@ -281,12 +292,89 @@ export default function AdminView() {
       ]);
       setSourceIntakeSources(sourcesRes);
       setSourceIntakeReports(reportsRes);
+      return sourcesRes;
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to load source intake data.");
+      return null;
     } finally {
       setIsSourceIntakeLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!sourceIntakePrepHighlighted) {
+      return;
+    }
+
+    const timer = setTimeout(() => setSourceIntakePrepHighlighted(false), 2000);
+    return () => clearTimeout(timer);
+  }, [sourceIntakePrepHighlighted]);
+
+  const handlePrepareSourceIntake = useCallback(
+    async (handoff: IcloudAcquisitionSourceIntakeHandoff) => {
+      setIntakeError("");
+      setSourceIntakePreparedNotice(null);
+
+      const refreshedSources = await loadSourceIntake();
+      if (!refreshedSources) {
+        setIntakeError("Unable to refresh the source registry before preparing Source Intake.");
+        sourceIntakeFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setSourceIntakePrepHighlighted(true);
+        return;
+      }
+
+      const currentSources = refreshedSources.sources;
+      const normalizedSourceLabel = normalizeSourceLabelForMatch(handoff.sourceLabel);
+      const normalizedSourceRootPath = normalizeSourcePathForMatch(handoff.sourceRootPath);
+
+      const matchedSource = currentSources.find(
+        (source) =>
+          normalizeSourceLabelForMatch(source.source_label) === normalizedSourceLabel &&
+          normalizeSourcePathForMatch(source.source_root_path) === normalizedSourceRootPath,
+      );
+
+      if (!matchedSource) {
+        setIntakeError(
+          "The acquisition source is no longer registered or its path no longer matches. Please review the Source Registry before running Source Intake.",
+        );
+        sourceIntakeFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setSourceIntakePrepHighlighted(true);
+        return;
+      }
+
+      setIntakeSourceId(matchedSource.source_id);
+
+      const stagedCount = handoff.fileInventoryCount != null && handoff.fileInventoryCount > 0 ? handoff.fileInventoryCount : null;
+      const recentCount = handoff.recentCount != null && handoff.recentCount > 0 ? handoff.recentCount : null;
+      const sourceLimit = stagedCount ?? recentCount;
+      const cappedSourceLimit = sourceLimit !== null ? Math.min(sourceLimit, 500) : null;
+
+      if (cappedSourceLimit !== null) {
+        setIntakeLimit(String(cappedSourceLimit));
+      }
+
+      const parsedBatchSize = Number(intakeBatchSize);
+      if (!Number.isFinite(parsedBatchSize) || parsedBatchSize < 1) {
+        setIntakeBatchSize("500");
+      }
+
+      if (handoff.fileInventoryCount === 0) {
+        setSourceIntakePreparedNotice(
+          `Warning: no staged files are currently available for intake. Prepared ${matchedSource.source_label} and used the recent count fallback for Source Intake.`,
+        );
+      } else if (cappedSourceLimit !== null) {
+        setSourceIntakePreparedNotice(
+          `Prepared Source Intake for ${matchedSource.source_label}. Source limit set to ${cappedSourceLimit}. Batch size preserved.`,
+        );
+      } else {
+        setSourceIntakePreparedNotice(`Prepared Source Intake for ${matchedSource.source_label}. Batch size preserved.`);
+      }
+
+      sourceIntakeFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setSourceIntakePrepHighlighted(true);
+    },
+    [intakeBatchSize, loadSourceIntake, sourceIntakeSources?.sources],
+  );
 
   const loadIntakeStatus = useCallback(async () => {
     try {
@@ -784,7 +872,7 @@ export default function AdminView() {
         Snapshot time: {summary?.generated_at ? new Date(summary.generated_at).toLocaleString() : "-"}
       </p>
 
-      <IcloudAcquisitionCard />
+      <IcloudAcquisitionCard onPrepareSourceIntake={handlePrepareSourceIntake} />
 
       <section className={styles.sourceIntakeSection}>
         <div className={styles.sectionHeader}>
@@ -1099,7 +1187,14 @@ export default function AdminView() {
             Refresh Status
           </button>
         </div>
-        <div className={styles.sourceIntakeBlock}>
+        <div
+          ref={sourceIntakeFormRef}
+          className={`${styles.sourceIntakeBlock} ${sourceIntakePrepHighlighted ? styles.sourceIntakeBlockHighlighted : ""}`.trim()}
+        >
+          {sourceIntakePreparedNotice && <p className={styles.metaSmall}>{sourceIntakePreparedNotice}</p>}
+          <p className={styles.metaSmall}>
+            Staged iCloud files are retained after Source Intake for now. Cleanup will be handled separately in 12.44.1.
+          </p>
           <div className={styles.registryForm}>
             <label className={styles.formLabel}>
               Ingestion Source
