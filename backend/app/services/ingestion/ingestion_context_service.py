@@ -8,6 +8,9 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+# Project root is two levels above this file: backend/app/services/ → backend/app/ → backend/ → project root
+_PROJECT_ROOT: Path = Path(__file__).resolve().parents[3].parent
+
 from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
 
@@ -38,10 +41,18 @@ def normalize_source_label(source_label: str | None) -> str:
 
 
 def normalize_source_root_path(source_root_path: str | None) -> str:
-    """Normalize root path for stable source reuse matching."""
+    """Normalize root path for stable source reuse matching.
+
+    Relative paths are resolved from the project root (the parent of the
+    backend/ directory), not from the process CWD.  This prevents a mismatch
+    when the server is started from inside backend/ vs. the project root.
+    """
     if source_root_path is None:
         return ""
-    return str(Path(source_root_path).expanduser().resolve()).strip().lower()
+    raw = Path(source_root_path).expanduser()
+    if raw.is_absolute():
+        return str(raw.resolve()).strip().lower()
+    return str((_PROJECT_ROOT / raw).resolve()).strip().lower()
 
 
 def coerce_source_type(source_type: str | None) -> str:

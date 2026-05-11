@@ -660,6 +660,67 @@ export interface SourceIntakeSourcesResponse {
   sources: SourceIntakeSourceSummary[];
 }
 
+// ── iCloud Acquisition (Milestone 12.42/12.43) ──────────────────────────────
+
+export interface IcloudAcquisitionRunStatus {
+  run_id: number | null;
+  status:
+    | "idle"
+    | "running"
+    | "stop_requested"
+    | "completed"
+    | "completed_with_warnings"
+    | "failed"
+    | "stopped";
+  source_label: string | null;
+  source_type: string | null;
+  source_root_path: string | null;
+  source_registration_status: string | null;
+  username: string | null;
+  staging_path: string | null;
+  recent_count: number | null;
+  resolved_executable: string | null;
+  icloudpd_version: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  elapsed_seconds: number | null;
+  downloaded_count: number;
+  skipped_existing_count: number;
+  failed_count: number;
+  stdout_tail: string | null;
+  stderr_tail: string | null;
+  report_path: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  stop_requested: boolean;
+  file_inventory_count: number | null;
+  recommended_source_intake_command: string | null;
+}
+
+export interface IcloudAcquisitionStatusResponse {
+  generated_at: string;
+  current: IcloudAcquisitionRunStatus;
+}
+
+export interface IcloudAcquisitionRunRequest {
+  source_label: string;
+  username: string;
+  recent_count: number;
+  source_type?: string;
+}
+
+export interface IcloudAcquisitionRunResponse {
+  status: string;
+  message: string;
+  current: IcloudAcquisitionRunStatus;
+}
+
+export interface IcloudAcquisitionStopResponse {
+  status: string;
+  message: string;
+  current: IcloudAcquisitionRunStatus;
+}
+
 export interface SourceIntakeReportSummary {
   report_filename: string;
   generated_at_utc: string | null;

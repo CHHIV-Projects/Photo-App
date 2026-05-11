@@ -371,6 +371,8 @@ def _to_icloud_acquisition_run_status(snapshot: IcloudAcquisitionStatusSnapshot)
         error_code=snapshot.error_code,
         error_message=snapshot.error_message,
         stop_requested=snapshot.stop_requested,
+        file_inventory_count=snapshot.file_inventory_count,
+        recommended_source_intake_command=snapshot.recommended_source_intake_command,
     )
 
 

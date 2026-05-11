@@ -19,6 +19,10 @@ import type {
   SourceIntakeRunResponse,
   SourceIntakeStatusSnapshot,
   SourceIntakeStopResponse,
+  IcloudAcquisitionStatusResponse,
+  IcloudAcquisitionRunRequest,
+  IcloudAcquisitionRunResponse,
+  IcloudAcquisitionStopResponse,
   AlbumDetail,
   AlbumMembershipSummary,
   AlbumSummary,
@@ -515,6 +519,25 @@ export function stopHeicPreviewGeneration(): Promise<AdminHeicPreviewActionRespo
 
 export function getSourceIntakeSources(): Promise<SourceIntakeSourcesResponse> {
   return apiRequest<SourceIntakeSourcesResponse>("/api/admin/source-intake/sources");
+}
+
+// ── iCloud Acquisition ────────────────────────────────────────────────────────
+
+export function getIcloudAcquisitionStatus(): Promise<IcloudAcquisitionStatusResponse> {
+  return apiRequest<IcloudAcquisitionStatusResponse>("/api/admin/icloud-acquisition/status");
+}
+
+export function runIcloudAcquisition(req: IcloudAcquisitionRunRequest): Promise<IcloudAcquisitionRunResponse> {
+  return apiRequest<IcloudAcquisitionRunResponse>("/api/admin/icloud-acquisition/run", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function stopIcloudAcquisition(): Promise<IcloudAcquisitionStopResponse> {
+  return apiRequest<IcloudAcquisitionStopResponse>("/api/admin/icloud-acquisition/stop", {
+    method: "POST",
+  });
 }
 
 export function getSourceIntakeReports(): Promise<SourceIntakeReportsResponse> {

@@ -41,6 +41,7 @@ import type {
 } from "@/types/ui-api";
 
 import styles from "./admin-view.module.css";
+import IcloudAcquisitionCard from "./IcloudAcquisitionCard";
 
 export default function AdminView() {
   const [summary, setSummary] = useState<AdminSummaryResponse | null>(null);
@@ -782,6 +783,8 @@ export default function AdminView() {
       <p className={styles.generatedAt}>
         Snapshot time: {summary?.generated_at ? new Date(summary.generated_at).toLocaleString() : "-"}
       </p>
+
+      <IcloudAcquisitionCard />
 
       <section className={styles.sourceIntakeSection}>
         <div className={styles.sectionHeader}>

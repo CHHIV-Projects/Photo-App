@@ -183,7 +183,9 @@ def start_source_intake(
     if not source_root_path.strip():
         raise ValueError("Source has no root path configured.")
 
-    resolved_path = Path(source_root_path).expanduser().resolve()
+    _project_root = Path(__file__).resolve().parents[4]
+    raw_path = Path(source_root_path).expanduser()
+    resolved_path = raw_path.resolve() if raw_path.is_absolute() else (_project_root / raw_path).resolve()
     if not resolved_path.exists():
         raise ValueError(f"Source path does not exist: {resolved_path}")
     if not resolved_path.is_dir():

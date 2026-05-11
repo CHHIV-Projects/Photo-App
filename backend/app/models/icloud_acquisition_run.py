@@ -49,6 +49,10 @@ class IcloudAcquisitionRun(Base):
     error_message: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     stop_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Staged file inventory (populated at run completion).
+    file_inventory_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recommended_source_intake_command: Mapped[str | None] = mapped_column(String(4096), nullable=True)
+
     created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

@@ -409,6 +409,8 @@ class IcloudAcquisitionRunStatus(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
     stop_requested: bool = False
+    file_inventory_count: int | None = None
+    recommended_source_intake_command: str | None = None
 
 
 class IcloudAcquisitionStatusResponse(BaseModel):

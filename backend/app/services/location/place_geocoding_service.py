@@ -333,6 +333,19 @@ def _background_place_geocoding_run(run_id: int) -> None:
         db.close()
 
 
+def _reset_stale_runs(db: Session) -> None:
+    """On startup, reset any active rows to failed if process died mid-run."""
+    stale = db.scalars(
+        select(PlaceGeocodingRun).where(PlaceGeocodingRun.status.in_(RUNNING_STATUSES))
+    ).all()
+    for run in stale:
+        run.status = STATUS_FAILED
+        run.last_error = (run.last_error or "") + " [reset: process restarted]"
+        run.finished_at = _utc_now()
+    if stale:
+        db.commit()
+
+
 def _write_report(run: PlaceGeocodingRun) -> None:
     """Write final run report to JSON file."""
     REPORT_DIR.mkdir(parents=True, exist_ok=True)

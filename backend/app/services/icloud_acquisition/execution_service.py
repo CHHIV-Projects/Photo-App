@@ -80,6 +80,8 @@ class IcloudAcquisitionStatusSnapshot:
     error_code: str | None
     error_message: str | None
     stop_requested: bool
+    file_inventory_count: int | None
+    recommended_source_intake_command: str | None
 
 
 @dataclass(frozen=True)
@@ -165,6 +167,8 @@ def _to_snapshot(run: IcloudAcquisitionRun | None) -> IcloudAcquisitionStatusSna
             error_code=None,
             error_message=None,
             stop_requested=False,
+            file_inventory_count=None,
+            recommended_source_intake_command=None,
         )
 
     return IcloudAcquisitionStatusSnapshot(
@@ -191,6 +195,8 @@ def _to_snapshot(run: IcloudAcquisitionRun | None) -> IcloudAcquisitionStatusSna
         error_code=run.error_code,
         error_message=run.error_message,
         stop_requested=bool(run.stop_requested),
+        file_inventory_count=getattr(run, "file_inventory_count", None),
+        recommended_source_intake_command=getattr(run, "recommended_source_intake_command", None),
     )
 
 
@@ -989,6 +995,14 @@ def _run_background_job(
             run.stderr_tail = _tail_text(stderr_text)
             run.resolved_executable = resolved_executable
             run.icloudpd_version = icloudpd_version
+            run.file_inventory_count = int(final_inventory["total_files"])
+            run.recommended_source_intake_command = (
+                f'python scripts/run_pipeline.py --from-path "{run.staging_path}" '
+                f'--source-label "{run.source_label}" --source-type {run.source_type or "cloud_export"} '
+                f'--source-limit {run.recent_count or DEFAULT_RECENT_COUNT} --ingest-batch-size 10'
+                if run.staging_path and run.source_label
+                else None
+            )
             if status == STATUS_COMPLETED and failed_count > 0:
                 run.status = STATUS_COMPLETED_WITH_WARNINGS
             if status == STATUS_STOPPED:

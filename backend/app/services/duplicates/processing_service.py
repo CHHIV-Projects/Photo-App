@@ -401,6 +401,19 @@ def _run_existing_workset(
     return snapshot
 
 
+def _reset_stale_duplicate_runs(db: Session) -> None:
+    """On startup, reset any active rows to failed if process died mid-run."""
+    stale = db.scalars(
+        select(DuplicateProcessingRun).where(DuplicateProcessingRun.status.in_(RUNNING_STATUSES))
+    ).all()
+    for run in stale:
+        run.status = STATUS_FAILED
+        run.error_message = (run.error_message or "") + " [reset: process restarted]"
+        run.finished_at = datetime.now(timezone.utc)
+    if stale:
+        db.commit()
+
+
 def run_duplicate_processing_sync(
     *,
     created_by: str | None = "script",
