@@ -546,3 +546,100 @@ cleanup report required
 This milestone is about workflow clarity and operator safety.
 
 It should make the two-step process feel guided without removing the operator’s explicit control.
+
+# 12.44 Clarification Answers## 1. If acquisition source no longer maps to a registered sourceFail with a warning.`Prepare Source Intake` should not proceed if the acquisition source label/root no longer maps to a currently registered source.Show message such as:```textThe acquisition source is no longer registered or its path no longer matches. Please review the Source Registry before running Source Intake.
+
+Reason:
+
+Source Intake should use registered source identity
+
+silent fallback/free-text behavior can create duplicate labels or wrong paths
+
+source consistency is the whole point of this milestone
+
+2. Intake limit overwrite behavior
+   Overwrite the intake limit when the operator explicitly clicks:
+   Prepare Source Intake
+   Reason:
+
+the click is an intentional handoff action
+
+the source limit should reflect the acquisition result
+
+otherwise stale values from a previous intake run could remain
+
+Use:
+file_inventory_count firstrecent_count fallback
+Keep existing batch size default unless the user already changed it during the current session and changing it would be disruptive.
+Minimum acceptable:
+source_limit = file_inventory_count if available, else recent_countbatch_size unchanged/default
+
+3. Scroll vs highlight
+   Do both if low-risk.
+   Required:
+   scroll to Source Intake
+   Preferred:
+   brief visual highlight / focus on Source Intake section
+   If highlight adds complexity, just scroll is enough for 12.44.
+
+4. What should acquisition card pass?
+   Pass both:
+   source_labelsource_root_path
+   Also pass if available:
+   file_inventory_countrecent_count
+   AdminView should verify that the source label and root path still match a registered source before prefill.
+   Reason:
+
+source_label alone may be ambiguous if historical duplicate labels exist
+
+root path verification helps prevent wrong-source intake
+
+this stays frontend-only and avoids backend changes
+
+Approved implementation direction
+Proceed with coder’s recommended low-risk approach:
+
+keep Source Intake state in AdminView.tsx
+
+do not extract Source Intake into a new component for 12.44
+
+add callback prop from IcloudAcquisitionCard.tsx to AdminView.tsx
+
+Prepare Source Intake resolves selected acquisition source against current source registry
+
+prefill Source Intake with same registered source
+
+use staged file count first, recent count fallback
+
+Source Intake still requires explicit Run click
+
+scroll to Source Intake after prefill
+
+add brief highlight if easy
+
+no backend work unless needed
+
+no cleanup/deletion in this milestone
+
+# 12.44 Batch Size Clarification
+
+`Prepare Source Intake` should preserve a user-edited intake batch size if the operator already changed it in the current session.
+
+Behavior:
+
+```text
+source/source label: overwrite from acquisition handoff
+source limit: overwrite from staged file count, fallback to recent count
+batch size: preserve current user-edited value
+
+If the batch size field is empty, invalid, or untouched/default, use the existing Source Intake default.
+
+Reason:
+
+acquisition handoff should control the source and source limit
+batch size is an operator tuning/control value
+silently resetting it could be annoying or surprising
+
+So:
+
+Prepare Source Intake should not reset batch size unless the current value is invalid or missing.

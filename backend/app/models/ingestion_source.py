@@ -29,4 +29,5 @@ class IngestionSource(Base):
     source_type: Mapped[str] = mapped_column(String(64), nullable=False, default="local_folder")
     source_root_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     source_root_path_normalized: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    account_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

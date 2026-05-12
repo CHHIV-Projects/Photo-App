@@ -585,12 +585,14 @@ def create_intake_source(
         source_label=body.source_label,
         source_type=body.source_type,
         source_root_path=body.source_root_path,
+        account_username=body.account_username,
     )
     return SourceCreateResponse(
         ingestion_source_id=source.id,
         source_label=source.source_label,
         source_type=source.source_type,
         source_root_path=source.source_root_path,
+        account_username=source.account_username,
         created_at=source.created_at,
         was_existing=was_existing,
     )

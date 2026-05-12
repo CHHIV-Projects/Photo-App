@@ -58,12 +58,19 @@ export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudA
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [error, setError] = useState("");
   const [showIntakeCommand, setShowIntakeCommand] = useState(false);
+  const [usernameOverrideEnabled, setUsernameOverrideEnabled] = useState(false);
+  const [usernameDiffersFromSource, setUsernameDiffersFromSource] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const isActive = status ? ACTIVE_STATUSES.has(status.status) : false;
   const isAuthError = status?.error_code ? AUTH_ERROR_CODES.has(status.error_code) : false;
   const selectedSource = sources.find(s => s.source_label === sourceLabel) ?? null;
+  const sourceAccountUsername = selectedSource?.account_username?.trim() ?? "";
+  const hasSourceAccountUsername = sourceAccountUsername.length > 0;
+  const effectiveUsername = hasSourceAccountUsername && !usernameOverrideEnabled
+    ? sourceAccountUsername
+    : username.trim();
   const cloudExportSources = sources.filter(s => s.source_type === "cloud_export");
 
   // ── Data loading ───────────────────────────────────────────────────────────
@@ -90,6 +97,19 @@ export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudA
     void loadSources();
   }, [loadStatus, loadSources]);
 
+  // ── Prefill username when source changes ────────────────────────────────────
+  useEffect(() => {
+    if (hasSourceAccountUsername) {
+      setUsername(sourceAccountUsername);
+      setUsernameDiffersFromSource(false);
+      setUsernameOverrideEnabled(false);
+    } else {
+      setUsername("");
+      setUsernameDiffersFromSource(false);
+      setUsernameOverrideEnabled(false);
+    }
+  }, [hasSourceAccountUsername, sourceAccountUsername, selectedSource]);
+
   // ── Polling ────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isActive) return;
@@ -102,12 +122,12 @@ export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudA
   // ── Actions ────────────────────────────────────────────────────────────────
   async function handleRun() {
     if (!sourceLabel.trim()) { setError("Select a source first."); return; }
-    if (!username.trim()) { setError("Enter an Apple ID username."); return; }
+    if (!effectiveUsername) { setError("Enter an Apple ID username."); return; }
     if (recentCount < 1 || recentCount > 500) { setError("Recent count must be between 1 and 500."); return; }
     setError("");
     setIsActionLoading(true);
     try {
-      const res = await runIcloudAcquisition({ source_label: sourceLabel, username, recent_count: recentCount });
+      const res = await runIcloudAcquisition({ source_label: sourceLabel, username: effectiveUsername, recent_count: recentCount });
       setStatus(res.current);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to start iCloud acquisition.");
@@ -138,21 +158,26 @@ export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudA
         <button
           type="button"
           className={styles.refreshButton}
-          onClick={() => void loadStatus()}
+          onClick={() => {
+            void loadStatus();
+            void loadSources();
+          }}
           disabled={isActionLoading}
         >
           Refresh Status
         </button>
       </div>
 
-      {/* Safety notice */}
+      {/* Safety and workflow notice */}
       <div className={styles.sourceIntakeBlock}>
         <p className={styles.metaSmall}>
-          Downloads from iCloud into the exports staging folder only.
-          Does not ingest directly into Vault.
-          Does not delete or modify iCloud content.
-          Does not store your Apple ID password.
-          Run Source Intake after acquisition to import staged files.
+          <strong>Workflow:</strong> Use one stable iCloud source per iCloud account. Create/manage sources in Source Registry before running acquisition.
+        </p>
+        <p className={styles.metaSmall}>
+          <strong>Staging:</strong> Downloads from iCloud into the exports staging folder. Does not ingest directly into Vault. Run Source Intake after acquisition to import staged files.
+        </p>
+        <p className={styles.metaSmall}>
+          <strong>Security:</strong> Does not delete or modify iCloud content. Does not store your Apple ID password. Password and 2FA are handled by icloudpd outside Photo Organizer.
         </p>
       </div>
 
@@ -202,10 +227,48 @@ export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudA
               autoComplete="off"
               placeholder="your@icloud.com"
               value={username}
-              onChange={e => setUsername(e.target.value)}
-              disabled={isActive}
+              onChange={e => {
+                setUsername(e.target.value);
+                if (
+                  hasSourceAccountUsername
+                  && e.target.value.trim().toLowerCase() !== sourceAccountUsername.toLowerCase()
+                ) {
+                  setUsernameDiffersFromSource(true);
+                } else {
+                  setUsernameDiffersFromSource(false);
+                }
+              }}
+              disabled={isActive || (hasSourceAccountUsername && !usernameOverrideEnabled)}
             />
           </label>
+          {hasSourceAccountUsername && (
+            <div className={styles.inlineToggleRow}>
+              <p className={styles.metaSmall}>
+                Using source-associated account by default: <strong>{sourceAccountUsername}</strong>
+              </p>
+              <label className={styles.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  checked={usernameOverrideEnabled}
+                  onChange={e => {
+                    const enabled = e.target.checked;
+                    setUsernameOverrideEnabled(enabled);
+                    if (!enabled) {
+                      setUsername(sourceAccountUsername);
+                      setUsernameDiffersFromSource(false);
+                    }
+                  }}
+                  disabled={isActive}
+                />
+                Override for this run
+              </label>
+            </div>
+          )}
+          {usernameOverrideEnabled && usernameDiffersFromSource && (
+            <p className={styles.warningText}>
+              ⚠ This username differs from the account associated with the selected source. Make sure you are not downloading from the wrong iCloud account into this source.
+            </p>
+          )}
           <p className={styles.metaSmall}>
             Password and 2FA are handled by icloudpd outside Photo Organizer. This app does not store your Apple ID password.
           </p>
@@ -224,7 +287,8 @@ export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudA
             />
           </label>
           <p className={styles.metaSmall}>
-            Number of recent iCloud assets to acquire. Start small, such as 25. Maximum 500.
+            Number of recent iCloud items to acquire. This checks the N most recent items in your iCloud library but does not prove the entire library is caught up.
+            Start with 25 for small updates; use 100–500 for catch-up after travel or a long interval.
           </p>
 
           {/* Action buttons */}
@@ -233,7 +297,7 @@ export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudA
               type="button"
               className={styles.actionButton}
               onClick={() => void handleRun()}
-              disabled={isActionLoading || isActive || !sourceLabel || !username}
+              disabled={isActionLoading || isActive || !sourceLabel || !effectiveUsername}
             >
               {isActionLoading && !isActive ? "Starting…" : "Run iCloud Acquisition"}
             </button>
@@ -291,6 +355,13 @@ export default function IcloudAcquisitionCard({ onPrepareSourceIntake }: IcloudA
           <p className={styles.meta}>Failed: {status.failed_count}</p>
           {status.file_inventory_count !== null && status.file_inventory_count !== undefined && (
             <p className={styles.meta}><strong>Files currently staged: {status.file_inventory_count}</strong></p>
+          )}
+
+          {/* Completeness note */}
+          {status.recent_count !== null && status.recent_count !== undefined && (
+            <p className={styles.metaSmall} style={{ fontStyle: "italic", marginTop: "0.5rem" }}>
+              <strong>Completeness:</strong> This run checked the most recent {status.recent_count} iCloud item(s). It does not prove the entire iCloud library is caught up.
+            </p>
           )}
 
           {/* Report path */}

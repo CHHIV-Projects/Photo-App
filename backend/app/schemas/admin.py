@@ -259,6 +259,7 @@ class SourceIntakeSourceSummary(BaseModel):
     source_label: str
     source_type: str
     source_root_path: str | None = None
+    account_username: str | None = None
     first_seen_at: datetime | None = None
     last_run_at: datetime | None = None
     latest_report_filename: str | None = None
@@ -311,6 +312,7 @@ class SourceCreateRequest(BaseModel):
     source_label: str
     source_type: str
     source_root_path: str
+    account_username: str | None = None
     create_new_label: bool = False
 
 
@@ -319,6 +321,7 @@ class SourceCreateResponse(BaseModel):
     source_label: str
     source_type: str
     source_root_path: str | None
+    account_username: str | None = None
     created_at: datetime
     was_existing: bool
 

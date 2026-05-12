@@ -81,6 +81,7 @@ export default function AdminView() {
   const [regNewLabel, setRegNewLabel] = useState("");
   const [regType, setRegType] = useState("local_folder");
   const [regPath, setRegPath] = useState("");
+  const [regAccountUsername, setRegAccountUsername] = useState("");
   const [regResult, setRegResult] = useState<SourceCreateResponse | null>(null);
   const [regError, setRegError] = useState("");
   const [isRegLoading, setIsRegLoading] = useState(false);
@@ -1113,6 +1114,17 @@ export default function AdminView() {
                 placeholder="/absolute/path/to/source"
               />
             </label>
+            <label className={styles.formLabel}>
+              Account Username (Optional)
+              <input
+                className={styles.formInput}
+                type="email"
+                value={regAccountUsername}
+                onChange={e => setRegAccountUsername(e.target.value)}
+                placeholder="your@icloud.com"
+                autoComplete="off"
+              />
+            </label>
             <button
               type="button"
               className={styles.actionButton}
@@ -1141,11 +1153,13 @@ export default function AdminView() {
                   source_label: selectedLabel,
                   source_type: regType,
                   source_root_path: regPath,
+                  account_username: regAccountUsername.trim() || null,
                   create_new_label: regLabelMode === "new",
                 })
                   .then(res => {
                     setRegResult(res);
                     setRegExistingLabel(res.source_label);
+                    setRegAccountUsername(res.account_username ?? "");
                     if (regLabelMode === "new") {
                       setRegNewLabel("");
                       setRegLabelMode("existing");

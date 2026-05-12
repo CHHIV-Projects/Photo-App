@@ -134,6 +134,7 @@ def create_or_get_ingestion_source(
     source_label: str,
     source_type: str,
     source_root_path: str,
+    account_username: str | None = None,
 ) -> tuple[IngestionSource, bool]:
     """Register a new source or return the existing one.
 
@@ -153,15 +154,23 @@ def create_or_get_ingestion_source(
         )
     )
     if source is not None:
+        # Update account_username if provided and different
+        if account_username and account_username.strip() and source.account_username != account_username.strip():
+            source.account_username = account_username.strip()
+            db_session.commit()
         return source, True
 
-    resolved_root = str(Path(source_root_path).expanduser().resolve()) if source_root_path.strip() else None
+    resolved_root: str | None = None
+    if source_root_path.strip():
+        raw_root = Path(source_root_path).expanduser()
+        resolved_root = str(raw_root.resolve()) if raw_root.is_absolute() else str((_PROJECT_ROOT / raw_root).resolve())
     source = IngestionSource(
         source_label=resolved_label,
         source_label_normalized=normalized_label,
         source_type=resolved_type,
         source_root_path=resolved_root,
         source_root_path_normalized=normalized_root,
+        account_username=account_username.strip() if account_username else None,
     )
     db_session.add(source)
     db_session.flush()

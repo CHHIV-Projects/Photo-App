@@ -123,6 +123,17 @@ def _to_snapshot(run: SourceIntakeRun | None) -> SourceIntakeStatusSnapshot:
     )
 
 
+def _legacy_backend_storage_fallback(path: Path) -> Path | None:
+    """Map legacy .../backend/storage/... paths to .../storage/... when present."""
+    parts = list(path.parts)
+    lowered = [part.lower() for part in parts]
+    for idx in range(len(lowered) - 1):
+        if lowered[idx] == "backend" and lowered[idx + 1] == "storage":
+            candidate = Path(*parts[:idx], parts[idx + 1], *parts[idx + 2:]).resolve()
+            return candidate
+    return None
+
+
 def _latest_run_stmt():
     return select(SourceIntakeRun).order_by(SourceIntakeRun.id.desc()).limit(1)
 
@@ -187,9 +198,17 @@ def start_source_intake(
     raw_path = Path(source_root_path).expanduser()
     resolved_path = raw_path.resolve() if raw_path.is_absolute() else (_project_root / raw_path).resolve()
     if not resolved_path.exists():
+        fallback_path = _legacy_backend_storage_fallback(resolved_path)
+        if fallback_path is not None and fallback_path.exists():
+            resolved_path = fallback_path
+            source.source_root_path = str(fallback_path)
+            source.source_root_path_normalized = str(fallback_path).strip().lower()
+            db_session.commit()
+    if not resolved_path.exists():
         raise ValueError(f"Source path does not exist: {resolved_path}")
     if not resolved_path.is_dir():
         raise ValueError(f"Source path is not a directory: {resolved_path}")
+    canonical_source_root_path = str(resolved_path)
 
     # Validate drop zone is empty
     drop_zone = resolve_runtime_path(settings.drop_zone_path)
@@ -203,7 +222,7 @@ def start_source_intake(
         ingestion_run_id=None,  # Will be set after first batch context resolve
         source_label=source.source_label,
         source_type=source.source_type,
-        source_root_path=source_root_path,
+        source_root_path=canonical_source_root_path,
         source_intake_limit=source_intake_limit,
         ingest_batch_size=ingest_batch_size,
         started_at=_utc_now(),
@@ -219,7 +238,7 @@ def start_source_intake(
     with _runner_lock:
         t = threading.Thread(
             target=_run_background_job,
-            args=(run_id, source_root_path, source.source_label, source.source_type, source_intake_limit, ingest_batch_size),
+            args=(run_id, canonical_source_root_path, source.source_label, source.source_type, source_intake_limit, ingest_batch_size),
             daemon=True,
             name=f"source-intake-{run_id}",
         )

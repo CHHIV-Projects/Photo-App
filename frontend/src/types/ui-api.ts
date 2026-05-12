@@ -648,6 +648,7 @@ export interface SourceIntakeSourceSummary {
   source_label: string;
   source_type: string;
   source_root_path: string | null;
+  account_username: string | null;
   first_seen_at: string | null;
   last_run_at: string | null;
   latest_report_filename: string | null;
@@ -753,6 +754,7 @@ export interface SourceCreateRequest {
   source_label: string;
   source_type: string;
   source_root_path: string;
+  account_username?: string | null;
   create_new_label?: boolean;
 }
 
@@ -761,6 +763,7 @@ export interface SourceCreateResponse {
   source_label: string;
   source_type: string;
   source_root_path: string | null;
+  account_username: string | null;
   created_at: string;
   was_existing: boolean;
 }

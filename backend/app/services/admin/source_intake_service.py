@@ -159,6 +159,7 @@ def list_sources_with_latest_info(db_session: Session) -> list[SourceIntakeSourc
                 source_label=source.source_label,
                 source_type=source.source_type,
                 source_root_path=source.source_root_path,
+                account_username=source.account_username,
                 first_seen_at=source.created_at,
                 last_run_at=latest_run_at,
                 latest_report_filename=latest_report.report_filename if latest_report else None,
