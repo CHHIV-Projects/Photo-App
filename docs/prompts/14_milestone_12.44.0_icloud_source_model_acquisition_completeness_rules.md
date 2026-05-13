@@ -693,3 +693,149 @@ The aim is to make the model clear:
 ```text
 one iCloud account → one stable source → one staging folder → Source Intake → Vault
 ```
+
+# 12.44.0 Clarification Answers## 1. Source-level username fieldYes — include the source-level username field now.Add a nullable, non-secret field to `IngestionSource`, such as:```textaccount_username
+
+or:
+source_account_username
+Use whichever naming best matches project conventions.
+Purpose:
+Associate this iCloud source with the Apple ID / iCloud username normally used for acquisition.
+Important:
+This is not a password.This is not a credential.This is not a session token.This is just the account username/email for operator safety.
+Do not store:
+password2FA codesession cookieauth token
+Reason for doing this now:
+
+reduces wrong-account/wrong-source risk
+
+supports future multi-account behavior
+
+lets Admin prefill username safely
+
+helps define “one iCloud account = one stable source”
+
+This is a small schema change with high operator value.
+
+2. Username editable per run or hard-bound?
+   Use source-based prefill, but allow editable override per run.
+   Behavior:
+   selected source has account_username:    prefill username field with account_usernameoperator may edit username before run
+   If edited username differs from the source’s stored username, show a warning:
+   This username differs from the account associated with the selected source. Make sure you are not downloading from the wrong iCloud account into this source.
+   Do not hard-block in 12.44.0.
+   Reason:
+
+we want safety, not brittleness
+
+test/debug scenarios may need override
+
+hard enforcement can come later if needed
+
+Future possible behavior:
+require exact source/account match for production sources
+but not now.
+
+3. Source label naming rule
+   Do not block source creation based on naming.
+   Use warning/guidance only.
+   Recommended production pattern:
+   <person_or_account>_icloudpd
+   Examples:
+   chuck_icloudpdfamily_icloudpdspouse_icloudpd
+   If source label does not end in _icloudpd, show guidance/warning if low-risk:
+   Recommended iCloud source labels should use a stable production name such as chuck_icloudpd.
+   Do not block labels that do not follow the pattern.
+   Reason:
+
+existing test labels already vary
+
+blocking may interfere with current source registry use
+
+source label conventions are guidance, not a hard schema rule yet
+
+4. Test source visual tagging
+   Doc-only policy for 12.44.0.
+   Do not add visual test-source tagging in the UI yet.
+   Reason:
+
+source archive/inactive/test classification is broader than iCloud
+
+it likely needs a proper source status field later
+
+avoid adding heuristic UI labels based on string matching
+
+Document that labels containing patterns like these are likely test-only:
+testtrialadapterbackend_test12_3712_38direct_new_asset
+But do not implement UI tagging yet.
+Future parking lot item remains:
+Source Registry Archive / Inactive Source Support
+
+5. Completeness wording
+   Use conservative wording:
+   recent window checkedfull-library completeness not determined
+   Suggested UI wording:
+   This run checked the most recent N iCloud items. It does not prove the entire iCloud library is caught up.
+   Suggested status/note wording:
+   Completeness: recent window checked; full-library completeness not determined.
+   Avoid implying:
+   caught upall new files acquiredcomplete
+   unless/until we implement --until-found / checkpoint logic.
+
+6. until-found follow-up
+   Since installed icloudpd supports:
+   --until-found
+   please document a concrete follow-up in the 12.44.0 rules doc.
+   Parking lot item:
+   PX-ICLOUD-004 — iCloud Acquisition Until-Found / Checkpoint Strategy
+   Include acceptance criteria such as:
+   evaluate icloudpd --until-found behaviordefine consecutive-known thresholddetermine whether known means staged file, source provenance, or cloud asset IDreport whether acquisition appears caught upavoid full-library scans
+   Do not implement --until-found in 12.44.0.
+
+Approved 12.44.0 Scope
+Proceed with:
+Must do
+
+source/acquisition rules document
+
+one-source-per-account rule
+
+recent window semantics
+
+cleanup prerequisites for 12.44.1
+
+UI wording improvements in iCloud Acquisition card
+
+password/session policy wording
+
+source creation guidance
+
+completeness note:
+
+recent window checked
+
+full-library completeness not determined
+
+Do now
+
+add nullable non-secret source-level username field
+
+prefill acquisition username from selected source when available
+
+allow per-run username override with warning if different
+
+Do not do
+
+do not store password/2FA/session cookies
+
+do not block non-_icloudpd labels
+
+do not implement test-source UI tagging
+
+do not implement source archive/inactive support
+
+do not implement --until-found
+
+do not delete staging files
+
+do not auto-run Source Intake

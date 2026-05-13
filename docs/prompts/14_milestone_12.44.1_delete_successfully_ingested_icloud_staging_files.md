@@ -775,3 +775,107 @@ Acquire
 It does not affect the original iCloud asset or the Vault copy.
 
 If the system cannot prove a staged file is safely ingested, it must leave the file alone.
+
+# 12.44.1 Clarification Answers## 1. Cleanup safety conditionAgreed: tighten the cleanup rule.Do not delete based only on provenance + Vault existence if there is uncertainty about failure/deferred status.Use conservative behavior:```textpositive proof of successful ingestion requiredunknown evidence = skipfailure/deferred evidence = skip
+
+A file is eligible only when:
+file is under selected iCloud source rootsource root resolves under project_root/storage/exports/icloudsource_relative_path matches provenance for that ingestion_source_idasset existsVault file existsno known failed/deferred/rejected evidence appliessuccessful intake/provenance evidence exists
+If evidence is incomplete or ambiguous, skip and report the reason.
+
+2. Absolute source root containment
+   Use resolved absolute paths.
+   The rule should be:
+   resolved source_root_path must be inside:<project_root>/storage/exports/icloud/
+   Do not rely on string fragments like storage/exports/icloud alone.
+   Use canonical/resolved paths for:
+   exports rootsource rootcandidate file path
+   Reject cleanup if containment is not provably true.
+
+3. Dry run / preview
+   Make dry-run mandatory.
+   Use one endpoint with:
+   {  "source_id": 123,  "dry_run": true}
+   and:
+   {  "source_id": 123,  "dry_run": false}
+   A separate preview endpoint is optional and can be deferred.
+   The UI should use dry_run: true first as the preview path.
+
+4. Latest report vs historical reports
+   Use all historical successful source intake/provenance evidence for that source, not only the latest source intake report.
+   Reason:
+
+a staging folder may contain files ingested across multiple intake runs
+
+cleanup should not fail just because the latest run was a repeat/skip-known run
+
+provenance is the durable proof
+
+However, failure/deferred/rejected evidence should still be checked conservatively when available.
+Recommended priority:
+Primary proof:  provenance row for source_id + source_relative_path  linked asset exists  Vault file existsNegative evidence:  if file appears in known failure/deferred/rejected records/reports and no later successful provenance exists, skip
+Do not make cleanup depend solely on the latest report.
+
+5. File with valid provenance + Vault but later failure_details
+   If a file has valid provenance and a valid Vault file, but appears in a later failure/deferred list, be conservative but not irrational.
+   Rule:
+   If valid provenance + Vault proof exists, treat it as successfully ingested unless the later failure/deferred evidence clearly refers to the same current staged file and indicates unresolved failure.
+   If the code cannot confidently determine that, skip and report:
+   conflicting_status_evidence
+   Do not delete files with unresolved conflicting evidence.
+
+6. Active Source Intake run
+   Yes — block cleanup if any Source Intake run is currently active for that same source.
+   Preferred:
+   If any active source intake run exists for the selected source:    cleanup rejected with SOURCE_INTAKE_ACTIVE
+   If active-run detection can only be global, use global blocking for 12.44.1.
+   Reason:
+
+avoid deleting files while intake may be scanning/staging them
+
+cleanup should operate only on a stable source folder state
+
+7. UI placement
+   Place cleanup primarily near the Source Intake workflow/result area, because cleanup is safe only after intake.
+   Also acceptable: show a small link/note near iCloud Acquisition completion saying:
+   Cleanup is available after Source Intake succeeds.
+   But the actual cleanup control should be near Source Intake / iCloud workflow completion, not only in the acquisition card.
+
+8. Execution model
+   Use background run for actual delete.
+   Preferred model:
+   dry_run = true:    may be synchronous if fast, but can also use same background/report pathdry_run = false:    background job
+   If simpler and consistent, implement both dry-run and actual cleanup through the same background/status/report mechanism.
+   Do not perform large delete operations as a blocking UI request.
+
+9. Required skipped reasons
+   Include these skipped reasons:
+   source_not_under_icloud_exports_rootfile_not_under_source_rootfile_missingno_provenanceasset_missingvault_file_missingfailed_or_deferred_evidenceconflicting_status_evidencestatus_evidence_missingsource_intake_activeunknown_error
+   Add samples per reason if practical.
+
+10. Empty directories
+    Approved.
+    After deleting eligible files:
+    remove empty child directories onlykeep source root
+
+Approved implementation direction
+Proceed with coder’s recommended conservative approach:
+
+use source_id as primary target
+
+mandatory dry-run support
+
+resolved absolute path containment checks
+
+background job preferred, especially for actual delete
+
+use provenance + asset + Vault existence as primary positive proof
+
+unknown/ambiguous evidence means skip
+
+block cleanup during active Source Intake
+
+write JSON reports under storage/logs/icloud_cleanup_reports
+
+remove empty child directories but keep source root
+
+repeat cleanup should be idempotent

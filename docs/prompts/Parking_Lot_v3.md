@@ -1040,8 +1040,6 @@ This is not needed to complete the current iCloud ingestion arc, but it is impor
 
 ---
 
-
-
 ## AQ-005 — Hamming Distance Threshold Tuning
 
 ### Problem
