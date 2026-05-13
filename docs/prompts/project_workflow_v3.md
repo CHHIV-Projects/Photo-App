@@ -1,4 +1,4 @@
-# WORKFLOW.md
+# PROJECT_WORKFLOW.md
 
 ## Purpose
 
@@ -47,8 +47,6 @@ This workflow ensures:
 - writes structured prompts (.md) for implementation
 
 - anticipates likely coder clarification questions
-
-- 
 
 - answers coder questions clearly and decisively, while ensuring alignment with current system behavior and architecture
 
@@ -114,33 +112,25 @@ Coder:
 
 ---
 
-###### Step 2.5 — Codebase Reconnaissance (NEW)
+### Step 2.5 — Codebase Reconnaissance (NEW)
 
-For complex milestones, the coder should:  
+For complex milestones, the coder should:
 
-- inspect relevant existing systems and code paths  
+- inspect relevant existing systems and code paths
+- identify:
+  - conflicts with current implementation
+  - missing data structures
+  - implicit assumptions in prompt vs reality
+- confirm:
+  - where changes will occur
+  - whether migration/backfill is required
+- return structured observations before implementation if needed
 
-- identify:  
+Purpose:
 
-- conflicts with current implementation  
-
-- missing data structures  
-
-- implicit assumptions in prompt vs reality  
-
-- confirm:  
-
-- where changes will occur  
-
-- whether migration/backfill is required  
-
-- return structured observations before implementation if needed  
-
-Purpose:  
-
-- avoid incorrect assumptions  
-- reduce rework  
-- ensure prompt aligns with actual system state 
+- avoid incorrect assumptions
+- reduce rework
+- ensure prompt aligns with actual system state
 
 ---
 
@@ -178,17 +168,34 @@ Coder:
 
 ---
 
-### Step 5 — Code Summary
+### Step 5 — Code Summary / Coder Response Artifact
 
-Coder returns:
+Coder returns and places in the workspace a structured closeout document:
 
-- list of files modified/added
+`docs/prompts/Coder response <milestone>.md`
 
-- description of implementation
+or equivalent project-approved location/naming.
 
-- any deviations or assumptions
+The response should include:
 
-- test results
+- milestone title and date
+- scope completed
+- files modified/added
+- implementation summary
+- tests/build results
+- validation results
+- deviations from prompt, if any
+- known limitations or follow-up items
+- whether Definition of Done was met
+
+This coder response becomes part of the project record and may be used to update:
+
+- `MILESTONE_HISTORY.md`
+- `PROJECT_CONTEXT.md`
+- `PROJECT_ARCHITECTURE.md`
+- Parking Lot items
+
+If the workspace convention uses a different exact path, preserve the actual convention.
 
 ---
 
@@ -242,9 +249,19 @@ Additionally (critical for continuity):
   
   - `PROJECT_CONTEXT.md`
   
-  - `ARCHITECTURE_ROADMAP.md`
+  - `PROJECT_ARCHITECTURE.md`
   
   - `MILESTONE_HISTORY.md`
+
+Additionally, update or preserve relevant project artifacts when needed:
+
+- `PROJECT_CONTEXT.md`
+- `PROJECT_ARCHITECTURE.md`
+- `MILESTONE_HISTORY.md`
+- `project_workflow.md`
+- `Parking_Lot_v*.md`
+- milestone prompt files under `docs/prompts/`
+- `docs/prompts/Coder response <milestone>.md`
 
 This ensures the system state remains portable across sessions.
 
@@ -265,6 +282,33 @@ ChatGPT:
   - core feature development
   
   - system refinement
+
+---
+
+### Step 10 — Chat / Context Health and Continuation
+
+At major documentation boundaries, especially after large milestone arcs, User and ChatGPT should decide whether to continue in the current chat or start a continuation chat.
+
+Recommended continuation points:
+
+- after major documentation refreshes
+- after large milestone arcs
+- when attachment handling becomes unreliable
+- when responses slow noticeably
+- when the assistant begins re-asking settled context
+- when answers become generic or inconsistent
+- when project state has changed enough that updated docs should become the new source of truth
+
+Continuation chats should begin with current copies of:
+
+- `PROJECT_CONTEXT.md`
+- `PROJECT_ARCHITECTURE.md`
+- `MILESTONE_HISTORY.md`
+- `project_workflow.md`
+- Parking Lot
+- any current milestone prompt/coder response needed for continuity
+
+The purpose is to preserve context quality and reduce the risk of architectural drift.
 
 ---
 
@@ -449,9 +493,11 @@ The system must always be representable through:
 
 - `PROJECT_CONTEXT.md` (current state)
 
-- `ARCHITECTURE_ROADMAP.md` (direction)
+- `PROJECT_ARCHITECTURE.md` (direction)
 
 - `MILESTONE_HISTORY.md` (change log)
+
+- `PROJECT_WORKFLOW.md` (change log)
 
 These documents enable:
 
@@ -478,3 +524,5 @@ This workflow is successful when:
 - documentation reflects actual system state
 
 - user confidence increases with each milestone
+
+- 
