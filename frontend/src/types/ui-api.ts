@@ -813,3 +813,40 @@ export interface SourceIntakeStopResponse {
   message: string;
   current: SourceIntakeStatusSnapshot;
 }
+
+export interface IcloudStagingCleanupRunRequest {
+  source_id: number;
+  dry_run: boolean;
+}
+
+export interface IcloudStagingCleanupRunStatus {
+  run_id: number | null;
+  status: string;
+  source_id: number | null;
+  source_label: string | null;
+  source_root_path: string | null;
+  dry_run: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  eligible_count: number;
+  deleted_count: number;
+  skipped_count: number;
+  total_bytes_eligible: number;
+  total_bytes_deleted: number;
+  skipped_reasons: Record<string, number>;
+  skipped_samples: Record<string, string[]>;
+  report_path: string | null;
+  error_message: string | null;
+}
+
+export interface IcloudStagingCleanupStatusResponse {
+  generated_at: string;
+  current: IcloudStagingCleanupRunStatus;
+}
+
+export interface IcloudStagingCleanupRunResponse {
+  status: string;
+  message: string;
+  current: IcloudStagingCleanupRunStatus;
+}

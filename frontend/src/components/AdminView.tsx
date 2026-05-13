@@ -25,6 +25,8 @@ import {
   startSourceIntake,
   getSourceIntakeRunStatus,
   stopSourceIntake,
+  getIcloudStagingCleanupStatus,
+  runIcloudStagingCleanup,
 } from "@/lib/api";
 import type {
   AdminDuplicateProcessingStatusResponse,
@@ -38,6 +40,7 @@ import type {
   SourceIntakeSourcesResponse,
   SourceCreateResponse,
   SourceIntakeStatusSnapshot,
+  IcloudStagingCleanupRunStatus,
 } from "@/types/ui-api";
 
 import styles from "./admin-view.module.css";
@@ -93,6 +96,9 @@ export default function AdminView() {
   const [intakeStatus, setIntakeStatus] = useState<SourceIntakeStatusSnapshot | null>(null);
   const [intakeError, setIntakeError] = useState("");
   const [isIntakeActionLoading, setIsIntakeActionLoading] = useState(false);
+  const [cleanupStatus, setCleanupStatus] = useState<IcloudStagingCleanupRunStatus | null>(null);
+  const [isCleanupActionLoading, setIsCleanupActionLoading] = useState(false);
+  const [cleanupError, setCleanupError] = useState("");
 
   const existingLabelOptions = useMemo(() => {
     const optionsByNormalized = new Map<string, { normalized: string; label: string; sourceCount: number; firstSeen: number }>();
@@ -386,6 +392,15 @@ export default function AdminView() {
     }
   }, []);
 
+  const loadCleanupStatus = useCallback(async () => {
+    try {
+      const response = await getIcloudStagingCleanupStatus();
+      setCleanupStatus(response.current);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load iCloud cleanup status.");
+    }
+  }, []);
+
   const toggleReportDetail = useCallback(async (filename: string) => {
     if (expandedReportFilename === filename) {
       setExpandedReportFilename(null);
@@ -447,8 +462,28 @@ export default function AdminView() {
   }, [loadLivePhotoPairingStatus]);
 
   const loadAll = useCallback(async () => {
-    await Promise.all([loadSummary(), loadDuplicateStatus(), loadPlaceGeocodingStatus(), loadFaceProcessingStatus(), loadHeicPreviewStatus(), loadLivePhotoPairingStatus(), loadSourceIntake(), loadIntakeStatus()]);
-  }, [loadDuplicateStatus, loadFaceProcessingStatus, loadHeicPreviewStatus, loadLivePhotoPairingStatus, loadPlaceGeocodingStatus, loadSourceIntake, loadSummary, loadIntakeStatus]);
+    await Promise.all([
+      loadSummary(),
+      loadDuplicateStatus(),
+      loadPlaceGeocodingStatus(),
+      loadFaceProcessingStatus(),
+      loadHeicPreviewStatus(),
+      loadLivePhotoPairingStatus(),
+      loadSourceIntake(),
+      loadIntakeStatus(),
+      loadCleanupStatus(),
+    ]);
+  }, [
+    loadCleanupStatus,
+    loadDuplicateStatus,
+    loadFaceProcessingStatus,
+    loadHeicPreviewStatus,
+    loadIntakeStatus,
+    loadLivePhotoPairingStatus,
+    loadPlaceGeocodingStatus,
+    loadSourceIntake,
+    loadSummary,
+  ]);
 
   useEffect(() => {
     void loadAll();
@@ -581,6 +616,22 @@ export default function AdminView() {
 
     void loadSourceIntake();
   }, [intakeStatus?.run_id, intakeStatus?.status, loadSourceIntake]);
+
+  useEffect(() => {
+    const isActive = cleanupStatus && ["pending", "running", "stop_requested"].includes(cleanupStatus.status);
+
+    if (!isActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadCleanupStatus();
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [cleanupStatus?.status, loadCleanupStatus]);
 
   useEffect(() => {
     if (existingLabelOptions.length === 0) {
@@ -1207,7 +1258,7 @@ export default function AdminView() {
         >
           {sourceIntakePreparedNotice && <p className={styles.metaSmall}>{sourceIntakePreparedNotice}</p>}
           <p className={styles.metaSmall}>
-            Staged iCloud files are retained after Source Intake for now. Cleanup will be handled separately in 12.44.1.
+            Staged iCloud files remain after intake until you run iCloud Staging Cleanup below.
           </p>
           <div className={styles.registryForm}>
             <label className={styles.formLabel}>
@@ -1308,6 +1359,95 @@ export default function AdminView() {
               {intakeStatus.error_message && <p className={styles.errorText}>{intakeStatus.error_message}</p>}
             </div>
           )}
+
+          <div className={styles.intakeStatusPanel}>
+            <h4 className={styles.sectionTitle}>iCloud Staging Cleanup</h4>
+            <p className={styles.warningText}>
+              Run dry-run first. Deletion only removes files that have strong provenance and existing vault evidence.
+            </p>
+            <div className={styles.intakeActions}>
+              <button
+                type="button"
+                className={styles.actionButton}
+                disabled={isCleanupActionLoading || intakeSourceId === ""}
+                onClick={() => {
+                  if (intakeSourceId === "") {
+                    return;
+                  }
+                  setCleanupError("");
+                  setIsCleanupActionLoading(true);
+                  runIcloudStagingCleanup({ source_id: intakeSourceId, dry_run: true })
+                    .then((res) => setCleanupStatus(res.current))
+                    .catch((err) => setCleanupError(err instanceof Error ? err.message : "Failed to start cleanup dry run."))
+                    .finally(() => setIsCleanupActionLoading(false));
+                }}
+              >
+                {isCleanupActionLoading ? "Working..." : "Preview Cleanup"}
+              </button>
+              <button
+                type="button"
+                className={styles.stopButton}
+                disabled={isCleanupActionLoading || intakeSourceId === ""}
+                onClick={() => {
+                  if (intakeSourceId === "") {
+                    return;
+                  }
+                  setCleanupError("");
+                  setIsCleanupActionLoading(true);
+                  runIcloudStagingCleanup({ source_id: intakeSourceId, dry_run: false })
+                    .then((res) => setCleanupStatus(res.current))
+                    .catch((err) => setCleanupError(err instanceof Error ? err.message : "Failed to start cleanup execution."))
+                    .finally(() => setIsCleanupActionLoading(false));
+                }}
+              >
+                {isCleanupActionLoading ? "Working..." : "Execute Cleanup"}
+              </button>
+              <button
+                type="button"
+                className={styles.refreshButton}
+                onClick={() => {
+                  setCleanupError("");
+                  void loadCleanupStatus();
+                }}
+                disabled={isCleanupActionLoading}
+              >
+                Refresh Cleanup Status
+              </button>
+            </div>
+            {cleanupError && <p className={styles.errorText}>{cleanupError}</p>}
+            {cleanupStatus && (
+              <>
+                <p className={styles.meta}>
+                  <strong>Status:</strong>{" "}
+                  <span className={styles[`status_${cleanupStatus.status}`] ?? styles.statusBadge}>{cleanupStatus.status}</span>
+                  {cleanupStatus.run_id ? <> &nbsp; <strong>Run ID:</strong> #{cleanupStatus.run_id}</> : null}
+                </p>
+                <p className={styles.meta}>
+                  <strong>Mode:</strong> {cleanupStatus.dry_run ? "dry_run" : "delete"}
+                  &nbsp; <strong>Eligible:</strong> {cleanupStatus.eligible_count}
+                  &nbsp; <strong>Deleted:</strong> {cleanupStatus.deleted_count}
+                  &nbsp; <strong>Skipped:</strong> {cleanupStatus.skipped_count}
+                </p>
+                <p className={styles.meta}>
+                  <strong>Bytes eligible:</strong> {cleanupStatus.total_bytes_eligible}
+                  &nbsp; <strong>Bytes deleted:</strong> {cleanupStatus.total_bytes_deleted}
+                </p>
+                {cleanupStatus.report_path && (
+                  <p className={styles.meta}><strong>Report:</strong> <code>{cleanupStatus.report_path}</code></p>
+                )}
+                {Object.keys(cleanupStatus.skipped_reasons ?? {}).length > 0 && (
+                  <p className={styles.meta}>
+                    <strong>Skip reasons:</strong>{" "}
+                    {Object.entries(cleanupStatus.skipped_reasons)
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([reason, count]) => `${reason}:${count}`)
+                      .join(" | ")}
+                  </p>
+                )}
+                {cleanupStatus.error_message && <p className={styles.errorText}>{cleanupStatus.error_message}</p>}
+              </>
+            )}
+          </div>
         </div>
       </section>
     </section>

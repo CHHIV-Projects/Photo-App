@@ -872,7 +872,175 @@ Video Canonicalization Recompute Parity
 
 ---
 
+```
+## PX-ICLOUD-017 — Unified Source Profile and Intake Workflow### SummaryThe current ingestion workflow is architecturally safe but too clumsy for end-state production use.Today, cloud ingestion requires multiple visible operator steps:```text1. Create/register source2. Run iCloud Acquisition3. Prepare Source Intake4. Run Source Intake5. Later clean up staged files
+```
+
+This separation was appropriate during development and testing, but the long-term Admin workflow should be simpler and more source/profile-centered.
+
 ---
+
+### Current State
+
+Current iCloud flow:
+
+```
+icloudpd acquisition→ storage/exports/icloud/<source_label>/→ Source Intake→ Drop Zone→ Vault / DB / Provenance
+```
+
+Current Admin concepts are separate:
+
+```
+Source RegistryiCloud AcquisitionSource IntakeStaging Cleanup, planned separately
+```
+
+This creates several usability issues:
+
+```
+operator must understand implementation stagesoperator must choose the same source repeatedlycloud workflow differs from local workflowsource label/path mistakes are possiblestaging folder details are too visiblecleanup feels separate from intake
+```
+
+---
+
+### Desired Future Direction
+
+Create a unified **Source Profile** model.
+
+A source profile should represent both:
+
+```
+where files come fromhow files should be acquired or scanned
+```
+
+The operator should select a source/profile and run intake, while the system determines which technical steps are needed.
+
+---
+
+### Proposed Concepts
+
+#### Source Type
+
+Examples:
+
+```
+local_folderexternal_drivecloudscan_batchother
+```
+
+#### Cloud Type
+
+For cloud sources only:
+
+```
+icloudonedrivegoogle_photosdropboxother
+```
+
+#### Source Profile
+
+For iCloud:
+
+```
+Source Label: chuck_icloudSource Type: cloudCloud Type: icloudAccount Username: chhendersoniv@gmail.comAcquisition Method: icloudpdRoot/Staging Path: storage/exports/icloud/chuck_icloud/
+```
+
+For a local folder:
+
+```
+Source Label: chuck_pcSource Type: local_folderRoot Path: D:\Photos\
+```
+
+---
+
+### Desired End-State Workflow
+
+Operator selects:
+
+```
+Chuck iCloud
+```
+
+Then clicks:
+
+```
+Run Intake
+```
+
+System performs the appropriate workflow.
+
+#### For iCloud
+
+```
+1. Run cloud acquisition via icloudpd.2. Download into staging folder.3. Run Source Intake against staging folder.4. Report acquisition + intake results together.5. Offer or perform verified cleanup of successfully ingested staging files.
+```
+
+#### For Local Folder
+
+```
+1. Scan local folder.2. Run Source Intake.3. Report results.
+```
+
+The user should not need to think in terms of separate acquisition/intake mechanics unless troubleshooting.
+
+---
+
+### Benefits
+
+```
+one unified intake workflowfewer operator stepsless confusion between acquisition and ingestionfewer source label/path mistakeseasier multi-provider cloud support laterclearer source identity and provenancecleaner Admin UIbetter foundation for scheduled intake later
+```
+
+---
+
+### Important Design Rules
+
+- Cloud acquisition must still not write directly to Vault or DB.
+- Source Intake remains the authority for ingestion.
+- Staging folders should become implementation details where possible.
+- Passwords, 2FA codes, and session cookies must not be stored in Source Profiles.
+- Account username may be stored as non-secret source metadata.
+- Cleanup of staging files must remain provenance-verified.
+- Local and cloud workflows should share a common operator-facing “Run Intake” concept.
+
+---
+
+### Relationship to Current Milestones
+
+This should not block:
+
+```
+12.44.1 — Delete Successfully Ingested iCloud Staging Files12.45 — Documentation Refresh / Architecture Housekeeping
+```
+
+The current milestone path should finish the safe, explicit workflow first.
+
+This item should be revisited during the post-12.45 punchlist/usability review.
+
+---
+
+### Suggested Future Milestone
+
+```
+Unified Source Profile and Intake Workflow Design
+```
+
+---
+
+### Possible Follow-On Implementation Milestones
+
+```
+Source Profile schema refinementCloud provider type supportUnified Run Intake Admin UICloud acquisition + intake orchestrationUnified acquisition/intake run historyProvider-specific source settingsSource-level cleanup policyScheduled source profile intake
+```
+
+---
+
+### Priority
+
+Medium-high after 12.45.
+
+This is not needed to complete the current iCloud ingestion arc, but it is important before the system becomes a production daily-use tool.
+
+---
+
+
 
 ## AQ-005 — Hamming Distance Threshold Tuning
 

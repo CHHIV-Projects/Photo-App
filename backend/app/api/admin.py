@@ -40,6 +40,10 @@ from app.schemas.admin import (
     IcloudAcquisitionRunStatus,
     IcloudAcquisitionStatusResponse,
     IcloudAcquisitionStopResponse,
+    IcloudStagingCleanupRunRequest,
+    IcloudStagingCleanupRunResponse,
+    IcloudStagingCleanupRunStatus,
+    IcloudStagingCleanupStatusResponse,
 )
 from app.services.admin import (
     build_admin_summary,
@@ -90,6 +94,14 @@ from app.services.icloud_acquisition.execution_service import (
     get_icloud_acquisition_status,
     request_icloud_acquisition_stop,
     start_icloud_acquisition_background,
+)
+from app.services.admin.icloud_staging_cleanup_execution_service import (
+    CleanupBusyError,
+    CleanupRunSnapshot,
+    CleanupValidationError,
+    SourceIntakeActiveError,
+    get_cleanup_status,
+    start_cleanup_run,
 )
 from app.services.previews.heic_preview_processing_service import (
     HeicPreviewAlreadyRunningError,
@@ -376,6 +388,50 @@ def _to_icloud_acquisition_run_status(snapshot: IcloudAcquisitionStatusSnapshot)
     )
 
 
+def _to_icloud_cleanup_run_status(snapshot: CleanupRunSnapshot | None) -> IcloudStagingCleanupRunStatus:
+    if snapshot is None:
+        return IcloudStagingCleanupRunStatus(
+            run_id=None,
+            status="idle",
+            source_id=None,
+            source_label=None,
+            source_root_path=None,
+            dry_run=True,
+            started_at=None,
+            finished_at=None,
+            elapsed_seconds=None,
+            eligible_count=0,
+            deleted_count=0,
+            skipped_count=0,
+            total_bytes_eligible=0,
+            total_bytes_deleted=0,
+            skipped_reasons={},
+            skipped_samples={},
+            report_path=None,
+            error_message=None,
+        )
+    return IcloudStagingCleanupRunStatus(
+        run_id=snapshot.run_id,
+        status=snapshot.status,
+        source_id=snapshot.source_id,
+        source_label=snapshot.source_label,
+        source_root_path=snapshot.source_root_path,
+        dry_run=snapshot.dry_run,
+        started_at=snapshot.started_at,
+        finished_at=snapshot.finished_at,
+        elapsed_seconds=snapshot.elapsed_seconds,
+        eligible_count=snapshot.eligible_count,
+        deleted_count=snapshot.deleted_count,
+        skipped_count=snapshot.skipped_count,
+        total_bytes_eligible=snapshot.total_bytes_eligible,
+        total_bytes_deleted=snapshot.total_bytes_deleted,
+        skipped_reasons=snapshot.skipped_reasons,
+        skipped_samples=snapshot.skipped_samples,
+        report_path=snapshot.report_path,
+        error_message=snapshot.error_message,
+    )
+
+
 @router.get("/heic-preview/status", response_model=HeicPreviewStatusResponse)
 def get_heic_preview_run_status(db: Session = Depends(get_db_session)) -> HeicPreviewStatusResponse:
     """Return display preview generation status and pending-work count."""
@@ -504,6 +560,54 @@ def stop_icloud_acquisition(db: Session = Depends(get_db_session)) -> IcloudAcqu
         status="stop_requested",
         message=result.message,
         current=_to_icloud_acquisition_run_status(result.status),
+    )
+
+
+@router.get("/icloud-staging-cleanup/status", response_model=IcloudStagingCleanupStatusResponse)
+def get_icloud_staging_cleanup_status(db: Session = Depends(get_db_session)) -> IcloudStagingCleanupStatusResponse:
+    """Return current or latest iCloud staging cleanup run snapshot."""
+    from datetime import datetime, timezone
+
+    snapshot = get_cleanup_status(db)
+    return IcloudStagingCleanupStatusResponse(
+        generated_at=datetime.now(timezone.utc),
+        current=_to_icloud_cleanup_run_status(snapshot),
+    )
+
+
+@router.post("/icloud-staging-cleanup/run", response_model=IcloudStagingCleanupRunResponse)
+def run_icloud_staging_cleanup(
+    body: IcloudStagingCleanupRunRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudStagingCleanupRunResponse | JSONResponse:
+    """Launch conservative iCloud staging cleanup in background."""
+    try:
+        snapshot = start_cleanup_run(
+            db,
+            source_id=body.source_id,
+            dry_run=body.dry_run,
+            created_by="admin_api",
+        )
+    except CleanupBusyError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc), "error_code": "CLEANUP_ALREADY_RUNNING"},
+        )
+    except SourceIntakeActiveError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": str(exc), "error_code": "SOURCE_INTAKE_ACTIVE"},
+        )
+    except CleanupValidationError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc), "error_code": "INVALID_CLEANUP_SOURCE"},
+        )
+
+    return IcloudStagingCleanupRunResponse(
+        status="started",
+        message="iCloud staging cleanup started.",
+        current=_to_icloud_cleanup_run_status(snapshot),
     )
 
 

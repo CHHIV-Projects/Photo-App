@@ -19,6 +19,9 @@ import type {
   SourceIntakeRunResponse,
   SourceIntakeStatusSnapshot,
   SourceIntakeStopResponse,
+  IcloudStagingCleanupRunRequest,
+  IcloudStagingCleanupRunResponse,
+  IcloudStagingCleanupStatusResponse,
   IcloudAcquisitionStatusResponse,
   IcloudAcquisitionRunRequest,
   IcloudAcquisitionRunResponse,
@@ -635,5 +638,18 @@ export function getSourceIntakeRunStatus(): Promise<SourceIntakeStatusSnapshot> 
 export function stopSourceIntake(): Promise<SourceIntakeStopResponse> {
   return apiRequest<SourceIntakeStopResponse>("/api/admin/source-intake/run/stop", {
     method: "POST"
+  });
+}
+
+export function getIcloudStagingCleanupStatus(): Promise<IcloudStagingCleanupStatusResponse> {
+  return apiRequest<IcloudStagingCleanupStatusResponse>("/api/admin/icloud-staging-cleanup/status");
+}
+
+export function runIcloudStagingCleanup(
+  req: IcloudStagingCleanupRunRequest
+): Promise<IcloudStagingCleanupRunResponse> {
+  return apiRequest<IcloudStagingCleanupRunResponse>("/api/admin/icloud-staging-cleanup/run", {
+    method: "POST",
+    body: JSON.stringify(req)
   });
 }

@@ -374,6 +374,48 @@ class SourceIntakeStopResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# iCloud staging cleanup (12.44.1)
+# ---------------------------------------------------------------------------
+
+
+class IcloudStagingCleanupRunRequest(BaseModel):
+    source_id: int
+    dry_run: bool = True
+
+
+class IcloudStagingCleanupRunStatus(BaseModel):
+    run_id: int | None
+    status: str
+    source_id: int | None
+    source_label: str | None
+    source_root_path: str | None
+    dry_run: bool
+    started_at: datetime | None
+    finished_at: datetime | None
+    elapsed_seconds: float | None
+    eligible_count: int
+    deleted_count: int
+    skipped_count: int
+    total_bytes_eligible: int
+    total_bytes_deleted: int
+    skipped_reasons: dict[str, int]
+    skipped_samples: dict[str, list[str]]
+    report_path: str | None
+    error_message: str | None
+
+
+class IcloudStagingCleanupStatusResponse(BaseModel):
+    generated_at: datetime
+    current: IcloudStagingCleanupRunStatus
+
+
+class IcloudStagingCleanupRunResponse(BaseModel):
+    status: str
+    message: str
+    current: IcloudStagingCleanupRunStatus
+
+
+# ---------------------------------------------------------------------------
 # icloudpd acquisition (12.42)
 # ---------------------------------------------------------------------------
 
