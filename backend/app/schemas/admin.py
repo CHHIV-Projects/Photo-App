@@ -436,6 +436,7 @@ class IcloudAcquisitionRunStatus(BaseModel):
     source_label: str | None = None
     source_type: str | None = None
     source_root_path: str | None = None
+    acquisition_mode: Literal["standard", "list_first_non_repeat"] = "standard"
     source_registration_status: str | None = None
     username: str | None = None
     staging_path: str | None = None
@@ -488,3 +489,4 @@ class IcloudAcquisitionRunRequest(BaseModel):
     username: str
     recent_count: int = Field(default=25, ge=1, le=500)
     source_type: str = "cloud_export"
+    acquisition_mode: Literal["standard", "list_first_non_repeat"] = "standard"

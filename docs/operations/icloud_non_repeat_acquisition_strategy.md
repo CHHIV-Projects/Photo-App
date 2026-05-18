@@ -309,3 +309,81 @@ Evidence still needed in 12.48.1 validation:
 
 Given these limits, the recommendation remains safe and explicit:
 - hybrid strategy with Photo Organizer known-state logic; no reliance on --until-found alone.
+
+## 15. 12.48.1 Implementation Update
+
+Status:
+- Implemented backend foundation for explicit non-repeat mode in Milestone 12.48.1.
+
+Implemented acquisition mode:
+- Added explicit acquisition_mode values:
+  - standard (default, unchanged behavior)
+  - list_first_non_repeat (new explicit behavior)
+
+Preflight command behavior:
+- list_first_non_repeat performs safe preflight using:
+  - --recent <N>
+  - --dry-run
+  - --only-print-filenames
+- preflight does not download media bytes.
+
+Candidate parser behavior:
+- Added conservative parser for preflight output lines.
+- Preserves raw_line for audit.
+- Normalizes separators/path prefixes.
+- Any non-confident identity is classified as unknown_identity.
+- unknown_identity lines are retained in report samples.
+
+Known-state evaluator behavior:
+- Added known-state evaluator against durable evidence:
+  - staged_known (staging file exists)
+  - ingested_known (provenance match by source + source_relative_path)
+  - vault_verified_known (ingested_known + asset + vault path exists)
+- already_known is true only when ingested_known or vault_verified_known.
+- staged_known alone is not treated as durable already_known.
+
+Caught-up status logic:
+- Added conservative enum behavior:
+  - likely_caught_up
+  - partial_window_only
+  - unknown
+- unknown_identity prevents likely_caught_up.
+- likely_caught_up requires successful preflight, nonzero candidates, no unknown identities, all candidates already_known, and explicit download short-circuit.
+
+Short-circuit behavior:
+- If all preflight candidates are already_known and unknown_identity_count is zero:
+  - skip download subprocess
+  - complete run successfully
+  - report download_skipped_due_to_all_known=true
+
+Run/report fields:
+- Detailed non-repeat metrics are report-first (JSON) for 12.48.1.
+- Added report fields:
+  - acquisition_mode
+  - preflight_enabled
+  - preflight_ok
+  - preflight_candidate_count
+  - already_known_count
+  - staged_known_count
+  - ingested_known_count
+  - vault_verified_known_count
+  - unknown_identity_count
+  - caught_up_status
+  - download_skipped_due_to_all_known
+  - known_state_summary
+  - candidate_samples
+  - unknown_identity_samples
+- Added minimal run-table field:
+  - acquisition_mode
+
+Validation performed:
+- Unit tests only (no real iCloud runs):
+  - command builder tests for standard vs preflight-safe flags
+  - acquisition_mode normalization tests
+  - parser and caught-up status tests
+  - known-state evaluator tests with mocks/temp files
+
+Remaining limitations:
+- Real repeat-run workflow validation remains pending (12.48.2):
+  - acquire -> repeat -> intake -> cleanup -> repeat after cleanup
+- Candidate parser remains conservative and may classify borderline lines as unknown_identity.

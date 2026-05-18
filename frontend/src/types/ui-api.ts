@@ -676,6 +676,7 @@ export interface IcloudAcquisitionRunStatus {
   source_label: string | null;
   source_type: string | null;
   source_root_path: string | null;
+  acquisition_mode: "standard" | "list_first_non_repeat";
   source_registration_status: string | null;
   username: string | null;
   staging_path: string | null;
@@ -708,6 +709,7 @@ export interface IcloudAcquisitionRunRequest {
   username: string;
   recent_count: number;
   source_type?: string;
+  acquisition_mode?: "standard" | "list_first_non_repeat";
 }
 
 export interface IcloudAcquisitionRunResponse {

@@ -15,14 +15,18 @@ from app.api.admin import router as admin_router
 from app.db.session import get_db_session
 from app.schemas.admin import IcloudAcquisitionRunStatus
 from app.services.icloud_acquisition.execution_service import (
+    ACQUISITION_MODE_LIST_FIRST_NON_REPEAT,
+    ACQUISITION_MODE_STANDARD,
     DEFAULT_RECENT_COUNT,
     IcloudAcquisitionAlreadyRunningError,
     IcloudAcquisitionSourceNotRegisteredError,
     IcloudAcquisitionRunResult,
     IcloudAcquisitionStatusSnapshot,
+    build_icloudpd_preflight_command,
     IcloudAcquisitionStatusView,
     MAX_RECENT_COUNT,
     build_icloudpd_command,
+    normalize_acquisition_mode,
     normalize_recent_count,
     resolve_staging_root,
     sanitize_source_label,
@@ -79,6 +83,26 @@ class IcloudAcquisitionServiceTests(unittest.TestCase):
         self.assertIn("--directory", command)
         self.assertIn("--recent", command)
         self.assertIn("25", command)
+
+    def test_build_preflight_command_contains_safe_flags(self) -> None:
+        command = build_icloudpd_preflight_command(
+            executable=Path("C:/tools/icloudpd.exe"),
+            username="chuck@example.com",
+            staging_root=Path("C:/repo/storage/exports/icloud/chuck_icloudpd_test"),
+            recent_count=25,
+        )
+        self.assertIn("--only-print-filenames", command)
+        self.assertIn("--dry-run", command)
+        self.assertNotIn("--until-found", command)
+
+    def test_acquisition_mode_normalization(self) -> None:
+        self.assertEqual(normalize_acquisition_mode(None), ACQUISITION_MODE_STANDARD)
+        self.assertEqual(
+            normalize_acquisition_mode("list_first_non_repeat"),
+            ACQUISITION_MODE_LIST_FIRST_NON_REPEAT,
+        )
+        with self.assertRaises(ValueError):
+            normalize_acquisition_mode("experimental_mode")
 
     def test_run_endpoint_uses_default_recent_count(self) -> None:
         snapshot = IcloudAcquisitionStatusSnapshot(

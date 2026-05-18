@@ -22,6 +22,7 @@ class IcloudAcquisitionRun(Base):
     source_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_root_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    acquisition_mode: Mapped[str] = mapped_column(String(64), nullable=False, default="standard")
     source_registration_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     staging_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)

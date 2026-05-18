@@ -365,6 +365,7 @@ def _to_icloud_acquisition_run_status(snapshot: IcloudAcquisitionStatusSnapshot)
         source_label=snapshot.source_label,
         source_type=snapshot.source_type,
         source_root_path=snapshot.source_root_path,
+        acquisition_mode=snapshot.acquisition_mode,
         source_registration_status=snapshot.source_registration_status,
         username=snapshot.username,
         staging_path=snapshot.staging_path,
@@ -519,6 +520,7 @@ def run_icloud_acquisition(body: IcloudAcquisitionRunRequest, db: Session = Depe
             source_label=body.source_label,
             username=body.username,
             recent_count=body.recent_count,
+            acquisition_mode=body.acquisition_mode,
             source_type=body.source_type,
             created_by="admin_api",
         )

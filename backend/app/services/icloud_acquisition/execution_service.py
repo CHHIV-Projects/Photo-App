@@ -20,6 +20,12 @@ from app.core.config import BACKEND_ROOT, settings
 from app.db.session import SessionLocal
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.ingestion_source import IngestionSource
+from app.services.icloud_acquisition.known_state_service import (
+    CAUGHT_UP_UNKNOWN,
+    derive_caught_up_status,
+    evaluate_known_state,
+    parse_preflight_candidates,
+)
 from app.services.icloud_acquisition.schema import ensure_icloud_acquisition_schema
 from app.services.ingestion.ingestion_context_service import (
     coerce_source_type,
@@ -48,6 +54,13 @@ MIN_SUPPORTED_VERSION = str(getattr(settings, "icloudpd_min_version", "1.32.0"))
 MAX_TAIL_LINES = 80
 MAX_REPORT_TAIL_BYTES = 8192
 MAX_INVENTORY_SAMPLE = 200
+
+ACQUISITION_MODE_STANDARD = "standard"
+ACQUISITION_MODE_LIST_FIRST_NON_REPEAT = "list_first_non_repeat"
+SUPPORTED_ACQUISITION_MODES = {
+    ACQUISITION_MODE_STANDARD,
+    ACQUISITION_MODE_LIST_FIRST_NON_REPEAT,
+}
 
 _runner_lock = threading.Lock()
 _runner_thread: threading.Thread | None = None
@@ -80,8 +93,9 @@ class IcloudAcquisitionStatusSnapshot:
     error_code: str | None
     error_message: str | None
     stop_requested: bool
-    file_inventory_count: int | None
-    recommended_source_intake_command: str | None
+    file_inventory_count: int | None = None
+    recommended_source_intake_command: str | None = None
+    acquisition_mode: str = ACQUISITION_MODE_STANDARD
 
 
 @dataclass(frozen=True)
@@ -169,6 +183,7 @@ def _to_snapshot(run: IcloudAcquisitionRun | None) -> IcloudAcquisitionStatusSna
             stop_requested=False,
             file_inventory_count=None,
             recommended_source_intake_command=None,
+            acquisition_mode=ACQUISITION_MODE_STANDARD,
         )
 
     return IcloudAcquisitionStatusSnapshot(
@@ -197,6 +212,7 @@ def _to_snapshot(run: IcloudAcquisitionRun | None) -> IcloudAcquisitionStatusSna
         stop_requested=bool(run.stop_requested),
         file_inventory_count=getattr(run, "file_inventory_count", None),
         recommended_source_intake_command=getattr(run, "recommended_source_intake_command", None),
+        acquisition_mode=(run.acquisition_mode or ACQUISITION_MODE_STANDARD),
     )
 
 
@@ -245,6 +261,15 @@ def normalize_recent_count(recent_count: int | None) -> int:
         raise ValueError("recent_count must be at least 1.")
     if value > MAX_RECENT_COUNT:
         raise ValueError(f"recent_count must be {MAX_RECENT_COUNT} or less.")
+    return value
+
+
+def normalize_acquisition_mode(acquisition_mode: str | None) -> str:
+    value = (acquisition_mode or ACQUISITION_MODE_STANDARD).strip().lower()
+    if value not in SUPPORTED_ACQUISITION_MODES:
+        raise ValueError(
+            "acquisition_mode must be one of: standard, list_first_non_repeat."
+        )
     return value
 
 
@@ -355,6 +380,20 @@ def build_icloudpd_command(*, executable: Path, username: str, staging_root: Pat
         str(staging_root),
         "--recent",
         str(recent_count),
+    ]
+
+
+def build_icloudpd_preflight_command(*, executable: Path, username: str, staging_root: Path, recent_count: int) -> list[str]:
+    return [
+        str(executable),
+        "--username",
+        username,
+        "--directory",
+        str(staging_root),
+        "--recent",
+        str(recent_count),
+        "--dry-run",
+        "--only-print-filenames",
     ]
 
 
@@ -469,6 +508,21 @@ def _write_report(
     stderr_text: str | None,
     initial_inventory: dict[str, object] | None,
     final_inventory: dict[str, object] | None,
+    acquisition_mode: str = ACQUISITION_MODE_STANDARD,
+    preflight_enabled: bool = False,
+    preflight_ok: bool = False,
+    preflight_stdout_tail: str | None = None,
+    preflight_stderr_tail: str | None = None,
+    preflight_candidate_count: int = 0,
+    already_known_count: int = 0,
+    staged_known_count: int = 0,
+    ingested_known_count: int = 0,
+    vault_verified_known_count: int = 0,
+    unknown_identity_count: int = 0,
+    download_skipped_due_to_all_known: bool = False,
+    caught_up_status: str = CAUGHT_UP_UNKNOWN,
+    candidate_samples: list[dict[str, object]] | None = None,
+    unknown_identity_samples: list[str] | None = None,
     notes: list[str] | None = None,
 ) -> Path:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -480,6 +534,7 @@ def _write_report(
         "status": run.status,
         "source_label": run.source_label,
         "source_type": run.source_type,
+        "acquisition_mode": acquisition_mode,
         "source_registration_status": run.source_registration_status,
         "username_redacted": redact_username(run.username),
         "staging_path": run.staging_path,
@@ -504,6 +559,28 @@ def _write_report(
         ),
         "error_code": run.error_code,
         "error_message": run.error_message,
+        "preflight_enabled": preflight_enabled,
+        "preflight_ok": preflight_ok,
+        "preflight_stdout_tail": _tail_text(preflight_stdout_tail),
+        "preflight_stderr_tail": _tail_text(preflight_stderr_tail),
+        "preflight_candidate_count": preflight_candidate_count,
+        "already_known_count": already_known_count,
+        "staged_known_count": staged_known_count,
+        "ingested_known_count": ingested_known_count,
+        "vault_verified_known_count": vault_verified_known_count,
+        "unknown_identity_count": unknown_identity_count,
+        "caught_up_status": caught_up_status,
+        "download_skipped_due_to_all_known": download_skipped_due_to_all_known,
+        "known_state_summary": {
+            "candidate_count": preflight_candidate_count,
+            "already_known_count": already_known_count,
+            "staged_known_count": staged_known_count,
+            "ingested_known_count": ingested_known_count,
+            "vault_verified_known_count": vault_verified_known_count,
+            "unknown_identity_count": unknown_identity_count,
+        },
+        "candidate_samples": candidate_samples or [],
+        "unknown_identity_samples": unknown_identity_samples or [],
         "notes": notes or [],
     }
     if command is not None:
@@ -518,6 +595,7 @@ def _create_run_row(
     source_label: str,
     source_type: str,
     source_root_path: str,
+    acquisition_mode: str,
     source_registration_status: str,
     username: str,
     staging_path: str,
@@ -534,6 +612,7 @@ def _create_run_row(
         source_label=source_label,
         source_type=source_type,
         source_root_path=source_root_path,
+        acquisition_mode=acquisition_mode,
         source_registration_status=source_registration_status,
         username=username,
         staging_path=staging_path,
@@ -644,8 +723,9 @@ def _prepare_launch(
     source_type: str | None,
     username: str,
     recent_count: int | None,
+    acquisition_mode: str | None,
     created_by: str,
-) -> tuple[IcloudAcquisitionRun, Path, Path, str, str, int]:
+) -> tuple[IcloudAcquisitionRun, Path, Path, str, str, int, int]:
     ensure_icloud_acquisition_schema(db_session)
 
     active = db_session.scalar(_active_run_stmt())
@@ -659,6 +739,7 @@ def _prepare_launch(
     normalized_username = normalize_username(username)
     normalized_source_type = coerce_source_type(source_type)
     normalized_recent_count = normalize_recent_count(recent_count)
+    normalized_acquisition_mode = normalize_acquisition_mode(acquisition_mode)
     sanitized_label = sanitize_source_label(source_label)
     staging_root = validate_staging_root(resolve_staging_root(sanitized_label))
     staging_root.mkdir(parents=True, exist_ok=True)
@@ -676,6 +757,7 @@ def _prepare_launch(
             source_label=sanitized_label,
             source_type=normalized_source_type,
             source_root_path=source_root_path,
+            acquisition_mode=normalized_acquisition_mode,
             source_registration_status="missing",
             username=normalized_username,
             staging_path=source_root_path,
@@ -732,6 +814,7 @@ def _prepare_launch(
             source_label=sanitized_label,
             source_type=normalized_source_type,
             source_root_path=source_root_path,
+            acquisition_mode=normalized_acquisition_mode,
             source_registration_status="registered",
             username=normalized_username,
             staging_path=source_root_path,
@@ -786,6 +869,7 @@ def _prepare_launch(
             source_label=sanitized_label,
             source_type=normalized_source_type,
             source_root_path=source_root_path,
+            acquisition_mode=normalized_acquisition_mode,
             source_registration_status="registered",
             username=normalized_username,
             staging_path=source_root_path,
@@ -838,6 +922,7 @@ def _prepare_launch(
         source_label=sanitized_label,
         source_type=normalized_source_type,
         source_root_path=source_root_path,
+        acquisition_mode=normalized_acquisition_mode,
         source_registration_status="registered",
         username=normalized_username,
         staging_path=source_root_path,
@@ -847,7 +932,15 @@ def _prepare_launch(
         status=STATUS_RUNNING,
         created_by=created_by,
     )
-    return run, executable, staging_root, normalized_username, normalized_source_type, normalized_recent_count
+    return (
+        run,
+        executable,
+        staging_root,
+        normalized_username,
+        normalized_source_type,
+        normalized_recent_count,
+        int(matching_source.id),
+    )
 
 
 def start_icloud_acquisition_background(
@@ -856,16 +949,26 @@ def start_icloud_acquisition_background(
     source_label: str,
     username: str,
     recent_count: int | None,
+    acquisition_mode: str | None = ACQUISITION_MODE_STANDARD,
     source_type: str | None = "cloud_export",
     created_by: str = "admin_api",
 ) -> IcloudAcquisitionRunResult:
     """Validate, create a run row, and launch the background thread."""
-    run, executable, staging_root, normalized_username, normalized_source_type, normalized_recent_count = _prepare_launch(
+    (
+        run,
+        executable,
+        staging_root,
+        normalized_username,
+        normalized_source_type,
+        normalized_recent_count,
+        source_id,
+    ) = _prepare_launch(
         db_session,
         source_label=source_label,
         source_type=source_type,
         username=username,
         recent_count=recent_count,
+        acquisition_mode=acquisition_mode,
         created_by=created_by,
     )
 
@@ -879,6 +982,8 @@ def start_icloud_acquisition_background(
                 normalized_username,
                 normalized_source_type,
                 normalized_recent_count,
+                source_id,
+                run.acquisition_mode or ACQUISITION_MODE_STANDARD,
             ),
             daemon=True,
             name=f"icloud-acquisition-{run.id}",
@@ -900,10 +1005,16 @@ def _run_background_job(
     username: str,
     source_type: str,
     recent_count: int,
+    source_id: int,
+    acquisition_mode: str,
 ) -> None:
     started_at = time.perf_counter()
     stdout_text: str | None = None
     stderr_text: str | None = None
+    preflight_stdout_text: str | None = None
+    preflight_stderr_text: str | None = None
+    preflight_enabled = acquisition_mode == ACQUISITION_MODE_LIST_FIRST_NON_REPEAT
+    preflight_ok = False
     initial_inventory = _build_file_inventory(staging_root)
     final_inventory = initial_inventory
     command = build_icloudpd_command(
@@ -923,68 +1034,194 @@ def _run_background_job(
             str(recent_count),
         ]
     )
+    preflight_command = build_icloudpd_preflight_command(
+        executable=executable,
+        username=username,
+        staging_root=staging_root,
+        recent_count=recent_count,
+    )
+    preflight_command_sanitized = " ".join(
+        [
+            str(executable),
+            "--username",
+            redact_username(username) or username,
+            "--directory",
+            str(staging_root),
+            "--recent",
+            str(recent_count),
+            "--dry-run",
+            "--only-print-filenames",
+        ]
+    )
+
+    preflight_candidate_count = 0
+    already_known_count = 0
+    staged_known_count = 0
+    ingested_known_count = 0
+    vault_verified_known_count = 0
+    unknown_identity_count = 0
+    download_skipped_due_to_all_known = False
+    candidate_samples: list[dict[str, object]] = []
+    unknown_identity_samples: list[str] = []
+
     exit_code: int | None = None
     status = STATUS_FAILED
     error_code: str | None = None
     error_message: str | None = None
     resolved_executable = str(executable)
     icloudpd_version = None
+    skipped_existing_count = 0
+    failed_count = 0
+    downloaded_count = 0
 
     try:
         version_text = probe_icloudpd_version(executable)
         icloudpd_version = version_text
-        with _current_process_lock:
-            process = subprocess.Popen(
-                command,
-                cwd=str(BACKEND_ROOT),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                text=True,
-            )
-            _PROCESS_STATE.process = process
-            _PROCESS_STATE.run_id = run_id
-
-        try:
-            stdout_text, stderr_text = process.communicate(timeout=DEFAULT_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired:
-            error_code = "TIMEOUT"
-            error_message = "icloudpd acquisition timed out before completion."
+        should_run_download = True
+        if preflight_enabled:
             try:
-                process.terminate()
-                stdout_text, stderr_text = process.communicate(timeout=10)
-            except Exception:  # noqa: BLE001
+                completed = subprocess.run(
+                    preflight_command,
+                    cwd=str(BACKEND_ROOT),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    check=False,
+                    timeout=DEFAULT_TIMEOUT_SECONDS,
+                )
+                preflight_stdout_text = completed.stdout
+                preflight_stderr_text = completed.stderr
+                preflight_ok = completed.returncode == 0
+                if not preflight_ok:
+                    should_run_download = False
+                    status = STATUS_FAILED
+                    error_code, error_message = _classify_process_error(
+                        completed.returncode,
+                        preflight_stdout_text,
+                        preflight_stderr_text,
+                        timed_out=False,
+                    )
+                else:
+                    candidates = parse_preflight_candidates(preflight_stdout_text, preflight_stderr_text)
+                    with SessionLocal() as db_session:
+                        known_summary = evaluate_known_state(
+                            db_session,
+                            ingestion_source_id=source_id,
+                            staging_root=staging_root,
+                            candidates=candidates,
+                        )
+                    preflight_candidate_count = known_summary.candidate_count
+                    already_known_count = known_summary.already_known_count
+                    staged_known_count = known_summary.staged_known_count
+                    ingested_known_count = known_summary.ingested_known_count
+                    vault_verified_known_count = known_summary.vault_verified_known_count
+                    unknown_identity_count = known_summary.unknown_identity_count
+                    candidate_samples = [
+                        {
+                            "raw_line": row.raw_line,
+                            "normalized_source_relative_path": row.normalized_source_relative_path,
+                            "known_state": row.known_state,
+                            "already_known": row.already_known,
+                            "unknown_identity": row.unknown_identity,
+                        }
+                        for row in known_summary.candidates[:50]
+                    ]
+                    unknown_identity_samples = [
+                        row.raw_line for row in known_summary.candidates if row.unknown_identity
+                    ][:20]
+
+                    all_candidates_already_known = (
+                        preflight_candidate_count > 0
+                        and unknown_identity_count == 0
+                        and already_known_count == preflight_candidate_count
+                    )
+                    if all_candidates_already_known:
+                        should_run_download = False
+                        download_skipped_due_to_all_known = True
+                        status = STATUS_COMPLETED
+                        error_code = None
+                        error_message = None
+            except subprocess.TimeoutExpired:
+                should_run_download = False
+                preflight_ok = False
+                status = STATUS_FAILED
+                error_code = "PREFLIGHT_TIMEOUT"
+                error_message = "icloudpd preflight timed out before completion."
+            except OSError as exc:
+                should_run_download = False
+                preflight_ok = False
+                status = STATUS_FAILED
+                error_code = "PREFLIGHT_EXECUTION_ERROR"
+                error_message = f"icloudpd preflight failed to execute: {exc}"
+
+        if should_run_download:
+            with _current_process_lock:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(BACKEND_ROOT),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                )
+                _PROCESS_STATE.process = process
+                _PROCESS_STATE.run_id = run_id
+
+            try:
+                stdout_text, stderr_text = process.communicate(timeout=DEFAULT_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                error_code = "TIMEOUT"
+                error_message = "icloudpd acquisition timed out before completion."
                 try:
-                    process.kill()
+                    process.terminate()
                     stdout_text, stderr_text = process.communicate(timeout=10)
                 except Exception:  # noqa: BLE001
-                    stdout_text = stdout_text or None
-                    stderr_text = stderr_text or None
-            exit_code = process.returncode
-            status = STATUS_FAILED
-        else:
-            exit_code = process.returncode
-            stop_was_requested = False
-            with SessionLocal() as db_session:
-                run = db_session.get(IcloudAcquisitionRun, run_id)
-                stop_was_requested = bool(run.stop_requested) if run is not None else False
-            if stop_was_requested:
-                status = STATUS_STOPPED
-                error_code = "PROCESS_STOPPED"
-                error_message = "icloudpd acquisition stopped by operator request."
-            elif exit_code == 0:
-                status = STATUS_COMPLETED
-            else:
+                    try:
+                        process.kill()
+                        stdout_text, stderr_text = process.communicate(timeout=10)
+                    except Exception:  # noqa: BLE001
+                        stdout_text = stdout_text or None
+                        stderr_text = stderr_text or None
+                exit_code = process.returncode
                 status = STATUS_FAILED
-                error_code, error_message = _classify_process_error(exit_code, stdout_text, stderr_text, timed_out=False)
+            else:
+                exit_code = process.returncode
+                stop_was_requested = False
+                with SessionLocal() as db_session:
+                    run = db_session.get(IcloudAcquisitionRun, run_id)
+                    stop_was_requested = bool(run.stop_requested) if run is not None else False
+                if stop_was_requested:
+                    status = STATUS_STOPPED
+                    error_code = "PROCESS_STOPPED"
+                    error_message = "icloudpd acquisition stopped by operator request."
+                elif exit_code == 0:
+                    status = STATUS_COMPLETED
+                else:
+                    status = STATUS_FAILED
+                    error_code, error_message = _classify_process_error(exit_code, stdout_text, stderr_text, timed_out=False)
 
-        _dummy, skipped_existing_count, failed_count = _extract_best_effort_counts((stdout_text or "") + "\n" + (stderr_text or ""))
-        final_inventory = _build_file_inventory(staging_root)
-        # Always use filesystem delta as ground truth — log parsing is unreliable
-        # (icloudpd summary lines contain "download" but are not per-file events)
-        downloaded_count = max(0, int(final_inventory["total_files"]) - int(initial_inventory["total_files"]))
-        if failed_count == 0 and status == STATUS_FAILED:
-            failed_count = 1
+            _dummy, skipped_existing_count, failed_count = _extract_best_effort_counts((stdout_text or "") + "\n" + (stderr_text or ""))
+            final_inventory = _build_file_inventory(staging_root)
+            # Always use filesystem delta as ground truth — log parsing is unreliable
+            # (icloudpd summary lines contain "download" but are not per-file events)
+            downloaded_count = max(0, int(final_inventory["total_files"]) - int(initial_inventory["total_files"]))
+            if failed_count == 0 and status == STATUS_FAILED:
+                failed_count = 1
+        else:
+            final_inventory = _build_file_inventory(staging_root)
+
+        caught_up_status = derive_caught_up_status(
+            preflight_ok=preflight_ok,
+            preflight_candidate_count=preflight_candidate_count,
+            unknown_identity_count=unknown_identity_count,
+            all_candidates_already_known=(
+                preflight_candidate_count > 0
+                and already_known_count == preflight_candidate_count
+                and unknown_identity_count == 0
+            ),
+            download_skipped_due_to_all_known=download_skipped_due_to_all_known,
+        )
 
         elapsed = time.perf_counter() - started_at
         with SessionLocal() as db_session:
@@ -1002,6 +1239,7 @@ def _run_background_job(
             run.resolved_executable = resolved_executable
             run.icloudpd_version = icloudpd_version
             run.file_inventory_count = int(final_inventory["total_files"])
+            run.acquisition_mode = acquisition_mode
             run.recommended_source_intake_command = (
                 f'python scripts/run_pipeline.py --from-path "{run.staging_path}" '
                 f'--source-label "{run.source_label}" --source-type {run.source_type or "cloud_export"} '
@@ -1034,6 +1272,21 @@ def _run_background_job(
                 stderr_text=stderr_text,
                 initial_inventory=initial_inventory,
                 final_inventory=final_inventory,
+                acquisition_mode=acquisition_mode,
+                preflight_enabled=preflight_enabled,
+                preflight_ok=preflight_ok,
+                preflight_stdout_tail=preflight_stdout_text,
+                preflight_stderr_tail=preflight_stderr_text,
+                preflight_candidate_count=preflight_candidate_count,
+                already_known_count=already_known_count,
+                staged_known_count=staged_known_count,
+                ingested_known_count=ingested_known_count,
+                vault_verified_known_count=vault_verified_known_count,
+                unknown_identity_count=unknown_identity_count,
+                download_skipped_due_to_all_known=download_skipped_due_to_all_known,
+                caught_up_status=caught_up_status,
+                candidate_samples=candidate_samples,
+                unknown_identity_samples=unknown_identity_samples,
                 notes=["background acquisition run"],
             )
             run.report_path = str(report_path)
@@ -1067,6 +1320,21 @@ def _run_background_job(
                     stderr_text=f"{stderr_text or ''}\n{error_message}",
                     initial_inventory=initial_inventory,
                     final_inventory=final_inventory,
+                    acquisition_mode=acquisition_mode,
+                    preflight_enabled=preflight_enabled,
+                    preflight_ok=preflight_ok,
+                    preflight_stdout_tail=preflight_stdout_text,
+                    preflight_stderr_tail=preflight_stderr_text,
+                    preflight_candidate_count=preflight_candidate_count,
+                    already_known_count=already_known_count,
+                    staged_known_count=staged_known_count,
+                    ingested_known_count=ingested_known_count,
+                    vault_verified_known_count=vault_verified_known_count,
+                    unknown_identity_count=unknown_identity_count,
+                    download_skipped_due_to_all_known=download_skipped_due_to_all_known,
+                    caught_up_status=CAUGHT_UP_UNKNOWN,
+                    candidate_samples=candidate_samples,
+                    unknown_identity_samples=unknown_identity_samples,
                     notes=[f"exception: {type(exc).__name__}"],
                 )
                 run.report_path = str(report_path)

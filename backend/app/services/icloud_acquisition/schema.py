@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
@@ -30,6 +30,14 @@ def ensure_icloud_acquisition_schema(db_session: Session) -> IcloudAcquisitionSc
         created_tables.append("icloud_acquisition_runs")
     else:
         IcloudAcquisitionRun.__table__.create(bind=bind, checkfirst=True)
+        run_columns = {column["name"] for column in inspector.get_columns("icloud_acquisition_runs")}
+        if "acquisition_mode" not in run_columns:
+            db_session.execute(
+                text(
+                    "ALTER TABLE icloud_acquisition_runs "
+                    "ADD COLUMN acquisition_mode VARCHAR(64) NOT NULL DEFAULT 'standard'"
+                )
+            )
 
     db_session.commit()
     return IcloudAcquisitionSchemaSummary(created_tables=created_tables)
