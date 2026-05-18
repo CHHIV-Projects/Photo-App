@@ -4,16 +4,23 @@ services:
     container_name: photo-organizer-postgres
     restart: unless-stopped
     environment:
-      # Replace these placeholder values later with your real local settings.
-      POSTGRES_DB: photo_organizer
-      POSTGRES_USER: photo_user
-      POSTGRES_PASSWORD: change_me
+      # Override these via environment variables (e.g. from launcher script or .env).
+      # Production launcher sets POSTGRES_DB=photo_organizer_prod.
+      POSTGRES_DB: ${POSTGRES_DB:-photo_organizer}
+      POSTGRES_USER: ${POSTGRES_USER:-photo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
     ports:
       # Host:Container
       - "5432:5432"
     volumes:
       # Keeps database data between container restarts.
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-photo_user} -d ${POSTGRES_DB:-photo_organizer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7
@@ -25,6 +32,12 @@ services:
     volumes:
       # Keeps Redis data between container restarts.
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
 volumes:
   postgres_data:

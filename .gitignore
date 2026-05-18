@@ -11,6 +11,8 @@ out/
 # Env files
 .env
 .env.*
+# Allow committed example/template files
+!.env.*.example
 
 # OS
 .DS_Store

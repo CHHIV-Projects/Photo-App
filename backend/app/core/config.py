@@ -8,7 +8,26 @@ from dotenv import load_dotenv
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(dotenv_path=BACKEND_ROOT / ".env", override=True)
+
+# Read runtime profile from process environment only.
+# APP_RUNTIME_PROFILE must be set externally (shell, launcher script, or Docker env).
+# Never read it from a dotenv file -- that creates a bootstrap ambiguity where you
+# need the profile value to know which file to load it from.
+RUNTIME_PROFILE: str = os.environ.get("APP_RUNTIME_PROFILE", "development").strip().lower()
+
+if RUNTIME_PROFILE == "production":
+    _env_file = BACKEND_ROOT / ".env.production"
+    if not _env_file.exists():
+        raise RuntimeError(
+            f"APP_RUNTIME_PROFILE=production but {_env_file} does not exist. "
+            "Create backend/.env.production from the template "
+            "backend/.env.production.example before starting in production mode."
+        )
+    load_dotenv(dotenv_path=_env_file, override=True)
+else:
+    # Development: prefer .env.development, fall back to legacy .env for backward compatibility.
+    _dev_env = BACKEND_ROOT / ".env.development"
+    load_dotenv(dotenv_path=_dev_env if _dev_env.exists() else BACKEND_ROOT / ".env", override=True)
 
 
 DEFAULT_APPROVED_EXTENSIONS = ".jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.heic,.mp4,.mov,.avi,.mkv"
@@ -20,11 +39,14 @@ class Settings:
 
 	app_name: str = os.getenv("APP_NAME", "AI Photo Organizer API")
 	app_version: str = os.getenv("APP_VERSION", "0.1.0")
+	runtime_profile: str = RUNTIME_PROFILE
 	postgres_host: str = os.getenv("POSTGRES_HOST", "localhost")
 	postgres_port: str = os.getenv("POSTGRES_PORT", "5432")
 	postgres_db: str = os.getenv("POSTGRES_DB", "photo_organizer")
 	postgres_user: str = os.getenv("POSTGRES_USER", "photo_user")
 	postgres_password: str = os.getenv("POSTGRES_PASSWORD", "change_me")
+	redis_host: str = os.getenv("REDIS_HOST", "localhost")
+	redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
 
 	approved_extensions_csv: str = os.getenv("APPROVED_EXTENSIONS", DEFAULT_APPROVED_EXTENSIONS)
 	minimum_file_size_bytes: int = int(os.getenv("MINIMUM_FILE_SIZE_BYTES", str(50 * 1024)))

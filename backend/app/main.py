@@ -29,7 +29,7 @@ from app.services.duplicates.suggestion_schema import ensure_duplicate_suggestio
 from app.services.places.place_schema import ensure_place_schema
 from app.services.photos.display_adjustment_schema import ensure_display_adjustment_schema
 from app.services.previews.heic_preview_schema import ensure_heic_preview_schema
-from app.services.vision.face_incremental_schema import ensure_face_incremental_schema
+from app.services.face.face_processing_schema import ensure_face_processing_schema
 from app.services.admin.source_intake_schema import ensure_source_intake_schema
 from app.services.admin.source_intake_execution_service import _reset_stale_runs
 from app.services.live_photo.pairing_schema import ensure_live_photo_pairing_schema
@@ -40,6 +40,7 @@ from app.services.admin.icloud_staging_cleanup_execution_service import reset_st
 from app.services.face.face_processing_service import _reset_stale_runs as _reset_stale_face_processing_runs
 from app.services.duplicates.processing_service import _reset_stale_duplicate_runs
 from app.services.location.place_geocoding_service import _reset_stale_runs as _reset_stale_place_geocoding_runs
+from app.services.location.place_geocoding_schema import ensure_place_geocoding_schema
 from app.services.previews.heic_preview_processing_service import _reset_stale_runs as _reset_stale_heic_preview_runs
 
 
@@ -88,12 +89,13 @@ def create_app() -> FastAPI:
 			ensure_duplicate_processing_schema(db_session)
 			ensure_place_schema(db_session)
 			ensure_display_adjustment_schema(db_session)
-			ensure_face_incremental_schema(db_session)
+			ensure_face_processing_schema(db_session)
 			ensure_heic_preview_schema(db_session)
 			ensure_source_intake_schema(db_session)
 			ensure_live_photo_pairing_schema(db_session)
 			ensure_icloud_acquisition_schema(db_session)
 			ensure_icloud_staging_cleanup_schema(db_session)
+			ensure_place_geocoding_schema(db_session.connection())
 			_reset_stale_runs(db_session)
 			_reset_stale_icloud_acquisition_runs(db_session)
 			reset_stale_cleanup_runs(db_session)
