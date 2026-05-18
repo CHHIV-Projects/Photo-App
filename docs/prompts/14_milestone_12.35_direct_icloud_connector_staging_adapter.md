@@ -579,127 +579,108 @@ This milestone is about making the feasible connector easier to operate safely.
 
 It should remain conservative and reversible.
 
-
-# 12.35 Clarification Answers## 1. Milestone IDConfirmed: we are executing **12.35**.The reference to 12.25 was a typo if it appeared anywhere.Correct milestone:```text12.35 — Direct iCloud Connector Staging Adapter
+# 
 
 2. Wrapper decision
-Yes.
-Implement Option B:
-new wrapper script
-Keep the existing scan/download scripts.
-The wrapper should improve operator workflow without removing the lower-level diagnostic tools.
+   Yes.
+   Implement Option B:
+   new wrapper script
+   Keep the existing scan/download scripts.
+   The wrapper should improve operator workflow without removing the lower-level diagnostic tools.
 
 3. Wrapper name/location
-Confirmed.
-Use:
-backend/scripts/experimental/icloud_staging_adapter.py
-Keep it under experimental.
+   Confirmed.
+   Use:
+   backend/scripts/experimental/icloud_staging_adapter.py
+   Keep it under experimental.
 
 4. Authentication flow
-Yes.
-The wrapper should reuse one authenticated PyiCloud session for both scan and download in a single run.
-Reason:
-
+   Yes.
+   The wrapper should reuse one authenticated PyiCloud session for both scan and download in a single run.
+   Reason:
 
 fewer 2FA/session prompts
 
-
 closer to real operator workflow
-
 
 simpler user experience
 
-
-
 5. Download cap policy
-Approved.
-Default protection:
-hard max = 25 downloads
-Anything above 25 requires an explicit override flag:
---allow-large-test
-Even with that flag, this remains experimental. Do not implement full-library download behavior.
+   Approved.
+   Default protection:
+   hard max = 25 downloads
+   Anything above 25 requires an explicit override flag:
+   --allow-large-test
+   Even with that flag, this remains experimental. Do not implement full-library download behavior.
 
 6. Existing-file behavior
-Confirmed.
-Default behavior:
-skip existing
-Optional explicit rename mode is acceptable if already supported, but default should be skip.
-Do not overwrite existing staged files silently.
+   Confirmed.
+   Default behavior:
+   skip existing
+   Optional explicit rename mode is acceptable if already supported, but default should be skip.
+   Do not overwrite existing staged files silently.
 
 7. Source label requirement
-Yes.
-The wrapper should fail fast if --source-label is missing.
-No default label.
-No auto-generated source labels.
+   Yes.
+   The wrapper should fail fast if --source-label is missing.
+   No default label.
+   No auto-generated source labels.
 
 8. Source registration check
-Use read-only lookup and guidance only.
-Do not auto-create the source in 12.35.
-Behavior:
-if source exists:    print registered source foundif source missing:    print Admin registration guidance
-No source creation from the wrapper yet.
+   Use read-only lookup and guidance only.
+   Do not auto-create the source in 12.35.
+   Behavior:
+   if source exists:    print registered source foundif source missing:    print Admin registration guidance
+   No source creation from the wrapper yet.
 
 9. Source Intake handoff
-Print the Source Intake command only.
-Do not auto-run Source Intake in 12.35.
-Manual handoff remains intentional and safer at this stage.
+   Print the Source Intake command only.
+   Do not auto-run Source Intake in 12.35.
+   Manual handoff remains intentional and safer at this stage.
 
 10. Validation style
-Use a new label first, then immediately run again on the same label to prove skip-existing behavior.
-Suggested validation label:
-chuck_icloud_direct_adapter_test
-Expected validation:
-Run 1:downloads limited fresh set into clean staging folderRun 2:same label/folderskips existing files by default
-This is better than reusing chuck_icloud_direct_test, because it avoids confusion with earlier 12.33/12.34 artifacts.
+    Use a new label first, then immediately run again on the same label to prove skip-existing behavior.
+    Suggested validation label:
+    chuck_icloud_direct_adapter_test
+    Expected validation:
+    Run 1:downloads limited fresh set into clean staging folderRun 2:same label/folderskips existing files by default
+    This is better than reusing chuck_icloud_direct_test, because it avoids confusion with earlier 12.33/12.34 artifacts.
 
 11. Docs update target
-Yes.
-Update:
-docs/operations/icloud_direct_feasibility_notes.md
-Add a 12.35 workflow section for the staging adapter wrapper.
-No need to create a new operator doc unless coder thinks the existing doc is getting too large.
+    Yes.
+    Update:
+    docs/operations/icloud_direct_feasibility_notes.md
+    Add a 12.35 workflow section for the staging adapter wrapper.
+    No need to create a new operator doc unless coder thinks the existing doc is getting too large.
 
 12. Closeout artifact
-Yes.
-Create a dedicated closeout response file if that is consistent with recent workflow.
-Suggested:
-docs/prompts/Coder response 12.35.md
-or follow the exact naming convention currently used in the repo.
+    Yes.
+    Create a dedicated closeout response file if that is consistent with recent workflow.
+    Suggested:
+    docs/prompts/Coder response 12.35.md
+    or follow the exact naming convention currently used in the repo.
 
 Approved Fast Path
 Proceed with coder’s recommended default path:
 
-
 12.35 confirmed
-
 
 add wrapper script
 
-
 keep existing scan/download scripts
-
 
 reuse one authenticated session
 
-
 hard cap 25 unless --allow-large-test
-
 
 skip existing by default
 
-
 require explicit source label
-
 
 read-only source registration check
 
-
 print Source Intake command only
-
 
 validate with new label first, then repeat same label for skip-existing proof
 
-
 update icloud_direct_feasibility_notes.md
-
-

@@ -656,25 +656,25 @@
 
 ### 12.37 — Direct iCloud New-Asset Insertion Trial
 
-- Proved direct iCloud adapter can acquire new unique assets
+- Tested direct iCloud adapter acquisition into staging  
 
-- Confirmed new Asset rows and provenance creation
+- Confirmed Source Intake could process direct-cloud staged files  
 
-- Validated enrichment behavior on newly acquired assets
+- Identified recent/newest asset targeting limitations in full-library ordering  
 
-- Documented outcomes for production integration planning
+- Documented need for improved selection strategy before production use
 
 ---
 
 ### 12.37.1 — Direct iCloud New-Asset Insertion Trial Sorting Addendum
 
-- Identified full-library ordering limitations for recent asset selection
+- Added album/collection targeting to improve asset selection  
 
-- Added album and collection targeting for reliable selection
+- Validated controlled new-asset insertion using a curated album path  
 
-- Prepared improved targeting approach for production workflows
+- Confirmed new Asset rows and provenance creation from direct-cloud staged files  
 
-- Resolved inconclusive trial outcomes via better targeting
+- Established raw PyiCloud as useful but not preferred for production acquisition
 
 ---
 
@@ -744,7 +744,21 @@
 
 - Wired UI to acquisition backend endpoints and controls
 
-- Displayed source registry status and staging folder context
+- Displayed source registry status, staged file count, report path, and acquisition status  
+
+- Added next-step guidance toward Source Intake without automating intake
+
+---
+
+### 12.44 — iCloud Acquisition and Source Intake Workflow Integration
+
+- Improved Admin handoff from iCloud Acquisition to Source Intake
+
+- Enabled acquisition results to prefill Source Intake controls
+
+- Clarified staged file counts and recommended settings in UI
+
+- Reduced operator risk before cleanup automation
 
 - Added guided handoff into Source Intake workflow
 
@@ -762,18 +776,6 @@
 
 ---
 
-### 12.44 — iCloud Acquisition and Source Intake Workflow Integration
-
-- Improved Admin handoff from iCloud Acquisition to Source Intake
-
-- Enabled acquisition results to prefill Source Intake controls
-
-- Clarified staged file counts and recommended settings in UI
-
-- Reduced operator risk before cleanup automation
-
----
-
 ### 12.44.1 — Delete Successfully Ingested iCloud Staging Files
 
 - Added backend cleanup logic for iCloud staging files
@@ -783,6 +785,29 @@
 - Deleted only verified successfully ingested staged files
 
 - Preserved source registry, Vault, provenance, and DB integrity
+
+---
+
+##### 12.45 — PROJECT_CONTEXT Refresh
+
+- Refreshed project context to reflect post-12.44.1 architecture  
+- Updated cloud acquisition, Source Intake, Live Photo, video metadata, and cleanup status  
+- Removed stale limitations around cloud ingestion, HEIC support, Live Photo handling, and video handling  
+- Reestablished PROJECT_CONTEXT.md as current-state source of truth  
+
+### 12.45.0 — PROJECT_ARCHITECTURE Refresh
+
+- Updated architecture roadmap after the iCloud ingestion arc  
+- Reclassified implemented items versus remaining roadmap work  
+- Added cloud acquisition boundary and unified Source Profile direction  
+- Updated Phase 5 to focus on operational hardening and real-world scale  
+
+### 12.45.1 — Workflow Documentation Refresh
+
+- Updated workflow process to include formal coder response artifacts  
+- Added chat/context health and continuation guidance  
+- Clarified documentation artifact expectations  
+- Preserved milestone-driven architect/coder/user collaboration model 
 
 ---
 
@@ -796,3 +821,6 @@ The following areas are identified for future milestones:
 - Video-aware review and playback-centered workflow improvements
 - Cross-source acquisition unification beyond iCloud-specific flows
 - Policy-driven automation for cleanup, retry, and background orchestration
+- iCloud until-found / checkpoint acquisition strategy
+- Source Registry archive / inactive source lifecycle
+- Unified Source Profile and one-click intake workflow
