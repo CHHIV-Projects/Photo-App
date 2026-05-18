@@ -1355,6 +1355,38 @@ operational run history
 
 ---
 
+ 
+
+```
+NAS-003 — Production Bootstrap / NAS Runtime Validation### SummaryValidate the 12.47 production bootstrap foundation against the real NAS-backed production path before any real production archive ingestion.### Current State12.47 created the production runtime scaffold, including:```textproduction profile/config templatesproduction DB separationproduction launcher scriptsproduction storage bootstrap scriptproduction release manifestoperator bootstrap guide
+```
+
+However, production startup has not yet been fully tested against real NAS paths.
+
+### Desired
+
+Before first real production ingestion:
+
+- create real `backend/.env.production`
+- configure actual NAS Vault path
+- run production storage bootstrap
+- verify production DB initialization
+- verify production launcher startup/shutdown
+- verify health checks
+- confirm dev/prod separation
+- confirm no fallback to development config/storage
+- confirm no real media ingestion occurs during validation
+
+### Importance
+
+High before first production archive ingestion.
+
+This is a validation and safety checkpoint, not a feature expansion.
+
+---
+
+
+
 # 12. Intelligence / AI Long-Term
 
 ---
