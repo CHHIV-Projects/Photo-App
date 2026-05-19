@@ -76,7 +76,11 @@ class PhotoMetadataObservation(BaseModel):
 class PhotoSummary(BaseModel):
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None = None
+    display_url: str | None = None
+    original_url: str | None = None
+    has_display_preview: bool = False
+    display_source: str | None = None
     captured_at: str | None = None
     capture_time_trust: Literal["high", "low", "unknown"] = "unknown"
     face_count: int
@@ -93,7 +97,11 @@ class PhotoListResponse(BaseModel):
 class SearchPhotoSummary(BaseModel):
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None = None
+    display_url: str | None = None
+    original_url: str | None = None
+    has_display_preview: bool = False
+    display_source: str | None = None
     captured_at: str | None = None
     camera_make: str | None = None
     camera_model: str | None = None
@@ -134,7 +142,11 @@ class PhotoPlaceSummary(BaseModel):
 class PhotoDetail(BaseModel):
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None = None
+    display_url: str | None = None
+    original_url: str | None = None
+    has_display_preview: bool = False
+    display_source: str | None = None
     display_rotation_degrees: Literal[0, 90, 180, 270] = 0
     is_scan: bool
     capture_type: Literal["digital", "scan", "unknown"]
@@ -163,7 +175,11 @@ class PhotoDetail(BaseModel):
 class DuplicateGroupAssetSummary(BaseModel):
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None = None
+    display_url: str | None = None
+    original_url: str | None = None
+    has_display_preview: bool = False
+    display_source: str | None = None
     is_canonical: bool
     visibility_status: Literal["visible", "demoted"] = "visible"
     quality_score: float | None = None
@@ -201,7 +217,11 @@ class DuplicateMergeTargetSummary(BaseModel):
 
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None = None
+    display_url: str | None = None
+    original_url: str | None = None
+    has_display_preview: bool = False
+    display_source: str | None = None
     captured_at: str | None = None
     duplicate_group_id: int
     duplicate_count: int
@@ -269,7 +289,11 @@ class DuplicateAdjudicationResponse(BaseModel):
 class DuplicateSuggestionAssetSummary(BaseModel):
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None = None
+    display_url: str | None = None
+    original_url: str | None = None
+    has_display_preview: bool = False
+    display_source: str | None = None
     duplicate_group_id: int | None = None
     quality_score: float | None = None
 

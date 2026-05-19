@@ -11,6 +11,7 @@ from app.models.asset import Asset
 from app.models.collection import Collection
 from app.models.collection_asset import CollectionAsset
 from app.models.face import Face
+from app.services.photos.display_url_service import build_asset_display_url_contract
 from app.services.timeline.timeline_service import effective_capture_time_trust_expr
 
 
@@ -21,13 +22,13 @@ def _to_utc_iso(value: datetime | None) -> str | None:
     return utc_value.isoformat().replace("+00:00", "Z")
 
 
-def _asset_image_url(sha256: str, extension: str) -> str:
-    ext = extension.lower()
-    if not ext.startswith("."):
-        ext = f".{ext}"
-    prefix = sha256[:2]
-    filename = f"{sha256}{ext}"
-    return f"/media/assets/{prefix}/{filename}"
+def _asset_image_url(sha256: str, extension: str, display_preview_path: str | None = None) -> str | None:
+    contract = build_asset_display_url_contract(
+        sha256=sha256,
+        extension=extension,
+        display_preview_path=display_preview_path,
+    )
+    return contract.image_url
 
 
 def _touch_collection(db: Session, collection_id: int) -> None:
@@ -37,10 +38,11 @@ def _touch_collection(db: Session, collection_id: int) -> None:
     collection.updated_at_utc = datetime.now(timezone.utc)
 
 
-def _cover_image_url_from_rows(*, cover_asset_sha256: str | None, membership_rows: list, asset_map: dict[str, tuple[str, str]]) -> str | None:
+def _cover_image_url_from_rows(*, cover_asset_sha256: str | None, membership_rows: list, asset_map: dict[str, tuple[str, str, str | None]]) -> str | None:
     if cover_asset_sha256 and cover_asset_sha256 in asset_map:
         ext = asset_map[cover_asset_sha256][1]
-        return _asset_image_url(cover_asset_sha256, ext)
+        display_preview_path = asset_map[cover_asset_sha256][2]
+        return _asset_image_url(cover_asset_sha256, ext, display_preview_path)
 
     if not membership_rows:
         return None
@@ -49,7 +51,7 @@ def _cover_image_url_from_rows(*, cover_asset_sha256: str | None, membership_row
     tuple_value = asset_map.get(first_asset_sha256)
     if tuple_value is None:
         return None
-    return _asset_image_url(first_asset_sha256, tuple_value[1])
+    return _asset_image_url(first_asset_sha256, tuple_value[1], tuple_value[2])
 
 
 def create_album(db: Session, *, name: str, description: str | None) -> dict:
@@ -152,13 +154,13 @@ def list_albums(db: Session) -> list[dict]:
         membership_by_collection.setdefault(row.collection_id, []).append(row)
         needed_asset_sha256.add(row.asset_sha256)
 
-    asset_map: dict[str, tuple[str, str]] = {}
+    asset_map: dict[str, tuple[str, str, str | None]] = {}
     if needed_asset_sha256:
         asset_rows = db.execute(
-            select(Asset.sha256, Asset.original_filename, Asset.extension)
+            select(Asset.sha256, Asset.original_filename, Asset.extension, Asset.display_preview_path)
             .where(Asset.sha256.in_(needed_asset_sha256))
         ).all()
-        asset_map = {row.sha256: (row.original_filename, row.extension) for row in asset_rows}
+        asset_map = {row.sha256: (row.original_filename, row.extension, row.display_preview_path) for row in asset_rows}
 
     return [
         {
@@ -206,6 +208,7 @@ def get_album_detail(db: Session, *, album_id: int) -> dict:
             CollectionAsset.added_at_utc,
             Asset.original_filename,
             Asset.extension,
+            Asset.display_preview_path,
             Asset.captured_at,
             trust_expr.label("capture_time_trust"),
             func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
@@ -217,7 +220,7 @@ def get_album_detail(db: Session, *, album_id: int) -> dict:
     ).all()
 
     membership_rows = list(reversed(rows))
-    asset_map = {row.asset_sha256: (row.original_filename, row.extension) for row in rows}
+    asset_map = {row.asset_sha256: (row.original_filename, row.extension, row.display_preview_path) for row in rows}
 
     return {
         "album_id": album.id,
@@ -235,7 +238,19 @@ def get_album_detail(db: Session, *, album_id: int) -> dict:
             {
                 "asset_sha256": row.asset_sha256,
                 "filename": row.original_filename,
-                "image_url": _asset_image_url(row.asset_sha256, row.extension),
+                **(lambda contract: {
+                    "image_url": contract.image_url,
+                    "display_url": contract.display_url,
+                    "original_url": contract.original_url,
+                    "has_display_preview": contract.has_display_preview,
+                    "display_source": contract.display_source,
+                })(
+                    build_asset_display_url_contract(
+                        sha256=row.asset_sha256,
+                        extension=row.extension,
+                        display_preview_path=row.display_preview_path,
+                    )
+                ),
                 "captured_at": _to_utc_iso(row.captured_at),
                 "capture_time_trust": row.capture_time_trust,
                 "face_count": int(row.face_count or 0),

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.asset import Asset
 from app.models.event import Event
 from app.models.face import Face
-from app.services.photos.photos_service import _build_asset_url
+from app.services.photos.display_url_service import build_asset_display_url_contract
 
 
 LOGGER = logging.getLogger(__name__)
@@ -217,6 +217,7 @@ def get_event_detail(db: Session, event_id: int) -> dict | None:
             Asset.sha256,
             Asset.original_filename,
             Asset.extension,
+            Asset.display_preview_path,
             Asset.captured_at,
             func.coalesce(face_count_subq.c.face_count, 0).label("face_count"),
         )
@@ -225,16 +226,26 @@ def get_event_detail(db: Session, event_id: int) -> dict | None:
         .order_by(Asset.captured_at.asc(), Asset.sha256.asc())
     ).all()
 
-    photos = [
-        {
-            "asset_sha256": row.sha256,
-            "filename": row.original_filename,
-            "image_url": _build_asset_url(row.sha256, row.extension),
-            "captured_at": _to_utc_iso(row.captured_at),
-            "face_count": row.face_count,
-        }
-        for row in photo_rows
-    ]
+    photos: list[dict] = []
+    for row in photo_rows:
+        contract = build_asset_display_url_contract(
+            sha256=row.sha256,
+            extension=row.extension,
+            display_preview_path=row.display_preview_path,
+        )
+        photos.append(
+            {
+                "asset_sha256": row.sha256,
+                "filename": row.original_filename,
+                "image_url": contract.image_url,
+                "display_url": contract.display_url,
+                "original_url": contract.original_url,
+                "has_display_preview": contract.has_display_preview,
+                "display_source": contract.display_source,
+                "captured_at": _to_utc_iso(row.captured_at),
+                "face_count": row.face_count,
+            }
+        )
 
     return {
         "event_id": event_id,

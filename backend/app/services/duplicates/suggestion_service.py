@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.asset import Asset
 from app.models.duplicate_rejection import DuplicateRejection
 from app.services.duplicates.lineage import IMAGE_EXTENSIONS
+from app.services.photos.display_url_service import build_asset_display_url_contract
 
 MAX_SUGGESTION_DISTANCE = 15
 HIGH_MAX_DISTANCE = 5
@@ -20,7 +21,11 @@ MEDIUM_MAX_DISTANCE = 10
 class SuggestionAssetSummary:
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None
+    display_url: str | None
+    original_url: str
+    has_display_preview: bool
+    display_source: str
     duplicate_group_id: int | None
     quality_score: float | None
 
@@ -37,15 +42,6 @@ class DuplicateSuggestionSummary:
 class DuplicateSuggestionListResult:
     total_count: int
     items: list[DuplicateSuggestionSummary]
-
-
-def _build_asset_url(sha256: str, extension: str) -> str:
-    ext = extension.lower()
-    if not ext.startswith("."):
-        ext = f".{ext}"
-    prefix = sha256[:2]
-    filename = f"{sha256}{ext}"
-    return f"/media/assets/{prefix}/{filename}"
 
 
 def _canonical_pair(sha_a: str, sha_b: str) -> tuple[str, str]:
@@ -137,14 +133,38 @@ def list_duplicate_suggestions(
                     asset_a=SuggestionAssetSummary(
                         asset_sha256=left.sha256,
                         filename=left.original_filename,
-                        image_url=_build_asset_url(left.sha256, left.extension),
+                        **(lambda contract: {
+                            "image_url": contract.image_url,
+                            "display_url": contract.display_url,
+                            "original_url": contract.original_url,
+                            "has_display_preview": contract.has_display_preview,
+                            "display_source": contract.display_source,
+                        })(
+                            build_asset_display_url_contract(
+                                sha256=left.sha256,
+                                extension=left.extension,
+                                display_preview_path=left.display_preview_path,
+                            )
+                        ),
                         duplicate_group_id=left.duplicate_group_id,
                         quality_score=left.quality_score,
                     ),
                     asset_b=SuggestionAssetSummary(
                         asset_sha256=right.sha256,
                         filename=right.original_filename,
-                        image_url=_build_asset_url(right.sha256, right.extension),
+                        **(lambda contract: {
+                            "image_url": contract.image_url,
+                            "display_url": contract.display_url,
+                            "original_url": contract.original_url,
+                            "has_display_preview": contract.has_display_preview,
+                            "display_source": contract.display_source,
+                        })(
+                            build_asset_display_url_contract(
+                                sha256=right.sha256,
+                                extension=right.extension,
+                                display_preview_path=right.display_preview_path,
+                            )
+                        ),
                         duplicate_group_id=right.duplicate_group_id,
                         quality_score=right.quality_score,
                     ),

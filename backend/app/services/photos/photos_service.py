@@ -16,6 +16,7 @@ from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.live_photo_pair import LivePhotoPair
 from app.models.person import Person
+from app.services.photos.display_url_service import build_asset_display_url_contract
 from app.models.place import Place
 from app.models.provenance import Provenance
 from app.services.metadata.metadata_normalizer import get_effective_capture_classification
@@ -99,26 +100,14 @@ def _validate_display_rotation_degrees(rotation_degrees: int) -> int:
     return rotation_degrees
 
 
-def _build_asset_url(sha256: str, extension: str, display_preview_path: str | None = None) -> str:
-    """Build a browser-accessible URL for a vault asset.
-
-    When *display_preview_path* is set the preview URL is returned directly —
-    this covers HEIC assets that have had a JPEG derivative generated.
-    Falls back to the raw vault URL for all other assets and for HEIC assets
-    that have not been previewed yet.
-
-    Vault layout:   storage/vault/{sha256[:2]}/{sha256}.{ext}
-    Served at:      /media/assets/{sha256[:2]}/{sha256}.{ext}
-    Preview served: /media/previews/{sha256[:2]}/{sha256}.jpg
-    """
-    if display_preview_path:
-        return display_preview_path
-    ext = extension.lower()
-    if not ext.startswith("."):
-        ext = f".{ext}"
-    prefix = sha256[:2]
-    filename = f"{sha256}{ext}"
-    return f"/media/assets/{prefix}/{filename}"
+def _build_asset_url(sha256: str, extension: str, display_preview_path: str | None = None) -> str | None:
+    """Backward-compatible alias for display-safe URL."""
+    contract = build_asset_display_url_contract(
+        sha256=sha256,
+        extension=extension,
+        display_preview_path=display_preview_path,
+    )
+    return contract.image_url
 
 
 def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[dict]:
@@ -162,20 +151,31 @@ def list_photos(db: Session, *, filters: TimelineFilter | None = None) -> list[d
         )
     ).all()
 
-    return [
-        {
-            "asset_sha256": row.sha256,
-            "filename": row.original_filename,
-            "image_url": _build_asset_url(row.sha256, row.extension, row.display_preview_path),
-            "captured_at": _to_utc_iso(row.captured_at),
-            "capture_time_trust": row.capture_time_trust,
-            "face_count": row.face_count,
-            "has_live_photo_motion_companion": row.live_photo_motion_asset_sha256 is not None,
-            "is_live_photo_motion_companion": row.live_photo_still_asset_sha256 is not None,
-            "live_photo_still_asset_sha256": row.live_photo_still_asset_sha256,
-        }
-        for row in rows
-    ]
+    items: list[dict] = []
+    for row in rows:
+        contract = build_asset_display_url_contract(
+            sha256=row.sha256,
+            extension=row.extension,
+            display_preview_path=row.display_preview_path,
+        )
+        items.append(
+            {
+                "asset_sha256": row.sha256,
+                "filename": row.original_filename,
+                "image_url": contract.image_url,
+                "display_url": contract.display_url,
+                "original_url": contract.original_url,
+                "has_display_preview": contract.has_display_preview,
+                "display_source": contract.display_source,
+                "captured_at": _to_utc_iso(row.captured_at),
+                "capture_time_trust": row.capture_time_trust,
+                "face_count": row.face_count,
+                "has_live_photo_motion_companion": row.live_photo_motion_asset_sha256 is not None,
+                "is_live_photo_motion_companion": row.live_photo_still_asset_sha256 is not None,
+                "live_photo_still_asset_sha256": row.live_photo_still_asset_sha256,
+            }
+        )
+    return items
 
 
 def _get_content_tags(db: Session, sha256: str) -> list[dict]:
@@ -341,12 +341,22 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
                 Asset.is_canonical.is_(True),
             )
             .limit(1)
-        )
+        ) or canonical_asset_sha256
+
+    contract = build_asset_display_url_contract(
+        sha256=asset.sha256,
+        extension=asset.extension,
+        display_preview_path=asset.display_preview_path,
+    )
 
     return {
-        "asset_sha256": sha256,
+        "asset_sha256": asset.sha256,
         "filename": asset.original_filename,
-        "image_url": _build_asset_url(asset.sha256, asset.extension, asset.display_preview_path),
+        "image_url": contract.image_url,
+        "display_url": contract.display_url,
+        "original_url": contract.original_url,
+        "has_display_preview": contract.has_display_preview,
+        "display_source": contract.display_source,
         "display_rotation_degrees": _validate_display_rotation_degrees(int(asset.display_rotation_degrees or 0)),
         "is_scan": capture_type == "scan",
         "capture_type": capture_type,
@@ -399,11 +409,20 @@ def get_duplicate_group_detail(db: Session, group_id: int) -> dict | None:
     items: list[dict] = []
     for asset in assets:
         capture_type, capture_time_trust = get_effective_capture_classification(asset)
+        contract = build_asset_display_url_contract(
+            sha256=asset.sha256,
+            extension=asset.extension,
+            display_preview_path=asset.display_preview_path,
+        )
         items.append(
             {
                 "asset_sha256": asset.sha256,
                 "filename": asset.original_filename,
-                "image_url": _build_asset_url(asset.sha256, asset.extension, asset.display_preview_path),
+                "image_url": contract.image_url,
+                "display_url": contract.display_url,
+                "original_url": contract.original_url,
+                "has_display_preview": contract.has_display_preview,
+                "display_source": contract.display_source,
                 "is_canonical": asset.is_canonical,
                 "visibility_status": asset.visibility_status,
                 "quality_score": asset.quality_score,

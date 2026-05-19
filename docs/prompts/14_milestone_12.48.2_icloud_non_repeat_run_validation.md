@@ -577,3 +577,46 @@ If validation exposes larger identity/reporting issues:
 ```
 Revisit candidate identity model before proceeding.
 ```
+
+# 12.48.2 Follow-up — Add Unit Test for Staging Root Path Stripping
+
+Please add a focused unit test for the bug fixed during 12.48.2.
+
+Test requirement:
+
+- `parse_preflight_candidates()` receives an absolute path emitted by `icloudpd --only-print-filenames`
+- `staging_root` is provided
+- parser strips the staging root
+- resulting normalized source-relative path matches expected value, for example:
+
+```text
+2026/05/14/IMG_5655.HEIC
+
+The test should also confirm:
+
+raw_line is preserved
+candidate is not classified as unknown_identity
+existing tests still pass
+
+Run:
+
+python -m unittest discover -s tests -p "test_icloud*.py" -v
+
+No behavior changes beyond the test unless needed to make the existing fix testable.
+
+## Known limitation
+
+Coder identified that when staging already contains files, `icloudpd --only-print-filenames --dry-run` may output nothing because those files are already local. That results in `preflight_candidate_count=0` and `caught_up_status=unknown`. This is conservative and safe because local `icloudpd` skip behavior still prevents repeated download. :contentReference[oaicite:3]{index=3}
+
+That should be documented, but it does **not** block v1.0.
+
+## Closeout decision
+
+```text
+12.48.2 validation: successful
+Core non-repeat behavior after cleanup: confirmed
+Bug found/fixed: yes
+Unsafe actions: none
+Remaining action before commit: add unit test for staging-root stripping
+
+After that unit test passes, close 12.48.2.

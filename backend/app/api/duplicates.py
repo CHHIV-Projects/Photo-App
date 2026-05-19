@@ -53,6 +53,10 @@ def get_duplicate_suggestions(
                 "asset_sha256": asset.get("asset_sha256"),
                 "filename": asset.get("filename"),
                 "image_url": asset.get("image_url"),
+                "display_url": asset.get("display_url"),
+                "original_url": asset.get("original_url"),
+                "has_display_preview": asset.get("has_display_preview", False),
+                "display_source": asset.get("display_source"),
                 "duplicate_group_id": asset.get("duplicate_group_id"),
                 "quality_score": asset.get("quality_score"),
             }
@@ -60,6 +64,10 @@ def get_duplicate_suggestions(
             "asset_sha256": getattr(asset, "asset_sha256"),
             "filename": getattr(asset, "filename"),
             "image_url": getattr(asset, "image_url"),
+            "display_url": getattr(asset, "display_url"),
+            "original_url": getattr(asset, "original_url"),
+            "has_display_preview": getattr(asset, "has_display_preview", False),
+            "display_source": getattr(asset, "display_source"),
             "duplicate_group_id": getattr(asset, "duplicate_group_id"),
             "quality_score": getattr(asset, "quality_score"),
         }

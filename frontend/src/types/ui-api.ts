@@ -83,7 +83,11 @@ export interface FaceInPhoto {
 export interface PhotoSummary {
   asset_sha256: string;
   filename: string;
-  image_url: string;
+  image_url: string | null;
+  display_url: string | null;
+  original_url: string | null;
+  has_display_preview: boolean;
+  display_source: string | null;
   captured_at: string | null;
   capture_time_trust: "high" | "low" | "unknown";
   face_count: number;
@@ -95,7 +99,11 @@ export interface PhotoSummary {
 export interface SearchPhotoSummary {
   asset_sha256: string;
   filename: string;
-  image_url: string;
+  image_url: string | null;
+  display_url: string | null;
+  original_url: string | null;
+  has_display_preview: boolean;
+  display_source: string | null;
   captured_at: string | null;
   camera_make: string | null;
   camera_model: string | null;
@@ -235,7 +243,11 @@ export interface ContentTagSummary {
 export interface PhotoDetail {
   asset_sha256: string;
   filename: string;
-  image_url: string;
+  image_url: string | null;
+  display_url: string | null;
+  original_url: string | null;
+  has_display_preview: boolean;
+  display_source: string | null;
   display_rotation_degrees: 0 | 90 | 180 | 270;
   is_scan: boolean;
   capture_type: "digital" | "scan" | "unknown";
@@ -314,7 +326,11 @@ export interface PhotoEventMutationResponse {
 export interface DuplicateMergeTargetSummary {
   asset_sha256: string;
   filename: string;
-  image_url: string;
+  image_url: string | null;
+  display_url: string | null;
+  original_url: string | null;
+  has_display_preview: boolean;
+  display_source: string | null;
   captured_at: string | null;
   duplicate_group_id: number;
   duplicate_count: number;
@@ -348,7 +364,11 @@ export interface DuplicateLineageMergeResponse {
 export interface DuplicateSuggestionAssetSummary {
   asset_sha256: string;
   filename: string;
-  image_url: string;
+  image_url: string | null;
+  display_url: string | null;
+  original_url: string | null;
+  has_display_preview: boolean;
+  display_source: string | null;
   duplicate_group_id: number | null;
   quality_score: number | null;
 }
@@ -390,7 +410,11 @@ export interface DuplicateGroupListResponse {
 export interface DuplicateGroupAssetSummary {
   asset_sha256: string;
   filename: string;
-  image_url: string;
+  image_url: string | null;
+  display_url: string | null;
+  original_url: string | null;
+  has_display_preview: boolean;
+  display_source: string | null;
   is_canonical: boolean;
   visibility_status: "visible" | "demoted";
   quality_score: number | null;

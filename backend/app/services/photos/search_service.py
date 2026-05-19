@@ -14,7 +14,7 @@ from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.live_photo_pair import LivePhotoPair
 from app.models.provenance import Provenance
-from app.services.photos.photos_service import _build_asset_url
+from app.services.photos.display_url_service import build_asset_display_url_contract
 from app.services.timeline.timeline_service import TimelineFilter, apply_asset_time_filters, effective_capture_time_trust_expr
 
 
@@ -22,7 +22,11 @@ from app.services.timeline.timeline_service import TimelineFilter, apply_asset_t
 class SearchPhotoSummary:
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None
+    display_url: str | None
+    original_url: str
+    has_display_preview: bool
+    display_source: str
     captured_at: str | None
     camera_make: str | None
     camera_model: str | None
@@ -232,27 +236,37 @@ def search_photos(
         .limit(max(1, min(limit, 500)))
     ).all()
 
-    items = [
-        SearchPhotoSummary(
-            asset_sha256=row.sha256,
-            filename=row.original_filename,
-            image_url=_build_asset_url(row.sha256, row.extension, row.display_preview_path),
-            captured_at=_to_utc_iso(row.captured_at),
-            camera_make=row.camera_make,
-            camera_model=row.camera_model,
-            capture_time_trust=row.capture_time_trust,
-            face_count=int(row.face_count or 0),
-            assigned_face_count=int(row.assigned_face_count or 0),
-            unassigned_face_count=int(row.unassigned_face_count or 0),
-            duplicate_group_id=row.duplicate_group_id,
-            is_canonical=bool(row.is_canonical),
-            visibility_status=row.visibility_status,
-            has_live_photo_motion_companion=row.live_photo_motion_asset_sha256 is not None,
-            is_live_photo_motion_companion=row.live_photo_still_asset_sha256 is not None,
-            live_photo_still_asset_sha256=row.live_photo_still_asset_sha256,
+    items: list[SearchPhotoSummary] = []
+    for row in rows:
+        contract = build_asset_display_url_contract(
+            sha256=row.sha256,
+            extension=row.extension,
+            display_preview_path=row.display_preview_path,
         )
-        for row in rows
-    ]
+        items.append(
+            SearchPhotoSummary(
+                asset_sha256=row.sha256,
+                filename=row.original_filename,
+                image_url=contract.image_url,
+                display_url=contract.display_url,
+                original_url=contract.original_url,
+                has_display_preview=contract.has_display_preview,
+                display_source=contract.display_source,
+                captured_at=_to_utc_iso(row.captured_at),
+                camera_make=row.camera_make,
+                camera_model=row.camera_model,
+                capture_time_trust=row.capture_time_trust,
+                face_count=int(row.face_count or 0),
+                assigned_face_count=int(row.assigned_face_count or 0),
+                unassigned_face_count=int(row.unassigned_face_count or 0),
+                duplicate_group_id=row.duplicate_group_id,
+                is_canonical=bool(row.is_canonical),
+                visibility_status=row.visibility_status,
+                has_live_photo_motion_companion=row.live_photo_motion_asset_sha256 is not None,
+                is_live_photo_motion_companion=row.live_photo_still_asset_sha256 is not None,
+                live_photo_still_asset_sha256=row.live_photo_still_asset_sha256,
+            )
+        )
 
     bounded_limit = max(1, min(limit, 500))
     return SearchPhotoListResult(total_count=total_count, offset=max(0, offset), limit=bounded_limit, items=items)

@@ -9,7 +9,7 @@ from app.models.place import Place
 from app.schemas.places import PlaceSummary, PlaceDetail, PlaceListResponse
 from app.schemas.photos import PhotoSummary
 from app.services.location.geocoding_service import build_place_display_label
-from app.services.photos.photos_service import _build_asset_url
+from app.services.photos.display_url_service import build_asset_display_url_contract
 
 MAX_PLACE_USER_LABEL_LENGTH = 120
 
@@ -45,6 +45,7 @@ def list_places(db: Session) -> PlaceListResponse:
 			Asset.place_id,
 			Asset.sha256,
 			Asset.extension,
+			Asset.display_preview_path,
 			func.row_number().over(
 				partition_by=Asset.place_id,
 				order_by=[nullslast(Asset.captured_at.desc()), Asset.sha256.asc()],
@@ -60,6 +61,7 @@ def list_places(db: Session) -> PlaceListResponse:
 			asset_ranked_sq.c.place_id,
 			asset_ranked_sq.c.sha256,
 			asset_ranked_sq.c.extension,
+			asset_ranked_sq.c.display_preview_path,
 		)
 		.where(asset_ranked_sq.c.rn == 1)
 		.subquery("thumb")
@@ -80,6 +82,7 @@ def list_places(db: Session) -> PlaceListResponse:
 			func.count(Asset.sha256).label("photo_count"),
 			thumb_sq.c.sha256.label("thumb_sha256"),
 			thumb_sq.c.extension.label("thumb_ext"),
+			thumb_sq.c.display_preview_path.label("thumb_display_preview_path"),
 		)
 		.join(Asset, Asset.place_id == Place.place_id)
 		.where(Asset.visibility_status == "visible")
@@ -97,35 +100,45 @@ def list_places(db: Session) -> PlaceListResponse:
 			Place.geocode_status,
 			thumb_sq.c.sha256,
 			thumb_sq.c.extension,
+			thumb_sq.c.display_preview_path,
 		)
 		.order_by(func.count(Asset.sha256).desc(), Place.place_id.asc())
 	).all()
 
-	items = [
-		PlaceSummary(
-			place_id=str(row.place_id),
-			latitude=row.representative_latitude,
-			longitude=row.representative_longitude,
-			photo_count=int(row.photo_count),
-			thumbnail_url=_build_asset_url(row.thumb_sha256, row.thumb_ext) if row.thumb_sha256 else None,
-			user_label=row.user_label,
-			display_label=(row.user_label.strip() if row.user_label and row.user_label.strip() else build_place_display_label(
-				city=row.city,
-				state=row.state,
-				country=row.country,
-				formatted_address=row.formatted_address,
+	items: list[PlaceSummary] = []
+	for row in rows:
+		thumbnail_url = None
+		if row.thumb_sha256:
+			thumbnail_url = build_asset_display_url_contract(
+				sha256=row.thumb_sha256,
+				extension=row.thumb_ext,
+				display_preview_path=row.thumb_display_preview_path,
+			).image_url
+
+		items.append(
+			PlaceSummary(
+				place_id=str(row.place_id),
 				latitude=row.representative_latitude,
 				longitude=row.representative_longitude,
-			)),
-			formatted_address=row.formatted_address,
-			city=row.city,
-			county=row.county,
-			state=row.state,
-			country=row.country,
-			geocode_status=row.geocode_status,
+				photo_count=int(row.photo_count),
+				thumbnail_url=thumbnail_url,
+				user_label=row.user_label,
+				display_label=(row.user_label.strip() if row.user_label and row.user_label.strip() else build_place_display_label(
+					city=row.city,
+					state=row.state,
+					country=row.country,
+					formatted_address=row.formatted_address,
+					latitude=row.representative_latitude,
+					longitude=row.representative_longitude,
+				)),
+				formatted_address=row.formatted_address,
+				city=row.city,
+				county=row.county,
+				state=row.state,
+				country=row.country,
+				geocode_status=row.geocode_status,
+			)
 		)
-		for row in rows
-	]
 
 	return PlaceListResponse(count=len(items), items=items)
 
@@ -157,11 +170,20 @@ def get_place_detail(db: Session, place_id: str) -> PlaceDetail | None:
 	photos = []
 	for asset in assets:
 		face_count = db.query(Face).filter(Face.asset_sha256 == asset.sha256).count()
+		contract = build_asset_display_url_contract(
+			sha256=asset.sha256,
+			extension=asset.extension,
+			display_preview_path=asset.display_preview_path,
+		)
 
 		photo = PhotoSummary(
 			asset_sha256=asset.sha256,
 			filename=asset.original_filename,
-			image_url=_build_asset_url(asset.sha256, asset.extension),
+			image_url=contract.image_url,
+			display_url=contract.display_url,
+			original_url=contract.original_url,
+			has_display_preview=contract.has_display_preview,
+			display_source=contract.display_source,
 			face_count=face_count,
 		)
 		photos.append(photo)

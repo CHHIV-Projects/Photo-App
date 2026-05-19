@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.asset import Asset
 from app.models.duplicate_group import DuplicateGroup
 from app.services.duplicates.lineage import IMAGE_EXTENSIONS, recompute_group_canonical
+from app.services.photos.display_url_service import build_asset_display_url_contract
 
 VISIBILITY_VISIBLE = "visible"
 VISIBILITY_DEMOTED = "demoted"
@@ -23,20 +24,24 @@ def _to_utc_iso(value: datetime | None) -> str | None:
     return utc_value.isoformat().replace("+00:00", "Z")
 
 
-def _build_asset_url(sha256: str, extension: str) -> str:
-    ext = extension.lower()
-    if not ext.startswith("."):
-        ext = f".{ext}"
-    prefix = sha256[:2]
-    filename = f"{sha256}{ext}"
-    return f"/media/assets/{prefix}/{filename}"
+def _build_asset_url(sha256: str, extension: str, display_preview_path: str | None = None) -> str | None:
+    contract = build_asset_display_url_contract(
+        sha256=sha256,
+        extension=extension,
+        display_preview_path=display_preview_path,
+    )
+    return contract.image_url
 
 
 @dataclass(frozen=True)
 class DuplicateMergeTargetSummary:
     asset_sha256: str
     filename: str
-    image_url: str
+    image_url: str | None
+    display_url: str | None
+    original_url: str
+    has_display_preview: bool
+    display_source: str
     captured_at: str | None
     duplicate_group_id: int
     duplicate_count: int
@@ -161,19 +166,30 @@ def list_duplicate_merge_targets(
     candidates.sort(key=sort_key)
     sliced = candidates[: max(1, min(limit, 100))]
 
-    return [
-        DuplicateMergeTargetSummary(
-            asset_sha256=item.sha256,
-            filename=item.original_filename,
-            image_url=_build_asset_url(item.sha256, item.extension),
-            captured_at=_to_utc_iso(item.captured_at),
-            # duplicate_group_id=0 signals "standalone — will create new group on merge"
-            duplicate_group_id=int(item.duplicate_group_id or 0),
-            duplicate_count=group_member_count.get(int(item.duplicate_group_id or 0), 1),
-            is_canonical=item.is_canonical,
+    items: list[DuplicateMergeTargetSummary] = []
+    for item in sliced:
+        contract = build_asset_display_url_contract(
+            sha256=item.sha256,
+            extension=item.extension,
+            display_preview_path=item.display_preview_path,
         )
-        for item in sliced
-    ]
+        items.append(
+            DuplicateMergeTargetSummary(
+                asset_sha256=item.sha256,
+                filename=item.original_filename,
+                image_url=contract.image_url,
+                display_url=contract.display_url,
+                original_url=contract.original_url,
+                has_display_preview=contract.has_display_preview,
+                display_source=contract.display_source,
+                captured_at=_to_utc_iso(item.captured_at),
+                # duplicate_group_id=0 signals "standalone — will create new group on merge"
+                duplicate_group_id=int(item.duplicate_group_id or 0),
+                duplicate_count=group_member_count.get(int(item.duplicate_group_id or 0), 1),
+                is_canonical=item.is_canonical,
+            )
+        )
+    return items
 
 
 def merge_asset_into_target_lineage(
@@ -482,7 +498,11 @@ def list_duplicate_groups(
         if canonical_sha:
             canonical_asset = db_session.get(Asset, canonical_sha)
             if canonical_asset:
-                canonical_url = _build_asset_url(canonical_sha, canonical_asset.extension)
+                canonical_url = _build_asset_url(
+                    canonical_sha,
+                    canonical_asset.extension,
+                    canonical_asset.display_preview_path,
+                )
 
         summaries.append(
             DuplicateGroupSummary(
