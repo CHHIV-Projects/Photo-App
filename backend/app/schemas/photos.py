@@ -366,3 +366,44 @@ class PhotoEventMutationResponse(BaseModel):
 
 class SuccessResponse(BaseModel):
     success: bool
+
+
+class PhotoBatchVisibilityRequest(BaseModel):
+    asset_sha256_list: list[str]
+    action: Literal["demote", "restore"]
+
+
+class PhotoBatchFailureSummary(BaseModel):
+    asset_sha256: str
+    reason: str
+
+
+class PhotoBatchVisibilityResponse(BaseModel):
+    success: bool
+    action: Literal["demote", "restore"]
+    requested_count: int
+    updated_count: int
+    noop_count: int
+    failed_count: int
+    failures: list[PhotoBatchFailureSummary] = []
+
+
+class PhotoBatchAlbumAddRequest(BaseModel):
+    asset_sha256_list: list[str]
+
+
+class PhotoBatchAlbumCreateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    asset_sha256_list: list[str]
+
+
+class PhotoBatchAlbumSummaryResponse(BaseModel):
+    success: bool
+    album_id: int
+    album_name: str
+    requested_count: int
+    added_count: int
+    already_in_album_count: int
+    failed_count: int
+    failures: list[PhotoBatchFailureSummary] = []

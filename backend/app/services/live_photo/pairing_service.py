@@ -116,6 +116,8 @@ def _pair_confidence(
     motion_captured_at: datetime | None,
     still_capture_time_trust: str | None,
     motion_capture_time_trust: str | None,
+    still_modified_at_utc: datetime | None,
+    motion_modified_at_utc: datetime | None,
 ) -> tuple[str, int | None, bool]:
     if still_captured_at is None or motion_captured_at is None:
         return "high", None, False
@@ -131,6 +133,14 @@ def _pair_confidence(
 
     delta = int(abs((still_utc - motion_utc).total_seconds()))
     if delta > SUSPICIOUS_MAX_SECONDS:
+        still_modified_utc = _to_utc_datetime(still_modified_at_utc)
+        motion_modified_utc = _to_utc_datetime(motion_modified_at_utc)
+        if still_modified_utc is not None and motion_modified_utc is not None:
+            modified_delta = int(abs((still_modified_utc - motion_modified_utc).total_seconds()))
+            if modified_delta <= SUSPICIOUS_MAX_SECONDS:
+                if modified_delta <= HIGH_CONFIDENCE_MAX_SECONDS:
+                    return "high", modified_delta, False
+                return "medium", modified_delta, False
         return "skip", delta, True
     if delta > HIGH_CONFIDENCE_MAX_SECONDS:
         return "medium", delta, False
@@ -164,10 +174,14 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
             Asset.extension,
             Asset.captured_at,
             Asset.capture_time_trust,
+            Asset.modified_timestamp_utc,
         ).join(Asset, Asset.sha256 == Provenance.asset_sha256)
     ).all()
 
-    grouped: dict[tuple[int, str, str], dict[str, dict[str, tuple[datetime | None, str | None, str]]]] = {}
+    grouped: dict[
+        tuple[int, str, str],
+        dict[str, dict[str, tuple[datetime | None, str | None, str, datetime | None]]],
+    ] = {}
     scanned_rows = 0
     skipped_missing_source = 0
     motion_suffixes_seen: dict[str, int] = {}
@@ -208,7 +222,12 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
         bucket_for_role = bucket[role]
         existing_value = bucket_for_role.get(row.sha256)
         if existing_value is None:
-            bucket_for_role[row.sha256] = (row.captured_at, row.capture_time_trust, match_variant)
+            bucket_for_role[row.sha256] = (
+                row.captured_at,
+                row.capture_time_trust,
+                match_variant,
+                row.modified_timestamp_utc,
+            )
 
     candidates: list[PairCandidate] = []
     skipped_ambiguous = 0
@@ -224,14 +243,16 @@ def run_live_photo_pairing(db_session: Session) -> LivePhotoPairingResult:
 
         still_sha, still_info = still_items[0]
         motion_sha, motion_info = motion_items[0]
-        still_captured_at, still_capture_time_trust, _ = still_info
-        motion_captured_at, motion_capture_time_trust, match_variant = motion_info
+        still_captured_at, still_capture_time_trust, _, still_modified_at_utc = still_info
+        motion_captured_at, motion_capture_time_trust, match_variant, motion_modified_at_utc = motion_info
 
         confidence, delta_seconds, is_suspicious = _pair_confidence(
             still_captured_at,
             motion_captured_at,
             still_capture_time_trust,
             motion_capture_time_trust,
+            still_modified_at_utc,
+            motion_modified_at_utc,
         )
         if is_suspicious:
             skipped_suspicious_delta += 1

@@ -15,6 +15,7 @@ from app.models.face_cluster import FaceCluster
 from app.models.live_photo_pair import LivePhotoPair
 from app.models.provenance import Provenance
 from app.services.photos.display_url_service import build_asset_display_url_contract
+from app.services.metadata.metadata_normalizer import VIDEO_EXTENSIONS
 from app.services.timeline.timeline_service import TimelineFilter, apply_asset_time_filters, effective_capture_time_trust_expr
 
 
@@ -106,6 +107,9 @@ def search_photos(
     has_location: bool | None = None,
     has_faces: bool | None = None,
     has_unassigned_faces: bool | None = None,
+    visibility_filter: str = "all",
+    media_type_filter: str = "all",
+    include_live_photo_motion_companions: bool = True,
     canonical_first: bool = False,
     sort_by: str = "ingested_desc",
     timeline_filters: TimelineFilter | None = None,
@@ -167,7 +171,7 @@ def search_photos(
     )
 
     active_timeline_filters = timeline_filters or TimelineFilter()
-    base_query = apply_asset_time_filters(base_query, active_timeline_filters)
+    base_query = apply_asset_time_filters(base_query, active_timeline_filters, include_non_visible=True)
 
     if filename_query and filename_query.strip():
         q = f"%{filename_query.strip().lower()}%"
@@ -194,6 +198,22 @@ def search_photos(
 
     if has_unassigned_faces is True:
         base_query = base_query.where(func.coalesce(face_count_subq.c.unassigned_face_count, 0) > 0)
+
+    if visibility_filter not in {"visible", "demoted", "all"}:
+        raise ValueError("visibility_filter must be one of: visible, demoted, all.")
+    if visibility_filter != "all":
+        base_query = base_query.where(Asset.visibility_status == visibility_filter)
+
+    if media_type_filter not in {"all", "photos", "videos"}:
+        raise ValueError("media_type_filter must be one of: all, photos, videos.")
+    normalized_video_extensions = sorted(VIDEO_EXTENSIONS)
+    if media_type_filter == "photos":
+        base_query = base_query.where(~Asset.extension.in_(normalized_video_extensions))
+    elif media_type_filter == "videos":
+        base_query = base_query.where(Asset.extension.in_(normalized_video_extensions))
+
+    if not include_live_photo_motion_companions:
+        base_query = base_query.where(motion_pair.still_asset_sha256.is_(None))
 
     if sort_by not in {"ingested_desc", "captured_desc"}:
         raise ValueError("sort_by must be one of: ingested_desc, captured_desc.")

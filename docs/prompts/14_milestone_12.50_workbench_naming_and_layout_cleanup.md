@@ -515,3 +515,131 @@ If 12.50 completes successfully, continue the Production v1.0 roadmap with:
 ```
 
 If layout or naming cleanup reveals isolated issues, use a narrow 12.50.x follow-up before moving on.
+
+
+# Answers to Coder Questions — Milestone 12.50
+
+## 1. Naming cleanup scope
+
+Update the user-facing tab/button/page labels **and** clean up obvious obsolete top-shell copy/browser metadata if it still says things like:
+
+```text
+Milestone 10.12
+Face Cluster Review
+
+The app should no longer present itself as a milestone/demo surface.
+
+Preferred user-facing direction:
+
+Photo Organizer
+Photo Review
+Photo Detail
+Face Review
+Workbench
+Admin
+
+Do not do a broad branding/design rewrite. Just remove stale development-era wording where it is clearly visible to the user.
+
+Internal route/view keys should remain unchanged unless a change is trivial and low-risk.
+
+2. Photos → Photo Detail related action text
+
+Update related action text only where it improves clarity and does not create churn.
+
+Preferred labels:
+
+Open Detail
+View Detail
+Photo Detail
+
+Avoid ambiguous labels like:
+
+Open Photo
+Photos
+
+if they refer to the detailed inspection surface.
+
+However, do not rename every occurrence mechanically. If a button naturally means “open this image/photo,” keep it as-is. The key is that the tab/surface should be clearly named Photo Detail.
+
+3. Unassigned Faces create-cluster behavior
+
+Start with the low-risk frontend-only fix.
+
+Preferred 12.50 behavior:
+
+After creating/assigning from an unassigned face:
+- show a clear success message
+- refresh the unassigned list
+- explain that the face may leave the list because it is no longer unassigned
+- avoid leaving stale selected state
+
+Do not extend backend response or add navigation to Face Review in 12.50 unless it is already trivial and clearly supported.
+
+The broader backend-return-new-cluster-id flow can be deferred if useful.
+
+So choose:
+
+Option A: low-risk frontend-only success/context fix
+
+Document whether a future enhancement should jump directly to the new cluster/person.
+
+4. Layout width cleanup
+
+Use a desktop-first widening pass, but keep it targeted.
+
+Preferred approach:
+
+Widen the global shell/container enough to use modern desktop screen width better.
+Then fix the most cramped tabs directly.
+
+Do not redesign every surface.
+
+Prioritize:
+
+Face Review
+Photo Detail
+Albums
+Events
+Places
+Duplicate Groups
+Duplicate Suggestions
+
+Keep Photo Review and Admin stable unless they have obvious spacing regressions.
+
+Avoid horizontal overflow and keep readability.
+
+5. Duplicate preview tradeoff
+
+Prefer larger previews with better aspect-ratio preservation, even if that means fewer cards per row.
+
+The purpose of duplicate review is visual comparison, not maximum density.
+
+Preferred direction:
+
+larger preview images
+object-contain or equivalent where appropriate
+less misleading cropping
+better use of width
+fewer cards per row if needed
+
+Do not change duplicate logic, canonical rules, rejection rules, or scoring.
+
+Confirmed assumptions
+
+Proceed with these assumptions:
+
+Internal route/view keys stay unchanged.
+12.49 display URL behavior stays untouched unless a direct UI regression is found.
+Changes stay targeted to naming, layout, bounded scrolling, duplicate preview layout, and Unassigned Faces workflow clarity.
+Summary
+
+Proceed with:
+
+- Rename visible Review -> Face Review.
+- Rename visible Photos -> Photo Detail.
+- Remove obvious stale milestone/demo shell wording.
+- Improve confusing related action labels selectively.
+- Use low-risk frontend success feedback for Unassigned Faces.
+- Do targeted desktop-first width/layout cleanup.
+- Prefer larger duplicate previews with aspect-ratio preservation.
+- Keep internal routes stable.

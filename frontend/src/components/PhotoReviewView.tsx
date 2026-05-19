@@ -1,16 +1,19 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+
+import { PresentationViewer } from "@/components/PresentationViewer";
 import styles from "@/components/photo-review-view.module.css";
 import {
-  demoteDuplicateGroupMember,
+  batchAddPhotosToAlbum,
+  batchCreateAlbumFromPhotos,
+  batchUpdatePhotoVisibility,
+  getAlbums,
   getTimelineSummary,
-  restoreDuplicateGroupMember,
-  searchPhotos,
-  setDuplicateGroupCanonical,
   resolveApiUrl,
+  searchPhotos,
 } from "@/lib/api";
-import type { SearchPhotoSummary } from "@/types/ui-api";
+import type { AlbumSummary, PhotoSummary, SearchPhotoSummary } from "@/types/ui-api";
 
 const MONTH_MAP: Record<string, string> = {
   january: "01", jan: "01",
@@ -97,27 +100,35 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   const [offset, setOffset] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [busyAssetSha256, setBusyAssetSha256] = useState<string | null>(null);
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const [isRunningBatchAction, setIsRunningBatchAction] = useState(false);
+
+  const [albums, setAlbums] = useState<AlbumSummary[]>([]);
+  const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
+
+  const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
+  const [presentationStartIndex, setPresentationStartIndex] = useState<number | null>(null);
 
   const [searchText, setSearchText] = useState("");
   const [year, setYear] = useState<string>("");
   const [month, setMonth] = useState<string>("");
   const [camera, setCamera] = useState("");
+  const [visibilityFilter, setVisibilityFilter] = useState<"visible" | "demoted" | "all">("visible");
+  const [mediaTypeFilter, setMediaTypeFilter] = useState<"all" | "photos" | "videos">("all");
+  const [showLivePhotoMotionClips, setShowLivePhotoMotionClips] = useState(false);
   const [hasLocation, setHasLocation] = useState(false);
   const [hasFaces, setHasFaces] = useState(false);
   const [hasUnassignedFaces, setHasUnassignedFaces] = useState(false);
-  const [selectedTrusts, setSelectedTrusts] = useState<Array<"high" | "low" | "unknown">>([
-    "high",
-    "low",
-    "unknown",
-  ]);
   const [undated, setUndated] = useState(false);
   const [yearOptions, setYearOptions] = useState<string[]>([]);
-  const [monthOptions, setMonthOptions] = useState<Array<{ value: string; label: string }>>([])
+  const [monthOptions, setMonthOptions] = useState<Array<{ value: string; label: string }>>([]);
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const yearRef = useRef(year);
   yearRef.current = year;
+
+  const selectedCount = selectedAssets.size;
+  const selectedShaList = useMemo(() => Array.from(selectedAssets), [selectedAssets]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -239,6 +250,39 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     }
   }, [month, monthOptions]);
 
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadAlbums(): Promise<void> {
+      try {
+        const response = await getAlbums();
+        if (!isCancelled) {
+          setAlbums(response.items);
+        }
+      } catch {
+        if (!isCancelled) {
+          setAlbums([]);
+        }
+      }
+    }
+
+    void loadAlbums();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (albums.length === 0) {
+      setSelectedAlbumId(null);
+      return;
+    }
+    if (selectedAlbumId !== null && albums.some((album) => album.album_id === selectedAlbumId)) {
+      return;
+    }
+    setSelectedAlbumId(albums[0].album_id);
+  }, [albums, selectedAlbumId]);
+
   async function loadPage(nextOffset: number, reset: boolean): Promise<void> {
     if (isLoading) {
       return;
@@ -254,10 +298,12 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
         year: activeYear,
         month: activeMonth,
         camera: camera || undefined,
+        visibilityFilter,
+        mediaTypeFilter,
+        includeLivePhotoMotionCompanions: showLivePhotoMotionClips,
         hasLocation: hasLocation ? true : undefined,
         hasFaces: hasFaces ? true : undefined,
         hasUnassignedFaces: hasUnassignedFaces ? true : undefined,
-        trust: selectedTrusts.length < 3 ? selectedTrusts : undefined,
         undated: undated || undefined,
         canonicalFirst: true,
         offset: nextOffset,
@@ -289,6 +335,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   }
 
   async function reloadFromStart(): Promise<void> {
+    setSelectedAssets(new Set());
     setItems([]);
     setOffset(0);
     setTotalCount(0);
@@ -297,7 +344,18 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
   useEffect(() => {
     void reloadFromStart();
-  }, [year, month, camera, hasLocation, hasFaces, hasUnassignedFaces, selectedTrusts, undated]);
+  }, [
+    year,
+    month,
+    camera,
+    visibilityFilter,
+    mediaTypeFilter,
+    showLivePhotoMotionClips,
+    hasLocation,
+    hasFaces,
+    hasUnassignedFaces,
+    undated,
+  ]);
 
   const hasMore = items.length < totalCount;
 
@@ -319,63 +377,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
     observer.observe(sentinelRef.current);
     return () => observer.disconnect();
-  }, [offset, hasMore, isLoading, year, month, camera, hasLocation, hasFaces, hasUnassignedFaces, selectedTrusts, undated]);
-
-  async function handleSetCanonical(assetSha256: string): Promise<void> {
-    setBusyAssetSha256(assetSha256);
-    try {
-      await setDuplicateGroupCanonical(assetSha256);
-      await reloadFromStart();
-    } catch (error) {
-      const message = error instanceof Error && error.message ? error.message : "Failed to set canonical.";
-      setErrorMessage(message);
-    } finally {
-      setBusyAssetSha256(null);
-    }
-  }
-
-  async function handleDemote(assetSha256: string): Promise<void> {
-    setBusyAssetSha256(assetSha256);
-    try {
-      await demoteDuplicateGroupMember(assetSha256);
-      await reloadFromStart();
-    } catch (error) {
-      const message = error instanceof Error && error.message ? error.message : "Failed to demote asset.";
-      setErrorMessage(message);
-    } finally {
-      setBusyAssetSha256(null);
-    }
-  }
-
-  async function handleRestore(assetSha256: string): Promise<void> {
-    setBusyAssetSha256(assetSha256);
-    try {
-      await restoreDuplicateGroupMember(assetSha256);
-      await reloadFromStart();
-    } catch (error) {
-      const message = error instanceof Error && error.message ? error.message : "Failed to restore asset.";
-      setErrorMessage(message);
-    } finally {
-      setBusyAssetSha256(null);
-    }
-  }
-
-  function handleToggleTrust(value: "high" | "low" | "unknown"): void {
-    setSelectedTrusts((current) => {
-      if (current.includes(value)) {
-        if (current.length === 1) return current;
-        return current.filter((v) => v !== value);
-      }
-      return [...current, value] as Array<"high" | "low" | "unknown">;
-    });
-  }
-
-  function removeTrustChip(value: "high" | "low" | "unknown"): void {
-    setSelectedTrusts((current) => {
-      if (current.length === 1) return current;
-      return current.filter((v) => v !== value);
-    });
-  }
+  }, [offset, hasMore, isLoading]);
 
   function removeUndatedFilter(): void {
     setUndated(false);
@@ -408,6 +410,122 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     setSearchText(buildSearchText(year, month, ""));
   }
 
+  function toggleSelectAsset(assetSha256: string): void {
+    setSelectedAssets((current) => {
+      const next = new Set(current);
+      if (next.has(assetSha256)) {
+        next.delete(assetSha256);
+      } else {
+        next.add(assetSha256);
+      }
+      return next;
+    });
+  }
+
+  function handleClearSelection(): void {
+    setSelectedAssets(new Set());
+  }
+
+  function handleSelectAllVisible(): void {
+    setSelectedAssets(new Set(items.map((item) => item.asset_sha256)));
+  }
+
+  async function handleBatchVisibility(action: "demote" | "restore"): Promise<void> {
+    if (selectedShaList.length === 0) {
+      return;
+    }
+
+    setIsRunningBatchAction(true);
+    setBatchMessage(null);
+
+    try {
+      const response = await batchUpdatePhotoVisibility(selectedShaList, action);
+      setBatchMessage(
+        `${response.updated_count} updated, ${response.noop_count} unchanged, ${response.failed_count} failed (${action}).`
+      );
+      setSelectedAssets(new Set());
+      await reloadFromStart();
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : `Failed to ${action} assets.`;
+      setErrorMessage(message);
+    } finally {
+      setIsRunningBatchAction(false);
+    }
+  }
+
+  async function handleBatchAddToAlbum(): Promise<void> {
+    if (selectedShaList.length === 0 || selectedAlbumId === null) {
+      return;
+    }
+
+    setIsRunningBatchAction(true);
+    setBatchMessage(null);
+
+    try {
+      const response = await batchAddPhotosToAlbum(selectedAlbumId, selectedShaList);
+      setBatchMessage(
+        `${response.album_name}: ${response.added_count} added, ${response.already_in_album_count} already in album, ${response.failed_count} failed.`
+      );
+      setSelectedAssets(new Set());
+      const albumsResponse = await getAlbums();
+      setAlbums(albumsResponse.items);
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : "Failed to add selected assets to album.";
+      setErrorMessage(message);
+    } finally {
+      setIsRunningBatchAction(false);
+    }
+  }
+
+  async function handleBatchCreateAlbum(): Promise<void> {
+    if (selectedShaList.length === 0) {
+      return;
+    }
+    const albumName = window.prompt("New album name");
+    if (!albumName || !albumName.trim()) {
+      return;
+    }
+
+    setIsRunningBatchAction(true);
+    setBatchMessage(null);
+
+    try {
+      const response = await batchCreateAlbumFromPhotos(albumName.trim(), null, selectedShaList);
+      setBatchMessage(
+        `${response.album_name} created: ${response.added_count} added, ${response.already_in_album_count} already in album, ${response.failed_count} failed.`
+      );
+      setSelectedAssets(new Set());
+      const albumsResponse = await getAlbums();
+      setAlbums(albumsResponse.items);
+      setSelectedAlbumId(response.album_id);
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : "Failed to create album from selection.";
+      setErrorMessage(message);
+    } finally {
+      setIsRunningBatchAction(false);
+    }
+  }
+
+  const presentationItems = useMemo<PhotoSummary[]>(
+    () =>
+      items.map((item) => ({
+        asset_sha256: item.asset_sha256,
+        filename: item.filename,
+        image_url: item.image_url,
+        display_url: item.display_url,
+        original_url: item.original_url,
+        has_display_preview: item.has_display_preview,
+        display_source: item.display_source,
+        captured_at: item.captured_at,
+        capture_time_trust: item.capture_time_trust,
+        face_count: item.face_count,
+        has_live_photo_motion_companion: item.has_live_photo_motion_companion,
+        is_live_photo_motion_companion: item.is_live_photo_motion_companion,
+        live_photo_still_asset_sha256: item.live_photo_still_asset_sha256,
+      })),
+    [items]
+  );
+
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
@@ -421,71 +539,30 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
           />
         </div>
 
-        {(year || month || camera || selectedTrusts.length < 3 || undated) && (
+        {(year || month || camera || undated) && (
           <div className={styles.chipRow}>
             {year && (
               <span className={styles.chip}>
                 Year: {year}
-                <button
-                  type="button"
-                  className={styles.chipRemove}
-                  onClick={removeYearChip}
-                  aria-label="Remove year filter"
-                >
-                  ×
-                </button>
+                <button type="button" className={styles.chipRemove} onClick={removeYearChip} aria-label="Remove year filter">×</button>
               </span>
             )}
             {month && (
               <span className={styles.chip}>
                 Month: {MONTH_NUM_TO_NAME[month] ?? month}
-                <button
-                  type="button"
-                  className={styles.chipRemove}
-                  onClick={removeMonthChip}
-                  aria-label="Remove month filter"
-                >
-                  ×
-                </button>
+                <button type="button" className={styles.chipRemove} onClick={removeMonthChip} aria-label="Remove month filter">×</button>
               </span>
             )}
             {camera && (
               <span className={styles.chip}>
                 Camera: {camera}
-                <button
-                  type="button"
-                  className={styles.chipRemove}
-                  onClick={removeCameraChip}
-                  aria-label="Remove camera filter"
-                >
-                  ×
-                </button>
+                <button type="button" className={styles.chipRemove} onClick={removeCameraChip} aria-label="Remove camera filter">×</button>
               </span>
             )}
-            {selectedTrusts.length < 3 && selectedTrusts.map((value) => (
-              <span key={value} className={styles.chip}>
-                Trust: {value.charAt(0).toUpperCase() + value.slice(1)}
-                <button
-                  type="button"
-                  className={styles.chipRemove}
-                  onClick={() => removeTrustChip(value)}
-                  aria-label={`Remove ${value} trust filter`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
             {undated && (
               <span className={styles.chip}>
                 Undated
-                <button
-                  type="button"
-                  className={styles.chipRemove}
-                  onClick={removeUndatedFilter}
-                  aria-label="Remove undated filter"
-                >
-                  ×
-                </button>
+                <button type="button" className={styles.chipRemove} onClick={removeUndatedFilter} aria-label="Remove undated filter">×</button>
               </span>
             )}
           </div>
@@ -494,86 +571,72 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
         <div className={styles.fieldRow}>
           <label className={styles.fieldLabel}>
             Year
-            <select
-              value={year}
-              onChange={(event) => handleYearDropdownChange(event.target.value)}
-              className={styles.select}
-            >
+            <select value={year} onChange={(event) => handleYearDropdownChange(event.target.value)} className={styles.select}>
               <option value="">All</option>
               {yearOptions.map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
+                <option key={value} value={value}>{value}</option>
               ))}
             </select>
           </label>
 
           <label className={styles.fieldLabel}>
             Month
-            <select
-              value={month}
-              onChange={(event) => handleMonthDropdownChange(event.target.value)}
-              className={styles.select}
-              disabled={!year}
-            >
+            <select value={month} onChange={(event) => handleMonthDropdownChange(event.target.value)} className={styles.select} disabled={!year}>
               <option value="">All</option>
               {monthOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
+                <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
           </label>
 
+          <label className={styles.fieldLabel}>
+            Visibility
+            <select
+              value={visibilityFilter}
+              onChange={(event) => setVisibilityFilter(event.target.value as "visible" | "demoted" | "all")}
+              className={styles.select}
+            >
+              <option value="visible">Visible</option>
+              <option value="demoted">Demoted</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+
+          <label className={styles.fieldLabel}>
+            Media Type
+            <select
+              value={mediaTypeFilter}
+              onChange={(event) => setMediaTypeFilter(event.target.value as "all" | "photos" | "videos")}
+              className={styles.select}
+            >
+              <option value="all">All</option>
+              <option value="photos">Photos</option>
+              <option value="videos">Videos</option>
+            </select>
+          </label>
+
           <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={hasLocation}
-              onChange={(event) => setHasLocation(event.target.checked)}
-            />
+            <input type="checkbox" checked={showLivePhotoMotionClips} onChange={(event) => setShowLivePhotoMotionClips(event.target.checked)} />
+            Show Live Photo motion clips
+          </label>
+
+          <label className={styles.checkboxLabel}>
+            <input type="checkbox" checked={hasLocation} onChange={(event) => setHasLocation(event.target.checked)} />
             Has Location
           </label>
 
           <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={hasFaces}
-              onChange={(event) => setHasFaces(event.target.checked)}
-            />
+            <input type="checkbox" checked={hasFaces} onChange={(event) => setHasFaces(event.target.checked)} />
             Has Faces
           </label>
 
           <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={hasUnassignedFaces}
-              onChange={(event) => setHasUnassignedFaces(event.target.checked)}
-            />
+            <input type="checkbox" checked={hasUnassignedFaces} onChange={(event) => setHasUnassignedFaces(event.target.checked)} />
             Unassigned Faces
           </label>
 
-          <div className={styles.trustGroup}>
-            <span className={styles.trustGroupLabel}>Date Trust</span>
-            <div className={styles.trustButtons}>
-              {(["high", "low", "unknown"] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={`${styles.trustToggle}${selectedTrusts.includes(value) ? ` ${styles.trustToggleActive}` : ""}`}
-                  onClick={() => handleToggleTrust(value)}
-                >
-                  {value.charAt(0).toUpperCase() + value.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={undated}
-              onChange={(event) => setUndated(event.target.checked)}
-            />
+            <input type="checkbox" checked={undated} onChange={(event) => setUndated(event.target.checked)} />
             Undated
           </label>
         </div>
@@ -581,30 +644,58 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
         <div className={styles.countRow}>{items.length} / {totalCount} photos</div>
       </div>
 
-      {errorMessage && <div className={styles.errorMessage}>{errorMessage}</div>}
+      {selectedCount > 0 ? (
+        <div className={styles.batchToolbar}>
+          <div className={styles.batchCount}>{selectedCount} selected</div>
+          <div className={styles.batchActions}>
+            <button type="button" className={styles.actionButtonDanger} disabled={isRunningBatchAction} onClick={() => void handleBatchVisibility("demote")}>Demote selected</button>
+            <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={() => void handleBatchVisibility("restore")}>Restore selected</button>
+            <select
+              value={selectedAlbumId ?? ""}
+              onChange={(event) => setSelectedAlbumId(event.target.value ? Number(event.target.value) : null)}
+              className={styles.select}
+              disabled={isRunningBatchAction || albums.length === 0}
+            >
+              {albums.length === 0 ? <option value="">No albums</option> : albums.map((album) => (
+                <option key={album.album_id} value={album.album_id}>{album.name}</option>
+              ))}
+            </select>
+            <button type="button" className={styles.actionButton} disabled={isRunningBatchAction || selectedAlbumId === null} onClick={() => void handleBatchAddToAlbum()}>Add to album</button>
+            <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={() => void handleBatchCreateAlbum()}>Create album from selected</button>
+            <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={handleSelectAllVisible}>Select all visible</button>
+            <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={handleClearSelection}>Clear selection</button>
+            <button type="button" className={styles.actionButton} disabled>Add to Collection (12.52)</button>
+            <button type="button" className={styles.actionButton} disabled>Create Collection (12.52)</button>
+          </div>
+        </div>
+      ) : null}
+
+      {errorMessage ? <div className={styles.errorMessage}>{errorMessage}</div> : null}
+      {batchMessage ? <div className={styles.batchMessage}>{batchMessage}</div> : null}
 
       <div className={styles.grid}>
-        {items.map((item) => (
-          <div key={item.asset_sha256} className={styles.card}>
-            <button
-              type="button"
-              className={styles.imageButton}
-              onClick={() => onOpenPhotoDetail(item.asset_sha256)}
-            >
-              <img
-                src={resolveApiUrl(item.image_url) ?? ""}
-                alt={item.filename}
-                className={styles.image}
-                loading="lazy"
-              />
+        {items.map((item, index) => (
+          <div key={item.asset_sha256} className={`${styles.card} ${selectedAssets.has(item.asset_sha256) ? styles.cardSelected : ""}`.trim()}>
+            <div className={styles.cardSelectRow}>
+              <label className={styles.cardSelectLabel}>
+                <input type="checkbox" checked={selectedAssets.has(item.asset_sha256)} onChange={() => toggleSelectAsset(item.asset_sha256)} />
+                Select
+              </label>
+            </div>
+
+            <button type="button" className={styles.imageButton} onClick={() => setPresentationStartIndex(index)}>
+              <img src={resolveApiUrl(item.image_url) ?? ""} alt={item.filename} className={styles.image} loading="lazy" />
             </button>
+
             <div className={styles.filename} title={item.filename}>{item.filename}</div>
+
             {(item.has_live_photo_motion_companion || item.is_live_photo_motion_companion) && (
               <div className={styles.badgeRow}>
                 {item.has_live_photo_motion_companion ? <span className={styles.badgeLivePhoto}>Live Photo</span> : null}
                 {item.is_live_photo_motion_companion ? <span className={styles.badgeLivePhotoMotion}>Live Photo Motion</span> : null}
               </div>
             )}
+
             {item.face_count > 0 && (
               <div className={styles.badgeRow}>
                 <span className={styles.badgeNeutral}>{item.face_count} face{item.face_count !== 1 ? "s" : ""}</span>
@@ -612,83 +703,29 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
                 <span className={styles.badgeWarning}>{item.unassigned_face_count} unassigned</span>
               </div>
             )}
+
             <div className={styles.actionRow}>
-              <button
-                type="button"
-                className={styles.actionButton}
-                onClick={() => onOpenPhotoDetail(item.asset_sha256)}
-              >
-                Open Detail
-              </button>
-
-              {item.face_count > 0 && (
-                <button
-                  type="button"
-                  className={styles.actionButton}
-                  onClick={() => onOpenPhotoDetail(item.asset_sha256)}
-                >
-                  Open Face Review
-                </button>
-              )}
-
-              {item.duplicate_group_id !== null && (
-                <button
-                  type="button"
-                  className={styles.actionButton}
-                  onClick={() => onOpenDuplicateGroup(item.duplicate_group_id as number)}
-                >
-                  Open Group
-                </button>
-              )}
-
-              {item.duplicate_group_id !== null && !item.is_canonical && item.visibility_status === "visible" && (
-                <button
-                  type="button"
-                  disabled={busyAssetSha256 === item.asset_sha256}
-                  className={styles.actionButton}
-                  onClick={() => {
-                    void handleSetCanonical(item.asset_sha256);
-                  }}
-                >
-                  Make Canonical
-                </button>
-              )}
-
-              {item.duplicate_group_id !== null && !item.is_canonical && item.visibility_status === "visible" && (
-                <button
-                  type="button"
-                  disabled={busyAssetSha256 === item.asset_sha256}
-                  className={styles.actionButtonDanger}
-                  onClick={() => {
-                    void handleDemote(item.asset_sha256);
-                  }}
-                >
-                  Demote
-                </button>
-              )}
-
-              {item.duplicate_group_id !== null && item.visibility_status === "demoted" && (
-                <button
-                  type="button"
-                  disabled={busyAssetSha256 === item.asset_sha256}
-                  className={styles.actionButton}
-                  onClick={() => {
-                    void handleRestore(item.asset_sha256);
-                  }}
-                >
-                  Restore
-                </button>
-              )}
+              <button type="button" className={styles.actionButton} onClick={() => onOpenPhotoDetail(item.asset_sha256)}>Open Detail</button>
+              {item.duplicate_group_id !== null ? (
+                <button type="button" className={styles.actionButton} onClick={() => onOpenDuplicateGroup(item.duplicate_group_id as number)}>Open Group</button>
+              ) : null}
             </div>
           </div>
         ))}
       </div>
 
-      {isLoading && <div className={styles.loadingMessage}>Loading...</div>}
-      {!isLoading && items.length === 0 && !errorMessage && (
-        <div className={styles.emptyState}>No photos found for current filters.</div>
-      )}
+      {isLoading ? <div className={styles.loadingMessage}>Loading...</div> : null}
+      {!isLoading && items.length === 0 && !errorMessage ? <div className={styles.emptyState}>No photos found for current filters.</div> : null}
       <div ref={sentinelRef} className={styles.sentinel} />
+
+      {presentationStartIndex !== null && items.length > 0 ? (
+        <PresentationViewer
+          items={presentationItems}
+          initialIndex={presentationStartIndex}
+          onClose={() => setPresentationStartIndex(null)}
+        />
+      ) : null}
     </div>
   );
 }
+

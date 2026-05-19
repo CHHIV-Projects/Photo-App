@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.live_photo.pairing_reporting import build_report_payload
 from app.services.live_photo.pairing_schema import LivePhotoPairingSchemaSummary
-from app.services.live_photo.pairing_service import LivePhotoPairingResult, _normalize_motion_basename
+from app.services.live_photo.pairing_service import LivePhotoPairingResult, _normalize_motion_basename, _pair_confidence
 
 
 class LivePhotoPairingNormalizationTests(unittest.TestCase):
@@ -59,6 +60,36 @@ class LivePhotoPairingReportingTests(unittest.TestCase):
         self.assertEqual(summary["pairs_created_motion_suffix"], 1)
         self.assertEqual(summary["motion_suffixes_seen"], {"_hevc": 2})
         self.assertEqual(summary["ambiguous_skipped"], 1)
+
+
+class LivePhotoPairingConfidenceTests(unittest.TestCase):
+    def test_high_trust_capture_delta_uses_modified_timestamp_fallback(self) -> None:
+        confidence, delta, is_suspicious = _pair_confidence(
+            datetime(2026, 5, 14, 20, 6, 2, tzinfo=timezone.utc),
+            datetime(2026, 5, 15, 3, 6, 1, tzinfo=timezone.utc),
+            "high",
+            "high",
+            datetime(2026, 5, 15, 3, 6, 2, tzinfo=timezone.utc),
+            datetime(2026, 5, 15, 3, 6, 2, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(confidence, "high")
+        self.assertEqual(delta, 0)
+        self.assertFalse(is_suspicious)
+
+    def test_high_trust_capture_delta_still_skips_when_modified_delta_large(self) -> None:
+        confidence, delta, is_suspicious = _pair_confidence(
+            datetime(2026, 5, 14, 20, 6, 2, tzinfo=timezone.utc),
+            datetime(2026, 5, 15, 3, 6, 1, tzinfo=timezone.utc),
+            "high",
+            "high",
+            datetime(2026, 5, 14, 20, 0, 0, tzinfo=timezone.utc),
+            datetime(2026, 5, 15, 3, 0, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(confidence, "skip")
+        self.assertTrue(delta is not None and delta > 60)
+        self.assertTrue(is_suspicious)
 
 
 if __name__ == "__main__":

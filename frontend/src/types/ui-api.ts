@@ -126,6 +126,32 @@ export interface SearchPhotoListResponse {
   items: SearchPhotoSummary[];
 }
 
+export interface PhotoBatchFailureSummary {
+  asset_sha256: string;
+  reason: string;
+}
+
+export interface PhotoBatchVisibilityResponse {
+  success: boolean;
+  action: "demote" | "restore";
+  requested_count: number;
+  updated_count: number;
+  noop_count: number;
+  failed_count: number;
+  failures: PhotoBatchFailureSummary[];
+}
+
+export interface PhotoBatchAlbumSummaryResponse {
+  success: boolean;
+  album_id: number;
+  album_name: string;
+  requested_count: number;
+  added_count: number;
+  already_in_album_count: number;
+  failed_count: number;
+  failures: PhotoBatchFailureSummary[];
+}
+
 export interface TimelineBucketSummary {
   period_key: string;
   label: string;

@@ -35,9 +35,10 @@ def _trust_count_expr(trust_value: str) -> Any:
     return func.sum(case((trust_expr == trust_value, 1), else_=0))
 
 
-def apply_asset_time_filters(query: Any, filters: TimelineFilter) -> Any:
+def apply_asset_time_filters(query: Any, filters: TimelineFilter, *, include_non_visible: bool = False) -> Any:
     """Apply explicit time/trust filters to an Asset-backed query."""
-    query = query.where(Asset.visibility_status == "visible")
+    if not include_non_visible:
+        query = query.where(Asset.visibility_status == "visible")
     trust_expr = effective_capture_time_trust_expr()
 
     if filters.trust_values:

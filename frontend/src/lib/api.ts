@@ -50,6 +50,8 @@ import type {
   PersonSummary,
   PersonWithClusters,
   PhotoDetail,
+  PhotoBatchAlbumSummaryResponse,
+  PhotoBatchVisibilityResponse,
   PhotoSummary,
   PlaceDetail,
   PlaceSummary,
@@ -77,6 +79,9 @@ export interface SearchPhotoQueryOptions extends PhotoQueryOptions {
   hasLocation?: boolean;
   hasFaces?: boolean;
   hasUnassignedFaces?: boolean;
+  visibilityFilter?: "visible" | "demoted" | "all";
+  mediaTypeFilter?: "all" | "photos" | "videos";
+  includeLivePhotoMotionCompanions?: boolean;
   canonicalFirst?: boolean;
   offset?: number;
   limit?: number;
@@ -237,6 +242,11 @@ export function searchPhotos(options: SearchPhotoQueryOptions = {}): Promise<Sea
   if (options.hasFaces !== undefined) params.set("has_faces", String(options.hasFaces));
   if (options.hasUnassignedFaces !== undefined) {
     params.set("has_unassigned_faces", String(options.hasUnassignedFaces));
+  }
+  if (options.visibilityFilter) params.set("visibility_filter", options.visibilityFilter);
+  if (options.mediaTypeFilter) params.set("media_type_filter", options.mediaTypeFilter);
+  if (options.includeLivePhotoMotionCompanions !== undefined) {
+    params.set("include_live_photo_motion_companions", String(options.includeLivePhotoMotionCompanions));
   }
   if (options.canonicalFirst !== undefined) params.set("canonical_first", String(options.canonicalFirst));
   if (options.offset !== undefined) params.set("offset", String(options.offset));
@@ -606,6 +616,37 @@ export function removeAssetsFromAlbum(
   return apiRequest<{ success: boolean }>(`/api/albums/${albumId}/assets`, {
     method: "DELETE",
     body: JSON.stringify({ asset_sha256_list: assetSha256List })
+  });
+}
+
+export function batchUpdatePhotoVisibility(
+  assetSha256List: string[],
+  action: "demote" | "restore"
+): Promise<PhotoBatchVisibilityResponse> {
+  return apiRequest<PhotoBatchVisibilityResponse>("/api/photos/batch/visibility", {
+    method: "POST",
+    body: JSON.stringify({ asset_sha256_list: assetSha256List, action })
+  });
+}
+
+export function batchAddPhotosToAlbum(
+  albumId: number,
+  assetSha256List: string[]
+): Promise<PhotoBatchAlbumSummaryResponse> {
+  return apiRequest<PhotoBatchAlbumSummaryResponse>(`/api/photos/batch/albums/${albumId}/add`, {
+    method: "POST",
+    body: JSON.stringify({ asset_sha256_list: assetSha256List })
+  });
+}
+
+export function batchCreateAlbumFromPhotos(
+  name: string,
+  description: string | null,
+  assetSha256List: string[]
+): Promise<PhotoBatchAlbumSummaryResponse> {
+  return apiRequest<PhotoBatchAlbumSummaryResponse>("/api/photos/batch/albums/create", {
+    method: "POST",
+    body: JSON.stringify({ name, description, asset_sha256_list: assetSha256List })
   });
 }
 

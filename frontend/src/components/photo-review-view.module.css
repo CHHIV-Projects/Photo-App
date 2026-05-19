@@ -79,6 +79,40 @@
   font-size: 0.84rem;
 }
 
+.batchMessage {
+  padding: 12px;
+  border: 1px solid #b6d7c1;
+  background: #f2fbf5;
+  color: #185a32;
+  border-radius: 8px;
+  font-size: 0.84rem;
+}
+
+.batchToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d5dde6;
+  border-radius: 10px;
+  background: #f6f9fc;
+}
+
+.batchCount {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #2a3b4c;
+}
+
+.batchActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -93,6 +127,24 @@
   display: flex;
   flex-direction: column;
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.cardSelected {
+  border-color: #2e6da2;
+  box-shadow: 0 0 0 2px rgba(46, 109, 162, 0.18);
+}
+
+.cardSelectRow {
+  padding: 8px 10px 0;
+}
+
+.cardSelectLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  color: #314152;
+  font-weight: 700;
 }
 
 .card:hover {

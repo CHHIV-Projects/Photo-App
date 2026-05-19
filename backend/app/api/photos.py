@@ -9,6 +9,11 @@ from app.db.session import get_db_session
 from app.schemas.photos import (
     CaptureClassificationOverrideRequest,
     PhotoDetail,
+    PhotoBatchAlbumAddRequest,
+    PhotoBatchAlbumCreateRequest,
+    PhotoBatchAlbumSummaryResponse,
+    PhotoBatchVisibilityRequest,
+    PhotoBatchVisibilityResponse,
     PhotoEventAssignRequest,
     PhotoEventMutationResponse,
     PhotoListResponse,
@@ -23,6 +28,11 @@ from app.services.photos.photos_service import (
     list_photos,
     set_photo_display_rotation,
     set_capture_classification_override,
+)
+from app.services.photos.batch_actions_service import (
+    batch_add_assets_to_album,
+    batch_create_album_with_assets,
+    batch_update_visibility,
 )
 from app.services.timeline.timeline_service import TimelineFilter, VALID_CAPTURE_TIME_TRUST
 
@@ -190,4 +200,93 @@ def assign_photo_event(
         event=result.event,
         old_event=result.old_event_summary,
         new_event=result.new_event_summary,
+    )
+
+
+@router.post("/batch/visibility", response_model=PhotoBatchVisibilityResponse)
+def post_batch_visibility_update(
+    payload: PhotoBatchVisibilityRequest,
+    db: Session = Depends(get_db_session),
+) -> PhotoBatchVisibilityResponse:
+    try:
+        result = batch_update_visibility(
+            db,
+            asset_sha256_list=payload.asset_sha256_list,
+            action=payload.action,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return PhotoBatchVisibilityResponse(
+        success=True,
+        action=result.action,  # type: ignore[arg-type]
+        requested_count=result.requested_count,
+        updated_count=result.updated_count,
+        noop_count=result.noop_count,
+        failed_count=len(result.failures),
+        failures=[
+            {"asset_sha256": failure.asset_sha256, "reason": failure.reason}
+            for failure in result.failures
+        ],
+    )
+
+
+@router.post("/batch/albums/{album_id}/add", response_model=PhotoBatchAlbumSummaryResponse)
+def post_batch_add_to_album(
+    album_id: int,
+    payload: PhotoBatchAlbumAddRequest,
+    db: Session = Depends(get_db_session),
+) -> PhotoBatchAlbumSummaryResponse:
+    try:
+        result = batch_add_assets_to_album(
+            db,
+            album_id=album_id,
+            asset_sha256_list=payload.asset_sha256_list,
+        )
+    except ValueError as exc:
+        status_code = 404 if "does not exist" in str(exc) else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+    return PhotoBatchAlbumSummaryResponse(
+        success=True,
+        album_id=result.album_id,
+        album_name=result.album_name,
+        requested_count=result.requested_count,
+        added_count=result.added_count,
+        already_in_album_count=result.already_in_album_count,
+        failed_count=len(result.failures),
+        failures=[
+            {"asset_sha256": failure.asset_sha256, "reason": failure.reason}
+            for failure in result.failures
+        ],
+    )
+
+
+@router.post("/batch/albums/create", response_model=PhotoBatchAlbumSummaryResponse)
+def post_batch_create_album(
+    payload: PhotoBatchAlbumCreateRequest,
+    db: Session = Depends(get_db_session),
+) -> PhotoBatchAlbumSummaryResponse:
+    try:
+        result = batch_create_album_with_assets(
+            db,
+            name=payload.name,
+            description=payload.description,
+            asset_sha256_list=payload.asset_sha256_list,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return PhotoBatchAlbumSummaryResponse(
+        success=True,
+        album_id=result.album_id,
+        album_name=result.album_name,
+        requested_count=result.requested_count,
+        added_count=result.added_count,
+        already_in_album_count=result.already_in_album_count,
+        failed_count=len(result.failures),
+        failures=[
+            {"asset_sha256": failure.asset_sha256, "reason": failure.reason}
+            for failure in result.failures
+        ],
     )
