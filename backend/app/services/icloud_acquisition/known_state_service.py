@@ -76,7 +76,27 @@ def _looks_like_candidate_line(raw_line: str) -> bool:
     return True
 
 
-def parse_preflight_candidates(stdout_text: str | None, stderr_text: str | None) -> list[PreflightCandidate]:
+def _strip_staging_root(normalized_path: str, staging_root: Path | None) -> str:
+    """Strip the staging root prefix from an absolute normalized path to get the source-relative path."""
+    if staging_root is None:
+        return normalized_path
+    # Normalize staging_root the same way
+    root_str = str(staging_root).replace("\\", "/").rstrip("/") + "/"
+    if normalized_path.startswith(root_str):
+        return normalized_path[len(root_str):]
+    # Also try without drive letter prefix (e.g. 'c:/' -> '/')
+    root_no_drive = re.sub(r'^[a-zA-Z]:', '', root_str)
+    path_no_drive = re.sub(r'^[a-zA-Z]:', '', normalized_path)
+    if path_no_drive.startswith(root_no_drive):
+        return path_no_drive[len(root_no_drive):]
+    return normalized_path
+
+
+def parse_preflight_candidates(
+    stdout_text: str | None,
+    stderr_text: str | None,
+    staging_root: Path | None = None,
+) -> list[PreflightCandidate]:
     candidates: list[PreflightCandidate] = []
     combined = "\n".join(part for part in [stdout_text or "", stderr_text or ""] if part)
     if not combined.strip():
@@ -87,6 +107,9 @@ def parse_preflight_candidates(stdout_text: str | None, stderr_text: str | None)
             continue
 
         normalized = _normalize_relative_path(raw_line)
+        # Strip staging_root prefix — icloudpd emits full absolute paths
+        if staging_root is not None:
+            normalized = _strip_staging_root(normalized, staging_root)
         # Conservative identity confidence: require a normalized path with filename extension.
         filename = Path(normalized).name
         has_extension = "." in filename and not filename.endswith(".")

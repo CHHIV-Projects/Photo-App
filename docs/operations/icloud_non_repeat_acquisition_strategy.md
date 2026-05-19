@@ -384,6 +384,62 @@ Validation performed:
   - known-state evaluator tests with mocks/temp files
 
 Remaining limitations:
-- Real repeat-run workflow validation remains pending (12.48.2):
-  - acquire -> repeat -> intake -> cleanup -> repeat after cleanup
 - Candidate parser remains conservative and may classify borderline lines as unknown_identity.
+- `list_first_non_repeat` preflight returns empty output when staging already contains files (icloudpd silently skips locally-present files). In that case `preflight_candidate_count=0` and `caught_up_status=unknown`. Known-state skip only activates when staging is empty/partially cleared.
+
+---
+
+## Section 16 — 12.48.2 Repeat-Run Validation (2026-05-18)
+
+### Test Source
+
+| Field | Value |
+|---|---|
+| source_label | chuck_icloudpd_nonrepeat_test |
+| source_id | 52 |
+| source_type | cloud_export |
+| account_username | [redacted] |
+| recent_count | 5 |
+| files per run | 8 (5 photos; 3 are Live Photo pairs = HEIC + MOV) |
+
+### Validation Sequence Results
+
+| Step | Run | Mode | Downloaded | Skipped | Outcome |
+|---|---|---|---|---|---|
+| Initial standard | run 9 | standard | 8 | 0 | Clean download |
+| Repeat standard | run 10 | standard | 0 | 8 | icloudpd local skip works |
+| Source Intake | run 29 | — | 8 new | 0 | Provenance records created |
+| Cleanup dry-run | cleanup 8 | dry_run | eligible=8 | 0 | Safe |
+| Cleanup execute | cleanup 9 | execute | deleted=8 | 0 | Staging empty |
+| nr mode (post-fix) | run 13 | list_first_non_repeat | 0 | 0 | **download_skipped=True** |
+
+### Bug Found and Fixed
+
+**`parse_preflight_candidates` did not strip staging root prefix.**
+
+icloudpd `--only-print-filenames` emits full absolute paths. The parser was preserving the full path as `normalized_source_relative_path`, so provenance DB lookups (which store source-relative paths like `2026/05/14/IMG_5655.HEIC`) returned no matches.
+
+Fix: added `staging_root` parameter and `_strip_staging_root()` helper in `known_state_service.py`. Updated call site in `execution_service.py`.
+
+### Final known-state result (run 13)
+
+```
+preflight_candidate_count: 8
+already_known_count:        8
+ingested_known_count:       8
+vault_verified_known_count: 8
+unknown_identity_count:     0
+caught_up_status:           likely_caught_up
+download_skipped_due_to_all_known: True
+downloaded_count:           0
+```
+
+### Safety Confirmation
+
+No iCloud deletion, no Vault deletion, no DB reset, no auto-intake, no auto-cleanup. All safety rules observed.
+
+### Known Limitations After 12.48.2
+
+- Preflight produces no candidates when staging already contains files. Known-state skip only activates on empty/cleared staging.
+- `vault_verified_known` requires vault file to be present at stored path. If vault layout changes, falls back to `ingested_known`.
+- A unit test covering absolute-path stripping via `staging_root` parameter should be added.

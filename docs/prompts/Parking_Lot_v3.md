@@ -742,6 +742,26 @@ Medium.
 
 ---
 
+```
+## OPS-004 — Launcher Already-Running / Port Conflict Handling### SummaryImprove startup scripts so they detect when Photo Organizer is already running and provide a clear operator message instead of failing confusingly or appearing to encounter a ghost listener.### Current ObservationDuring 12.48.1 validation, port `8001` appeared blocked because the program was already running in another terminal. Closing all terminals cleared the port and the app ran normally.### DesiredStartup should detect occupied ports such as `8001` and `3000` and report:```textPhoto Organizer may already be running.Close existing terminal/session or run stop script before starting again.
+```
+
+Optionally offer a safe stop/retry path.
+
+### Importance
+
+Medium.
+
+This improves launcher reliability and operator clarity before v1.0 production use.
+
+```
+## Practical operator rule for nowBefore starting the app:```text1. Check whether another terminal is already running backend/frontend.2. If unsure, run stop_photo_organizer.ps1.3. Then start again.
+```
+
+
+
+---
+
 # 4. Photo Review / General UX
 
 ---
@@ -1355,8 +1375,6 @@ operational run history
 
 ---
 
- 
-
 ```
 NAS-003 — Production Bootstrap / NAS Runtime Validation### SummaryValidate the 12.47 production bootstrap foundation against the real NAS-backed production path before any real production archive ingestion.### Current State12.47 created the production runtime scaffold, including:```textproduction profile/config templatesproduction DB separationproduction launcher scriptsproduction storage bootstrap scriptproduction release manifestoperator bootstrap guide
 ```
@@ -1384,8 +1402,6 @@ High before first production archive ingestion.
 This is a validation and safety checkpoint, not a feature expansion.
 
 ---
-
-
 
 # 12. Intelligence / AI Long-Term
 

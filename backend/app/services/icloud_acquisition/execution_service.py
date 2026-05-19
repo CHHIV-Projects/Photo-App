@@ -1103,7 +1103,7 @@ def _run_background_job(
                         timed_out=False,
                     )
                 else:
-                    candidates = parse_preflight_candidates(preflight_stdout_text, preflight_stderr_text)
+                    candidates = parse_preflight_candidates(preflight_stdout_text, preflight_stderr_text, staging_root=staging_root)
                     with SessionLocal() as db_session:
                         known_summary = evaluate_known_state(
                             db_session,

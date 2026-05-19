@@ -138,6 +138,21 @@ class IcloudKnownStateServiceTests(unittest.TestCase):
             self.assertEqual(summary.vault_verified_known_count, 1)
             self.assertEqual(summary.candidates[0].known_state, KNOWN_STATE_VAULT_VERIFIED)
 
+    def test_parse_preflight_candidates_strips_staging_root_from_absolute_path(self) -> None:
+        """icloudpd emits full absolute paths; parser must strip staging root to produce relative paths."""
+        staging_root = Path("C:/repo/storage/exports/icloud/chuck_icloudpd_nonrepeat_test")
+        stdout = (
+            "C:\\repo\\storage\\exports\\icloud\\chuck_icloudpd_nonrepeat_test\\2026\\05\\14\\IMG_5655.HEIC\n"
+            "C:\\repo\\storage\\exports\\icloud\\chuck_icloudpd_nonrepeat_test\\2026\\05\\14\\IMG_5655_HEVC.MOV\n"
+        )
+        candidates = parse_preflight_candidates(stdout, None, staging_root=staging_root)
+
+        self.assertEqual(len(candidates), 2)
+        self.assertFalse(candidates[0].unknown_identity)
+        self.assertEqual(candidates[0].normalized_source_relative_path, "2026/05/14/IMG_5655.HEIC")
+        self.assertFalse(candidates[1].unknown_identity)
+        self.assertEqual(candidates[1].normalized_source_relative_path, "2026/05/14/IMG_5655_HEVC.MOV")
+
 
 if __name__ == "__main__":
     unittest.main()
