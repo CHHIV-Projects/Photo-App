@@ -48,14 +48,20 @@ const MONTH_NUM_TO_NAME: Record<string, string> = {
 interface ParsedQuery {
   year?: number;
   monthNum?: string;
-  cameraTokens: string[];
+  cameraQuery?: string;
+  freeTextTokens: string[];
 }
+
+// Prefixes that are not yet supported by the backend.
+// The prefix is stripped and the value is routed to free-text search (q).
+const UNSUPPORTED_PREFIXES = ["person:", "event:", "place:", "source:", "album:", "filename:"];
 
 function parseSearchQuery(input: string): ParsedQuery {
   const tokens = input.trim().split(/\s+/).filter(Boolean);
   let year: number | undefined;
   let monthNum: string | undefined;
-  const cameraTokens: string[] = [];
+  let cameraQuery: string | undefined;
+  const freeTextTokens: string[] = [];
 
   for (const token of tokens) {
     if (/^\d{4}$/.test(token)) {
@@ -70,20 +76,40 @@ function parseSearchQuery(input: string): ParsedQuery {
       monthNum = mapped;
       continue;
     }
-    cameraTokens.push(token);
+    const lowerToken = token.toLowerCase();
+    if (lowerToken.startsWith("camera:")) {
+      // Explicit camera: prefix — route to camera filter
+      const value = token.slice("camera:".length).trim();
+      if (value) {
+        cameraQuery = value;
+      }
+      continue;
+    }
+    // Unsupported structured prefixes — strip prefix, route value to free text
+    const unsupported = UNSUPPORTED_PREFIXES.find((p) => lowerToken.startsWith(p));
+    if (unsupported) {
+      const value = token.slice(unsupported.length).trim();
+      if (value) {
+        freeTextTokens.push(value);
+      }
+      continue;
+    }
+    // Plain text — route to free-text search (q)
+    freeTextTokens.push(token);
   }
 
-  return { year, monthNum, cameraTokens };
+  return { year, monthNum, cameraQuery, freeTextTokens };
 }
 
-function buildSearchText(year: string, monthNum: string, camera: string): string {
+function buildSearchText(year: string, monthNum: string, camera: string, freeText: string): string {
   const parts: string[] = [];
   if (year) parts.push(year);
   if (monthNum) {
     const name = MONTH_NUM_TO_NAME[monthNum];
     if (name) parts.push(name);
   }
-  if (camera.trim()) parts.push(camera.trim());
+  if (camera.trim()) parts.push(`camera:${camera.trim()}`);
+  if (freeText.trim()) parts.push(freeText.trim());
   return parts.join(" ");
 }
 
@@ -113,6 +139,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   const [year, setYear] = useState<string>("");
   const [month, setMonth] = useState<string>("");
   const [camera, setCamera] = useState("");
+  const [freeText, setFreeText] = useState("");
   const [visibilityFilter, setVisibilityFilter] = useState<"visible" | "demoted" | "all">("visible");
   const [mediaTypeFilter, setMediaTypeFilter] = useState<"all" | "photos" | "videos">("all");
   const [showLivePhotoMotionClips, setShowLivePhotoMotionClips] = useState(false);
@@ -145,11 +172,13 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
       }
 
       const newMonth = parsed.monthNum && newYear ? parsed.monthNum : "";
-      const newCamera = parsed.cameraTokens.join(" ");
+      const newCamera = parsed.cameraQuery ?? "";
+      const newFreeText = parsed.freeTextTokens.join(" ");
 
       setYear(newYear);
       setMonth(newMonth);
       setCamera(newCamera);
+      setFreeText(newFreeText);
     }, 300);
     return () => window.clearTimeout(handle);
   }, [searchText]);
@@ -295,6 +324,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
       const activeYear = year && !month ? Number(year) : undefined;
       const activeMonth = year && month ? `${year}-${month}` : undefined;
       const response = await searchPhotos({
+        q: freeText || undefined,
         year: activeYear,
         month: activeMonth,
         camera: camera || undefined,
@@ -348,6 +378,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     year,
     month,
     camera,
+    freeText,
     visibilityFilter,
     mediaTypeFilter,
     showLivePhotoMotionClips,
@@ -386,28 +417,28 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   function handleYearDropdownChange(newYear: string): void {
     setYear(newYear);
     setMonth("");
-    setSearchText(buildSearchText(newYear, "", camera));
+    setSearchText(buildSearchText(newYear, "", camera, freeText));
   }
 
   function handleMonthDropdownChange(newMonth: string): void {
     setMonth(newMonth);
-    setSearchText(buildSearchText(year, newMonth, camera));
+    setSearchText(buildSearchText(year, newMonth, camera, freeText));
   }
 
   function removeYearChip(): void {
     setYear("");
     setMonth("");
-    setSearchText(buildSearchText("", "", camera));
+    setSearchText(buildSearchText("", "", camera, freeText));
   }
 
   function removeMonthChip(): void {
     setMonth("");
-    setSearchText(buildSearchText(year, "", camera));
+    setSearchText(buildSearchText(year, "", camera, freeText));
   }
 
   function removeCameraChip(): void {
     setCamera("");
-    setSearchText(buildSearchText(year, month, ""));
+    setSearchText(buildSearchText(year, month, "", freeText));
   }
 
   function toggleSelectAsset(assetSha256: string): void {
@@ -534,7 +565,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
             type="search"
             value={searchText}
             onChange={(event) => setSearchText(event.target.value)}
-            placeholder="Search photos... e.g. 2023, March, Canon"
+            placeholder="Search photos... e.g. 2023, March, camera:Canon, IMG_5653"
             className={styles.searchInput}
           />
         </div>
