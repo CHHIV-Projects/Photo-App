@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Photo Organizer v1",
-  description: "Face cluster review screen for Photo Organizer v1"
+  description: "Photo Organizer workbench for photo review, face review, and detail inspection"
 };
 
 export default function RootLayout({

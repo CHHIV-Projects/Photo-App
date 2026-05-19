@@ -627,7 +627,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
                   className={styles.actionButton}
                   onClick={() => onOpenPhotoDetail(item.asset_sha256)}
                 >
-                  Review Faces
+                  Open Face Review
                 </button>
               )}
 

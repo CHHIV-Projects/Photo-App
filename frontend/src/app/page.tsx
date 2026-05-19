@@ -711,10 +711,10 @@ export default function HomePage() {
     <main className={styles.page}>
       <div className={styles.shell}>
         <header className={styles.header}>
-          <p className={styles.kicker}>Milestone 10.12</p>
-          <h1 className={styles.title}>Face Cluster Review</h1>
+          <p className={styles.kicker}>Photo Organizer</p>
+          <h1 className={styles.title}>Workbench</h1>
           <p className={styles.subtitle}>
-            Review, correct, and merge clusters while keeping people assignments in sync.
+            Browse photos, inspect details, and manage face curation tools from one place.
           </p>
 
           <div className={styles.viewSwitch}>
@@ -733,7 +733,7 @@ export default function HomePage() {
               className={`${styles.viewButton} ${viewMode === "review" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("review")}
             >
-              Review
+              Face Review
             </button>
             <button
               type="button"
@@ -754,7 +754,7 @@ export default function HomePage() {
               className={`${styles.viewButton} ${viewMode === "photos" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("photos")}
             >
-              Photos
+              Photo Detail
             </button>
             <button
               type="button"

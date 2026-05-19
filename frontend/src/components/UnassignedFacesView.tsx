@@ -179,7 +179,7 @@ export function UnassignedFacesView({
           ...current,
           [faceId]: false
         }));
-        setSuccessMessage("New cluster created for this face");
+        setSuccessMessage("New cluster created. This face may leave the list because it is no longer unassigned.");
         setTimeout(() => setSuccessMessage(null), 3000);
       }
     } finally {

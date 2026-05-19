@@ -459,7 +459,7 @@ function EventPhotoCard({
 
   return (
     <article className={styles.photoCard}>
-      <button type="button" className={styles.photoThumbButton} onClick={onOpenPhoto} title={`Open ${photo.filename} in Photos view`}>
+      <button type="button" className={styles.photoThumbButton} onClick={onOpenPhoto} title={`Open ${photo.filename} in Photo Detail`}>
         <div className={styles.photoThumb}>
           {!isVideoAsset && imageUrl && !imgError ? (
             <img

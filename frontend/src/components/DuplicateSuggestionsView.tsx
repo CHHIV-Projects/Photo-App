@@ -292,7 +292,7 @@ function AssetPane({ asset, label, onOpenPhoto }: AssetPaneProps) {
         onClick={() => onOpenPhoto(asset.asset_sha256)}
         className={styles.openButton}
       >
-        Open Photo
+        Open Detail
       </button>
     </div>
   );

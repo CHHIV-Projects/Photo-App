@@ -864,7 +864,7 @@ export function PhotosView({
         {/* ── Photo list ────────────────────────────────────────────── */}
         <aside className={styles.panel}>
           <div className={styles.panelHeader}>
-            <h2 className={styles.panelTitle}>Photos</h2>
+            <h2 className={styles.panelTitle}>Photo Results</h2>
             <span className={styles.panelCount}>{totalCount}</span>
           </div>
 
@@ -991,7 +991,7 @@ export function PhotosView({
           </div>
         ) : !photoDetail ? (
           <div className={styles.panel}>
-            <p className={styles.statusMessage}>Select a photo to view.</p>
+            <p className={styles.statusMessage}>Select a photo to open Photo Detail.</p>
           </div>
         ) : (
           <>
@@ -1124,7 +1124,7 @@ export function PhotosView({
 
               <div className={styles.panel}>
                 <div className={styles.panelHeader}>
-                  <h2 className={styles.panelTitle}>Photo Details</h2>
+                  <h2 className={styles.panelTitle}>Photo Detail</h2>
                 </div>
                 <div className={styles.metadataBody}>
                   <section className={styles.metadataSection}>
