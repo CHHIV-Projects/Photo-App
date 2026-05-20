@@ -58,6 +58,11 @@ def search_photos_endpoint(
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
     camera: str | None = Query(default=None),
+    person_ids: str | None = Query(default=None),
+    album_id: int | None = Query(default=None),
+    event_id: int | None = Query(default=None),
+    place_query: str | None = Query(default=None),
+    provenance_query: str | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     has_location: bool | None = Query(default=None),
@@ -85,6 +90,13 @@ def search_photos_endpoint(
         trust=trust,
     )
 
+    person_id_list: list[int] = []
+    if person_ids:
+        try:
+            person_id_list = [int(pid.strip()) for pid in person_ids.split(",") if pid.strip()]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="person_ids must be comma-separated integers.") from exc
+
     try:
         result = search_photos(
             db,
@@ -92,6 +104,11 @@ def search_photos_endpoint(
             start_date=start_date,
             end_date=end_date,
             camera_query=camera,
+            person_ids=person_id_list,
+            album_id=album_id,
+            event_id=event_id,
+            place_query=place_query,
+            provenance_query=provenance_query,
             has_location=has_location,
             has_faces=has_faces,
             has_unassigned_faces=has_unassigned_faces,

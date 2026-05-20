@@ -39,6 +39,22 @@
   min-width: 220px;
 }
 
+.inputHint {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #5f7183;
+}
+
+.inlineControlRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.inlineControlRow .select {
+  min-width: 220px;
+}
+
 .select,
 .input {
   border: 1px solid #becad6;
@@ -52,6 +68,13 @@
 
 .input {
   min-width: 220px;
+}
+
+.select:focus,
+.input:focus {
+  outline: none;
+  border-color: #5b9ac9;
+  box-shadow: 0 0 0 3px rgba(91, 154, 201, 0.18);
 }
 
 .checkboxLabel {

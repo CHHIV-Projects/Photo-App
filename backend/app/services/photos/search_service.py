@@ -14,6 +14,11 @@ from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.live_photo_pair import LivePhotoPair
 from app.models.provenance import Provenance
+from app.models.person import Person
+from app.models.collection import Collection
+from app.models.collection_asset import CollectionAsset
+from app.models.event import Event
+from app.models.place import Place
 from app.services.photos.display_url_service import build_asset_display_url_contract
 from app.services.metadata.metadata_normalizer import VIDEO_EXTENSIONS
 from app.services.timeline.timeline_service import TimelineFilter, apply_asset_time_filters, effective_capture_time_trust_expr
@@ -104,6 +109,11 @@ def search_photos(
     start_date: str | None = None,
     end_date: str | None = None,
     camera_query: str | None = None,
+    person_ids: list[int] | None = None,
+    album_id: int | None = None,
+    event_id: int | None = None,
+    place_query: str | None = None,
+    provenance_query: str | None = None,
     has_location: bool | None = None,
     has_faces: bool | None = None,
     has_unassigned_faces: bool | None = None,
@@ -185,6 +195,70 @@ def search_photos(
                 func.lower(func.coalesce(Asset.camera_model, "")).like(q),
             )
         )
+
+    # Person filter: AND semantics (asset must contain all selected people)
+    if person_ids:
+        person_filter_subq = (
+            select(Face.asset_sha256)
+            .join(FaceCluster, Face.cluster_id == FaceCluster.id)
+            .where(FaceCluster.person_id.in_(person_ids))
+            .group_by(Face.asset_sha256)
+            .having(func.count(func.distinct(FaceCluster.person_id)) == len(person_ids))
+            .distinct()
+            .subquery()
+        )
+        base_query = base_query.where(Asset.sha256.in_(select(person_filter_subq.c.asset_sha256)))
+
+    # Album/Collection filter
+    if album_id is not None:
+        collection_filter_subq = (
+            select(CollectionAsset.asset_sha256)
+            .where(CollectionAsset.collection_id == album_id)
+            .subquery()
+        )
+        base_query = base_query.where(Asset.sha256.in_(select(collection_filter_subq.c.asset_sha256)))
+
+    # Event filter
+    if event_id is not None:
+        base_query = base_query.where(Asset.event_id == event_id)
+
+    # Place filter: search by place label/address/city/state/country
+    if place_query and place_query.strip():
+        q = f"%{place_query.strip().lower()}%"
+        place_filter_subq = (
+            select(Asset.sha256)
+            .outerjoin(Place, Asset.place_id == Place.place_id)
+            .where(
+                or_(
+                    func.lower(func.coalesce(Place.user_label, "")).like(q),
+                    func.lower(func.coalesce(Place.formatted_address, "")).like(q),
+                    func.lower(func.coalesce(Place.city, "")).like(q),
+                    func.lower(func.coalesce(Place.state, "")).like(q),
+                    func.lower(func.coalesce(Place.country, "")).like(q),
+                )
+            )
+            .subquery()
+        )
+        base_query = base_query.where(Asset.sha256.in_(select(place_filter_subq.c.sha256)))
+
+    # Provenance/Source filter: search source label, type, and path fields
+    if provenance_query and provenance_query.strip():
+        q = f"%{provenance_query.strip().lower()}%"
+        provenance_filter_subq = (
+            select(Provenance.asset_sha256)
+            .where(
+                or_(
+                    func.lower(func.coalesce(Provenance.source_label, "")).like(q),
+                    func.lower(func.coalesce(Provenance.source_type, "")).like(q),
+                    func.lower(func.coalesce(Provenance.source_relative_path, "")).like(q),
+                    func.lower(func.coalesce(Provenance.source_root_path, "")).like(q),
+                    func.lower(func.coalesce(Provenance.source_path, "")).like(q),
+                )
+            )
+            .distinct()
+            .subquery()
+        )
+        base_query = base_query.where(Asset.sha256.in_(select(provenance_filter_subq.c.asset_sha256)))
 
     if has_location is True:
         base_query = base_query.where(Asset.gps_latitude.is_not(None), Asset.gps_longitude.is_not(None))

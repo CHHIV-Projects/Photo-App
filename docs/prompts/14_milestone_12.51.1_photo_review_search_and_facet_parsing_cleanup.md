@@ -498,3 +498,155 @@ or, if face assignment cleanup is deferred:
 ```
 
 Given current user feedback, Face Assignment Workflow Cleanup is likely the better next milestone before Collections.
+
+
+
+
+# Answers to Coder Questions — Milestone 12.51.1
+
+## 1. Plain text routing
+
+Yes — route unrecognized plain text to `q`.
+
+For 12.51.1, it is acceptable that:
+
+```text
+Mary
+
+becomes a general filename/free-text query:
+
+q=Mary
+
+even if the backend currently only searches Asset.original_filename.
+
+The important fix for this milestone is:
+
+Mary must not become Camera: Mary.
+
+If q=Mary returns no results, that is acceptable for now, as long as the UI clearly behaves like a general search and shows the normal “No photos found” state.
+
+Do not try to implement person-name search in 12.51.1.
+
+Document clearly:
+
+Current free-text search searches filenames only.
+Person/event/place/source search is deferred.
+2. Camera access path after this change
+
+Use option A for 12.51.1:
+
+camera:<value>
+
+Examples:
+
+camera:Canon
+camera:iPhone
+camera:Mary
+
+Do not add a new dedicated camera text input in this milestone.
+
+Reason:
+
+This keeps 12.51.1 focused on parsing cleanup and avoids expanding the filter UI.
+
+If the existing backend camera param supports fuzzy/partial matching, reuse it.
+
+If camera: is implemented, show it honestly as:
+
+Camera: Canon
+
+or equivalent.
+
+3. Free-text chip display
+
+Keep it simple.
+
+For 12.51.1, leaving the text visible in the search box is sufficient.
+
+Do not add new chip state/rendering just for Search: Mary unless it is trivial.
+
+Required behavior:
+
+Mary stays visibly in the search input.
+No Camera: Mary chip appears.
+
+If existing chip logic requires a chip for consistency and it is low-risk, Search: Mary is acceptable. But the preferred low-risk path is:
+
+search input text = the visible free-text search state
+structured chips = only explicit/structured facets
+4. Year/month parsing
+
+Confirmed.
+
+Keep current unambiguous parsing:
+
+4-digit number -> year facet
+month name -> month facet
+
+This is acceptable because it is deterministic and user-understandable.
+
+Examples:
+
+2026 -> Year: 2026
+May -> Month: May
+
+Do not remove year/month parsing in 12.51.1.
+
+5. Unsupported prefix handling
+
+Do not silently pretend unsupported prefixes work.
+
+For 12.51.1, use this rule:
+
+Supported explicit prefix:
+  camera:<value> -> camera filter
+
+Unsupported explicit prefix:
+  person:<value>
+  event:<value>
+  place:<value>
+  source:<value>
+  album:<value>
+
+Preferred behavior:
+
+strip the prefix and treat the value as q
+
+but also make this behavior explicit in documentation.
+
+Example:
+
+person:Mary
+
+may become:
+
+q=Mary
+
+because person search is not yet supported.
+
+Do not show a fake Person: Mary chip.
+
+Do not send a fake person filter to the backend.
+
+A visible warning is not required in 12.51.1 unless trivial. If you add a warning, keep it lightweight and non-blocking, such as:
+
+Person search is not supported yet; searching filenames for "Mary".
+
+But the preferred low-risk implementation is:
+
+unsupported prefix -> plain q value
+document deferred support
+Summary
+
+Proceed with:
+
+- Unrecognized plain text -> q
+- q currently searches filenames only
+- Mary may return no results, but must not become Camera: Mary
+- camera search only through explicit camera:<value>
+- no new camera input field in 12.51.1
+- no new Search chip required; input text is sufficient
+- keep 4-digit year and month-name parsing
+- unsupported prefixes are treated as plain q values
+- do not fake person/event/place/source facets
+- document person/event/place/source search as deferred

@@ -9,11 +9,13 @@ import {
   batchCreateAlbumFromPhotos,
   batchUpdatePhotoVisibility,
   getAlbums,
+  getEvents,
+  getPeople,
   getTimelineSummary,
   resolveApiUrl,
   searchPhotos,
 } from "@/lib/api";
-import type { AlbumSummary, PhotoSummary, SearchPhotoSummary } from "@/types/ui-api";
+import type { AlbumSummary, EventSummary, PersonSummary, PhotoSummary, SearchPhotoSummary } from "@/types/ui-api";
 
 const MONTH_MAP: Record<string, string> = {
   january: "01", jan: "01",
@@ -130,6 +132,8 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   const [isRunningBatchAction, setIsRunningBatchAction] = useState(false);
 
   const [albums, setAlbums] = useState<AlbumSummary[]>([]);
+  const [people, setPeople] = useState<PersonSummary[]>([]);
+  const [events, setEvents] = useState<EventSummary[]>([]);
   const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
 
   const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
@@ -149,6 +153,13 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   const [undated, setUndated] = useState(false);
   const [yearOptions, setYearOptions] = useState<string[]>([]);
   const [monthOptions, setMonthOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [selectedPeopleIds, setSelectedPeopleIds] = useState<number[]>([]);
+  const [peopleSearchQuery, setPeopleSearchQuery] = useState("");
+  const [selectedPersonCandidateId, setSelectedPersonCandidateId] = useState<number | null>(null);
+  const [selectedAlbumForFilter, setSelectedAlbumForFilter] = useState<number | null>(null);
+  const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+  const [placeQuery, setPlaceQuery] = useState("");
+  const [provenanceQuery, setProvenanceQuery] = useState("");
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const yearRef = useRef(year);
@@ -224,6 +235,58 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     }
 
     void loadYearOptions();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadPeople(): Promise<void> {
+      try {
+        const response = await getPeople();
+        if (!isCancelled) {
+          const sorted = [...response.items].sort((a, b) => a.display_name.localeCompare(b.display_name));
+          setPeople(sorted);
+        }
+      } catch {
+        if (!isCancelled) {
+          setPeople([]);
+        }
+      }
+    }
+
+    void loadPeople();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadEvents(): Promise<void> {
+      try {
+        const response = await getEvents();
+        if (!isCancelled) {
+          const sorted = response.items
+            .filter((eventItem) => Boolean(eventItem.label?.trim()))
+            .sort((a, b) => {
+            const aLabel = a.label?.trim() || "";
+            const bLabel = b.label?.trim() || "";
+            return aLabel.localeCompare(bLabel);
+          });
+          setEvents(sorted);
+        }
+      } catch {
+        if (!isCancelled) {
+          setEvents([]);
+        }
+      }
+    }
+
+    void loadEvents();
     return () => {
       isCancelled = true;
     };
@@ -323,11 +386,17 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     try {
       const activeYear = year && !month ? Number(year) : undefined;
       const activeMonth = year && month ? `${year}-${month}` : undefined;
+      const personIdsString = selectedPeopleIds.length > 0 ? selectedPeopleIds.join(",") : undefined;
       const response = await searchPhotos({
         q: freeText || undefined,
         year: activeYear,
         month: activeMonth,
         camera: camera || undefined,
+        personIds: personIdsString,
+        albumId: selectedAlbumForFilter || undefined,
+        eventId: selectedEventId || undefined,
+        placeQuery: placeQuery || undefined,
+        provenanceQuery: provenanceQuery || undefined,
         visibilityFilter,
         mediaTypeFilter,
         includeLivePhotoMotionCompanions: showLivePhotoMotionClips,
@@ -379,6 +448,11 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     month,
     camera,
     freeText,
+    selectedPeopleIds,
+    selectedAlbumForFilter,
+    selectedEventId,
+    placeQuery,
+    provenanceQuery,
     visibilityFilter,
     mediaTypeFilter,
     showLivePhotoMotionClips,
@@ -459,6 +533,77 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
   function handleSelectAllVisible(): void {
     setSelectedAssets(new Set(items.map((item) => item.asset_sha256)));
+  }
+
+  const filteredPeopleOptions = useMemo(() => {
+    const q = peopleSearchQuery.trim().toLowerCase();
+    return people.filter((person) => {
+      if (selectedPeopleIds.includes(person.person_id)) {
+        return false;
+      }
+      if (!q) {
+        return true;
+      }
+      return person.display_name.toLowerCase().includes(q);
+    });
+  }, [people, peopleSearchQuery, selectedPeopleIds]);
+
+  const selectedPeople = useMemo(
+    () =>
+      selectedPeopleIds
+        .map((personId) => people.find((person) => person.person_id === personId))
+        .filter((person): person is PersonSummary => person !== undefined),
+    [people, selectedPeopleIds]
+  );
+
+  useEffect(() => {
+    if (filteredPeopleOptions.length === 0) {
+      setSelectedPersonCandidateId(null);
+      return;
+    }
+
+    // Only auto-select if user has typed a search query
+    if (peopleSearchQuery.trim() && selectedPersonCandidateId === null) {
+      setSelectedPersonCandidateId(filteredPeopleOptions[0].person_id);
+      return;
+    }
+
+    // If current selection is no longer available, select first
+    if (selectedPersonCandidateId !== null) {
+      const candidateStillAvailable = filteredPeopleOptions.some(
+        (person) => person.person_id === selectedPersonCandidateId
+      );
+
+      if (!candidateStillAvailable) {
+        setSelectedPersonCandidateId(filteredPeopleOptions[0].person_id);
+      }
+    }
+  }, [filteredPeopleOptions, selectedPersonCandidateId, peopleSearchQuery]);
+
+  function addSelectedPerson(): void {
+    if (selectedPersonCandidateId === null) {
+      return;
+    }
+    setSelectedPeopleIds((current) => {
+      if (current.includes(selectedPersonCandidateId)) {
+        return current;
+      }
+      return [...current, selectedPersonCandidateId];
+    });
+  }
+
+  function removeSelectedPerson(personId: number): void {
+    setSelectedPeopleIds((current) => current.filter((id) => id !== personId));
+  }
+
+  function clearStructuredFilters(): void {
+    setSelectedPeopleIds([]);
+    setSelectedPersonCandidateId(null);
+    setPeopleSearchQuery("");
+    setSelectedAlbumForFilter(null);
+    setSelectedEventId(null);
+    setPlaceQuery("");
+    setProvenanceQuery("");
   }
 
   async function handleBatchVisibility(action: "demote" | "restore"): Promise<void> {
@@ -645,6 +790,116 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
               <option value="videos">Videos</option>
             </select>
           </label>
+
+          <label className={styles.fieldLabel}>
+            Album
+            <select
+              value={selectedAlbumForFilter ?? ""}
+              onChange={(event) => setSelectedAlbumForFilter(event.target.value ? Number(event.target.value) : null)}
+              className={styles.select}
+            >
+              <option value="">All albums</option>
+              {albums.map((album) => (
+                <option key={album.album_id} value={album.album_id}>{album.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className={styles.fieldLabel}>
+            Event
+            <select
+              value={selectedEventId ?? ""}
+              onChange={(event) => setSelectedEventId(event.target.value ? Number(event.target.value) : null)}
+              className={styles.select}
+            >
+              <option value="">All events</option>
+              {events.map((eventItem) => (
+                <option key={eventItem.event_id} value={eventItem.event_id}>
+                  {eventItem.label?.trim() || `Event #${eventItem.event_id}`}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className={styles.fieldRow}>
+          <label className={styles.fieldLabelWide}>
+            <span className={styles.inputHint}>Type a name, then click Add from Matching people.</span>
+            People (select by name)
+            <input
+              type="text"
+              value={peopleSearchQuery}
+              onChange={(event) => setPeopleSearchQuery(event.target.value)}
+              placeholder="Filter people by name"
+              className={styles.input}
+            />
+          </label>
+
+          <label className={styles.fieldLabelWide}>
+            Matching people
+            <div className={styles.inlineControlRow}>
+              <select
+                value={selectedPersonCandidateId ?? ""}
+                onChange={(event) => setSelectedPersonCandidateId(event.target.value ? Number(event.target.value) : null)}
+                className={styles.select}
+              >
+                <option value="">Select person</option>
+                {filteredPeopleOptions.map((person) => (
+                  <option key={person.person_id} value={person.person_id}>{person.display_name}</option>
+                ))}
+              </select>
+              <button type="button" className={styles.actionButton} onClick={addSelectedPerson} disabled={selectedPersonCandidateId === null}>
+                Add
+              </button>
+            </div>
+          </label>
+
+          <label className={styles.fieldLabelWide}>
+            Place contains
+            <input
+              type="text"
+              value={placeQuery}
+              onChange={(event) => setPlaceQuery(event.target.value)}
+              placeholder="e.g., San Francisco, USA"
+              className={styles.input}
+            />
+          </label>
+
+          <label className={styles.fieldLabelWide}>
+            Source / Folder contains
+            <input
+              type="text"
+              value={provenanceQuery}
+              onChange={(event) => setProvenanceQuery(event.target.value)}
+              placeholder="e.g., iCloud, 2023/Vacation"
+              className={styles.input}
+            />
+          </label>
+
+          <button type="button" className={styles.actionButton} onClick={clearStructuredFilters}>
+            Clear structured filters
+          </button>
+        </div>
+
+        {selectedPeople.length > 0 ? (
+          <div className={styles.chipRow}>
+            {selectedPeople.map((person) => (
+              <span key={person.person_id} className={styles.chip}>
+                People: {person.display_name}
+                <button
+                  type="button"
+                  className={styles.chipRemove}
+                  onClick={() => removeSelectedPerson(person.person_id)}
+                  aria-label={`Remove ${person.display_name} filter`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        <div className={styles.fieldRow}>
 
           <label className={styles.checkboxLabel}>
             <input type="checkbox" checked={showLivePhotoMotionClips} onChange={(event) => setShowLivePhotoMotionClips(event.target.checked)} />
