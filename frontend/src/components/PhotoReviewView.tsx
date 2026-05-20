@@ -17,6 +17,7 @@ import {
   getTimelineSummary,
   resolveApiUrl,
   searchPhotos,
+  removeFaceFromCluster,
 } from "@/lib/api";
 import type {
   AlbumSummary,
@@ -1298,6 +1299,42 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
               disabled={isAssigningCluster || assignmentPersonId === null}
             >
               {selectedOverlayFaceEntry.face.person_id ? "Reassign cluster" : "Assign cluster"}
+            </button>
+            <button
+              type="button"
+              className={styles.actionButtonDanger}
+              onClick={async () => {
+                setIsAssigningCluster(true);
+                setAssignmentMessage(null);
+                setAssignmentErrorMessage(null);
+                try {
+                  await removeFaceFromCluster(selectedOverlayFaceEntry.face.face_id);
+                  setOverlaysByAsset((current) => {
+                    const next = { ...current };
+                    const overlay = next[selectedOverlayFaceEntry.assetSha256];
+                    if (overlay) {
+                      next[selectedOverlayFaceEntry.assetSha256] = {
+                        ...overlay,
+                        faces: overlay.faces.map((face) =>
+                          face.face_id === selectedOverlayFaceEntry.face.face_id
+                            ? { ...face, cluster_id: null, person_id: null, person_name: null }
+                            : face
+                        ),
+                      };
+                    }
+                    return next;
+                  });
+                  setAssignmentMessage("Face unassigned from cluster.");
+                } catch (error) {
+                  const message = error instanceof Error && error.message ? error.message : "Could not unassign face.";
+                  setAssignmentErrorMessage(message);
+                } finally {
+                  setIsAssigningCluster(false);
+                }
+              }}
+              disabled={isAssigningCluster}
+            >
+              Remove name
             </button>
           </div>
           <div className={styles.assignmentActionsRow}>

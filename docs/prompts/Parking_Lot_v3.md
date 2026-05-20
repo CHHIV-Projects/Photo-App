@@ -980,6 +980,10 @@ High after basic Photo Review thumbnail assignment works.
 
 ---
 
+FACE-005 — Backfill Protected Manually Unassigned Faces
+
+---
+
 
 
 # 6. Location / Places
