@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -26,6 +26,7 @@ class Face(Base):
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
     embedding_json: Mapped[str | None] = mapped_column(String, nullable=True)
     cluster_id: Mapped[int | None] = mapped_column(ForeignKey("face_clusters.id"), nullable=True, index=True)
+    is_manually_unassigned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

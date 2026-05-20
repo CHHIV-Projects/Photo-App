@@ -9,6 +9,8 @@ from app.db.session import get_db_session
 from app.schemas.photos import (
     CaptureClassificationOverrideRequest,
     PhotoDetail,
+    PhotoFaceOverlayBatchRequest,
+    PhotoFaceOverlayBatchResponse,
     PhotoBatchAlbumAddRequest,
     PhotoBatchAlbumCreateRequest,
     PhotoBatchAlbumSummaryResponse,
@@ -25,6 +27,7 @@ from app.schemas.photos import (
 from app.services.events.events_service import assign_asset_to_event, remove_asset_from_event
 from app.services.photos.photos_service import (
     get_photo_detail,
+    get_photo_face_overlays,
     list_photos,
     set_photo_display_rotation,
     set_capture_classification_override,
@@ -109,6 +112,15 @@ def get_photo(asset_sha256: str, db: Session = Depends(get_db_session)) -> Photo
     if result is None:
         raise HTTPException(status_code=404, detail=f"Photo {asset_sha256!r} not found.")
     return PhotoDetail(**result)
+
+
+@router.post("/face-overlays", response_model=PhotoFaceOverlayBatchResponse)
+def post_photo_face_overlays(
+    payload: PhotoFaceOverlayBatchRequest,
+    db: Session = Depends(get_db_session),
+) -> PhotoFaceOverlayBatchResponse:
+    items = get_photo_face_overlays(db, payload.asset_sha256_list)
+    return PhotoFaceOverlayBatchResponse(count=len(items), items=items)
 
 
 @router.post("/{asset_sha256}/capture-classification", response_model=SuccessResponse)

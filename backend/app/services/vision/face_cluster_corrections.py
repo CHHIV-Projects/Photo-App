@@ -70,6 +70,7 @@ def unassign_face_from_cluster(db: Session, face_id: int, cluster_id: int | None
         }
 
     face.cluster_id = None
+    face.is_manually_unassigned = True
     previous_cluster = db.get(FaceCluster, previous_cluster_id)
     if previous_cluster is not None:
         previous_cluster.is_reviewed = True
@@ -109,6 +110,7 @@ def move_face_to_cluster(db: Session, face_id: int, target_cluster_id: int) -> d
         }
 
     face.cluster_id = target_cluster_id
+    face.is_manually_unassigned = False
     target_cluster.is_reviewed = True
     if previous_cluster_id is not None:
         previous_cluster = db.get(FaceCluster, previous_cluster_id)

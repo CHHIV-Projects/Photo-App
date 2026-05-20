@@ -43,6 +43,7 @@ import type {
   DuplicateSuggestionRejectResponse,
   DuplicateMergeTargetListResponse,
   PhotoEventMutationResponse,
+  PhotoFaceOverlayBatchResponse,
   EventSummary,
   EventUpdateResponse,
   FaceSummary,
@@ -277,6 +278,13 @@ export function searchPhotos(options: SearchPhotoQueryOptions = {}): Promise<Sea
 
 export function getPhotoDetail(sha256: string): Promise<PhotoDetail> {
   return apiRequest<PhotoDetail>(`/api/photos/${sha256}`);
+}
+
+export function getPhotoFaceOverlays(assetSha256List: string[]): Promise<PhotoFaceOverlayBatchResponse> {
+  return apiRequest<PhotoFaceOverlayBatchResponse>("/api/photos/face-overlays", {
+    method: "POST",
+    body: JSON.stringify({ asset_sha256_list: assetSha256List })
+  });
 }
 
 export function getLivePhotoPairingStatus(): Promise<AdminLivePhotoPairingStatusResponse> {

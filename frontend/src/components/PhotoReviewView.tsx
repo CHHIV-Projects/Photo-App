@@ -5,17 +5,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PresentationViewer } from "@/components/PresentationViewer";
 import styles from "@/components/photo-review-view.module.css";
 import {
+  assignPerson,
   batchAddPhotosToAlbum,
   batchCreateAlbumFromPhotos,
   batchUpdatePhotoVisibility,
+  createPerson,
   getAlbums,
   getEvents,
+  getPhotoFaceOverlays,
   getPeople,
   getTimelineSummary,
   resolveApiUrl,
   searchPhotos,
 } from "@/lib/api";
-import type { AlbumSummary, EventSummary, PersonSummary, PhotoSummary, SearchPhotoSummary } from "@/types/ui-api";
+import type {
+  AlbumSummary,
+  EventSummary,
+  FaceInPhoto,
+  PersonSummary,
+  PhotoFaceOverlayAsset,
+  PhotoSummary,
+  SearchPhotoSummary,
+} from "@/types/ui-api";
 
 const MONTH_MAP: Record<string, string> = {
   january: "01", jan: "01",
@@ -122,6 +133,46 @@ interface PhotoReviewViewProps {
 
 const PAGE_SIZE = 80;
 
+type FaceOverlayMode = "off" | "hover" | "always";
+
+interface SelectedOverlayFace {
+  assetSha256: string;
+  faceId: number;
+}
+
+function getFaceLabel(face: FaceInPhoto): string {
+  if (face.person_name) return face.person_name;
+  if (face.cluster_id !== null) return `Cluster #${face.cluster_id} - No Person Assigned`;
+  return "Unassigned";
+}
+
+function getOverlayReferenceDims(
+  overlay: PhotoFaceOverlayAsset,
+  naturalDims: { w: number; h: number } | undefined
+): { w: number; h: number } | null {
+  if (!naturalDims || naturalDims.w <= 0 || naturalDims.h <= 0) {
+    if (overlay.canonical_width && overlay.canonical_height) {
+      return { w: overlay.canonical_width, h: overlay.canonical_height };
+    }
+    return null;
+  }
+
+  if (!overlay.canonical_width || !overlay.canonical_height) {
+    return naturalDims;
+  }
+
+  let referenceWidth = overlay.canonical_width;
+  let referenceHeight = overlay.canonical_height;
+  const naturalIsLandscape = naturalDims.w >= naturalDims.h;
+  const canonicalIsLandscape = overlay.canonical_width >= overlay.canonical_height;
+  if (naturalIsLandscape !== canonicalIsLandscape) {
+    referenceWidth = overlay.canonical_height;
+    referenceHeight = overlay.canonical_width;
+  }
+
+  return { w: referenceWidth, h: referenceHeight };
+}
+
 export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: PhotoReviewViewProps) {
   const [items, setItems] = useState<SearchPhotoSummary[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -160,6 +211,24 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [placeQuery, setPlaceQuery] = useState("");
   const [provenanceQuery, setProvenanceQuery] = useState("");
+  const [faceOverlayMode, setFaceOverlayMode] = useState<FaceOverlayMode>("hover");
+  const [overlaysByAsset, setOverlaysByAsset] = useState<Record<string, PhotoFaceOverlayAsset>>({});
+  const [loadingOverlayAssets, setLoadingOverlayAssets] = useState<Record<string, true>>({});
+  const [hoveredAssetSha256, setHoveredAssetSha256] = useState<string | null>(null);
+  const [hoveredFaceKey, setHoveredFaceKey] = useState<string | null>(null);
+  const [imageNaturalDimsByAsset, setImageNaturalDimsByAsset] = useState<Record<string, { w: number; h: number }>>({});
+  const [selectedOverlayFace, setSelectedOverlayFace] = useState<SelectedOverlayFace | null>(null);
+  const [assignmentPersonId, setAssignmentPersonId] = useState<number | null>(null);
+  const [newPersonName, setNewPersonName] = useState("");
+  const [isAssigningCluster, setIsAssigningCluster] = useState(false);
+  const [assignmentMessage, setAssignmentMessage] = useState<string | null>(null);
+  const [assignmentErrorMessage, setAssignmentErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!assignmentMessage) return;
+    const id = window.setTimeout(() => setAssignmentMessage(null), 1500);
+    return () => window.clearTimeout(id);
+  }, [assignmentMessage]);
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const yearRef = useRef(year);
@@ -463,6 +532,228 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   ]);
 
   const hasMore = items.length < totalCount;
+
+  useEffect(() => {
+    const currentAssetSet = new Set(items.map((item) => item.asset_sha256));
+    setOverlaysByAsset((current) => {
+      const next: Record<string, PhotoFaceOverlayAsset> = {};
+      let changed = false;
+      for (const [assetSha256, overlay] of Object.entries(current)) {
+        if (currentAssetSet.has(assetSha256)) {
+          next[assetSha256] = overlay;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+    setLoadingOverlayAssets((current) => {
+      const next: Record<string, true> = {};
+      let changed = false;
+      for (const assetSha256 of Object.keys(current)) {
+        if (currentAssetSet.has(assetSha256)) {
+          next[assetSha256] = true;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+    setImageNaturalDimsByAsset((current) => {
+      const next: Record<string, { w: number; h: number }> = {};
+      let changed = false;
+      for (const [assetSha256, dims] of Object.entries(current)) {
+        if (currentAssetSet.has(assetSha256)) {
+          next[assetSha256] = dims;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [items]);
+
+  useEffect(() => {
+    if (faceOverlayMode !== "off") {
+      return;
+    }
+    setHoveredAssetSha256(null);
+    setHoveredFaceKey(null);
+  }, [faceOverlayMode]);
+
+  useEffect(() => {
+    if (faceOverlayMode === "off") {
+      return;
+    }
+    const candidateAssetShas = items
+      .filter((item) => item.face_count > 0)
+      .map((item) => item.asset_sha256)
+      .filter((assetSha256) => overlaysByAsset[assetSha256] === undefined && loadingOverlayAssets[assetSha256] === undefined)
+      .slice(0, 40);
+
+    if (candidateAssetShas.length === 0) {
+      return;
+    }
+
+    setLoadingOverlayAssets((current) => {
+      const next = { ...current };
+      for (const assetSha256 of candidateAssetShas) {
+        next[assetSha256] = true;
+      }
+      return next;
+    });
+
+    async function loadOverlays(): Promise<void> {
+      try {
+        const response = await getPhotoFaceOverlays(candidateAssetShas);
+        setOverlaysByAsset((current) => {
+          const next = { ...current };
+          for (const overlay of response.items) {
+            next[overlay.asset_sha256] = overlay;
+          }
+          return next;
+        });
+      } catch {
+        // Keep browsing flow resilient even if overlay fetch fails.
+      } finally {
+        setLoadingOverlayAssets((current) => {
+          const next = { ...current };
+          for (const assetSha256 of candidateAssetShas) {
+            delete next[assetSha256];
+          }
+          return next;
+        });
+      }
+    }
+
+    void loadOverlays();
+  }, [faceOverlayMode, items]);
+
+  const selectedOverlayFaceEntry = useMemo(() => {
+    if (!selectedOverlayFace) {
+      return null;
+    }
+    const overlay = overlaysByAsset[selectedOverlayFace.assetSha256];
+    const face = overlay?.faces.find((candidate) => candidate.face_id === selectedOverlayFace.faceId);
+    if (!face) {
+      return null;
+    }
+    return {
+      assetSha256: selectedOverlayFace.assetSha256,
+      overlay,
+      face,
+    };
+  }, [overlaysByAsset, selectedOverlayFace]);
+
+  useEffect(() => {
+    if (!selectedOverlayFaceEntry) {
+      setAssignmentPersonId(null);
+      return;
+    }
+    setAssignmentPersonId(selectedOverlayFaceEntry.face.person_id ?? null);
+  }, [selectedOverlayFaceEntry]);
+
+  function patchClusterAssignment(clusterId: number, personId: number, personName: string): void {
+    setOverlaysByAsset((current) => {
+      const next: Record<string, PhotoFaceOverlayAsset> = {};
+      for (const [assetSha256, overlay] of Object.entries(current)) {
+        let changed = false;
+        const nextFaces = overlay.faces.map((face) => {
+          if (face.cluster_id !== clusterId) {
+            return face;
+          }
+          changed = true;
+          return {
+            ...face,
+            person_id: personId,
+            person_name: personName,
+          };
+        });
+
+        next[assetSha256] = changed
+          ? {
+              ...overlay,
+              faces: nextFaces,
+            }
+          : overlay;
+      }
+      return next;
+    });
+  }
+
+  async function handleAssignSelectedClusterToPerson(targetPersonId: number): Promise<void> {
+    if (!selectedOverlayFaceEntry || selectedOverlayFaceEntry.face.cluster_id === null) {
+      return;
+    }
+
+    const clusterId = selectedOverlayFaceEntry.face.cluster_id;
+    const previousName = selectedOverlayFaceEntry.face.person_name;
+    const targetPerson = people.find((person) => person.person_id === targetPersonId);
+    const targetPersonName = targetPerson?.display_name ?? `Person #${targetPersonId}`;
+
+    setIsAssigningCluster(true);
+    setAssignmentMessage(null);
+    setAssignmentErrorMessage(null);
+
+    try {
+      await assignPerson(clusterId, targetPersonId);
+      patchClusterAssignment(clusterId, targetPersonId, targetPersonName);
+      if (previousName && previousName !== targetPersonName) {
+        setAssignmentMessage(`Reassigned face cluster from ${previousName} to ${targetPersonName}.`);
+      } else {
+        setAssignmentMessage(`Assigned face cluster to ${targetPersonName}.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : "Could not assign cluster. Please try again.";
+      setAssignmentErrorMessage(message);
+    } finally {
+      setIsAssigningCluster(false);
+    }
+  }
+
+  async function handleCreatePersonAndAssign(): Promise<void> {
+    if (!selectedOverlayFaceEntry || selectedOverlayFaceEntry.face.cluster_id === null) {
+      return;
+    }
+
+    const candidateName = newPersonName.trim();
+    if (!candidateName) {
+      setAssignmentErrorMessage("Enter a person name first.");
+      return;
+    }
+
+    const clusterId = selectedOverlayFaceEntry.face.cluster_id;
+
+    setIsAssigningCluster(true);
+    setAssignmentMessage(null);
+    setAssignmentErrorMessage(null);
+
+    try {
+      const response = await createPerson(candidateName);
+      setPeople((current) => {
+        const already = current.some((person) => person.person_id === response.person.person_id);
+        if (already) {
+          return current;
+        }
+        return [...current, response.person].sort((a, b) => a.display_name.localeCompare(b.display_name));
+      });
+      setNewPersonName("");
+      setAssignmentPersonId(response.person.person_id);
+      await assignPerson(clusterId, response.person.person_id);
+      patchClusterAssignment(clusterId, response.person.person_id, response.person.display_name);
+      setAssignmentMessage(`Created person ${response.person.display_name} and assigned face cluster.`);
+    } catch (error) {
+      let message = error instanceof Error && error.message
+        ? error.message
+        : "Could not create person. Please try again.";
+      if (message.toLowerCase().includes("already exists")) {
+        message = "A person with this name already exists. Select the existing person instead.";
+      }
+      setAssignmentErrorMessage(message);
+    } finally {
+      setIsAssigningCluster(false);
+    }
+  }
 
   useEffect(() => {
     if (!sentinelRef.current || !hasMore || isLoading) {
@@ -925,6 +1216,19 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
             <input type="checkbox" checked={undated} onChange={(event) => setUndated(event.target.checked)} />
             Undated
           </label>
+
+          <label className={styles.fieldLabel}>
+            Face boxes
+            <select
+              value={faceOverlayMode}
+              onChange={(event) => setFaceOverlayMode(event.target.value as FaceOverlayMode)}
+              className={styles.select}
+            >
+              <option value="off">Off</option>
+              <option value="hover">Hover</option>
+              <option value="always">Always</option>
+            </select>
+          </label>
         </div>
 
         <div className={styles.countRow}>{items.length} / {totalCount} photos</div>
@@ -959,8 +1263,75 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
       {errorMessage ? <div className={styles.errorMessage}>{errorMessage}</div> : null}
       {batchMessage ? <div className={styles.batchMessage}>{batchMessage}</div> : null}
 
+      {selectedOverlayFaceEntry ? (
+        <div className={styles.assignmentPanel}>
+          <div className={styles.assignmentPanelHeader}>
+            <h3 className={styles.assignmentTitle}>Face assignment</h3>
+            <span className={styles.assignmentMeta}>Asset {selectedOverlayFaceEntry.assetSha256.slice(0, 10)}...</span>
+          </div>
+          <div className={styles.assignmentSummary}>
+            <span>Face #{selectedOverlayFaceEntry.face.face_id}</span>
+            <span>Cluster #{selectedOverlayFaceEntry.face.cluster_id ?? "-"}</span>
+            <span>Current: {getFaceLabel(selectedOverlayFaceEntry.face)}</span>
+            <span>
+              {selectedOverlayFaceEntry.face.cluster_face_count !== null && selectedOverlayFaceEntry.face.cluster_face_count !== undefined
+                ? `${selectedOverlayFaceEntry.face.cluster_face_count} face(s) in cluster`
+                : "Cluster face count unavailable"}
+            </span>
+          </div>
+          <div className={styles.assignmentActionsRow}>
+            <select
+              value={assignmentPersonId ?? ""}
+              onChange={(event) => setAssignmentPersonId(event.target.value ? Number(event.target.value) : null)}
+              className={styles.select}
+              disabled={isAssigningCluster}
+            >
+              <option value="">Select person</option>
+              {people.map((person) => (
+                <option key={person.person_id} value={person.person_id}>{person.display_name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={styles.actionButton}
+              onClick={() => assignmentPersonId !== null && void handleAssignSelectedClusterToPerson(assignmentPersonId)}
+              disabled={isAssigningCluster || assignmentPersonId === null}
+            >
+              {selectedOverlayFaceEntry.face.person_id ? "Reassign cluster" : "Assign cluster"}
+            </button>
+          </div>
+          <div className={styles.assignmentActionsRow}>
+            <input
+              type="text"
+              value={newPersonName}
+              onChange={(event) => setNewPersonName(event.target.value)}
+              placeholder="Create new person"
+              className={styles.input}
+              disabled={isAssigningCluster}
+            />
+            <button
+              type="button"
+              className={styles.actionButton}
+              onClick={() => void handleCreatePersonAndAssign()}
+              disabled={isAssigningCluster || !newPersonName.trim()}
+            >
+              Create + assign
+            </button>
+          </div>
+          {assignmentMessage ? <div className={styles.batchMessage}>{assignmentMessage}</div> : null}
+          {assignmentErrorMessage ? <div className={styles.errorMessage}>{assignmentErrorMessage}</div> : null}
+        </div>
+      ) : null}
+
       <div className={styles.grid}>
-        {items.map((item, index) => (
+        {items.map((item, index) => {
+          const overlay = overlaysByAsset[item.asset_sha256];
+          const naturalDims = imageNaturalDimsByAsset[item.asset_sha256];
+          const referenceDims = overlay ? getOverlayReferenceDims(overlay, naturalDims) : null;
+          const shouldShowOverlays =
+            faceOverlayMode === "always" || (faceOverlayMode === "hover" && hoveredAssetSha256 === item.asset_sha256);
+
+          return (
           <div key={item.asset_sha256} className={`${styles.card} ${selectedAssets.has(item.asset_sha256) ? styles.cardSelected : ""}`.trim()}>
             <div className={styles.cardSelectRow}>
               <label className={styles.cardSelectLabel}>
@@ -969,9 +1340,66 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
               </label>
             </div>
 
-            <button type="button" className={styles.imageButton} onClick={() => setPresentationStartIndex(index)}>
-              <img src={resolveApiUrl(item.image_url) ?? ""} alt={item.filename} className={styles.image} loading="lazy" />
-            </button>
+            <div
+              className={styles.imageShell}
+              onMouseEnter={() => setHoveredAssetSha256(item.asset_sha256)}
+              onMouseLeave={() => {
+                setHoveredAssetSha256((current) => (current === item.asset_sha256 ? null : current));
+                setHoveredFaceKey((current) => (current?.startsWith(`${item.asset_sha256}:`) ? null : current));
+              }}
+            >
+              <button type="button" className={styles.imageButton} onClick={() => setPresentationStartIndex(index)}>
+                <img
+                  src={resolveApiUrl(item.image_url) ?? ""}
+                  alt={item.filename}
+                  className={styles.image}
+                  loading="lazy"
+                  onLoad={(event) => {
+                    const img = event.currentTarget;
+                    setImageNaturalDimsByAsset((current) => ({
+                      ...current,
+                      [item.asset_sha256]: { w: img.naturalWidth, h: img.naturalHeight },
+                    }));
+                  }}
+                />
+              </button>
+
+              {faceOverlayMode !== "off" && shouldShowOverlays && overlay && referenceDims ? (
+                <div className={styles.faceOverlayLayer}>
+                  {overlay.faces.map((face) => {
+                    const faceKey = `${item.asset_sha256}:${face.face_id}`;
+                    const isSelected =
+                      selectedOverlayFace?.assetSha256 === item.asset_sha256 &&
+                      selectedOverlayFace.faceId === face.face_id;
+                    return (
+                      <button
+                        key={face.face_id}
+                        type="button"
+                        className={`${styles.faceBox} ${isSelected ? styles.faceBoxActive : ""}`.trim()}
+                        style={{
+                          left: `${(face.bbox.x / referenceDims.w) * 100}%`,
+                          top: `${(face.bbox.y / referenceDims.h) * 100}%`,
+                          width: `${(face.bbox.w / referenceDims.w) * 100}%`,
+                          height: `${(face.bbox.h / referenceDims.h) * 100}%`,
+                        }}
+                        onMouseEnter={() => setHoveredFaceKey(faceKey)}
+                        onMouseLeave={() => setHoveredFaceKey((current) => (current === faceKey ? null : current))}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedOverlayFace({ assetSha256: item.asset_sha256, faceId: face.face_id });
+                          setAssignmentMessage(null);
+                          setAssignmentErrorMessage(null);
+                        }}
+                        title={getFaceLabel(face)}
+                        aria-label={getFaceLabel(face)}
+                      >
+                        {hoveredFaceKey === faceKey ? <span className={styles.faceLabel}>{getFaceLabel(face)}</span> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
 
             <div className={styles.filename} title={item.filename}>{item.filename}</div>
 
@@ -997,7 +1425,8 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
               ) : null}
             </div>
           </div>
-        ))}
+        );
+        })}
       </div>
 
       {isLoading ? <div className={styles.loadingMessage}>Loading...</div> : null}

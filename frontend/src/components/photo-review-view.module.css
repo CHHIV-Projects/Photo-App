@@ -111,6 +111,50 @@
   font-size: 0.84rem;
 }
 
+.assignmentPanel {
+  border: 1px solid #d5dde6;
+  background: #f9fbfd;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.assignmentPanelHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.assignmentTitle {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #1d2b39;
+}
+
+.assignmentMeta {
+  font-size: 0.75rem;
+  color: #516274;
+  font-weight: 600;
+}
+
+.assignmentSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: #304355;
+}
+
+.assignmentActionsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .batchToolbar {
   display: flex;
   flex-wrap: wrap;
@@ -181,6 +225,12 @@
   margin: 0;
   background: transparent;
   cursor: pointer;
+  display: block;
+  width: 100%;
+}
+
+.imageShell {
+  position: relative;
 }
 
 .image {
@@ -189,6 +239,43 @@
   object-fit: cover;
   background: #e7edf3;
   display: block;
+}
+
+.faceOverlayLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.faceBox {
+  position: absolute;
+  border: 2px solid rgba(49, 117, 180, 0.95);
+  background: rgba(49, 117, 180, 0.16);
+  border-radius: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+  padding: 0;
+}
+
+.faceBoxActive {
+  border-color: rgba(30, 150, 70, 0.96);
+  background: rgba(30, 150, 70, 0.22);
+}
+
+.faceLabel {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(17, 30, 45, 0.92);
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 700;
 }
 
 .filename {

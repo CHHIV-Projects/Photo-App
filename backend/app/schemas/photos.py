@@ -18,6 +18,7 @@ class FaceInPhoto(BaseModel):
     face_id: int
     bbox: BBox
     cluster_id: int | None
+    cluster_face_count: int | None = None
     person_id: int | None
     person_name: str | None
 
@@ -362,6 +363,22 @@ class PhotoEventMutationResponse(BaseModel):
     event: PhotoEventSummary | None = None
     old_event: EventImpactSummary | None = None
     new_event: EventImpactSummary | None = None
+
+
+class PhotoFaceOverlayBatchRequest(BaseModel):
+    asset_sha256_list: list[str]
+
+
+class PhotoFaceOverlayAsset(BaseModel):
+    asset_sha256: str
+    canonical_width: int | None = None
+    canonical_height: int | None = None
+    faces: list[FaceInPhoto] = []
+
+
+class PhotoFaceOverlayBatchResponse(BaseModel):
+    count: int
+    items: list[PhotoFaceOverlayAsset] = []
 
 
 class SuccessResponse(BaseModel):

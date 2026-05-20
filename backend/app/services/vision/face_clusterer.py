@@ -134,7 +134,7 @@ def load_faces_for_incremental_assignment(db_session: Session) -> list[Face]:
     return list(
         db_session.scalars(
             select(Face)
-            .where(Face.cluster_id.is_(None), Face.embedding_json.is_not(None))
+            .where(Face.cluster_id.is_(None), Face.embedding_json.is_not(None), Face.is_manually_unassigned.is_(False))
             .order_by(Face.id.asc())
         ).all()
     )

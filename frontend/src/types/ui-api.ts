@@ -76,8 +76,21 @@ export interface FaceInPhoto {
   face_id: number;
   bbox: BBox;
   cluster_id: number | null;
+  cluster_face_count?: number | null;
   person_id: number | null;
   person_name: string | null;
+}
+
+export interface PhotoFaceOverlayAsset {
+  asset_sha256: string;
+  canonical_width: number | null;
+  canonical_height: number | null;
+  faces: FaceInPhoto[];
+}
+
+export interface PhotoFaceOverlayBatchResponse {
+  count: number;
+  items: PhotoFaceOverlayAsset[];
 }
 
 export interface PhotoSummary {

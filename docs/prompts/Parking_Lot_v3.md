@@ -758,8 +758,6 @@ This improves launcher reliability and operator clarity before v1.0 production u
 ## Practical operator rule for nowBefore starting the app:```text1. Check whether another terminal is already running backend/frontend.2. If unsure, run stop_photo_organizer.ps1.3. Then start again.
 ```
 
-
-
 ---
 
 # 4. Photo Review / General UX
@@ -953,6 +951,36 @@ Allow side-by-side comparison of faces/clusters/person candidates.
 Allow user to dismiss incorrect face/person suggestions.
 
 ---
+
+# ## FW-005 — Large Image Face Assignment Mode
+
+### Summary
+
+Add a larger-image face assignment mode for photos where thumbnail/card overlays are too small to assign faces comfortably.  
+
+### Desired Behavior
+
+User can open a larger image view from Photo Review or Photo Detail, reveal face boxes, click a face, assign the face cluster to an existing or new person, then continue assigning additional faces.  
+
+### Important
+
+Normal Presentation mode should remain clean by default. Face assignment overlays should be optional or available through a dedicated assignment mode.  
+
+### Candidate Designs
+
+- Photo Detail face assignment  
+- Presentation mode with optional assignment overlay  
+- Dedicated Face Assignment View  
+
+### Priority
+
+High after basic Photo Review thumbnail assignment works.
+
+
+
+---
+
+
 
 # 6. Location / Places
 

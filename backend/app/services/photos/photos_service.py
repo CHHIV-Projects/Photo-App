@@ -383,6 +383,104 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
     }
 
 
+def get_photo_face_overlays(db: Session, asset_sha256_list: list[str]) -> list[dict]:
+    """Return clustered, non-ignored face overlays for a batch of assets."""
+    normalized_shas: list[str] = []
+    seen: set[str] = set()
+    for sha in asset_sha256_list:
+        trimmed = sha.strip()
+        if not trimmed or trimmed in seen:
+            continue
+        seen.add(trimmed)
+        normalized_shas.append(trimmed)
+
+    if not normalized_shas:
+        return []
+
+    asset_rows = db.execute(
+        select(Asset.sha256, Asset.width, Asset.height).where(Asset.sha256.in_(normalized_shas))
+    ).all()
+    asset_dims_by_sha = {
+        row.sha256: {
+            "canonical_width": row.width,
+            "canonical_height": row.height,
+        }
+        for row in asset_rows
+    }
+
+    face_rows = db.execute(
+        select(
+            Face.asset_sha256,
+            Face.id,
+            Face.bbox_x,
+            Face.bbox_y,
+            Face.bbox_width,
+            Face.bbox_height,
+            Face.cluster_id,
+            FaceCluster.person_id,
+            Person.display_name,
+        )
+        .join(FaceCluster, Face.cluster_id == FaceCluster.id)
+        .outerjoin(Person, FaceCluster.person_id == Person.id)
+        .where(
+            Face.asset_sha256.in_(normalized_shas),
+            Face.cluster_id.is_not(None),
+            FaceCluster.is_ignored.is_(False),
+        )
+        .order_by(Face.asset_sha256.asc(), Face.id.asc())
+    ).all()
+
+    cluster_ids = sorted({int(row.cluster_id) for row in face_rows if row.cluster_id is not None})
+    cluster_face_count_by_id: dict[int, int] = {}
+    if cluster_ids:
+        cluster_count_rows = db.execute(
+            select(Face.cluster_id, func.count(Face.id).label("face_count"))
+            .where(Face.cluster_id.in_(cluster_ids))
+            .group_by(Face.cluster_id)
+        ).all()
+        cluster_face_count_by_id = {
+            int(row.cluster_id): int(row.face_count or 0)
+            for row in cluster_count_rows
+            if row.cluster_id is not None
+        }
+
+    faces_by_asset_sha: dict[str, list[dict]] = {sha: [] for sha in asset_dims_by_sha}
+    for row in face_rows:
+        if row.asset_sha256 not in faces_by_asset_sha:
+            continue
+        faces_by_asset_sha[row.asset_sha256].append(
+            {
+                "face_id": row.id,
+                "bbox": {
+                    "x": row.bbox_x,
+                    "y": row.bbox_y,
+                    "w": row.bbox_width,
+                    "h": row.bbox_height,
+                },
+                "cluster_id": row.cluster_id,
+                "cluster_face_count": cluster_face_count_by_id.get(int(row.cluster_id)) if row.cluster_id is not None else None,
+                "person_id": row.person_id,
+                "person_name": row.display_name,
+            }
+        )
+
+    payload: list[dict] = []
+    for sha in normalized_shas:
+        dims = asset_dims_by_sha.get(sha)
+        if dims is None:
+            continue
+        payload.append(
+            {
+                "asset_sha256": sha,
+                "canonical_width": dims["canonical_width"],
+                "canonical_height": dims["canonical_height"],
+                "faces": faces_by_asset_sha.get(sha, []),
+            }
+        )
+
+    return payload
+
+
 def get_duplicate_group_detail(db: Session, group_id: int) -> dict | None:
     """Return duplicate-group details and canonical member."""
     group = db.get(DuplicateGroup, group_id)
