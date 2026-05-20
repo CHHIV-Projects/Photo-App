@@ -9,6 +9,7 @@ import {
   getPeople,
   getPhotoDetail,
   getPhotoFaceOverlays,
+  removeFaceFromCluster,
   resolveApiUrl,
   setPhotoRotation,
 } from "@/lib/api";
@@ -20,6 +21,7 @@ interface Props {
   items: PhotoSummary[];
   initialIndex: number;
   onClose: () => void;
+  onFaceAssignmentsChanged?: () => void;
 }
 
 function formatCapturedAt(value: string | null): string | null {
@@ -89,7 +91,7 @@ function getOverlayReferenceDims(
   return { w: referenceWidth, h: referenceHeight };
 }
 
-export function PresentationViewer({ items, initialIndex, onClose }: Props) {
+export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignmentsChanged }: Props) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [photoDetail, setPhotoDetail] = useState<PhotoDetail | null>(null);
   const [detailErrorMessage, setDetailErrorMessage] = useState<string | null>(null);
@@ -520,6 +522,7 @@ export function PresentationViewer({ items, initialIndex, onClose }: Props) {
     try {
       await assignPerson(selectedOverlayFace.cluster_id, assignmentPersonId);
       patchOverlayAssignments(selectedOverlayFace.cluster_id, assignmentPersonId, target.display_name);
+      onFaceAssignmentsChanged?.();
       if (previousName && previousName !== target.display_name) {
         setAssignmentMessage(`Reassigned face cluster from ${previousName} to ${target.display_name}.`);
       } else {
@@ -565,6 +568,7 @@ export function PresentationViewer({ items, initialIndex, onClose }: Props) {
         response.person.person_id,
         response.person.display_name,
       );
+      onFaceAssignmentsChanged?.();
 
       setAssignmentMessage(`Created person ${response.person.display_name} and assigned face cluster.`);
       window.setTimeout(() => {
@@ -948,7 +952,7 @@ export function PresentationViewer({ items, initialIndex, onClose }: Props) {
                       setAssignmentErrorMessage(null);
                       setAssignmentMessage(null);
                       try {
-                        await import("@/lib/api").then(({ removeFaceFromCluster }) => removeFaceFromCluster(selectedOverlayFace.face_id));
+                        await removeFaceFromCluster(selectedOverlayFace.face_id);
                         setOverlayByAssetSha((current) => {
                           const next = { ...current };
                           const overlay = next[currentAssetSha ?? ""];
@@ -964,6 +968,7 @@ export function PresentationViewer({ items, initialIndex, onClose }: Props) {
                           }
                           return next;
                         });
+                        onFaceAssignmentsChanged?.();
                         setAssignmentMessage("Face unassigned from cluster.");
                         window.setTimeout(() => {
                           closeAssignmentPopover();

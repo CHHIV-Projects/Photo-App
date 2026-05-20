@@ -190,6 +190,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
   const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
   const [presentationStartIndex, setPresentationStartIndex] = useState<number | null>(null);
+  const [presentationHasPendingRefresh, setPresentationHasPendingRefresh] = useState(false);
 
   const [searchText, setSearchText] = useState("");
   const [year, setYear] = useState<string>("");
@@ -994,6 +995,19 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     [items]
   );
 
+  function handlePresentationFaceAssignmentsChanged(): void {
+    setPresentationHasPendingRefresh(true);
+  }
+
+  async function handleClosePresentation(): Promise<void> {
+    setPresentationStartIndex(null);
+    if (!presentationHasPendingRefresh) {
+      return;
+    }
+    setPresentationHasPendingRefresh(false);
+    await reloadFromStart();
+  }
+
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
@@ -1474,7 +1488,10 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
         <PresentationViewer
           items={presentationItems}
           initialIndex={presentationStartIndex}
-          onClose={() => setPresentationStartIndex(null)}
+          onFaceAssignmentsChanged={handlePresentationFaceAssignmentsChanged}
+          onClose={() => {
+            void handleClosePresentation();
+          }}
         />
       ) : null}
     </div>

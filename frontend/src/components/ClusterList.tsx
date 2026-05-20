@@ -3,29 +3,35 @@ import { useEffect, useRef, useState } from "react";
 import styles from "@/components/review-screen.module.css";
 import type { ClusterSummary } from "@/types/ui-api";
 
-type FilterMode = "all" | "unassigned" | "min1" | "min2" | "min5";
+type FilterMode = "all" | "assigned" | "unassigned" | "ignored";
 
 const FILTER_OPTIONS: { mode: FilterMode; label: string }[] = [
   { mode: "all", label: "All" },
+  { mode: "assigned", label: "Assigned" },
   { mode: "unassigned", label: "Unassigned" },
-  { mode: "min1", label: "1+" },
-  { mode: "min2", label: "2+" },
-  { mode: "min5", label: "5+" }
+  { mode: "ignored", label: "Ignored" },
 ];
 
-const MIN_FACE_COUNT: Record<FilterMode, number> = {
-  all: 0,
-  unassigned: 0,
-  min1: 1,
-  min2: 2,
-  min5: 5
-};
-
-function applyFilter(clusters: ClusterSummary[], mode: FilterMode): ClusterSummary[] {
+function applyStatusFilter(clusters: ClusterSummary[], mode: FilterMode): ClusterSummary[] {
   return clusters.filter((cluster) => {
-    if (mode === "unassigned" && cluster.person_id !== null) return false;
-    if (cluster.face_count < MIN_FACE_COUNT[mode]) return false;
-    return true;
+    if (mode === "all") return !cluster.is_ignored;
+    if (mode === "assigned") return !cluster.is_ignored && cluster.person_id !== null;
+    if (mode === "unassigned") return !cluster.is_ignored && cluster.person_id === null;
+    return cluster.is_ignored;
+  });
+}
+
+function applyPersonFilter(clusters: ClusterSummary[], personQuery: string): ClusterSummary[] {
+  const query = personQuery.trim().toLowerCase();
+  if (!query) {
+    return clusters;
+  }
+
+  return clusters.filter((cluster) => {
+    if (!cluster.person_name) {
+      return "unassigned".includes(query);
+    }
+    return cluster.person_name.toLowerCase().includes(query);
   });
 }
 
@@ -46,8 +52,9 @@ export function ClusterList({
 }: ClusterListProps) {
   const clusterRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const [personSearchQuery, setPersonSearchQuery] = useState("");
 
-  const visibleClusters = applyFilter(clusters, filterMode);
+  const visibleClusters = applyPersonFilter(applyStatusFilter(clusters, filterMode), personSearchQuery);
 
   useEffect(() => {
     if (selectedClusterId !== null) {
@@ -76,6 +83,14 @@ export function ClusterList({
       </header>
 
       <div className={styles.panelBody}>
+        <input
+          type="search"
+          className={styles.searchInput}
+          placeholder="Filter clusters by person name..."
+          value={personSearchQuery}
+          onChange={(event) => setPersonSearchQuery(event.target.value)}
+        />
+
         <div className={styles.filterBar}>
           {FILTER_OPTIONS.map(({ mode, label }) => (
             <button
@@ -125,6 +140,7 @@ export function ClusterList({
                   <p className={styles.clusterButtonLabel}>
                     {cluster.person_name ?? "Unassigned"}
                   </p>
+                  {cluster.is_ignored ? <p className={styles.clusterButtonMeta}>Ignored</p> : null}
                 </button>
               );
             })}

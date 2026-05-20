@@ -71,6 +71,12 @@ export interface PhotoQueryOptions {
 
 export interface TimelineQueryOptions extends PhotoQueryOptions {}
 
+export interface ClusterQueryOptions {
+  includeIgnored?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 export interface SearchPhotoQueryOptions extends PhotoQueryOptions {
   q?: string;
   startDate?: string;
@@ -124,8 +130,21 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function getClusters(): Promise<ListResponse<ClusterSummary>> {
-  return apiRequest<ListResponse<ClusterSummary>>("/api/clusters");
+export function getClusters(options: ClusterQueryOptions = {}): Promise<ListResponse<ClusterSummary>> {
+  const params = new URLSearchParams();
+  if (options.includeIgnored !== undefined) {
+    params.set("include_ignored", options.includeIgnored ? "true" : "false");
+  }
+  if (options.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.offset !== undefined) {
+    params.set("offset", String(options.offset));
+  }
+
+  const query = params.toString();
+  const path = query ? `/api/clusters?${query}` : "/api/clusters";
+  return apiRequest<ListResponse<ClusterSummary>>(path);
 }
 
 export function getCluster(clusterId: number): Promise<ClusterDetail> {

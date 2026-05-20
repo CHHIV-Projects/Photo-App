@@ -692,3 +692,202 @@ After 12.54, proceed to:
 - move clusters between people
 - person alias design
 - alias-aware person search
+
+# Answers to Coder Questions — Milestone 12.54
+
+## 1. Rotation behavior
+
+For 12.54, follow the safer Photo Detail rule:
+
+```text
+If image rotation is not 0°, disable face assignment overlays in Presentation mode.
+
+Reason:
+
+Bad face-box math is worse than temporarily disabling assignment for a rotated image.
+
+This is a corner case for now. We can address rotated-image overlay support later if it becomes important.
+
+Required behavior:
+
+rotation = 0:
+  face overlays allowed
+
+rotation != 0:
+  do not show clickable face boxes
+  optionally show subtle message:
+    Face assignment is unavailable for rotated display in this view.
+
+Do not spend time solving rotated overlay coordinate math in 12.54.
+
+2. Overlay data source
+
+Use strict reuse of the 12.53 overlay endpoint.
+
+Approved:
+
+Reuse the 12.53 overlay payload semantics:
+
+- clustered faces only
+- non-ignored clusters only
+- same face/cluster/person fields
+
+Even though Presentation already fetches getPhotoDetail, use the 12.53 overlay endpoint for consistency unless that creates a clear technical problem.
+
+Reason:
+
+Photo Review and Presentation face assignment should agree about which faces are assignable.
+3. Fetch timing
+
+It is okay to load overlay data when each slide loads.
+
+Clarification:
+
+Fetching face overlay data in the background when the image/slide loads is fine.
+
+But face boxes should not be visibly displayed until hover/mouse activity.
+
+So:
+
+Slide loads:
+  fetch overlay data if simple/safe
+
+User is idle / not hovering:
+  do not show boxes
+
+User hovers or moves mouse over image:
+  reveal boxes
+
+This is simpler than first-hover fetching and should feel faster when the user does hover.
+
+4. Inactivity / hide timing
+
+Use this behavior:
+
+mouse leaves image area:
+  hide boxes immediately, unless popover is open
+
+mouse remains over image but becomes idle:
+  hide boxes after about 1.5 seconds, unless popover is open
+
+mouse moves again:
+  show boxes again
+
+So yes:
+
+immediate on leave
+1.5 seconds only for idle
+
+If the popover is open, keep the selected face context visible enough to finish assignment.
+
+5. Popover placement
+
+Yes.
+
+Prefer:
+
+anchor near clicked face box
+auto-flip/reposition if clipped by viewport
+
+If anchoring near the face is too risky, use a compact floating panel near the image edge as fallback.
+
+The goal is:
+
+small
+near context when possible
+not covering too much of the photo
+not clipped offscreen
+6. Escape behavior
+
+Yes.
+
+Use this priority:
+
+If popover is open:
+  Escape closes popover only
+
+If popover is not open:
+  Escape closes Presentation mode
+
+This prevents accidental exit from Presentation while assigning.
+
+7. Success microflow
+
+Confirmed.
+
+Use this sequence:
+
+assignment succeeds
+→ success message shown inside popover for about 1 second
+→ overlay label updates immediately
+→ popover auto-closes
+→ overlays remain visible while mouse is still active
+→ user remains in Presentation mode
+
+Clarification on “overlays remain visible while mouse is still active”:
+
+If the user is still hovering/moving over the image, face boxes may remain visible.
+This allows the user to move to another face and continue assigning.
+
+If the mouse has left the image area, hide overlays after popover closes.
+
+Failure behavior:
+
+assignment fails
+→ popover stays open
+→ error is shown
+→ overlay label does not incorrectly update
+8. Fullscreen behavior
+
+Yes.
+
+Same assignment behavior is acceptable in fullscreen as windowed mode.
+
+Reason:
+
+Fullscreen is useful for seeing small faces clearly.
+
+But keep the same clean-viewing principles:
+
+no persistent clutter
+hover reveals boxes
+click face opens compact popover
+success auto-closes
+next/previous still works
+Escape behavior respects popover first
+Technical Direction Confirmation
+
+Your proposed technical direction is approved:
+
+- Implement primarily in PresentationViewer.tsx.
+- Do not add new backend mutation APIs.
+- Reuse existing assign/create/getPeople APIs.
+- Reuse 12.53 overlay payload/endpoint for face boxes.
+- Close popover on slide change.
+- Close popover on backdrop click.
+- Escape closes popover before closing Presentation.
+- No new global toggles.
+- No persistent side panel.
+- Keep UI minimal: hover boxes + compact popover.
+  Additional guardrails
+
+Please also ensure:
+
+- Face-box clicks stop propagation and do not trigger next/previous or close behavior.
+- Next/previous closes any open popover.
+- Overlay state does not leak between slides.
+- Photo Review 12.53 face assignment still works after these changes.
+- Presentation mode remains clean until mouse activity/hover.
+  Summary
+
+Proceed with:
+
+rotation != 0 disables assignment overlays for now
+overlay data may fetch on slide load, but boxes only show on hover/activity
+hide immediately on mouse leave
+hide after ~1.5s idle
+popover anchored near face with viewport flip
+Escape closes popover first, Presentation second
+success message ~1s then auto-close
+overlays stay active while mouse is active
+same behavior in fullscreen

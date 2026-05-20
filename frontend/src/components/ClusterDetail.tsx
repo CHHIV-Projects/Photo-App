@@ -54,7 +54,18 @@ export function ClusterDetail({
   onMoveFace,
   onSelectCluster
 }: ClusterDetailProps) {
+  type MergePreviewState = {
+    sourceClusterId: number;
+    targetClusterId: number;
+    sourcePersonName: string;
+    targetPersonName: string;
+    sourceFaceCount: number;
+    targetFaceCount: number;
+    sourceWillBeDeleted: boolean;
+  };
+
   const [targetClusterInput, setTargetClusterInput] = useState<string>("");
+  const [mergePreview, setMergePreview] = useState<MergePreviewState | null>(null);
   const [suggestions, setSuggestions] = useState<ClusterSuggestionResponse | null>(null);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [suggestionsErrorMessage, setSuggestionsErrorMessage] = useState<string | null>(null);
@@ -125,17 +136,50 @@ export function ClusterDetail({
       return;
     }
 
-    if (
-      !window.confirm(
-        "Are you sure you want to merge this cluster into the target cluster? This cannot be undone."
-      )
-    ) {
+    const targetCluster = clusters.find((cluster) => cluster.cluster_id === targetClusterId);
+    if (!targetCluster) {
+      onMergeValidationError(
+        "Target cluster is not currently loaded. Adjust filters or load scope, then retry merge."
+      );
       return;
     }
 
-    const didMerge = await onMergeClusters(targetClusterId);
+    if (targetCluster.is_ignored) {
+      onMergeValidationError("Cannot merge into an ignored cluster.");
+      return;
+    }
+
+    if (
+      clusterDetail.person_id !== null &&
+      targetCluster.person_id !== null &&
+      clusterDetail.person_id !== targetCluster.person_id
+    ) {
+      onMergeValidationError(
+        `Merge blocked: source is assigned to ${clusterDetail.person_name ?? `Person #${clusterDetail.person_id}`}, target is assigned to ${targetCluster.person_name ?? `Person #${targetCluster.person_id}`}. Reassign first.`
+      );
+      return;
+    }
+
+    setMergePreview({
+      sourceClusterId: clusterDetail.cluster_id,
+      targetClusterId,
+      sourcePersonName: clusterDetail.person_name ?? "Unassigned",
+      targetPersonName: targetCluster.person_name ?? "Unassigned",
+      sourceFaceCount: clusterDetail.faces.length,
+      targetFaceCount: targetCluster.face_count,
+      sourceWillBeDeleted: true,
+    });
+  };
+
+  const handleConfirmMerge = async () => {
+    if (!mergePreview) {
+      return;
+    }
+
+    const didMerge = await onMergeClusters(mergePreview.targetClusterId);
     if (didMerge) {
       setTargetClusterInput("");
+      setMergePreview(null);
     }
   };
 
@@ -307,6 +351,54 @@ export function ClusterDetail({
 
             {actionErrorMessage ? (
               <div className={styles.errorMessage}>{actionErrorMessage}</div>
+            ) : null}
+
+            {mergePreview ? (
+              <div className={styles.mergeConfirmOverlay}>
+                <div className={styles.mergeConfirmDialog} role="dialog" aria-modal="true" aria-label="Confirm cluster merge">
+                  <h3 className={styles.mergeConfirmTitle}>Confirm Cluster Merge</h3>
+                  <div className={styles.mergeConfirmGrid}>
+                    <span className={styles.infoLabel}>Source cluster</span>
+                    <span>#{mergePreview.sourceClusterId}</span>
+                    <span className={styles.infoLabel}>Target cluster</span>
+                    <span>#{mergePreview.targetClusterId}</span>
+                    <span className={styles.infoLabel}>Source assigned person</span>
+                    <span>{mergePreview.sourcePersonName}</span>
+                    <span className={styles.infoLabel}>Target assigned person</span>
+                    <span>{mergePreview.targetPersonName}</span>
+                    <span className={styles.infoLabel}>Source face count</span>
+                    <span>{mergePreview.sourceFaceCount}</span>
+                    <span className={styles.infoLabel}>Target face count</span>
+                    <span>{mergePreview.targetFaceCount}</span>
+                    <span className={styles.infoLabel}>Source cluster deletion</span>
+                    <span>{mergePreview.sourceWillBeDeleted ? "Yes" : "No"}</span>
+                  </div>
+                  <p className={styles.mergeConfirmWarning}>
+                    This will move faces from the source cluster into the target cluster and remove the source cluster.
+                    This action is not currently reversible.
+                  </p>
+                  <div className={styles.actionRow}>
+                    <button
+                      type="button"
+                      className={styles.assignButton}
+                      onClick={() => {
+                        void handleConfirmMerge();
+                      }}
+                      disabled={isMergingCluster}
+                    >
+                      {isMergingCluster ? "Merging..." : "Confirm Merge"}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.clusterNavButton}
+                      onClick={() => setMergePreview(null)}
+                      disabled={isMergingCluster}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
             ) : null}
 
             <div className={styles.detailGrid}>

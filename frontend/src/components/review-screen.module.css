@@ -706,3 +706,50 @@
   font-size: 0.85rem;
   color: #526274;
 }
+
+.mergeConfirmOverlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(24, 33, 43, 0.48);
+  z-index: 1200;
+}
+
+.mergeConfirmDialog {
+  width: min(560px, calc(100vw - 28px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid #d9e0e7;
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(18, 28, 38, 0.22);
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.mergeConfirmTitle {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.mergeConfirmGrid {
+  display: grid;
+  grid-template-columns: minmax(160px, 210px) minmax(0, 1fr);
+  gap: 8px 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f7fafc;
+  border: 1px solid #e2e8ee;
+}
+
+.mergeConfirmWarning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fef4dc;
+  border: 1px solid #f4d389;
+  color: #6f4b00;
+  font-size: 0.9rem;
+}

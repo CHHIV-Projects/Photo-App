@@ -145,7 +145,7 @@ export default function HomePage() {
     setClusterErrorMessage(null);
 
     try {
-      const response = await getClusters();
+      const response = await getClusters({ includeIgnored: true });
       setClusters(response.items);
 
       if (response.items.length === 0) {
