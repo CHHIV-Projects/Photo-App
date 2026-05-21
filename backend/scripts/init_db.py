@@ -18,12 +18,13 @@ from app.models.event import Event
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.person import Person
+from app.models.person_alias import PersonAlias
 from app.models.provenance import Provenance
 from app.models.source_intake_run import SourceIntakeRun
 
 
 def main() -> int:
-	_ = (Asset, Event, Face, FaceCluster, Person, DuplicateGroup, DuplicateProcessingRun, Provenance, SourceIntakeRun)
+	_ = (Asset, Event, Face, FaceCluster, Person, PersonAlias, DuplicateGroup, DuplicateProcessingRun, Provenance, SourceIntakeRun)
 	test_database_connection()
 
 	reset_requested = "--reset" in sys.argv

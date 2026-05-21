@@ -5,12 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, literal, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.person import Person
+from app.models.person_alias import PersonAlias
 from app.services.identity.person_service import create_person as identity_create_person
 from app.services.identity.person_service import list_people as identity_list_people
 from app.services.identity.person_suggestion_service import get_cluster_person_suggestion
@@ -30,6 +31,23 @@ FACE_FILENAME_PATTERN = re.compile(r"^face_(\d+)__", re.IGNORECASE)
 
 # Lazy, in-memory index built on first thumbnail lookup.
 _FACE_THUMBNAIL_INDEX: dict[int, str] | None = None
+
+
+def normalize_alias_text(value: str) -> str:
+    """Normalize alias/display text for uniqueness checks and lookups."""
+    collapsed = " ".join(value.strip().split())
+    return collapsed.lower()
+
+
+def _collect_aliases_by_person_id(db: Session) -> dict[int, list[str]]:
+    rows = db.execute(
+        select(PersonAlias.person_id, PersonAlias.alias)
+        .order_by(PersonAlias.person_id.asc(), PersonAlias.alias.asc())
+    ).all()
+    alias_map: dict[int, list[str]] = {}
+    for row in rows:
+        alias_map.setdefault(int(row.person_id), []).append(str(row.alias))
+    return alias_map
 
 
 def _build_face_thumbnail_index() -> dict[int, str]:
@@ -104,49 +122,91 @@ def list_clusters_for_review(
     include_ignored: bool = False,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict]:
+    status_filter: str = "all",
+    person_query: str | None = None,
+) -> tuple[list[dict], int]:
     """List clusters for UI review, including basic labeling metadata."""
+    valid_status_filters = {"all", "assigned", "unassigned", "ignored"}
+    if status_filter not in valid_status_filters:
+        raise ValueError(f"Unsupported status filter: {status_filter}")
+
     query = (
         select(
-            FaceCluster.id,
+            FaceCluster.id.label("cluster_id"),
             func.count(Face.id).label("face_count"),
             FaceCluster.person_id,
-            Person.display_name,
+            Person.display_name.label("person_name"),
             FaceCluster.is_ignored,
         )
         .outerjoin(Face, Face.cluster_id == FaceCluster.id)
         .outerjoin(Person, Person.id == FaceCluster.person_id)
     )
 
-    if not include_ignored:
+    if include_ignored:
+        if status_filter == "all":
+            query = query.where(FaceCluster.is_ignored.is_(False))
+        elif status_filter == "assigned":
+            query = query.where(FaceCluster.is_ignored.is_(False), FaceCluster.person_id.is_not(None))
+        elif status_filter == "unassigned":
+            query = query.where(FaceCluster.is_ignored.is_(False), FaceCluster.person_id.is_(None))
+        elif status_filter == "ignored":
+            query = query.where(FaceCluster.is_ignored.is_(True))
+    else:
         query = query.where(FaceCluster.is_ignored.is_(False))
 
-    rows = db.execute(
-        query.group_by(
-            FaceCluster.id,
-            FaceCluster.person_id,
-            Person.display_name,
-            FaceCluster.is_ignored,
+    normalized_person_query = (person_query or "").strip()
+    if normalized_person_query:
+        like_pattern = f"%{normalized_person_query}%"
+        alias_match = (
+            select(PersonAlias.id)
+            .where(
+                PersonAlias.person_id == FaceCluster.person_id,
+                PersonAlias.alias.ilike(like_pattern),
+            )
+            .exists()
         )
-        .having(func.count(Face.id) > 0)
-        .order_by(func.count(Face.id).desc(), FaceCluster.id.asc())
+        query = query.where(
+            or_(
+                Person.display_name.ilike(like_pattern),
+                alias_match,
+                and_(
+                    FaceCluster.person_id.is_(None),
+                    literal("unassigned").ilike(like_pattern),
+                ),
+            )
+        )
+
+    grouped_query = query.group_by(
+        FaceCluster.id,
+        FaceCluster.person_id,
+        Person.display_name,
+        FaceCluster.is_ignored,
+    ).having(func.count(Face.id) > 0)
+
+    grouped_subquery = grouped_query.subquery()
+    total_count = int(db.execute(select(func.count()).select_from(grouped_subquery)).scalar_one())
+
+    rows = db.execute(
+        select(grouped_subquery)
+        .order_by(grouped_subquery.c.face_count.desc(), grouped_subquery.c.cluster_id.asc())
         .offset(offset)
         .limit(limit)
     ).all()
 
     # Thumbnail URLs are returned only when a reliable serving path exists.
     # In Milestone 10 we intentionally return empty previews to avoid brittle paths.
-    return [
+    items = [
         {
-            "cluster_id": row.id,
+            "cluster_id": row.cluster_id,
             "face_count": int(row.face_count or 0),
             "person_id": row.person_id,
-            "person_name": row.display_name,
+            "person_name": row.person_name,
             "is_ignored": bool(row.is_ignored),
             "preview_thumbnail_urls": [],
         }
         for row in rows
     ]
+    return items, total_count
 
 
 def get_cluster_detail(db: Session, cluster_id: int) -> dict:
@@ -190,10 +250,12 @@ def get_cluster_detail(db: Session, cluster_id: int) -> dict:
 def list_people(db: Session) -> list[dict]:
     """Return all people as lightweight UI summaries."""
     people = identity_list_people(db)
+    aliases_by_person = _collect_aliases_by_person_id(db)
     return [
         {
             "person_id": person.id,
             "display_name": person.display_name,
+            "aliases": aliases_by_person.get(person.id, []),
         }
         for person in people
     ]
@@ -205,6 +267,7 @@ def create_person(db: Session, display_name: str) -> dict:
     return {
         "person_id": person.id,
         "display_name": person.display_name,
+        "aliases": [],
     }
 
 
@@ -279,11 +342,14 @@ def list_people_with_clusters(db: Session) -> list[dict]:
     people_map: dict[int, dict] = {}
     ordered_person_ids: list[int] = []
 
+    aliases_by_person = _collect_aliases_by_person_id(db)
+
     for row in rows:
         if row.id not in people_map:
             people_map[row.id] = {
                 "person_id": row.id,
                 "display_name": row.display_name,
+                "aliases": aliases_by_person.get(row.id, []),
                 "clusters": [],
             }
             ordered_person_ids.append(row.id)
@@ -322,3 +388,77 @@ def list_unassigned_faces(db: Session) -> list[dict]:
 def get_cluster_suggestions(db: Session, cluster_id: int) -> dict:
     """Return suggestion-only person recommendations for one cluster."""
     return get_cluster_person_suggestion(db, cluster_id)
+
+
+def list_person_aliases(db: Session, person_id: int) -> list[dict]:
+    """List aliases for one person."""
+    person = db.get(Person, person_id)
+    if person is None:
+        raise ValueError(f"Person ID {person_id} does not exist.")
+
+    rows = db.execute(
+        select(PersonAlias.id, PersonAlias.alias)
+        .where(PersonAlias.person_id == person_id)
+        .order_by(PersonAlias.alias.asc())
+    ).all()
+    return [{"alias_id": int(row.id), "alias": str(row.alias)} for row in rows]
+
+
+def add_person_alias(db: Session, person_id: int, alias: str) -> dict:
+    """Add alias for person with normalization and uniqueness validation."""
+    person = db.get(Person, person_id)
+    if person is None:
+        raise ValueError(f"Person ID {person_id} does not exist.")
+
+    alias_collapsed = " ".join(alias.strip().split())
+    if not alias_collapsed:
+        raise ValueError("Alias cannot be empty.")
+    if any(ord(ch) < 32 for ch in alias_collapsed):
+        raise ValueError("Alias contains unsupported control characters.")
+    if len(alias_collapsed) > 255:
+        raise ValueError("Alias cannot exceed 255 characters.")
+
+    normalized = normalize_alias_text(alias_collapsed)
+
+    if normalized == normalize_alias_text(person.display_name):
+        raise ValueError("Alias is already the display name for this person.")
+
+    conflicting_person = db.scalar(
+        select(Person).where(func.lower(Person.display_name) == normalized)
+    )
+    if conflicting_person is not None:
+        raise ValueError("Alias matches an existing person's display name.")
+
+    existing_alias = db.scalar(
+        select(PersonAlias).where(PersonAlias.alias_normalized == normalized)
+    )
+    if existing_alias is not None:
+        if existing_alias.person_id == person_id:
+            raise ValueError("Alias already exists for this person.")
+        raise ValueError("Alias already exists for another person.")
+
+    created = PersonAlias(person_id=person_id, alias=alias_collapsed, alias_normalized=normalized)
+    db.add(created)
+    db.commit()
+    db.refresh(created)
+    return {
+        "alias_id": created.id,
+        "alias": created.alias,
+    }
+
+
+def delete_person_alias(db: Session, person_id: int, alias_id: int) -> dict:
+    """Hard delete one alias from one person."""
+    person = db.get(Person, person_id)
+    if person is None:
+        raise ValueError(f"Person ID {person_id} does not exist.")
+
+    alias_row = db.get(PersonAlias, alias_id)
+    if alias_row is None:
+        raise ValueError(f"Alias ID {alias_id} does not exist.")
+    if alias_row.person_id != person_id:
+        raise ValueError(f"Alias ID {alias_id} does not belong to Person ID {person_id}.")
+
+    db.delete(alias_row)
+    db.commit()
+    return {"success": True}

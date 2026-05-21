@@ -38,6 +38,12 @@ export interface ClusterSuggestionResponse {
 export interface PersonSummary {
   person_id: number;
   display_name: string;
+  aliases: string[];
+}
+
+export interface PersonAliasSummary {
+  alias_id: number;
+  alias: string;
 }
 
 export interface ClusterAssignmentSummary {
@@ -48,6 +54,7 @@ export interface ClusterAssignmentSummary {
 export interface PersonWithClusters {
   person_id: number;
   display_name: string;
+  aliases: string[];
   clusters: ClusterAssignmentSummary[];
 }
 
@@ -63,6 +70,12 @@ export interface CreatePersonResponse {
 export interface ListResponse<T> {
   count: number;
   items: T[];
+}
+
+export interface ClusterListResponse extends ListResponse<ClusterSummary> {
+  total_count: number;
+  offset: number;
+  limit: number;
 }
 
 export interface BBox {

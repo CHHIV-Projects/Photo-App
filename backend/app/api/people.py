@@ -7,14 +7,21 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.schemas.ui_api import (
+    CreatePersonAliasRequest,
     CreatePersonRequest,
     CreatePersonResponse,
+    PersonSummary,
+    PersonAliasListResponse,
     PeopleListResponse,
     PeopleWithClustersResponse,
+    SuccessResponse,
 )
 from app.services.identity.ui_api_service import (
+    add_person_alias,
     create_person,
+    delete_person_alias,
     list_people,
+    list_person_aliases,
     list_people_with_clusters,
 )
 
@@ -47,3 +54,52 @@ def post_people(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     return CreatePersonResponse(success=True, person=person)
+
+
+@router.get("/people/{person_id}/aliases", response_model=PersonAliasListResponse)
+def get_person_aliases(person_id: int, db: Session = Depends(get_db_session)) -> PersonAliasListResponse:
+    """List aliases for one person."""
+    try:
+        items = list_person_aliases(db, person_id)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+    return PersonAliasListResponse(count=len(items), items=items)
+
+
+@router.post("/people/{person_id}/aliases", response_model=PersonSummary, status_code=status.HTTP_201_CREATED)
+def post_person_alias(
+    person_id: int,
+    payload: CreatePersonAliasRequest,
+    db: Session = Depends(get_db_session),
+) -> PersonSummary:
+    """Add alias for one person and return canonical person summary."""
+    try:
+        add_person_alias(db, person_id, payload.alias)
+        people = list_people(db)
+        person = next((item for item in people if item["person_id"] == person_id), None)
+        if person is None:
+            raise ValueError(f"Person ID {person_id} does not exist.")
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+    return PersonSummary(**person)
+
+
+@router.delete("/people/{person_id}/aliases/{alias_id}", response_model=SuccessResponse)
+def delete_alias(
+    person_id: int,
+    alias_id: int,
+    db: Session = Depends(get_db_session),
+) -> SuccessResponse:
+    """Delete one alias from one person."""
+    try:
+        delete_person_alias(db, person_id, alias_id)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+    return SuccessResponse(success=True)

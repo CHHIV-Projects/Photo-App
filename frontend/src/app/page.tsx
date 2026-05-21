@@ -17,8 +17,10 @@ import { TimelineView } from "@/components/TimelineView";
 import { UnassignedFacesView } from "@/components/UnassignedFacesView";
 import styles from "@/components/review-screen.module.css";
 import {
+  addPersonAlias,
   assignPerson,
   createPerson,
+    deletePersonAlias,
   createClusterFromFace,
   getCluster,
   getClusters,
@@ -53,6 +55,7 @@ import type {
 } from "@/types/ui-api";
 
 type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions" | "admin";
+type ClusterFilterMode = "all" | "assigned" | "unassigned" | "ignored";
 
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("photo-review");
@@ -61,6 +64,10 @@ export default function HomePage() {
   const [peopleWithClusters, setPeopleWithClusters] = useState<PersonWithClusters[]>([]);
   const [unassignedFaces, setUnassignedFaces] = useState<FaceSummary[]>([]);
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
+  const [clusterFilterMode, setClusterFilterMode] = useState<ClusterFilterMode>("all");
+  const [clusterPersonSearchQuery, setClusterPersonSearchQuery] = useState("");
+  const [clusterOffset, setClusterOffset] = useState(0);
+  const [clusterTotalCount, setClusterTotalCount] = useState(0);
   const [clusterDetail, setClusterDetail] = useState<ClusterDetailType | null>(null);
   const [isLoadingClusters, setIsLoadingClusters] = useState(true);
   const [isLoadingPeople, setIsLoadingPeople] = useState(true);
@@ -116,6 +123,7 @@ export default function HomePage() {
   const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState<string | null>(null);
   const [focusedDuplicateGroupId, setFocusedDuplicateGroupId] = useState<number | null>(null);
   const latestPhotoDetailRequestShaRef = useRef<string | null>(null);
+  const CLUSTER_PAGE_SIZE = 50;
   const PHOTO_SEARCH_PAGE_SIZE = 100;
 
   useEffect(() => {
@@ -140,20 +148,46 @@ export default function HomePage() {
     void loadClusterDetail(selectedClusterId);
   }, [selectedClusterId]);
 
-  async function loadClusters(preferredClusterId?: number | null): Promise<number | null> {
+  async function loadClusters(options?: {
+    preferredClusterId?: number | null;
+    offset?: number;
+    status?: ClusterFilterMode;
+    personQuery?: string;
+  }): Promise<number | null> {
+    const requestedOffset = options?.offset ?? clusterOffset;
+    const requestedStatus = options?.status ?? clusterFilterMode;
+    const requestedPersonQuery = options?.personQuery ?? clusterPersonSearchQuery;
+
     setIsLoadingClusters(true);
     setClusterErrorMessage(null);
 
     try {
-      const response = await getClusters({ includeIgnored: true });
+      const response = await getClusters({
+        includeIgnored: true,
+        status: requestedStatus,
+        personQuery: requestedPersonQuery || undefined,
+        offset: requestedOffset,
+        limit: CLUSTER_PAGE_SIZE,
+      });
+
+      if (requestedOffset > 0 && response.items.length === 0 && response.total_count > 0) {
+        const fallbackOffset = Math.max(0, requestedOffset - CLUSTER_PAGE_SIZE);
+        setClusterOffset(fallbackOffset);
+        return loadClusters({
+          ...options,
+          offset: fallbackOffset,
+        });
+      }
+
       setClusters(response.items);
+      setClusterTotalCount(response.total_count);
 
       if (response.items.length === 0) {
         setSelectedClusterId(null);
         return null;
       }
 
-      const nextSelectedClusterId = preferredClusterId ?? selectedClusterId;
+      const nextSelectedClusterId = options?.preferredClusterId ?? selectedClusterId;
       const matchingCluster = response.items.find(
         (cluster) => cluster.cluster_id === nextSelectedClusterId
       );
@@ -165,11 +199,36 @@ export default function HomePage() {
       return resolvedSelectedClusterId;
     } catch (error) {
       setClusterErrorMessage(getErrorMessage(error, "Failed to load clusters."));
+      setClusterTotalCount(0);
       setSelectedClusterId(null);
       return null;
     } finally {
       setIsLoadingClusters(false);
     }
+  }
+
+  function handleClusterFilterModeChange(mode: ClusterFilterMode) {
+    if (mode === clusterFilterMode) {
+      return;
+    }
+    setClusterFilterMode(mode);
+    setClusterOffset(0);
+    void loadClusters({ status: mode, offset: 0 });
+  }
+
+  function handleClusterSearchQueryChange(value: string) {
+    setClusterPersonSearchQuery(value);
+    setClusterOffset(0);
+    void loadClusters({ personQuery: value, offset: 0 });
+  }
+
+  function handleClusterPageChange(nextOffset: number) {
+    const safeOffset = Math.max(0, nextOffset);
+    if (safeOffset === clusterOffset) {
+      return;
+    }
+    setClusterOffset(safeOffset);
+    void loadClusters({ offset: safeOffset });
   }
 
   async function loadPeople() {
@@ -604,7 +663,7 @@ export default function HomePage() {
 
   async function refreshAfterClusterMutation(previousClusterId: number) {
     const selectedPhoto = selectedPhotoSha256;
-    const resolvedSelectedClusterId = await loadClusters(previousClusterId);
+    const resolvedSelectedClusterId = await loadClusters({ preferredClusterId: previousClusterId });
 
     if (resolvedSelectedClusterId === null) {
       setClusterDetail(null);
@@ -645,7 +704,7 @@ export default function HomePage() {
       await moveFace(faceId, targetClusterId);
 
       const preferredClusterId = selectedClusterId;
-      const resolvedSelectedClusterId = await loadClusters(preferredClusterId);
+      const resolvedSelectedClusterId = await loadClusters({ preferredClusterId });
 
       const refreshTasks: Promise<unknown>[] = [
         loadUnassignedFaces(),
@@ -705,6 +764,20 @@ export default function HomePage() {
     } finally {
       setIsCreatingPerson(false);
     }
+  }
+
+  async function handleAddPersonAlias(personId: number, alias: string): Promise<void> {
+    await addPersonAlias(personId, alias);
+    await Promise.all([loadPeople(), loadPeopleWithClusters()]);
+  }
+
+  async function handleRemovePersonAlias(personId: number, aliasId: number): Promise<void> {
+    await deletePersonAlias(personId, aliasId);
+    await Promise.all([loadPeople(), loadPeopleWithClusters()]);
+  }
+
+  function handlePhotoReviewFaceAssignmentsChanged(): void {
+    void Promise.all([loadPeople(), loadPeopleWithClusters()]);
   }
 
   return (
@@ -812,14 +885,23 @@ export default function HomePage() {
           <PhotoReviewView
             onOpenPhotoDetail={handleOpenPhotoDetailFromReview}
             onOpenDuplicateGroup={handleOpenDuplicateGroupFromReview}
+            onFaceAssignmentsChanged={handlePhotoReviewFaceAssignmentsChanged}
           />
         ) : viewMode === "review" ? (
           <div className={styles.layout}>
             <ClusterList
               clusters={clusters}
+              filterMode={clusterFilterMode}
+              personSearchQuery={clusterPersonSearchQuery}
+              totalCount={clusterTotalCount}
+              offset={clusterOffset}
+              pageSize={CLUSTER_PAGE_SIZE}
               selectedClusterId={selectedClusterId}
               isLoading={isLoadingClusters}
               errorMessage={clusterErrorMessage}
+              onFilterModeChange={handleClusterFilterModeChange}
+              onPersonSearchQueryChange={handleClusterSearchQueryChange}
+              onPageChange={handleClusterPageChange}
               onSelectCluster={setSelectedClusterId}
             />
 
@@ -853,6 +935,8 @@ export default function HomePage() {
             createErrorMessage={createPersonErrorMessage}
             isCreatingPerson={isCreatingPerson}
             onCreatePerson={handleCreatePerson}
+            onAddAlias={handleAddPersonAlias}
+            onRemoveAlias={handleRemovePersonAlias}
             onSelectCluster={handleSelectClusterFromPeople}
           />
         ) : viewMode === "unassigned" ? (

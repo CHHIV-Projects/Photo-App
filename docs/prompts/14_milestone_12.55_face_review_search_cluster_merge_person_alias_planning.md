@@ -665,3 +665,161 @@ If both were completed safely:
 ```
 12.56 — Collections / Album / Event Design
 ```
+
+
+# Answers to Coder Questions — Milestone 12.55
+
+## 1. Person filtering UX
+
+Integrate person search/filter directly into the Face Review cluster pane.
+
+Preferred behavior:
+
+```text
+Face Review:
+  Person filter/search box
+  user searches/selects person by name
+  cluster list filters to clusters assigned to that person
+
+Do not rely on the People view as the primary entry point for this milestone.
+
+However, if low-risk, selecting a person from People view may later deep-link/apply the same Face Review filter. That is a future enhancement, not required for 12.55.
+
+2. Status filter semantics
+
+Yes.
+
+Use:
+
+All
+Assigned
+Unassigned
+Ignored
+
+But for safety, define:
+
+All = assigned + unassigned, excluding ignored
+Ignored = ignored only
+
+Ignored clusters should remain hidden unless explicitly selected.
+
+That avoids accidentally editing/merging ignored clusters.
+
+3. Merge conflict behavior
+
+Confirmed.
+
+Use strict block when source and target clusters have different assigned people.
+
+Preferred rule:
+
+If source cluster and target cluster are assigned to different people:
+  block merge
+  show message explaining the conflict
+  require user to resolve assignment first
+
+Do not let target assignment silently win in 12.55.
+
+4. Merge confirmation detail
+
+Use a custom modal/dialog if low-risk.
+
+Native confirm is acceptable only as a fallback, but I strongly prefer a custom confirmation because merge is a high-impact action.
+
+The confirmation should show:
+
+source cluster
+target cluster
+source assigned person
+target assigned person
+source face count
+target face count
+whether source cluster will be deleted/merged away
+irreversible warning
+
+The user should know exactly what is about to happen.
+
+5. Source cluster after merge
+
+Current behavior deleting the source cluster is acceptable for now only if clearly labeled irreversible.
+
+Required wording:
+
+This will move faces from the source cluster into the target cluster and remove the source cluster. This action is not currently reversible.
+
+Do not hide that consequence.
+
+6. Person rename
+
+Do not implement person rename in 12.55 unless it already exists and is trivial to expose.
+
+For this milestone:
+
+Document whether rename exists.
+If missing, list it as a follow-up.
+
+Keep 12.55 focused on search/filter, reassignment, merge UX hardening, and alias planning.
+
+7. Alias scope
+
+Approved: alias is design-only for 12.55.
+
+Do not implement PersonAlias table yet.
+
+Produce a clear design recommendation for:
+
+PersonAlias table
+alias uniqueness rules
+alias-aware search
+alias-aware pickers
+add/remove alias UI
+migration/backfill considerations
+
+Implementation can be 12.56.
+
+8. Thumbnail expectations
+
+Cluster list thumbnails are useful, but do not make them a blocker for 12.55.
+
+If backend currently returns no preview thumbnails, document this as a follow-up unless it is very low-risk to populate from existing face crop/review thumbnail paths.
+
+Preferred 12.55 priority:
+
+person search/filter
+status filters
+safe merge confirmation
+cluster assignment/reassignment
+alias design
+
+Thumbnail improvement can be:
+
+12.55.x or later Face Review visual polish
+9. Scale behavior / pagination
+
+Do not expand 12.55 into a pagination milestone unless current behavior breaks the new filters.
+
+Keep current limit behavior for now, but document it.
+
+If adding “Load more” is trivial and consistent with current API, it is acceptable. But do not let pagination become the main work.
+
+Required documentation:
+
+Current cluster list limit/pagination behavior
+Whether filters apply before/after limit
+Known limitations for large cluster sets
+Summary for Coder
+
+Proceed with a tight 12.55 scope:
+
+1. Add person search/filter directly in Face Review cluster pane.
+2. Add status filters: All, Assigned, Unassigned, Ignored.
+3. Define All as excluding ignored.
+4. Keep ignored clusters hidden unless Ignored selected.
+5. Preserve existing assign/reassign cluster behavior.
+6. Harden merge UX with custom confirmation if feasible.
+7. Strictly block merges with conflicting assigned people.
+8. Allow current source-cluster deletion behavior if clearly labeled irreversible.
+9. Document person rename as gap unless trivial.
+10. Alias support is design-only for 12.55.
+11. Cluster thumbnails are non-blocking follow-up unless trivial.
+12. Pagination/load-more is non-blocking unless necessary.

@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, Integer, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+from app.models import person_alias as _person_alias_model
 
 
 class Person(Base):
@@ -22,4 +23,9 @@ class Person(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+    aliases: Mapped[list["_person_alias_model.PersonAlias"]] = relationship(
+        backref="person",
+        cascade="all, delete-orphan",
+        passive_deletes=False,
     )

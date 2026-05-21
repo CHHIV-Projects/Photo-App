@@ -32,6 +32,7 @@ import type {
   CreatePersonResponse,
   ClusterDetail,
   ClusterSuggestionResponse,
+  ClusterListResponse,
   ClusterSummary,
   DuplicateGroupListResponse,
   DuplicateGroupDetail,
@@ -49,6 +50,7 @@ import type {
   FaceSummary,
   ListResponse,
   PersonSummary,
+  PersonAliasSummary,
   PersonWithClusters,
   PhotoDetail,
   PhotoBatchAlbumSummaryResponse,
@@ -73,6 +75,8 @@ export interface TimelineQueryOptions extends PhotoQueryOptions {}
 
 export interface ClusterQueryOptions {
   includeIgnored?: boolean;
+  status?: "all" | "assigned" | "unassigned" | "ignored";
+  personQuery?: string;
   limit?: number;
   offset?: number;
 }
@@ -130,10 +134,16 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function getClusters(options: ClusterQueryOptions = {}): Promise<ListResponse<ClusterSummary>> {
+export function getClusters(options: ClusterQueryOptions = {}): Promise<ClusterListResponse> {
   const params = new URLSearchParams();
   if (options.includeIgnored !== undefined) {
     params.set("include_ignored", options.includeIgnored ? "true" : "false");
+  }
+  if (options.status) {
+    params.set("status", options.status);
+  }
+  if (options.personQuery) {
+    params.set("person_query", options.personQuery);
   }
   if (options.limit !== undefined) {
     params.set("limit", String(options.limit));
@@ -144,7 +154,7 @@ export function getClusters(options: ClusterQueryOptions = {}): Promise<ListResp
 
   const query = params.toString();
   const path = query ? `/api/clusters?${query}` : "/api/clusters";
-  return apiRequest<ListResponse<ClusterSummary>>(path);
+  return apiRequest<ClusterListResponse>(path);
 }
 
 export function getCluster(clusterId: number): Promise<ClusterDetail> {
@@ -178,6 +188,23 @@ export function createPerson(displayName: string): Promise<CreatePersonResponse>
   return apiRequest<CreatePersonResponse>("/api/people", {
     method: "POST",
     body: JSON.stringify({ display_name: displayName })
+  });
+}
+
+export function getPersonAliases(personId: number): Promise<ListResponse<PersonAliasSummary>> {
+  return apiRequest<ListResponse<PersonAliasSummary>>(`/api/people/${personId}/aliases`);
+}
+
+export function addPersonAlias(personId: number, alias: string): Promise<PersonSummary> {
+  return apiRequest<PersonSummary>(`/api/people/${personId}/aliases`, {
+    method: "POST",
+    body: JSON.stringify({ alias })
+  });
+}
+
+export function deletePersonAlias(personId: number, aliasId: number): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/people/${personId}/aliases/${aliasId}`, {
+    method: "DELETE"
   });
 }
 

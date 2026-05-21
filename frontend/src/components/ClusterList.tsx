@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import styles from "@/components/review-screen.module.css";
 import type { ClusterSummary } from "@/types/ui-api";
@@ -12,49 +12,43 @@ const FILTER_OPTIONS: { mode: FilterMode; label: string }[] = [
   { mode: "ignored", label: "Ignored" },
 ];
 
-function applyStatusFilter(clusters: ClusterSummary[], mode: FilterMode): ClusterSummary[] {
-  return clusters.filter((cluster) => {
-    if (mode === "all") return !cluster.is_ignored;
-    if (mode === "assigned") return !cluster.is_ignored && cluster.person_id !== null;
-    if (mode === "unassigned") return !cluster.is_ignored && cluster.person_id === null;
-    return cluster.is_ignored;
-  });
-}
-
-function applyPersonFilter(clusters: ClusterSummary[], personQuery: string): ClusterSummary[] {
-  const query = personQuery.trim().toLowerCase();
-  if (!query) {
-    return clusters;
-  }
-
-  return clusters.filter((cluster) => {
-    if (!cluster.person_name) {
-      return "unassigned".includes(query);
-    }
-    return cluster.person_name.toLowerCase().includes(query);
-  });
-}
-
 interface ClusterListProps {
   clusters: ClusterSummary[];
+  filterMode: FilterMode;
+  personSearchQuery: string;
+  totalCount: number;
+  offset: number;
+  pageSize: number;
   selectedClusterId: number | null;
   isLoading: boolean;
   errorMessage: string | null;
+  onFilterModeChange: (mode: FilterMode) => void;
+  onPersonSearchQueryChange: (value: string) => void;
+  onPageChange: (nextOffset: number) => void;
   onSelectCluster: (clusterId: number) => void;
 }
 
 export function ClusterList({
   clusters,
+  filterMode,
+  personSearchQuery,
+  totalCount,
+  offset,
+  pageSize,
   selectedClusterId,
   isLoading,
   errorMessage,
+  onFilterModeChange,
+  onPersonSearchQueryChange,
+  onPageChange,
   onSelectCluster
 }: ClusterListProps) {
   const clusterRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
-  const [filterMode, setFilterMode] = useState<FilterMode>("all");
-  const [personSearchQuery, setPersonSearchQuery] = useState("");
-
-  const visibleClusters = applyPersonFilter(applyStatusFilter(clusters, filterMode), personSearchQuery);
+  const visibleClusters = clusters;
+  const pageStart = totalCount === 0 ? 0 : offset + 1;
+  const pageEnd = totalCount === 0 ? 0 : Math.min(offset + visibleClusters.length, totalCount);
+  const canGoPrev = offset > 0;
+  const canGoNext = offset + pageSize < totalCount;
 
   useEffect(() => {
     if (selectedClusterId !== null) {
@@ -78,7 +72,9 @@ export function ClusterList({
       <header className={styles.panelHeader}>
         <div className={styles.panelTitleRow}>
           <h2 className={styles.panelTitle}>Clusters</h2>
-          <span className={styles.panelMeta}>{visibleClusters.length} visible</span>
+          <span className={styles.panelMeta}>
+            {visibleClusters.length} shown / {totalCount} total
+          </span>
         </div>
       </header>
 
@@ -88,7 +84,7 @@ export function ClusterList({
           className={styles.searchInput}
           placeholder="Filter clusters by person name..."
           value={personSearchQuery}
-          onChange={(event) => setPersonSearchQuery(event.target.value)}
+          onChange={(event) => onPersonSearchQueryChange(event.target.value)}
         />
 
         <div className={styles.filterBar}>
@@ -99,11 +95,33 @@ export function ClusterList({
               className={`${styles.filterButton} ${
                 filterMode === mode ? styles.filterButtonActive : ""
               }`.trim()}
-              onClick={() => setFilterMode(mode)}
+              onClick={() => onFilterModeChange(mode)}
             >
               {label}
             </button>
           ))}
+        </div>
+
+        <div className={styles.clusterNavControls}>
+          <button
+            type="button"
+            className={styles.clusterNavButton}
+            onClick={() => onPageChange(Math.max(0, offset - pageSize))}
+            disabled={!canGoPrev || isLoading}
+          >
+            Prev
+          </button>
+          <span className={styles.clusterNavMeta}>
+            {pageStart}-{pageEnd} of {totalCount}
+          </span>
+          <button
+            type="button"
+            className={styles.clusterNavButton}
+            onClick={() => onPageChange(offset + pageSize)}
+            disabled={!canGoNext || isLoading}
+          >
+            Next
+          </button>
         </div>
 
         {isLoading ? <div className={styles.message}>Loading clusters...</div> : null}
@@ -111,7 +129,7 @@ export function ClusterList({
 
         {!isLoading && !errorMessage && visibleClusters.length === 0 ? (
           <div className={styles.emptyState}>
-            {clusters.length === 0 ? "No clusters found." : "No clusters match this filter."}
+            {totalCount === 0 ? "No clusters found." : "No clusters match this filter."}
           </div>
         ) : null}
 

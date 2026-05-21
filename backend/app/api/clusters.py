@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -29,18 +31,28 @@ router = APIRouter(prefix="/api/clusters", tags=["clusters"])
 @router.get("", response_model=ClusterListResponse)
 def get_clusters(
     include_ignored: bool = False,
+    status: Literal["all", "assigned", "unassigned", "ignored"] = "all",
+    person_query: str | None = Query(default=None, max_length=255),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db_session),
 ) -> ClusterListResponse:
     """List clusters for UI review."""
-    items = list_clusters_for_review(
+    items, total_count = list_clusters_for_review(
         db,
         include_ignored=include_ignored,
         limit=limit,
         offset=offset,
+        status_filter=status,
+        person_query=person_query,
     )
-    return ClusterListResponse(count=len(items), items=items)
+    return ClusterListResponse(
+        count=len(items),
+        total_count=total_count,
+        offset=offset,
+        limit=limit,
+        items=items,
+    )
 
 
 @router.get("/{cluster_id}", response_model=ClusterDetail)

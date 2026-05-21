@@ -41,6 +41,14 @@ class PersonSummary(BaseModel):
 
     person_id: int
     display_name: str
+    aliases: list[str] = Field(default_factory=list)
+
+
+class PersonAliasSummary(BaseModel):
+    """UI-facing summary of one person alias."""
+
+    alias_id: int
+    alias: str
 
 
 class CreatePersonRequest(BaseModel):
@@ -68,7 +76,21 @@ class PersonWithClusters(BaseModel):
 
     person_id: int
     display_name: str
+    aliases: list[str] = Field(default_factory=list)
     clusters: list[ClusterAssignmentSummary] = Field(default_factory=list)
+
+
+class CreatePersonAliasRequest(BaseModel):
+    """Request body for adding alias to a person."""
+
+    alias: str
+
+
+class PersonAliasListResponse(BaseModel):
+    """Response wrapper for person aliases."""
+
+    count: int
+    items: list[PersonAliasSummary]
 
 
 class AssignPersonRequest(BaseModel):
@@ -100,6 +122,9 @@ class ClusterListResponse(BaseModel):
     """Response wrapper for cluster listing endpoints."""
 
     count: int
+    total_count: int
+    offset: int
+    limit: int
     items: list[ClusterSummary]
 
 

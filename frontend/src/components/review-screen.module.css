@@ -587,6 +587,56 @@
   background: #eaf4fb;
 }
 
+.aliasSection {
+  display: grid;
+  gap: 8px;
+}
+
+.aliasList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.aliasChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #cfd9e4;
+  border-radius: 999px;
+  background: #edf4fa;
+  color: #2f4e68;
+  font-size: 0.82rem;
+  padding: 4px 10px;
+}
+
+.aliasRemoveButton {
+  border: 0;
+  background: transparent;
+  color: #6b3a36;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.aliasRemoveButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.aliasAddRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.aliasAddRow .peopleInput {
+  min-width: 180px;
+  max-width: 320px;
+  margin: 0;
+}
+
 .message,
 .errorMessage,
 .emptyState {

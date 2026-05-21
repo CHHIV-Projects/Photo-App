@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import styles from "@/components/review-screen.module.css";
 import type { PersonSummary } from "@/types/ui-api";
@@ -21,10 +21,24 @@ export function PersonAssignForm({
   onAssign
 }: PersonAssignFormProps) {
   const [draftPersonId, setDraftPersonId] = useState<string>(selectedPersonId ? String(selectedPersonId) : "");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     setDraftPersonId(selectedPersonId ? String(selectedPersonId) : "");
   }, [selectedPersonId]);
+
+  const filteredPeople = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
+      return people;
+    }
+    return people.filter((person) => {
+      if (person.display_name.toLowerCase().includes(q)) {
+        return true;
+      }
+      return person.aliases.some((alias) => alias.toLowerCase().includes(q));
+    });
+  }, [people, searchQuery]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -44,6 +58,14 @@ export function PersonAssignForm({
       ) : null}
       {!isLoadingPeople && people.length > 0 ? (
         <form className={styles.assignForm} onSubmit={handleSubmit}>
+          <input
+            type="search"
+            className={styles.searchInput}
+            placeholder="Search person or alias..."
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            disabled={isSubmitting}
+          />
           <select
             className={styles.select}
             value={draftPersonId}
@@ -51,9 +73,11 @@ export function PersonAssignForm({
             disabled={isSubmitting}
           >
             <option value="">Select person</option>
-            {people.map((person) => (
+            {filteredPeople.map((person) => (
               <option key={person.person_id} value={person.person_id}>
-                {person.display_name}
+                {person.aliases.length > 0
+                  ? `${person.display_name} (${person.aliases.join(", ")})`
+                  : person.display_name}
               </option>
             ))}
           </select>

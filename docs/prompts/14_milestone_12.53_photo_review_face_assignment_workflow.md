@@ -733,10 +733,6 @@ After 12.53, proceed to:
 - person alias design
 - alias-aware person search
 
-
-
-
-
 # Answers to Coder Questions — Milestone 12.53
 
 ## 1. Clustered faces vs. truly unclustered faces

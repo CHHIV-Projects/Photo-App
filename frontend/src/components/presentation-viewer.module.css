@@ -158,6 +158,7 @@
   box-shadow: none;
   pointer-events: auto;
   cursor: pointer;
+  z-index: 3;
   transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
 }
 

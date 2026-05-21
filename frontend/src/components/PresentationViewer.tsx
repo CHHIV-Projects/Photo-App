@@ -63,6 +63,13 @@ function getFaceLabel(face: FaceInPhoto): string {
   return "Not assignable here";
 }
 
+function personMatchesSearch(person: PersonSummary, queryLower: string): boolean {
+  if (person.display_name.toLowerCase().includes(queryLower)) {
+    return true;
+  }
+  return person.aliases.some((alias) => alias.toLowerCase().includes(queryLower));
+}
+
 function getOverlayReferenceDims(
   overlay: PhotoFaceOverlayAsset | null,
   naturalDims: { w: number; h: number } | null,
@@ -136,7 +143,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
   const currentOverlay = currentAssetSha ? overlayByAssetSha[currentAssetSha] ?? null : null;
   const overlayFaces = currentOverlay?.faces ?? [];
   const filteredPeople = people.filter((person) =>
-    person.display_name.toLowerCase().includes(assignmentSearchText.trim().toLowerCase()),
+    personMatchesSearch(person, assignmentSearchText.trim().toLowerCase()),
   );
   const selectedOverlayFace = selectedFaceId !== null
     ? overlayFaces.find((face) => face.face_id === selectedFaceId) ?? null
@@ -412,7 +419,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
     overlayIdleTimerRef.current = window.setTimeout(() => {
       setShowFaceOverlays(false);
       setHoveredFaceId(null);
-    }, 1500);
+    }, 3000);
   }
 
   function activateFaceOverlays(mouseInside = isMouseInsideStage) {
@@ -835,7 +842,9 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
                           type="button"
                           className={[
                             styles.faceBox,
-                            hoveredFaceId === face.face_id || selectedFaceId === face.face_id ? styles.faceBoxVisible : "",
+                            showFaceOverlays || hoveredFaceId === face.face_id || selectedFaceId === face.face_id
+                              ? styles.faceBoxVisible
+                              : "",
                             selectedFaceId === face.face_id ? styles.faceBoxActive : "",
                           ].filter(Boolean).join(" ")}
                           style={{
@@ -850,11 +859,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
                           }}
                           onMouseLeave={() => {
                             setHoveredFaceId((current) => (current === face.face_id ? null : current));
-                            if (selectedFaceId === null) {
-                              clearOverlayIdleTimer();
-                              suppressOverlayRevealOnNextMoveRef.current = true;
-                              setShowFaceOverlays(false);
-                            }
+                            scheduleOverlayIdleHide();
                           }}
                           onClick={(event) => {
                             event.preventDefault();
@@ -881,7 +886,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
             )}
 
             {!isVideoAsset && !isLoadingOverlay && !areFaceAssignmentsSuppressed ? (
-              <p className={styles.hintMessage}>Hover faces to assign.</p>
+              <p className={styles.hintMessage}>Move pointer over a face, then click to assign.</p>
             ) : null}
 
             {areFaceAssignmentsSuppressed ? (

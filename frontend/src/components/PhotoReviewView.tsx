@@ -130,6 +130,7 @@ function buildSearchText(year: string, monthNum: string, camera: string, freeTex
 interface PhotoReviewViewProps {
   onOpenPhotoDetail: (sha256: string) => void;
   onOpenDuplicateGroup: (groupId: number) => void;
+  onFaceAssignmentsChanged?: () => void;
 }
 
 const PAGE_SIZE = 80;
@@ -145,6 +146,13 @@ function getFaceLabel(face: FaceInPhoto): string {
   if (face.person_name) return face.person_name;
   if (face.cluster_id !== null) return `Cluster #${face.cluster_id} - No Person Assigned`;
   return "Unassigned";
+}
+
+function personMatchesSearch(person: PersonSummary, queryLower: string): boolean {
+  if (person.display_name.toLowerCase().includes(queryLower)) {
+    return true;
+  }
+  return person.aliases.some((alias) => alias.toLowerCase().includes(queryLower));
 }
 
 function getOverlayReferenceDims(
@@ -174,7 +182,11 @@ function getOverlayReferenceDims(
   return { w: referenceWidth, h: referenceHeight };
 }
 
-export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: PhotoReviewViewProps) {
+export function PhotoReviewView({
+  onOpenPhotoDetail,
+  onOpenDuplicateGroup,
+  onFaceAssignmentsChanged,
+}: PhotoReviewViewProps) {
   const [items, setItems] = useState<SearchPhotoSummary[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -233,6 +245,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
   }, [assignmentMessage]);
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const assignmentPanelRef = useRef<HTMLDivElement | null>(null);
   const yearRef = useRef(year);
   yearRef.current = year;
 
@@ -629,7 +642,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     }
 
     void loadOverlays();
-  }, [faceOverlayMode, items]);
+  }, [faceOverlayMode, items, overlaysByAsset, loadingOverlayAssets]);
 
   const selectedOverlayFaceEntry = useMemo(() => {
     if (!selectedOverlayFace) {
@@ -653,6 +666,22 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
       return;
     }
     setAssignmentPersonId(selectedOverlayFaceEntry.face.person_id ?? null);
+  }, [selectedOverlayFaceEntry]);
+
+  useEffect(() => {
+    if (!selectedOverlayFaceEntry || !assignmentPanelRef.current || typeof window === "undefined") {
+      return;
+    }
+
+    const panel = assignmentPanelRef.current;
+    const rect = panel.getBoundingClientRect();
+    const viewportPadding = 24;
+    const isVisible = rect.top >= viewportPadding && rect.bottom <= window.innerHeight - viewportPadding;
+    if (isVisible) {
+      return;
+    }
+
+    panel.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
   }, [selectedOverlayFaceEntry]);
 
   function patchClusterAssignment(clusterId: number, personId: number, personName: string): void {
@@ -700,6 +729,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
     try {
       await assignPerson(clusterId, targetPersonId);
       patchClusterAssignment(clusterId, targetPersonId, targetPersonName);
+      onFaceAssignmentsChanged?.();
       if (previousName && previousName !== targetPersonName) {
         setAssignmentMessage(`Reassigned face cluster from ${previousName} to ${targetPersonName}.`);
       } else {
@@ -743,6 +773,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
       setAssignmentPersonId(response.person.person_id);
       await assignPerson(clusterId, response.person.person_id);
       patchClusterAssignment(clusterId, response.person.person_id, response.person.display_name);
+      onFaceAssignmentsChanged?.();
       setAssignmentMessage(`Created person ${response.person.display_name} and assigned face cluster.`);
     } catch (error) {
       let message = error instanceof Error && error.message
@@ -837,7 +868,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
       if (!q) {
         return true;
       }
-      return person.display_name.toLowerCase().includes(q);
+      return personMatchesSearch(person, q);
     });
   }, [people, peopleSearchQuery, selectedPeopleIds]);
 
@@ -997,6 +1028,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
 
   function handlePresentationFaceAssignmentsChanged(): void {
     setPresentationHasPendingRefresh(true);
+    onFaceAssignmentsChanged?.();
   }
 
   async function handleClosePresentation(): Promise<void> {
@@ -1279,7 +1311,7 @@ export function PhotoReviewView({ onOpenPhotoDetail, onOpenDuplicateGroup }: Pho
       {batchMessage ? <div className={styles.batchMessage}>{batchMessage}</div> : null}
 
       {selectedOverlayFaceEntry ? (
-        <div className={styles.assignmentPanel}>
+        <div className={styles.assignmentPanel} ref={assignmentPanelRef}>
           <div className={styles.assignmentPanelHeader}>
             <h3 className={styles.assignmentTitle}>Face assignment</h3>
             <span className={styles.assignmentMeta}>Asset {selectedOverlayFaceEntry.assetSha256.slice(0, 10)}...</span>

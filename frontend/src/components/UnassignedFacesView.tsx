@@ -51,6 +51,7 @@ export function UnassignedFacesView({
     const allResults: Array<{
       clusterId: number;
       personName: string | null;
+      aliases: string[];
       displayText: string;
     }> = [];
 
@@ -60,6 +61,7 @@ export function UnassignedFacesView({
       allResults.push({
         clusterId: cluster.cluster_id,
         personName,
+        aliases: person?.aliases ?? [],
         displayText: personName
           ? `Cluster #${cluster.cluster_id} — ${personName} — ${cluster.face_count} faces`
           : `Cluster #${cluster.cluster_id} — ${cluster.face_count} faces`
@@ -76,7 +78,8 @@ export function UnassignedFacesView({
     return searchableResults.filter((result) => {
       const idMatch = String(result.clusterId).includes(q);
       const nameMatch = result.personName?.toLowerCase().includes(q) ?? false;
-      return idMatch || nameMatch;
+      const aliasMatch = result.aliases.some((alias) => alias.toLowerCase().includes(q));
+      return idMatch || nameMatch || aliasMatch;
     });
   };
 
