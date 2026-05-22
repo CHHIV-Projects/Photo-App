@@ -584,3 +584,166 @@ or, if face workflows are now stable enough:
 ```
 12.58 — Collections / Album / Event Design
 ```
+
+# Answers to Coder Questions — Milestone 12.57.2
+
+## 1. Overlay inclusion for unclustered faces
+
+Yes. Use the strict predicate:
+
+```text
+cluster_id is null
+AND is_manually_unassigned is true
+
+Only those unclustered faces should appear in Photo Review / Presentation assignment overlays.
+
+Do not show every cluster_id = null face.
+
+Reason:
+
+We want to recover user-removed faces, not reintroduce noisy raw detections.
+
+Required behavior:
+
+clustered non-ignored face:
+  show as normal assignable face
+
+cluster_id null + is_manually_unassigned true:
+  show as assignable unclustered/manual-unassigned face
+
+cluster_id null + is_manually_unassigned false:
+  do not show in Photo Review / Presentation overlays
+
+Label manually unassigned faces as:
+
+Unassigned face
+
+or:
+
+Not in cluster
+
+Either is acceptable, but keep wording user-friendly.
+
+2. Existing-person assignment target tie-breakers
+
+Confirmed.
+
+When assigning an unclustered/manual-unassigned face to an existing person, use deterministic target selection:
+
+1. highest face_count
+2. non-ignored cluster
+3. lowest cluster_id
+
+However, ignored clusters should generally be excluded from eligible target clusters.
+
+So practical rule:
+
+eligible clusters = clusters assigned to selected person AND not ignored
+
+if eligible clusters exist:
+  target = highest face_count, then lowest cluster_id
+
+if no eligible cluster exists:
+  create a new cluster assigned to that person
+
+For a new person:
+
+create person
+create new cluster assigned to that person
+attach face
+clear is_manually_unassigned
+refresh centroid
+
+Do not expose this cluster choice in Photo Review or Presentation.
+
+3. Full-image preview fallback if bbox/canonical dimensions are missing
+
+Do not block the feature entirely.
+
+Use this fallback contract:
+
+If full image URL + bbox/canonical dimensions are available:
+  show full image with selected face highlighted
+
+If full image URL is available but bbox/canonical dimensions are missing:
+  show full image without highlight
+  also show enlarged face crop if available
+  display note: Face location unavailable for highlight
+
+If full image URL is not available:
+  show enlarged face crop only
+  display note: Full-image context unavailable
+
+So the priority is:
+
+best: full image + highlighted face
+acceptable: full image + crop, no highlight
+fallback: larger crop only
+
+Document which case occurs.
+
+4. Move-control consistency entry points
+
+Confirmed in-scope entry points for parity:
+
+1. Face tile action row in FaceGrid
+2. Face preview popout action row
+3. Any existing Cluster Detail quick move action if still present
+
+All three should support the same target input behavior:
+
+cluster ID
+person display name
+person alias
+
+If one of those controls no longer exists after code inspection, document it and apply parity to the remaining active controls.
+
+Do not expand to unrelated Unassigned Faces workflows unless a tiny reuse is necessary.
+
+5. Filename display fallback order
+
+Confirmed.
+
+Use this fallback order:
+
+1. Asset.original_filename
+2. basename from media/display/original path
+3. short asset hash
+
+Preferred UI label:
+
+Filename: IMG_5653.HEIC
+
+Fallback:
+
+Filename unavailable
+Asset: abc123...
+
+Keep asset hash secondary/debug only when filename exists.
+
+Additional Implementation Guardrails
+
+Please add these explicit rules to the implementation:
+
+- Do not show all unclustered faces in overlays.
+- Only manually unassigned unclustered faces are recovered into Photo Review/Presentation overlays.
+- Assigning a manually unassigned face to a person should clear is_manually_unassigned.
+- Existing-person assignment should attach to that person's largest eligible non-ignored cluster, or create a new cluster if none exists.
+- New-person assignment should create a new person and new assigned cluster.
+- Full-image context preview should degrade gracefully if highlight data is unavailable.
+- Move-control parity applies to FaceGrid tile row, preview popout, and active Cluster Detail quick move control.
+
+Summary:
+
+Proceed with strict unclustered-face eligibility:
+cluster_id null + is_manually_unassigned true only.
+
+Use deterministic cluster targeting:
+highest face_count, non-ignored eligibility, lowest cluster_id.
+
+Do not block full-image preview if highlight data is missing; degrade gracefully.
+
+Apply move-control consistency to FaceGrid tile, preview popout, and active Cluster Detail move controls.
+
+Use filename fallback order:
+original_filename -> path basename -> short hash.

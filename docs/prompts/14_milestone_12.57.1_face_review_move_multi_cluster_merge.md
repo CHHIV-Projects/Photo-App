@@ -625,3 +625,186 @@ or, if face workflows are stable enough:
 ```
 12.58 — Collections / Album / Event Design
 ```
+
+
+# Answers to Coder Questions — Milestone 12.57.1
+
+## 1. Ignored source clusters in merge
+
+Use strict blocking, and enforce it in both UI and backend.
+
+Required rule:
+
+```text
+If any selected source cluster is ignored:
+  block merge before mutation
+
+Also:
+
+If target cluster is ignored:
+  block merge
+
+This should not be UI-only. Backend should reject any merge that the UI blocks.
+
+Reason:
+
+Ignored clusters represent intentionally excluded or questionable face groupings.
+They should not be merged accidentally or allowed to propagate ignored state into a valid target.
+
+If current backend allows ignored source merge and propagates ignored state to target, change that behavior narrowly for merge safety.
+
+2. Target tie-breakers
+
+Keep the non-ignored tie-breaker for future-proofing, even though ignored targets should be blocked.
+
+Default target rule:
+
+1. largest face count
+2. non-ignored over ignored
+3. assigned over unassigned, if applicable
+4. lowest cluster_id
+
+But in normal 12.57.1 operation, ignored clusters should already be excluded from eligible merge targets.
+
+3. Multi-select persistence
+
+Yes — enforce hard clear on any search/filter/page change for v1 safety.
+
+Required behavior:
+
+search changes -> clear selected clusters
+person/alias filter changes -> clear selected clusters
+status filter changes -> clear selected clusters
+page changes -> clear selected clusters
+refresh that changes cluster result set -> clear selected clusters
+
+Reason:
+
+Cluster merge is high-impact and not reversible.
+Selections should only apply to the visible/current review context.
+4. Move-by-person behavior when multiple clusters exist
+
+Use auto-pick largest cluster as the default, but show confirmation before executing.
+
+Preferred flow:
+
+user enters/selects person or alias
+system resolves canonical person
+system finds that person's clusters
+system chooses largest face-count cluster as default target
+confirmation shows target cluster and face count
+user confirms move
+
+If feasible, include an override picker/list in the confirmation. But do not require override selection every time.
+
+Minimum acceptable:
+
+auto-pick largest
+show target summary
+require confirmation
+
+Do not move silently.
+
+5. Ambiguous person/alias text search
+
+Use exact-first, then contains fallback.
+
+Preferred behavior:
+
+1. normalized exact display_name match
+2. normalized exact alias match
+3. case-insensitive contains match on display_name or alias
+
+If exact match returns one person, use that person.
+
+If contains matching returns multiple people, require user selection.
+
+Do not silently choose among multiple people.
+
+6. Target lookup beyond loaded page
+
+Allow as a documented follow-up if implementation gets tight.
+
+Priority for 12.57.1:
+
+preview popout
+move by person/alias
+cluster multi-select
+merge selected with largest-cluster default
+safe preflight and confirmation
+
+If outside-page target lookup is easy, implement it.
+
+If not, document the limitation clearly:
+
+Target lookup is limited to loaded/currently available clusters in 12.57.1.
+Outside-page target search deferred.
+
+But for merge-selected from visible/current filtered results, loaded-page behavior is acceptable.
+
+7. Partial failure merge policy
+
+For 12.57.1, use repeated one-to-one merges with strict preflight and stop-on-first-failure.
+
+Required behavior:
+
+preflight all selected clusters before first mutation
+if preflight fails:
+  do not merge anything
+
+if preflight passes:
+  run merges one by one
+  stop on first failure
+  report completed merges and failed source cluster
+  refresh cluster list/detail
+
+Do not build an all-or-nothing batch backend endpoint in 12.57.1 unless coder determines it is clearly safer and low-risk.
+
+The important requirement is:
+
+no known unsafe merge should reach mutation
+8. Preview popout action placement
+
+Use popout-primary, with existing tile controls retained as fallback.
+
+Preferred behavior:
+
+click face tile -> larger preview popout
+popover includes:
+  Remove from cluster
+  Move face
+
+Existing tile/detail controls can remain if already present.
+
+Do not remove existing working controls.
+
+Reason:
+
+The popout gives the user a better visual decision point before removing or moving a face.
+Additional safety requirement
+
+Add this explicit implementation rule:
+
+Backend must reject any merge that the UI blocks.
+
+At minimum, backend must reject:
+
+source == target
+missing source/target
+ignored target
+ignored source
+conflicting assigned people
+Summary for Coder
+
+Proceed with:
+
+- Block ignored source and ignored target merges in UI and backend.
+- Keep largest-face-count target default.
+- Tie-break with non-ignored, assigned, then lowest cluster_id.
+- Clear cluster selection on search/filter/page changes.
+- Move-by-person/alias auto-targets largest cluster but requires confirmation.
+- Use exact-first, then contains fallback for person/alias search.
+- Outside-page target lookup is preferred but not required for 12.57.1.
+- Use strict preflight, then repeated one-to-one merges with stop-on-first-failure.
+- Put remove/move actions in the larger preview popout; keep existing controls as fallback.
+- Backend must reject any merge the UI blocks.

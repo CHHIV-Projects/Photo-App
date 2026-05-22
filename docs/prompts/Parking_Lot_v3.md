@@ -976,15 +976,58 @@ Normal Presentation mode should remain clean by default. Face assignment overlay
 
 High after basic Photo Review thumbnail assignment works.
 
-
-
 ---
 
 FACE-005 — Backfill Protected Manually Unassigned Faces
 
 ---
 
+## FACE-006 — Face Review Visual Polish and Cluster Thumbnail Cards
 
+### Summary
+
+Defer additional Face Review visual polish now that the core face workflows are functional and generally usable.
+
+### Purpose
+
+Improve Face Review scannability when reviewing many clusters.
+
+### Candidate Improvements
+
+- Add representative thumbnails to Face Review cluster cards if current cards remain too text-heavy.
+- Improve cluster card summaries:
+  - person name / unassigned / ignored
+  - face count
+  - cluster ID as secondary detail
+  - selected state
+  - reviewed / ignored status
+- Improve visual state for merge-selected workflow:
+  - selected clusters
+  - default merge target
+  - source clusters
+  - clear-selection control
+- Improve empty/loading/error states:
+  - no clusters found
+  - no ignored clusters
+  - no person/alias search results
+  - missing thumbnail fallback
+- Improve card spacing, density, and layout consistency.
+
+### Out of Scope
+
+- Face recognition changes
+- Reclustering changes
+- Assignment semantics
+- Merge logic changes
+- Person alias model changes
+- Provenance mining
+- Collections/albums/events model
+
+### Priority
+
+Deferred. Face Review is currently acceptable. Revisit after provenance mining and collection/album/event direction are clearer.
+
+---
 
 # 6. Location / Places
 
