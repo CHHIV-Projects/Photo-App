@@ -136,6 +136,8 @@ def merge_face_clusters(db: Session, source_cluster_id: int, target_cluster_id: 
     source = db.get(FaceCluster, source_cluster_id)
     if source is None:
         raise ValueError(f"Source cluster ID {source_cluster_id} does not exist.")
+    if source.is_ignored:
+        raise ValueError("Cannot merge from an ignored cluster.")
 
     target = db.get(FaceCluster, target_cluster_id)
     if target is None:
@@ -160,8 +162,6 @@ def merge_face_clusters(db: Session, source_cluster_id: int, target_cluster_id: 
     if source.person_id is not None and target.person_id is None:
         target.person_id = source.person_id
 
-    # Preserve caution state after merge.
-    target.is_ignored = bool(target.is_ignored or source.is_ignored)
     target.is_reviewed = True
 
     faces_moved = 0
@@ -182,7 +182,7 @@ def merge_face_clusters(db: Session, source_cluster_id: int, target_cluster_id: 
         "faces_moved": faces_moved,
         "source_deleted": True,
         "target_person_id": target.person_id,
-        "target_is_ignored": target.is_ignored,
+        "target_is_ignored": bool(target.is_ignored),
     }
 
 

@@ -57,6 +57,24 @@ import type {
 type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions" | "admin";
 type ClusterFilterMode = "all" | "assigned" | "unassigned" | "ignored";
 
+function compareClustersForMergeTarget(a: ClusterSummary, b: ClusterSummary): number {
+  if (a.face_count !== b.face_count) {
+    return b.face_count - a.face_count;
+  }
+
+  if (a.is_ignored !== b.is_ignored) {
+    return a.is_ignored ? 1 : -1;
+  }
+
+  const aAssigned = a.person_id !== null;
+  const bAssigned = b.person_id !== null;
+  if (aAssigned !== bAssigned) {
+    return aAssigned ? -1 : 1;
+  }
+
+  return a.cluster_id - b.cluster_id;
+}
+
 export default function HomePage() {
   const [viewMode, setViewMode] = useState<ViewMode>("photo-review");
   const [clusters, setClusters] = useState<ClusterSummary[]>([]);
@@ -64,6 +82,16 @@ export default function HomePage() {
   const [peopleWithClusters, setPeopleWithClusters] = useState<PersonWithClusters[]>([]);
   const [unassignedFaces, setUnassignedFaces] = useState<FaceSummary[]>([]);
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
+  const [selectedClusterIds, setSelectedClusterIds] = useState<Set<number>>(new Set());
+  const [mergeSelectedPreview, setMergeSelectedPreview] = useState<{
+    targetClusterId: number;
+    targetPersonName: string;
+    targetFaceCount: number;
+    sourceClusterIds: number[];
+    sourcePersonNames: string[];
+    sourceFaceCounts: number[];
+    totalFacesAffected: number;
+  } | null>(null);
   const [clusterFilterMode, setClusterFilterMode] = useState<ClusterFilterMode>("all");
   const [clusterPersonSearchQuery, setClusterPersonSearchQuery] = useState("");
   const [clusterOffset, setClusterOffset] = useState(0);
@@ -77,6 +105,7 @@ export default function HomePage() {
   const [isAssigning, setIsAssigning] = useState(false);
   const [isIgnoringCluster, setIsIgnoringCluster] = useState(false);
   const [isMergingCluster, setIsMergingCluster] = useState(false);
+  const [isMergingSelectedClusters, setIsMergingSelectedClusters] = useState(false);
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
   const [clusterErrorMessage, setClusterErrorMessage] = useState<string | null>(null);
   const [peopleErrorMessage, setPeopleErrorMessage] = useState<string | null>(null);
@@ -180,6 +209,8 @@ export default function HomePage() {
       }
 
       setClusters(response.items);
+      setSelectedClusterIds(new Set());
+      setMergeSelectedPreview(null);
       setClusterTotalCount(response.total_count);
 
       if (response.items.length === 0) {
@@ -213,12 +244,16 @@ export default function HomePage() {
     }
     setClusterFilterMode(mode);
     setClusterOffset(0);
+    setSelectedClusterIds(new Set());
+    setMergeSelectedPreview(null);
     void loadClusters({ status: mode, offset: 0 });
   }
 
   function handleClusterSearchQueryChange(value: string) {
     setClusterPersonSearchQuery(value);
     setClusterOffset(0);
+    setSelectedClusterIds(new Set());
+    setMergeSelectedPreview(null);
     void loadClusters({ personQuery: value, offset: 0 });
   }
 
@@ -228,7 +263,121 @@ export default function HomePage() {
       return;
     }
     setClusterOffset(safeOffset);
+    setSelectedClusterIds(new Set());
+    setMergeSelectedPreview(null);
     void loadClusters({ offset: safeOffset });
+  }
+
+  function handleToggleClusterSelection(clusterId: number) {
+    setActionErrorMessage(null);
+    setMergeSelectedPreview(null);
+    setSelectedClusterIds((current) => {
+      const next = new Set(current);
+      if (next.has(clusterId)) {
+        next.delete(clusterId);
+      } else {
+        next.add(clusterId);
+      }
+      return next;
+    });
+  }
+
+  function handleClearClusterSelection() {
+    setSelectedClusterIds(new Set());
+    setMergeSelectedPreview(null);
+  }
+
+  function preflightMergeSelectedClusters() {
+    if (selectedClusterIds.size < 2) {
+      throw new Error("Select at least two clusters to merge.");
+    }
+
+    const selected = clusters.filter((cluster) => selectedClusterIds.has(cluster.cluster_id));
+    if (selected.length !== selectedClusterIds.size) {
+      throw new Error("Some selected clusters are no longer available in the current result set.");
+    }
+
+    if (selected.some((cluster) => cluster.is_ignored)) {
+      throw new Error("Ignored source or target clusters cannot be merged.");
+    }
+
+    const assignedPersonIds = new Set(selected.map((cluster) => cluster.person_id).filter((personId): personId is number => personId !== null));
+    if (assignedPersonIds.size > 1) {
+      throw new Error("Merge blocked: selected clusters have conflicting assigned people.");
+    }
+
+    const sortedCandidates = [...selected].sort(compareClustersForMergeTarget);
+    const target = sortedCandidates[0];
+    if (target.is_ignored) {
+      throw new Error("Cannot merge into an ignored target cluster.");
+    }
+
+    const sources = selected.filter((cluster) => cluster.cluster_id !== target.cluster_id);
+    if (sources.length === 0) {
+      throw new Error("At least one source cluster is required.");
+    }
+
+    return {
+      target,
+      sources,
+      totalFacesAffected: selected.reduce((sum, cluster) => sum + cluster.face_count, 0),
+    };
+  }
+
+  function handleRequestMergeSelected() {
+    setActionErrorMessage(null);
+    try {
+      const preflight = preflightMergeSelectedClusters();
+      setMergeSelectedPreview({
+        targetClusterId: preflight.target.cluster_id,
+        targetPersonName: preflight.target.person_name ?? "Unassigned",
+        targetFaceCount: preflight.target.face_count,
+        sourceClusterIds: preflight.sources.map((cluster) => cluster.cluster_id),
+        sourcePersonNames: preflight.sources.map((cluster) => cluster.person_name ?? "Unassigned"),
+        sourceFaceCounts: preflight.sources.map((cluster) => cluster.face_count),
+        totalFacesAffected: preflight.totalFacesAffected,
+      });
+    } catch (error) {
+      setMergeSelectedPreview(null);
+      setActionErrorMessage(getErrorMessage(error, "Could not prepare merge-selected."));
+    }
+  }
+
+  function handleCancelMergeSelected() {
+    setMergeSelectedPreview(null);
+  }
+
+  async function handleConfirmMergeSelected() {
+    if (!mergeSelectedPreview) {
+      return;
+    }
+
+    setIsMergingSelectedClusters(true);
+    setActionErrorMessage(null);
+
+    let mergedCount = 0;
+    try {
+      for (const sourceClusterId of mergeSelectedPreview.sourceClusterIds) {
+        try {
+          await mergeClusters(sourceClusterId, mergeSelectedPreview.targetClusterId);
+          mergedCount += 1;
+        } catch (error) {
+          const detail = getErrorMessage(error, "Unknown error.");
+          setActionErrorMessage(`Merged ${mergedCount} source cluster(s). Failed on cluster #${sourceClusterId}: ${detail}`);
+          break;
+        }
+      }
+
+      await Promise.all([
+        refreshAfterClusterMutation(mergeSelectedPreview.targetClusterId),
+        loadPeople(),
+        loadPeopleWithClusters(),
+      ]);
+    } finally {
+      setIsMergingSelectedClusters(false);
+      setMergeSelectedPreview(null);
+      setSelectedClusterIds(new Set());
+    }
   }
 
   async function loadPeople() {
@@ -897,12 +1046,21 @@ export default function HomePage() {
               offset={clusterOffset}
               pageSize={CLUSTER_PAGE_SIZE}
               selectedClusterId={selectedClusterId}
+              selectedClusterIds={selectedClusterIds}
               isLoading={isLoadingClusters}
+              isMergingSelected={isMergingSelectedClusters}
               errorMessage={clusterErrorMessage}
+              actionErrorMessage={actionErrorMessage}
+              mergePreview={mergeSelectedPreview}
               onFilterModeChange={handleClusterFilterModeChange}
               onPersonSearchQueryChange={handleClusterSearchQueryChange}
               onPageChange={handleClusterPageChange}
               onSelectCluster={setSelectedClusterId}
+              onToggleClusterSelection={handleToggleClusterSelection}
+              onClearClusterSelection={handleClearClusterSelection}
+              onRequestMergeSelected={handleRequestMergeSelected}
+              onConfirmMergeSelected={handleConfirmMergeSelected}
+              onCancelMergeSelected={handleCancelMergeSelected}
             />
 
             <ClusterDetail
@@ -923,6 +1081,7 @@ export default function HomePage() {
               onRemoveFace={handleRemoveFace}
               onMoveFace={handleMoveFace}
               clusters={clusters}
+              peopleWithClusters={peopleWithClusters}
               selectedClusterId={selectedClusterId}
               onSelectCluster={setSelectedClusterId}
             />

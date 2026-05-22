@@ -4,6 +4,7 @@ import type {
   ClusterSuggestionResponse,
   ClusterSummary,
   PersonSummary,
+  PersonWithClusters,
 } from "@/types/ui-api";
 import { useEffect, useState } from "react";
 
@@ -23,6 +24,7 @@ interface ClusterDetailProps {
   isIgnoringCluster: boolean;
   isMergingCluster: boolean;
   clusters: ClusterSummary[];
+  peopleWithClusters: PersonWithClusters[];
   selectedClusterId: number | null;
   onAssign: (personId: number) => Promise<void>;
   onIgnoreCluster: () => Promise<void>;
@@ -45,6 +47,7 @@ export function ClusterDetail({
   isIgnoringCluster,
   isMergingCluster,
   clusters,
+  peopleWithClusters,
   selectedClusterId,
   onAssign,
   onIgnoreCluster,
@@ -133,6 +136,11 @@ export function ClusterDetail({
 
     if (targetClusterId === clusterDetail.cluster_id) {
       onMergeValidationError("Cannot merge a cluster into itself.");
+      return;
+    }
+
+    if (clusterDetail.is_ignored) {
+      onMergeValidationError("Cannot merge from an ignored cluster.");
       return;
     }
 
@@ -408,6 +416,9 @@ export function ClusterDetail({
               <FaceGrid
                 faces={clusterDetail.faces}
                 selectedClusterId={clusterDetail.cluster_id}
+                currentPersonName={clusterDetail.person_name}
+                clusters={clusters}
+                peopleWithClusters={peopleWithClusters}
                 onRemoveFace={onRemoveFace}
                 onMoveFace={onMoveFace}
               />

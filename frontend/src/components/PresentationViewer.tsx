@@ -114,8 +114,6 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
   const [overlayByAssetSha, setOverlayByAssetSha] = useState<Record<string, PhotoFaceOverlayAsset>>({});
   const [isLoadingOverlay, setIsLoadingOverlay] = useState(false);
   const [overlayErrorMessage, setOverlayErrorMessage] = useState<string | null>(null);
-  const [isMouseInsideStage, setIsMouseInsideStage] = useState(false);
-  const [showFaceOverlays, setShowFaceOverlays] = useState(false);
   const [hoveredFaceId, setHoveredFaceId] = useState<number | null>(null);
   const [selectedFaceId, setSelectedFaceId] = useState<number | null>(null);
   const [popoverAnchor, setPopoverAnchor] = useState<{ left: number; top: number } | null>(null);
@@ -129,8 +127,6 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
   const imageViewportRef = useRef<HTMLDivElement | null>(null);
   const viewerShellRef = useRef<HTMLDivElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
-  const overlayIdleTimerRef = useRef<number | null>(null);
-  const suppressOverlayRevealOnNextMoveRef = useRef(false);
   const imageMaxHeightVh = isFullscreen ? 94 : 88;
 
   const clampedIndex = Math.min(Math.max(currentIndex, 0), Math.max(items.length - 1, 0));
@@ -242,14 +238,6 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
   }, [currentAssetSha]);
 
   useEffect(() => {
-    return () => {
-      if (overlayIdleTimerRef.current !== null) {
-        window.clearTimeout(overlayIdleTimerRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -339,13 +327,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
   }, [currentItem?.asset_sha256]);
 
   useEffect(() => {
-    if (overlayIdleTimerRef.current !== null) {
-      window.clearTimeout(overlayIdleTimerRef.current);
-      overlayIdleTimerRef.current = null;
-    }
-    setShowFaceOverlays(false);
     setHoveredFaceId(null);
-    setIsMouseInsideStage(false);
     closeAssignmentPopover();
   }, [currentItem?.asset_sha256]);
 
@@ -403,33 +385,6 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
     setPopoverPosition({ left, top });
   }, [popoverAnchor, selectedOverlayFace, isLoadingPeople, people.length, assignmentMessage, assignmentErrorMessage]);
 
-  function clearOverlayIdleTimer() {
-    if (overlayIdleTimerRef.current !== null) {
-      window.clearTimeout(overlayIdleTimerRef.current);
-      overlayIdleTimerRef.current = null;
-    }
-  }
-
-  function scheduleOverlayIdleHide(mouseInside = isMouseInsideStage) {
-    clearOverlayIdleTimer();
-    if (!mouseInside || selectedFaceId !== null) {
-      return;
-    }
-
-    overlayIdleTimerRef.current = window.setTimeout(() => {
-      setShowFaceOverlays(false);
-      setHoveredFaceId(null);
-    }, 3000);
-  }
-
-  function activateFaceOverlays(mouseInside = isMouseInsideStage) {
-    if (areFaceAssignmentsSuppressed || isVideoAsset || isQuarterTurnRotation) {
-      return;
-    }
-    setShowFaceOverlays(true);
-    scheduleOverlayIdleHide(mouseInside);
-  }
-
   function closeAssignmentPopover() {
     setSelectedFaceId(null);
     setPopoverAnchor(null);
@@ -438,11 +393,6 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
     setAssignmentMessage(null);
     setNewPersonName("");
     setHoveredFaceId(null);
-    if (!isMouseInsideStage) {
-      setShowFaceOverlays(false);
-    } else {
-      scheduleOverlayIdleHide();
-    }
   }
 
   function moveToPhoto(index: number) {
@@ -482,31 +432,6 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
     setAssignmentMessage(null);
     setNewPersonName("");
     setAssignmentPersonId(face.person_id);
-    setShowFaceOverlays(true);
-    clearOverlayIdleTimer();
-  }
-
-  function handleStageMouseEnter() {
-    setIsMouseInsideStage(true);
-    activateFaceOverlays(true);
-  }
-
-  function handleStageMouseMove() {
-    setIsMouseInsideStage(true);
-    if (suppressOverlayRevealOnNextMoveRef.current) {
-      suppressOverlayRevealOnNextMoveRef.current = false;
-      return;
-    }
-    activateFaceOverlays(true);
-  }
-
-  function handleStageMouseLeave() {
-    setIsMouseInsideStage(false);
-    clearOverlayIdleTimer();
-    setHoveredFaceId(null);
-    if (selectedFaceId === null) {
-      setShowFaceOverlays(false);
-    }
   }
 
   async function handleAssignToExistingPerson() {
@@ -792,9 +717,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
           <div
             className={styles.mediaStage}
             ref={imageViewportRef}
-            onMouseEnter={handleStageMouseEnter}
-            onMouseMove={handleStageMouseMove}
-            onMouseLeave={handleStageMouseLeave}
+            onMouseLeave={() => setHoveredFaceId(null)}
           >
             {detailErrorMessage ? <p className={styles.errorMessage}>{detailErrorMessage}</p> : null}
             {rotationErrorMessage ? <p className={styles.errorMessage}>{rotationErrorMessage}</p> : null}
@@ -834,7 +757,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
                     }}
                   />
 
-                  {canRenderFaceOverlays && showFaceOverlays ? (
+                  {canRenderFaceOverlays ? (
                     <div className={styles.faceOverlayLayer}>
                       {overlayFaces.map((face) => (
                         <button
@@ -842,7 +765,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
                           type="button"
                           className={[
                             styles.faceBox,
-                            showFaceOverlays || hoveredFaceId === face.face_id || selectedFaceId === face.face_id
+                            hoveredFaceId === face.face_id || selectedFaceId === face.face_id
                               ? styles.faceBoxVisible
                               : "",
                             selectedFaceId === face.face_id ? styles.faceBoxActive : "",
@@ -855,11 +778,9 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
                           }}
                           onMouseEnter={() => {
                             setHoveredFaceId(face.face_id);
-                            activateFaceOverlays();
                           }}
                           onMouseLeave={() => {
                             setHoveredFaceId((current) => (current === face.face_id ? null : current));
-                            scheduleOverlayIdleHide();
                           }}
                           onClick={(event) => {
                             event.preventDefault();

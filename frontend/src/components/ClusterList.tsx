@@ -20,12 +20,29 @@ interface ClusterListProps {
   offset: number;
   pageSize: number;
   selectedClusterId: number | null;
+  selectedClusterIds: Set<number>;
   isLoading: boolean;
+  isMergingSelected: boolean;
   errorMessage: string | null;
+  actionErrorMessage: string | null;
+  mergePreview: {
+    targetClusterId: number;
+    targetPersonName: string;
+    targetFaceCount: number;
+    sourceClusterIds: number[];
+    sourcePersonNames: string[];
+    sourceFaceCounts: number[];
+    totalFacesAffected: number;
+  } | null;
   onFilterModeChange: (mode: FilterMode) => void;
   onPersonSearchQueryChange: (value: string) => void;
   onPageChange: (nextOffset: number) => void;
   onSelectCluster: (clusterId: number) => void;
+  onToggleClusterSelection: (clusterId: number) => void;
+  onClearClusterSelection: () => void;
+  onRequestMergeSelected: () => void;
+  onConfirmMergeSelected: () => void;
+  onCancelMergeSelected: () => void;
 }
 
 export function ClusterList({
@@ -36,12 +53,21 @@ export function ClusterList({
   offset,
   pageSize,
   selectedClusterId,
+  selectedClusterIds,
   isLoading,
+  isMergingSelected,
   errorMessage,
+  actionErrorMessage,
+  mergePreview,
   onFilterModeChange,
   onPersonSearchQueryChange,
   onPageChange,
-  onSelectCluster
+  onSelectCluster,
+  onToggleClusterSelection,
+  onClearClusterSelection,
+  onRequestMergeSelected,
+  onConfirmMergeSelected,
+  onCancelMergeSelected,
 }: ClusterListProps) {
   const clusterRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
   const visibleClusters = clusters;
@@ -49,6 +75,7 @@ export function ClusterList({
   const pageEnd = totalCount === 0 ? 0 : Math.min(offset + visibleClusters.length, totalCount);
   const canGoPrev = offset > 0;
   const canGoNext = offset + pageSize < totalCount;
+  const selectedCount = selectedClusterIds.size;
 
   useEffect(() => {
     if (selectedClusterId !== null) {
@@ -124,8 +151,29 @@ export function ClusterList({
           </button>
         </div>
 
+        <div className={styles.clusterNavControls}>
+          <span className={styles.clusterNavMeta}>{selectedCount} selected</span>
+          <button
+            type="button"
+            className={styles.clusterNavButton}
+            onClick={onClearClusterSelection}
+            disabled={selectedCount === 0 || isLoading || isMergingSelected}
+          >
+            Clear selection
+          </button>
+          <button
+            type="button"
+            className={styles.assignButton}
+            onClick={onRequestMergeSelected}
+            disabled={selectedCount < 2 || isLoading || isMergingSelected}
+          >
+            {isMergingSelected ? "Merging..." : "Merge selected"}
+          </button>
+        </div>
+
         {isLoading ? <div className={styles.message}>Loading clusters...</div> : null}
         {errorMessage ? <div className={styles.errorMessage}>{errorMessage}</div> : null}
+        {actionErrorMessage ? <div className={styles.errorMessage}>{actionErrorMessage}</div> : null}
 
         {!isLoading && !errorMessage && visibleClusters.length === 0 ? (
           <div className={styles.emptyState}>
@@ -138,30 +186,86 @@ export function ClusterList({
             {visibleClusters.map((cluster) => {
               const isSelected = cluster.cluster_id === selectedClusterId;
               return (
-                <button
-                  key={cluster.cluster_id}
-                  type="button"
-                  ref={(el) => {
-                    if (el) {
-                      clusterRefs.current.set(cluster.cluster_id, el);
-                    } else {
-                      clusterRefs.current.delete(cluster.cluster_id);
-                    }
-                  }}
-                  className={`${styles.clusterButton} ${
-                    isSelected ? styles.clusterButtonActive : ""
-                  }`.trim()}
-                  onClick={() => onSelectCluster(cluster.cluster_id)}
-                >
+                <div key={cluster.cluster_id} className={styles.clusterListItem}>
+                  <div className={styles.clusterSelectRow}>
+                    <label className={styles.clusterSelectLabel}>
+                      <input
+                        type="checkbox"
+                        checked={selectedClusterIds.has(cluster.cluster_id)}
+                        onChange={() => onToggleClusterSelection(cluster.cluster_id)}
+                      />
+                      Select
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    ref={(el) => {
+                      if (el) {
+                        clusterRefs.current.set(cluster.cluster_id, el);
+                      } else {
+                        clusterRefs.current.delete(cluster.cluster_id);
+                      }
+                    }}
+                    className={`${styles.clusterButton} ${
+                      isSelected ? styles.clusterButtonActive : ""
+                    }`.trim()}
+                    onClick={() => onSelectCluster(cluster.cluster_id)}
+                  >
                   <h3 className={styles.clusterButtonTitle}>Cluster #{cluster.cluster_id}</h3>
                   <p className={styles.clusterButtonMeta}>{cluster.face_count} faces</p>
                   <p className={styles.clusterButtonLabel}>
                     {cluster.person_name ?? "Unassigned"}
                   </p>
                   {cluster.is_ignored ? <p className={styles.clusterButtonMeta}>Ignored</p> : null}
-                </button>
+                  </button>
+                </div>
               );
             })}
+          </div>
+        ) : null}
+
+        {mergePreview ? (
+          <div className={styles.mergeConfirmOverlay}>
+            <div className={styles.mergeConfirmDialog} role="dialog" aria-modal="true" aria-label="Confirm merge selected clusters">
+              <h3 className={styles.mergeConfirmTitle}>Confirm Merge Selected Clusters</h3>
+              <div className={styles.mergeConfirmGrid}>
+                <span className={styles.infoLabel}>Target cluster</span>
+                <span>#{mergePreview.targetClusterId}</span>
+                <span className={styles.infoLabel}>Target assignment</span>
+                <span>{mergePreview.targetPersonName}</span>
+                <span className={styles.infoLabel}>Target face count</span>
+                <span>{mergePreview.targetFaceCount}</span>
+                <span className={styles.infoLabel}>Source clusters</span>
+                <span>{mergePreview.sourceClusterIds.map((clusterId) => `#${clusterId}`).join(", ")}</span>
+                <span className={styles.infoLabel}>Source assignments</span>
+                <span>{mergePreview.sourcePersonNames.join(", ")}</span>
+                <span className={styles.infoLabel}>Source face counts</span>
+                <span>{mergePreview.sourceFaceCounts.join(", ")}</span>
+                <span className={styles.infoLabel}>Total faces affected</span>
+                <span>{mergePreview.totalFacesAffected}</span>
+              </div>
+              <p className={styles.mergeConfirmWarning}>
+                This will move faces from the selected source clusters into the target cluster. The source clusters will be removed after merge. This action is not currently reversible.
+              </p>
+              <div className={styles.actionRow}>
+                <button
+                  type="button"
+                  className={styles.assignButton}
+                  onClick={onConfirmMergeSelected}
+                  disabled={isMergingSelected}
+                >
+                  {isMergingSelected ? "Merging..." : "Confirm Merge"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.clusterNavButton}
+                  onClick={onCancelMergeSelected}
+                  disabled={isMergingSelected}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
           </div>
         ) : null}
       </div>
