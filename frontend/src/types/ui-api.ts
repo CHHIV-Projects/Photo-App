@@ -10,6 +10,7 @@ export interface ClusterSummary {
 export interface FaceSummary {
   face_id: number;
   asset_sha256: string;
+  filename?: string | null;
   thumbnail_url: string | null;
 }
 

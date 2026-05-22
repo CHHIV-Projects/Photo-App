@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PresentationViewer } from "@/components/PresentationViewer";
 import styles from "@/components/photo-review-view.module.css";
 import {
+  assignFaceToPerson,
   assignPerson,
   batchAddPhotosToAlbum,
   batchCreateAlbumFromPhotos,
@@ -145,7 +146,7 @@ interface SelectedOverlayFace {
 function getFaceLabel(face: FaceInPhoto): string {
   if (face.person_name) return face.person_name;
   if (face.cluster_id !== null) return `Cluster #${face.cluster_id} - No Person Assigned`;
-  return "Unassigned";
+  return "Unclustered face";
 }
 
 function personMatchesSearch(person: PersonSummary, queryLower: string): boolean {
@@ -712,8 +713,20 @@ export function PhotoReviewView({
     });
   }
 
+  async function refreshOverlayForAsset(assetSha256: string): Promise<void> {
+    const response = await getPhotoFaceOverlays([assetSha256]);
+    const updated = response.items.find((item) => item.asset_sha256 === assetSha256);
+    if (!updated) {
+      return;
+    }
+    setOverlaysByAsset((current) => ({
+      ...current,
+      [assetSha256]: updated,
+    }));
+  }
+
   async function handleAssignSelectedClusterToPerson(targetPersonId: number): Promise<void> {
-    if (!selectedOverlayFaceEntry || selectedOverlayFaceEntry.face.cluster_id === null) {
+    if (!selectedOverlayFaceEntry) {
       return;
     }
 
@@ -727,13 +740,22 @@ export function PhotoReviewView({
     setAssignmentErrorMessage(null);
 
     try {
-      await assignPerson(clusterId, targetPersonId);
-      patchClusterAssignment(clusterId, targetPersonId, targetPersonName);
+      if (clusterId === null) {
+        await assignFaceToPerson(selectedOverlayFaceEntry.face.face_id, targetPersonId);
+        await refreshOverlayForAsset(selectedOverlayFaceEntry.assetSha256);
+      } else {
+        await assignPerson(clusterId, targetPersonId);
+        patchClusterAssignment(clusterId, targetPersonId, targetPersonName);
+      }
       onFaceAssignmentsChanged?.();
       if (previousName && previousName !== targetPersonName) {
-        setAssignmentMessage(`Reassigned face cluster from ${previousName} to ${targetPersonName}.`);
+        setAssignmentMessage(
+          clusterId === null
+            ? `Reassigned face from ${previousName} to ${targetPersonName}.`
+            : `Reassigned face cluster from ${previousName} to ${targetPersonName}.`
+        );
       } else {
-        setAssignmentMessage(`Assigned face cluster to ${targetPersonName}.`);
+        setAssignmentMessage(clusterId === null ? `Assigned face to ${targetPersonName}.` : `Assigned face cluster to ${targetPersonName}.`);
       }
     } catch (error) {
       const message = error instanceof Error && error.message ? error.message : "Could not assign cluster. Please try again.";
@@ -744,7 +766,7 @@ export function PhotoReviewView({
   }
 
   async function handleCreatePersonAndAssign(): Promise<void> {
-    if (!selectedOverlayFaceEntry || selectedOverlayFaceEntry.face.cluster_id === null) {
+    if (!selectedOverlayFaceEntry) {
       return;
     }
 
@@ -771,10 +793,19 @@ export function PhotoReviewView({
       });
       setNewPersonName("");
       setAssignmentPersonId(response.person.person_id);
-      await assignPerson(clusterId, response.person.person_id);
-      patchClusterAssignment(clusterId, response.person.person_id, response.person.display_name);
+      if (clusterId === null) {
+        await assignFaceToPerson(selectedOverlayFaceEntry.face.face_id, response.person.person_id);
+        await refreshOverlayForAsset(selectedOverlayFaceEntry.assetSha256);
+      } else {
+        await assignPerson(clusterId, response.person.person_id);
+        patchClusterAssignment(clusterId, response.person.person_id, response.person.display_name);
+      }
       onFaceAssignmentsChanged?.();
-      setAssignmentMessage(`Created person ${response.person.display_name} and assigned face cluster.`);
+      setAssignmentMessage(
+        clusterId === null
+          ? `Created person ${response.person.display_name} and assigned face.`
+          : `Created person ${response.person.display_name} and assigned face cluster.`
+      );
     } catch (error) {
       let message = error instanceof Error && error.message
         ? error.message
@@ -1344,7 +1375,9 @@ export function PhotoReviewView({
               onClick={() => assignmentPersonId !== null && void handleAssignSelectedClusterToPerson(assignmentPersonId)}
               disabled={isAssigningCluster || assignmentPersonId === null}
             >
-              {selectedOverlayFaceEntry.face.person_id ? "Reassign cluster" : "Assign cluster"}
+              {selectedOverlayFaceEntry.face.cluster_id === null
+                ? (selectedOverlayFaceEntry.face.person_id ? "Reassign face" : "Assign face")
+                : (selectedOverlayFaceEntry.face.person_id ? "Reassign cluster" : "Assign cluster")}
             </button>
             <button
               type="button"

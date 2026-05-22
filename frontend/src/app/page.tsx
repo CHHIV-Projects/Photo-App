@@ -926,7 +926,12 @@ export default function HomePage() {
   }
 
   function handlePhotoReviewFaceAssignmentsChanged(): void {
-    void Promise.all([loadPeople(), loadPeopleWithClusters()]);
+    void Promise.all([
+      loadPeople(),
+      loadPeopleWithClusters(),
+      loadUnassignedFaces(),
+      loadPhotos(),
+    ]);
   }
 
   return (

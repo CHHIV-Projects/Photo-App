@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+from urllib.parse import quote
 
 from sqlalchemy import and_, func, literal, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.asset import Asset
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
 from app.models.person import Person
@@ -16,6 +18,7 @@ from app.services.identity.person_service import create_person as identity_creat
 from app.services.identity.person_service import list_people as identity_list_people
 from app.services.identity.person_suggestion_service import get_cluster_person_suggestion
 from app.services.vision.face_cluster_corrections import (
+    assign_unclustered_face_to_person,
     merge_face_clusters as correction_merge_face_clusters,
     move_face_to_cluster as correction_move_face_to_cluster,
 )
@@ -86,7 +89,9 @@ def _build_face_thumbnail_index() -> dict[int, str]:
         except ValueError:
             continue
 
-        index[face_id] = f"/media/review/{relative_path.as_posix()}"
+        # URL-encode path segments so legacy filenames containing '%' (e.g. '%20')
+        # are served correctly by static file routing.
+        index[face_id] = f"/media/review/{quote(relative_path.as_posix(), safe='/')}"
 
     return index
 
@@ -226,7 +231,8 @@ def get_cluster_detail(db: Session, cluster_id: int) -> dict:
         raise ValueError(f"Cluster ID {cluster_id} does not exist.")
 
     face_rows = db.execute(
-        select(Face.id, Face.asset_sha256)
+        select(Face.id, Face.asset_sha256, Asset.original_filename)
+        .join(Asset, Asset.sha256 == Face.asset_sha256)
         .where(Face.cluster_id == cluster_id)
         .order_by(Face.id.asc())
     ).all()
@@ -240,6 +246,7 @@ def get_cluster_detail(db: Session, cluster_id: int) -> dict:
             {
                 "face_id": row.id,
                 "asset_sha256": row.asset_sha256,
+                "filename": row.original_filename,
                 "thumbnail_url": _resolve_face_thumbnail_url(row.id),
             }
             for row in face_rows
@@ -368,10 +375,11 @@ def list_people_with_clusters(db: Session) -> list[dict]:
 
 
 def list_unassigned_faces(db: Session) -> list[dict]:
-    """Return unresolved faces (cluster_id is null), newest first."""
+    """Return recovery-eligible faces (cluster_id null + manually unassigned), newest first."""
     rows = db.execute(
-        select(Face.id, Face.asset_sha256)
-        .where(Face.cluster_id.is_(None))
+        select(Face.id, Face.asset_sha256, Asset.original_filename)
+        .join(Asset, Asset.sha256 == Face.asset_sha256)
+        .where(Face.cluster_id.is_(None), Face.is_manually_unassigned.is_(True))
         .order_by(Face.created_at_utc.desc(), Face.id.desc())
     ).all()
 
@@ -379,10 +387,37 @@ def list_unassigned_faces(db: Session) -> list[dict]:
         {
             "face_id": row.id,
             "asset_sha256": row.asset_sha256,
+            "filename": row.original_filename,
             "thumbnail_url": _resolve_face_thumbnail_url(row.id),
         }
         for row in rows
     ]
+
+
+def assign_face_to_person(db: Session, face_id: int, person_id: int) -> dict:
+    """Assign one unclustered/manual-unassigned face to a person via cluster resolution rules."""
+    result = assign_unclustered_face_to_person(db, face_id=face_id, person_id=person_id)
+    return {
+        "success": True,
+        "target_cluster_id": int(result["target_cluster_id"]),
+        "created_cluster_id": result.get("created_cluster_id"),
+    }
+
+
+def create_person_and_assign_face(db: Session, face_id: int, display_name: str) -> dict:
+    """Create person then assign one unclustered/manual-unassigned face."""
+    person = identity_create_person(db, display_name=display_name)
+    result = assign_unclustered_face_to_person(db, face_id=face_id, person_id=person.id)
+    return {
+        "success": True,
+        "person": {
+            "person_id": person.id,
+            "display_name": person.display_name,
+            "aliases": [],
+        },
+        "target_cluster_id": int(result["target_cluster_id"]),
+        "created_cluster_id": result.get("created_cluster_id"),
+    }
 
 
 def get_cluster_suggestions(db: Session, cluster_id: int) -> dict:

@@ -12,6 +12,7 @@ class FaceSummary(BaseModel):
 
     face_id: int
     asset_sha256: str
+    filename: str | None = None
     thumbnail_url: str | None = None
 
 

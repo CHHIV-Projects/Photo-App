@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.schemas.ui_api import FaceListResponse, MoveFaceRequest, SuccessResponse
+from app.schemas.ui_api import AssignPersonRequest, FaceListResponse, MoveFaceRequest, SuccessResponse
 from app.services.identity.ui_api_service import (
+    assign_face_to_person,
     list_unassigned_faces,
     move_face_to_cluster,
     remove_face_from_cluster,
@@ -51,6 +52,26 @@ def post_move_face(
     """Move one face into another cluster."""
     try:
         move_face_to_cluster(db, face_id, request.target_cluster_id)
+    except ValueError as exc:
+        message = str(exc)
+        if "does not exist" in message:
+            status_code = 404
+        else:
+            status_code = 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+    return SuccessResponse(success=True)
+
+
+@router.post("/{face_id}/assign-person", response_model=SuccessResponse)
+def post_assign_face_to_person(
+    face_id: int,
+    request: AssignPersonRequest,
+    db: Session = Depends(get_db_session),
+) -> SuccessResponse:
+    """Assign one unclustered/manual-unassigned face to a person."""
+    try:
+        assign_face_to_person(db, face_id=face_id, person_id=request.person_id)
     except ValueError as exc:
         message = str(exc)
         if "does not exist" in message:

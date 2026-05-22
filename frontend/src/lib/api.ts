@@ -184,6 +184,13 @@ export function assignPerson(clusterId: number, personId: number): Promise<{ suc
   });
 }
 
+export function assignFaceToPerson(faceId: number, personId: number): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/faces/${faceId}/assign-person`, {
+    method: "POST",
+    body: JSON.stringify({ person_id: personId })
+  });
+}
+
 export function createPerson(displayName: string): Promise<CreatePersonResponse> {
   return apiRequest<CreatePersonResponse>("/api/people", {
     method: "POST",

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.face import Face
 from app.models.face_cluster import FaceCluster
+from app.models.person import Person
 from app.services.vision.face_embedder import embedding_from_json, embedding_to_json
 
 
@@ -227,4 +228,75 @@ def create_cluster_from_face(db: Session, face_id: int) -> dict:
         "new_cluster_id": new_cluster.id,
         "previous_cluster_id": previous_cluster_id,
         "message": f"Created cluster #{new_cluster.id} and moved face into it.",
+    }
+
+
+def assign_unclustered_face_to_person(db: Session, face_id: int, person_id: int) -> dict:
+    """Assign an unclustered/manual-unassigned face to a person's eligible cluster.
+
+    Eligibility and targeting rules:
+    - face must be unclustered (cluster_id is null)
+    - preferred target is largest non-ignored cluster for person
+    - tie-breaker is lowest cluster_id
+    - if no eligible cluster exists, create a new assigned cluster
+    """
+    face = db.get(Face, face_id)
+    if face is None:
+        raise ValueError(f"Face ID {face_id} does not exist.")
+    if face.cluster_id is not None:
+        raise ValueError("Face is already clustered. Use cluster assignment/reassignment flow.")
+
+    person = db.get(Person, person_id)
+    if person is None:
+        raise ValueError(f"Person ID {person_id} does not exist.")
+
+    eligible_cluster_rows = db.execute(
+        select(FaceCluster.id)
+        .where(FaceCluster.person_id == person_id, FaceCluster.is_ignored.is_(False))
+        .order_by(FaceCluster.id.asc())
+    ).all()
+
+    target_cluster_id: int | None = None
+    created_cluster_id: int | None = None
+    if eligible_cluster_rows:
+        cluster_ids = [int(row.id) for row in eligible_cluster_rows]
+        cluster_face_count_rows = db.execute(
+            select(Face.cluster_id, func.count(Face.id).label("face_count"))
+            .where(Face.cluster_id.in_(cluster_ids))
+            .group_by(Face.cluster_id)
+        ).all()
+        face_count_by_cluster_id = {
+            int(row.cluster_id): int(row.face_count or 0)
+            for row in cluster_face_count_rows
+            if row.cluster_id is not None
+        }
+        target_cluster_id = sorted(
+            cluster_ids,
+            key=lambda cluster_id: (-face_count_by_cluster_id.get(cluster_id, 0), cluster_id),
+        )[0]
+    else:
+        new_cluster = FaceCluster(person_id=person_id, is_ignored=False, is_reviewed=True)
+        db.add(new_cluster)
+        db.flush()
+        target_cluster_id = int(new_cluster.id)
+        created_cluster_id = int(new_cluster.id)
+
+    previous_cluster_id = face.cluster_id
+    face.cluster_id = target_cluster_id
+    face.is_manually_unassigned = False
+
+    target_cluster = db.get(FaceCluster, target_cluster_id)
+    if target_cluster is not None:
+        target_cluster.is_reviewed = True
+
+    _refresh_cluster_centroid(db, previous_cluster_id)
+    _refresh_cluster_centroid(db, target_cluster_id)
+    db.commit()
+
+    return {
+        "face_id": face_id,
+        "person_id": person_id,
+        "target_cluster_id": target_cluster_id,
+        "created_cluster_id": created_cluster_id,
+        "changed": True,
     }

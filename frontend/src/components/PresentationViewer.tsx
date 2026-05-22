@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  assignFaceToPerson,
   assignPerson,
   createPerson,
   getPeople,
@@ -59,8 +60,8 @@ function getErrorMessage(error: unknown, fallbackMessage: string): string {
 
 function getFaceLabel(face: FaceInPhoto): string {
   if (face.person_name) return face.person_name;
-  if (face.cluster_id !== null) return "Unassigned";
-  return "Not assignable here";
+  if (face.cluster_id !== null) return `Cluster #${face.cluster_id} - No Person Assigned`;
+  return "Unclustered face";
 }
 
 function personMatchesSearch(person: PersonSummary, queryLower: string): boolean {
@@ -423,6 +424,21 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
     });
   }
 
+  async function refreshCurrentOverlay(): Promise<void> {
+    if (!currentAssetSha) {
+      return;
+    }
+    const response = await getPhotoFaceOverlays([currentAssetSha]);
+    const overlay = response.items.find((item) => item.asset_sha256 === currentAssetSha);
+    if (!overlay) {
+      return;
+    }
+    setOverlayByAssetSha((current) => ({
+      ...current,
+      [currentAssetSha]: overlay,
+    }));
+  }
+
   function openAssignmentPopover(face: FaceInPhoto, anchor: { left: number; top: number }) {
     setSelectedFaceId(face.face_id);
     setPopoverAnchor(anchor);
@@ -435,7 +451,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
   }
 
   async function handleAssignToExistingPerson() {
-    if (!selectedOverlayFace || selectedOverlayFace.cluster_id === null || assignmentPersonId === null) {
+    if (!selectedOverlayFace || assignmentPersonId === null) {
       return;
     }
 
@@ -452,13 +468,26 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
     setAssignmentMessage(null);
 
     try {
-      await assignPerson(selectedOverlayFace.cluster_id, assignmentPersonId);
-      patchOverlayAssignments(selectedOverlayFace.cluster_id, assignmentPersonId, target.display_name);
+      if (selectedOverlayFace.cluster_id === null) {
+        await assignFaceToPerson(selectedOverlayFace.face_id, assignmentPersonId);
+        await refreshCurrentOverlay();
+      } else {
+        await assignPerson(selectedOverlayFace.cluster_id, assignmentPersonId);
+        patchOverlayAssignments(selectedOverlayFace.cluster_id, assignmentPersonId, target.display_name);
+      }
       onFaceAssignmentsChanged?.();
       if (previousName && previousName !== target.display_name) {
-        setAssignmentMessage(`Reassigned face cluster from ${previousName} to ${target.display_name}.`);
+        setAssignmentMessage(
+          selectedOverlayFace.cluster_id === null
+            ? `Reassigned face from ${previousName} to ${target.display_name}.`
+            : `Reassigned face cluster from ${previousName} to ${target.display_name}.`
+        );
       } else {
-        setAssignmentMessage(`Assigned face cluster to ${target.display_name}.`);
+        setAssignmentMessage(
+          selectedOverlayFace.cluster_id === null
+            ? `Assigned face to ${target.display_name}.`
+            : `Assigned face cluster to ${target.display_name}.`
+        );
       }
       window.setTimeout(() => {
         closeAssignmentPopover();
@@ -471,7 +500,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
   }
 
   async function handleCreatePersonAndAssign() {
-    if (!selectedOverlayFace || selectedOverlayFace.cluster_id === null) {
+    if (!selectedOverlayFace) {
       return;
     }
 
@@ -494,15 +523,24 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
         return [...current, response.person].sort((a, b) => a.display_name.localeCompare(b.display_name));
       });
 
-      await assignPerson(selectedOverlayFace.cluster_id, response.person.person_id);
-      patchOverlayAssignments(
-        selectedOverlayFace.cluster_id,
-        response.person.person_id,
-        response.person.display_name,
-      );
+      if (selectedOverlayFace.cluster_id === null) {
+        await assignFaceToPerson(selectedOverlayFace.face_id, response.person.person_id);
+        await refreshCurrentOverlay();
+      } else {
+        await assignPerson(selectedOverlayFace.cluster_id, response.person.person_id);
+        patchOverlayAssignments(
+          selectedOverlayFace.cluster_id,
+          response.person.person_id,
+          response.person.display_name,
+        );
+      }
       onFaceAssignmentsChanged?.();
 
-      setAssignmentMessage(`Created person ${response.person.display_name} and assigned face cluster.`);
+      setAssignmentMessage(
+        selectedOverlayFace.cluster_id === null
+          ? `Created person ${response.person.display_name} and assigned face.`
+          : `Created person ${response.person.display_name} and assigned face cluster.`
+      );
       window.setTimeout(() => {
         closeAssignmentPopover();
       }, 1000);
@@ -860,8 +898,7 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
                     className={styles.popoverButton}
                     disabled={
                       isAssigningCluster ||
-                      assignmentPersonId === null ||
-                      selectedOverlayFace.cluster_id === null
+                      assignmentPersonId === null
                     }
                     onClick={() => {
                       void handleAssignToExistingPerson();
@@ -925,12 +962,12 @@ export function PresentationViewer({ items, initialIndex, onClose, onFaceAssignm
                   placeholder="Create new person..."
                   value={newPersonName}
                   onChange={(event) => setNewPersonName(event.target.value)}
-                  disabled={isAssigningCluster || selectedOverlayFace.cluster_id === null}
+                  disabled={isAssigningCluster}
                 />
                 <button
                   type="button"
                   className={styles.popoverButton}
-                  disabled={isAssigningCluster || selectedOverlayFace.cluster_id === null || newPersonName.trim().length === 0}
+                  disabled={isAssigningCluster || newPersonName.trim().length === 0}
                   onClick={() => {
                     void handleCreatePersonAndAssign();
                   }}

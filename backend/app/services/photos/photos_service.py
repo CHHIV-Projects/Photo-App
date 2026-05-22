@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, nullslast, select
+from sqlalchemy import and_, func, nullslast, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.asset import Asset
@@ -384,7 +384,12 @@ def get_photo_detail(db: Session, sha256: str) -> dict | None:
 
 
 def get_photo_face_overlays(db: Session, asset_sha256_list: list[str]) -> list[dict]:
-    """Return clustered, non-ignored face overlays for a batch of assets."""
+    """Return review overlays for a batch of assets.
+
+    Includes:
+    - clustered faces from non-ignored clusters
+    - unclustered faces only when manually unassigned
+    """
     normalized_shas: list[str] = []
     seen: set[str] = set()
     for sha in asset_sha256_list:
@@ -420,12 +425,14 @@ def get_photo_face_overlays(db: Session, asset_sha256_list: list[str]) -> list[d
             FaceCluster.person_id,
             Person.display_name,
         )
-        .join(FaceCluster, Face.cluster_id == FaceCluster.id)
+        .outerjoin(FaceCluster, Face.cluster_id == FaceCluster.id)
         .outerjoin(Person, FaceCluster.person_id == Person.id)
         .where(
             Face.asset_sha256.in_(normalized_shas),
-            Face.cluster_id.is_not(None),
-            FaceCluster.is_ignored.is_(False),
+            or_(
+                and_(Face.cluster_id.is_not(None), FaceCluster.is_ignored.is_(False)),
+                and_(Face.cluster_id.is_(None), Face.is_manually_unassigned.is_(True)),
+            ),
         )
         .order_by(Face.asset_sha256.asc(), Face.id.asc())
     ).all()

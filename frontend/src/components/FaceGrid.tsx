@@ -1,8 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import styles from "@/components/review-screen.module.css";
-import { resolveApiUrl } from "@/lib/api";
-import type { ClusterSummary, FaceSummary, PersonWithClusters } from "@/types/ui-api";
+import { getPhotoDetail, resolveApiUrl } from "@/lib/api";
+import type { ClusterSummary, FaceSummary, PersonWithClusters, PhotoDetail } from "@/types/ui-api";
 
 interface FaceGridProps {
   faces: FaceSummary[];
@@ -70,6 +70,34 @@ function resolvePeopleMatches(query: string, people: PersonWithClusters[]): Pers
   return containsMatches.map((person) => ({ person, reason: "contains" }));
 }
 
+function buildFilenameDisplay(face: FaceSummary): string {
+  const trimmed = (face.filename ?? "").trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  return "Filename unavailable";
+}
+
+function buildDirectAssetImagePathFromFace(face: FaceSummary): string | null {
+  const filename = (face.filename ?? "").trim();
+  if (!filename) {
+    return null;
+  }
+
+  const dotIndex = filename.lastIndexOf(".");
+  if (dotIndex < 0 || dotIndex === filename.length - 1) {
+    return null;
+  }
+
+  const extension = filename.slice(dotIndex + 1).trim().toLowerCase();
+  if (!/^[a-z0-9]+$/.test(extension)) {
+    return null;
+  }
+
+  const prefix = face.asset_sha256.slice(0, 2);
+  return `/media/assets/${prefix}/${face.asset_sha256}.${extension}`;
+}
+
 export function FaceGrid({
   faces,
   selectedClusterId,
@@ -84,6 +112,13 @@ export function FaceGrid({
   const [pendingMoveFaceId, setPendingMoveFaceId] = useState<number | null>(null);
   const [failedImageByFaceId, setFailedImageByFaceId] = useState<Record<number, boolean>>({});
   const [previewFaceId, setPreviewFaceId] = useState<number | null>(null);
+  const [previewNaturalDims, setPreviewNaturalDims] = useState<{ w: number; h: number } | null>(null);
+  const [failedFullImageByFaceId, setFailedFullImageByFaceId] = useState<Record<number, boolean>>({});
+  const [loadedFullImageByFaceId, setLoadedFullImageByFaceId] = useState<Record<number, boolean>>({});
+  const [fullImageOverrideByFaceId, setFullImageOverrideByFaceId] = useState<Record<number, string>>({});
+  const [photoDetailByAsset, setPhotoDetailByAsset] = useState<
+    Record<string, { state: "loading" | "ready" | "error"; detail?: PhotoDetail; error?: string }>
+  >({});
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null);
   const [moveConfirmState, setMoveConfirmState] = useState<{
     faceId: number;
@@ -98,6 +133,76 @@ export function FaceGrid({
     }
     return index;
   }, [faces]);
+
+  const previewFace = useMemo(() => {
+    if (previewFaceId === null) {
+      return null;
+    }
+    return faceById.get(previewFaceId) ?? null;
+  }, [faceById, previewFaceId]);
+
+  useEffect(() => {
+    if (!previewFace) {
+      setPreviewNaturalDims(null);
+      return;
+    }
+
+    const assetSha = previewFace.asset_sha256;
+    const existing = photoDetailByAsset[assetSha];
+    if (existing?.state === "ready" || existing?.state === "loading") {
+      return;
+    }
+
+    let cancelled = false;
+    setPhotoDetailByAsset((current) => ({
+      ...current,
+      [assetSha]: { state: "loading" },
+    }));
+
+    async function loadDetail() {
+      try {
+        const detail = await getPhotoDetail(assetSha);
+        if (cancelled) {
+          return;
+        }
+        setPhotoDetailByAsset((current) => ({
+          ...current,
+          [assetSha]: { state: "ready", detail },
+        }));
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        const message = error instanceof Error && error.message ? error.message : "Could not load full image context.";
+        setPhotoDetailByAsset((current) => ({
+          ...current,
+          [assetSha]: { state: "error", error: message },
+        }));
+      }
+    }
+
+    void loadDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [photoDetailByAsset, previewFace]);
+
+  useEffect(() => {
+    if (previewFaceId === null) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewFaceId(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [previewFaceId]);
 
   const updateMoveTarget = (faceId: number, nextValue: string) => {
     setMoveTargetByFaceId((current) => ({
@@ -267,6 +372,20 @@ export function FaceGrid({
               onClick={() => {
                 setActionErrorMessage(null);
                 setPreviewFaceId(face.face_id);
+                setPreviewNaturalDims(null);
+                setFailedFullImageByFaceId((current) => ({
+                  ...current,
+                  [face.face_id]: false,
+                }));
+                setLoadedFullImageByFaceId((current) => ({
+                  ...current,
+                  [face.face_id]: false,
+                }));
+                setFullImageOverrideByFaceId((current) => {
+                  const next = { ...current };
+                  delete next[face.face_id];
+                  return next;
+                });
               }}
             >
               {resolveApiUrl(face.thumbnail_url) && !failedImageByFaceId[face.face_id] ? (
@@ -293,7 +412,7 @@ export function FaceGrid({
 
             <div>
               <p className={styles.faceTitle}>Face #{face.face_id}</p>
-              <p className={styles.faceMeta}>{face.asset_sha256}</p>
+              <p className={styles.faceMeta}>Filename: {buildFilenameDisplay(face)}</p>
             </div>
 
             {renderFaceActions(face)}
@@ -302,17 +421,106 @@ export function FaceGrid({
       </div>
 
       {previewFaceId !== null ? (
-        <div className={styles.mergeConfirmOverlay}>
+        <div
+          className={styles.mergeConfirmOverlay}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setPreviewFaceId(null);
+            }
+          }}
+        >
           <div className={styles.mergeConfirmDialog} role="dialog" aria-modal="true" aria-label="Face preview">
             <h3 className={styles.mergeConfirmTitle}>Face Preview</h3>
             {(() => {
-              const face = faceById.get(previewFaceId);
+              const face = previewFace;
               if (!face) {
                 return <div className={styles.errorMessage}>Face could not be loaded.</div>;
               }
 
+              const photoDetailState = photoDetailByAsset[face.asset_sha256];
+              const photoDetail = photoDetailState?.state === "ready" ? photoDetailState.detail : null;
+              const previewFaceInPhoto = photoDetail?.faces.find((candidate) => candidate.face_id === face.face_id) ?? null;
+              const detailPreferredUrl = resolveApiUrl(photoDetail?.display_url || photoDetail?.image_url);
+              const filenameFallbackUrl = resolveApiUrl(buildDirectAssetImagePathFromFace(face));
+              const originalUrl = resolveApiUrl(photoDetail?.original_url);
+              const fullImageUrl =
+                fullImageOverrideByFaceId[face.face_id] ||
+                detailPreferredUrl ||
+                filenameFallbackUrl ||
+                originalUrl;
+              const fullImageFailed = failedFullImageByFaceId[face.face_id] ?? false;
+              const fullImageLoaded = loadedFullImageByFaceId[face.face_id] ?? false;
+              const canHighlightFace =
+                fullImageUrl !== null &&
+                !fullImageFailed &&
+                previewFaceInPhoto !== null &&
+                previewNaturalDims !== null &&
+                photoDetail?.display_rotation_degrees === 0;
+              const displayFilename = face.filename || photoDetail?.filename || face.asset_sha256;
+
               return (
                 <>
+                  <div className={styles.mergeConfirmGrid}>
+                    <span className={styles.infoLabel}>Filename</span>
+                    <span>{displayFilename}</span>
+                  </div>
+
+                  {photoDetailState?.state === "loading" && !fullImageLoaded ? (
+                    <div className={styles.loadingMessage}>Loading full image context...</div>
+                  ) : null}
+
+                  {fullImageUrl && !fullImageFailed ? (
+                    <div className={styles.facePreviewContextShell}>
+                      <img
+                        className={styles.facePreviewContextImage}
+                        src={fullImageUrl}
+                        alt={displayFilename}
+                        onLoad={(event) => {
+                          const img = event.currentTarget;
+                          setPreviewNaturalDims({ w: img.naturalWidth, h: img.naturalHeight });
+                          setLoadedFullImageByFaceId((current) => ({
+                            ...current,
+                            [face.face_id]: true,
+                          }));
+                        }}
+                        onError={() => {
+                          if (filenameFallbackUrl && fullImageUrl !== filenameFallbackUrl) {
+                            setLoadedFullImageByFaceId((current) => ({
+                              ...current,
+                              [face.face_id]: false,
+                            }));
+                            setFullImageOverrideByFaceId((current) => ({
+                              ...current,
+                              [face.face_id]: filenameFallbackUrl,
+                            }));
+                            return;
+                          }
+                          setFailedFullImageByFaceId((current) => ({
+                            ...current,
+                            [face.face_id]: true,
+                          }));
+                          setLoadedFullImageByFaceId((current) => ({
+                            ...current,
+                            [face.face_id]: false,
+                          }));
+                        }}
+                      />
+                      {canHighlightFace ? (
+                        <div className={styles.faceOverlayLayer}>
+                          <div
+                            className={`${styles.faceBox} ${styles.faceBoxActive}`.trim()}
+                            style={{
+                              left: `${(previewFaceInPhoto.bbox.x / previewNaturalDims.w) * 100}%`,
+                              top: `${(previewFaceInPhoto.bbox.y / previewNaturalDims.h) * 100}%`,
+                              width: `${(previewFaceInPhoto.bbox.w / previewNaturalDims.w) * 100}%`,
+                              height: `${(previewFaceInPhoto.bbox.h / previewNaturalDims.h) * 100}%`,
+                            }}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   {resolveApiUrl(face.thumbnail_url) && !failedImageByFaceId[face.face_id] ? (
                     <img
                       className={styles.faceImageLarge}
@@ -333,6 +541,18 @@ export function FaceGrid({
                       </div>
                     </div>
                   )}
+
+                  {photoDetailState?.state !== "loading" && (fullImageUrl === null || fullImageFailed) ? (
+                    <div className={styles.hintMessage}>Full image unavailable. Showing face crop only.</div>
+                  ) : null}
+                  {photoDetailState?.state !== "loading" && fullImageUrl !== null && !fullImageFailed && !canHighlightFace ? (
+                    <div className={styles.hintMessage}>
+                      Full image context loaded. Face highlight unavailable for this image configuration.
+                    </div>
+                  ) : null}
+                  {photoDetailState?.state === "error" ? (
+                    <div className={styles.errorMessage}>{photoDetailState.error}</div>
+                  ) : null}
 
                   <div className={styles.mergeConfirmGrid}>
                     <span className={styles.infoLabel}>Face ID</span>
