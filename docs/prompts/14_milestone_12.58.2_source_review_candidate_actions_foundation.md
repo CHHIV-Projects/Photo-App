@@ -563,10 +563,6 @@ enable first write actioncreate collection/album from selected provenance levela
 
 Do not move to date/person/place/tag write actions until collection/album creation from provenance level is validated.
 
-
-
-
-
 # Answers to Coder Questions — Milestone 12.58.2
 
 ## 1. Preview card wording
@@ -630,8 +626,8 @@ Do not aggressively rewrite names.
 
 Examples:
 
-001. Family Pictures -> Family Pictures
-6. Pic of Mary -> Pic of Mary
+1. Family Pictures -> Family Pictures
+2. Pic of Mary -> Pic of Mary
 3. 6-75 to 12-76 -> 6-75 to 12-76
 
 Always keep the original segment visible somewhere, such as:

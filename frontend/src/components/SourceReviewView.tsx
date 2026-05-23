@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   createAlbumFromSourceReviewLevel,
+  createEventFromSourceReviewLevel,
   getPeople,
   getSourceReviewAsset,
   getSourceReviewMatches,
@@ -13,6 +14,7 @@ import type {
   PersonSummary,
   SourceReviewAssetResponse,
   SourceReviewCreateAlbumResponse,
+  SourceReviewCreateEventResponse,
   SourceReviewHierarchyLevel,
   SourceReviewMatchesResponse,
   SourceReviewProvenanceRow,
@@ -23,6 +25,7 @@ interface SourceReviewViewProps {
   assetSha256: string | null;
   onOpenPhotoDetail: (assetSha256: string) => void;
   onOpenAlbums: () => void;
+  onOpenEvents: () => void;
 }
 
 const MATCH_LIMIT = 50;
@@ -38,6 +41,13 @@ interface CandidateCard {
   title: string;
   proposedValue: string;
   detail: string;
+}
+
+interface EventDateCandidate {
+  startDate: string | null;
+  endDate: string | null;
+  interpretation: string | null;
+  precision: "month_range" | "year_range" | "year_only" | "unknown";
 }
 
 function formatDateTime(value: string | null): string {
@@ -95,6 +105,81 @@ function normalizeMonth(monthValue: string): number | null {
     return null;
   }
   return month;
+}
+
+function formatMonthLabel(year: number, month: number): string {
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleString(undefined, {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function lastDayOfMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function deriveEventDateCandidate(segmentText: string): EventDateCandidate {
+  const raw = normalizeWhitespace(segmentText);
+  if (!raw) {
+    return { startDate: null, endDate: null, interpretation: null, precision: "unknown" };
+  }
+
+  const monthRangeMatch = raw.match(/(\d{1,2})\s*[-/]\s*(\d{2,4})\s*(?:to|-|\u2013|\u2014)\s*(\d{1,2})\s*[-/]\s*(\d{2,4})/iu);
+  if (monthRangeMatch) {
+    const startMonth = normalizeMonth(monthRangeMatch[1]);
+    const startYear = toFourDigitYear(monthRangeMatch[2]);
+    const endMonth = normalizeMonth(monthRangeMatch[3]);
+    const endYear = toFourDigitYear(monthRangeMatch[4]);
+    if (startMonth && startYear && endMonth && endYear) {
+      const startDate = `${startYear}-${String(startMonth).padStart(2, "0")}-01`;
+      const endDate = `${endYear}-${String(endMonth).padStart(2, "0")}-${String(lastDayOfMonth(endYear, endMonth)).padStart(2, "0")}`;
+      return {
+        startDate,
+        endDate,
+        interpretation: `Interpreted as month range: ${formatMonthLabel(startYear, startMonth)} to ${formatMonthLabel(endYear, endMonth)}`,
+        precision: "month_range",
+      };
+    }
+  }
+
+  const yearRangeMatch = raw.match(/((?:19|20)\d{2})\s*(?:to|-|\u2013|\u2014)\s*(\d{2,4}|\d{2}['\u2019]s)/iu);
+  if (yearRangeMatch) {
+    const startYear = toFourDigitYear(yearRangeMatch[1]);
+    let endYear: number | null = null;
+    if (/\d{2}['\u2019]s$/u.test(yearRangeMatch[2])) {
+      const decadeYear = toFourDigitYear(yearRangeMatch[2]);
+      endYear = decadeYear ? decadeYear + 9 : null;
+    } else {
+      endYear = toFourDigitYear(yearRangeMatch[2]);
+    }
+    if (startYear && endYear) {
+      return {
+        startDate: `${startYear}-01-01`,
+        endDate: `${endYear}-12-31`,
+        interpretation: `Interpreted as year range: ${startYear} to ${endYear}`,
+        precision: "year_range",
+      };
+    }
+  }
+
+  const singleYearMatch = raw.match(/\b((?:19|20)\d{2})\b/u);
+  if (singleYearMatch) {
+    const year = Number.parseInt(singleYearMatch[1], 10);
+    return {
+      startDate: `${year}-01-01`,
+      endDate: `${year}-12-31`,
+      interpretation: `Interpreted as year: ${year}`,
+      precision: "year_only",
+    };
+  }
+
+  return {
+    startDate: null,
+    endDate: null,
+    interpretation: null,
+    precision: "unknown",
+  };
 }
 
 function detectDateClue(segmentText: string): DateClue | null {
@@ -262,7 +347,7 @@ function buildCandidateCards(params: {
   ];
 }
 
-export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums }: SourceReviewViewProps) {
+export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums, onOpenEvents }: SourceReviewViewProps) {
   const [assetResponse, setAssetResponse] = useState<SourceReviewAssetResponse | null>(null);
   const [hierarchyMode, setHierarchyMode] = useState<"relative" | "full_source_path">("relative");
   const [people, setPeople] = useState<PersonSummary[]>([]);
@@ -280,6 +365,15 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums 
   const [albumActionError, setAlbumActionError] = useState<string | null>(null);
   const [albumActionResult, setAlbumActionResult] = useState<SourceReviewCreateAlbumResponse | null>(null);
   const [albumNameConflictResult, setAlbumNameConflictResult] = useState<SourceReviewCreateAlbumResponse | null>(null);
+  const [isEventDialogOpen, setIsEventDialogOpen] = useState(false);
+  const [eventLabelInput, setEventLabelInput] = useState("");
+  const [eventStartDateInput, setEventStartDateInput] = useState("");
+  const [eventEndDateInput, setEventEndDateInput] = useState("");
+  const [eventPrecisionNote, setEventPrecisionNote] = useState<string | null>(null);
+  const [eventSingleFileConfirmChecked, setEventSingleFileConfirmChecked] = useState(false);
+  const [isSubmittingEvent, setIsSubmittingEvent] = useState(false);
+  const [eventActionError, setEventActionError] = useState<string | null>(null);
+  const [eventActionResult, setEventActionResult] = useState<SourceReviewCreateEventResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -388,7 +482,22 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums 
     return buildSuggestedLabel(selectedHierarchyLevel.segment_text || "Untitled");
   }, [selectedHierarchyLevel]);
 
+  const proposedEventName = useMemo(() => {
+    if (!selectedHierarchyLevel) {
+      return "";
+    }
+    return buildSuggestedLabel(selectedHierarchyLevel.segment_text || "Untitled");
+  }, [selectedHierarchyLevel]);
+
+  const parsedEventDateCandidate = useMemo(() => {
+    if (!selectedHierarchyLevel) {
+      return { startDate: null, endDate: null, interpretation: null, precision: "unknown" as const };
+    }
+    return deriveEventDateCandidate(selectedHierarchyLevel.segment_text);
+  }, [selectedHierarchyLevel]);
+
   const canCreateAlbum = Boolean(matches && matches.total_count > 0 && selectedProvenanceId !== null && selectedLevelIndex !== null);
+  const canCreateEvent = canCreateAlbum;
 
   const requiresSingleFileConfirm = Boolean(selectedHierarchyLevel?.is_filename);
 
@@ -397,6 +506,12 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums 
     !albumNameInput.trim() ||
     isSubmittingAlbum ||
     (requiresSingleFileConfirm && !singleFileConfirmChecked);
+
+  const confirmEventActionDisabled =
+    !canCreateEvent ||
+    !eventLabelInput.trim() ||
+    isSubmittingEvent ||
+    (requiresSingleFileConfirm && !eventSingleFileConfirmChecked);
 
   async function submitCreateAlbum(conflictMode: "ask" | "use_existing") {
     if (!matches || selectedProvenanceId === null || selectedLevelIndex === null) {
@@ -427,6 +542,32 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums 
       setAlbumActionError(getErrorMessage(error, "Failed to create album from selected provenance level."));
     } finally {
       setIsSubmittingAlbum(false);
+    }
+  }
+
+  async function submitCreateEvent() {
+    if (!matches || selectedProvenanceId === null || selectedLevelIndex === null) {
+      return;
+    }
+
+    setIsSubmittingEvent(true);
+    setEventActionError(null);
+
+    try {
+      const response = await createEventFromSourceReviewLevel({
+        provenance_id: selectedProvenanceId,
+        level_index: selectedLevelIndex,
+        hierarchy_mode: hierarchyMode,
+        event_label: eventLabelInput,
+        start_at: eventStartDateInput.trim() ? eventStartDateInput : null,
+        end_at: eventEndDateInput.trim() ? eventEndDateInput : null,
+        existing_event_policy: "skip_existing",
+      });
+      setEventActionResult(response);
+    } catch (error: unknown) {
+      setEventActionError(getErrorMessage(error, "Failed to create event from selected provenance level."));
+    } finally {
+      setIsSubmittingEvent(false);
     }
   }
 
@@ -490,13 +631,30 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums 
     setAlbumNameConflictResult(null);
     setSingleFileConfirmChecked(false);
     setAlbumNameInput(proposedAlbumName);
-  }, [proposedAlbumName, selectedProvenanceId, selectedLevelIndex, hierarchyMode]);
+    setIsEventDialogOpen(false);
+    setEventActionError(null);
+    setEventActionResult(null);
+    setEventSingleFileConfirmChecked(false);
+    setEventLabelInput(proposedEventName);
+    setEventStartDateInput(parsedEventDateCandidate.startDate ?? "");
+    setEventEndDateInput(parsedEventDateCandidate.endDate ?? "");
+    setEventPrecisionNote(parsedEventDateCandidate.interpretation);
+  }, [
+    parsedEventDateCandidate.endDate,
+    parsedEventDateCandidate.interpretation,
+    parsedEventDateCandidate.startDate,
+    proposedAlbumName,
+    proposedEventName,
+    selectedProvenanceId,
+    selectedLevelIndex,
+    hierarchyMode,
+  ]);
 
   return (
     <div className={styles.root}>
       <header className={styles.header}>
         <h2 className={styles.title}>Source Review</h2>
-        <p className={styles.subtitle}>Provenance workspace for hierarchy/prefix exploration with album creation enabled for selected levels.</p>
+        <p className={styles.subtitle}>Provenance workspace for hierarchy/prefix exploration with album and event creation enabled for selected levels.</p>
       </header>
 
       {!assetSha256 ? (
@@ -675,7 +833,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums 
               <p className={styles.status}>Select a hierarchy level to preview candidate actions.</p>
             ) : (
               <>
-                <p className={styles.noticeStrong}>Only Album creation is active in this milestone. Other actions remain preview-only.</p>
+                <p className={styles.noticeStrong}>Album and Event creation are active in this milestone. Other actions remain preview-only.</p>
                 <p className={styles.notice}>
                   Raw segment: <span className={styles.segmentRaw}>{selectedHierarchyLevel.segment_text}</span>
                 </p>
@@ -700,6 +858,24 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums 
                           }}
                         >
                           Create Album
+                        </button>
+                      ) : card.key === "event" ? (
+                        <button
+                          type="button"
+                          className={styles.actionButton}
+                          disabled={!canCreateEvent || isLoadingMatches}
+                          onClick={() => {
+                            setEventLabelInput(proposedEventName);
+                            setEventStartDateInput(parsedEventDateCandidate.startDate ?? "");
+                            setEventEndDateInput(parsedEventDateCandidate.endDate ?? "");
+                            setEventPrecisionNote(parsedEventDateCandidate.interpretation);
+                            setEventSingleFileConfirmChecked(false);
+                            setEventActionError(null);
+                            setEventActionResult(null);
+                            setIsEventDialogOpen(true);
+                          }}
+                        >
+                          Create Event
                         </button>
                       ) : (
                         <button type="button" className={styles.placeholderAction} disabled>
@@ -827,6 +1003,132 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums 
                           className={styles.secondaryButton}
                           disabled={isSubmittingAlbum}
                           onClick={() => setIsAlbumDialogOpen(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {isEventDialogOpen ? (
+                  <div className={styles.confirmPanel}>
+                    <h4 className={styles.confirmTitle}>Create Event from Selected Provenance Level</h4>
+                    <label className={styles.fieldLabel}>
+                      Event label
+                      <input
+                        type="text"
+                        value={eventLabelInput}
+                        onChange={(event) => setEventLabelInput(event.target.value)}
+                        className={styles.textInput}
+                        maxLength={255}
+                      />
+                    </label>
+
+                    <div className={styles.dateGrid}>
+                      <label className={styles.fieldLabel}>
+                        Start date
+                        <input
+                          type="date"
+                          value={eventStartDateInput}
+                          onChange={(event) => setEventStartDateInput(event.target.value)}
+                          className={styles.textInput}
+                        />
+                      </label>
+                      <label className={styles.fieldLabel}>
+                        End date
+                        <input
+                          type="date"
+                          value={eventEndDateInput}
+                          onChange={(event) => setEventEndDateInput(event.target.value)}
+                          className={styles.textInput}
+                        />
+                      </label>
+                    </div>
+
+                    {eventPrecisionNote ? (
+                      <p className={styles.noticeStrong}>{eventPrecisionNote}</p>
+                    ) : (
+                      <p className={styles.notice}>No obvious provenance date clue detected. On confirm, backend will infer from matching asset timestamps when available.</p>
+                    )}
+
+                    <ul className={styles.contextList}>
+                      <li>Source: {selectedProvenanceRow?.source_label ?? "Unknown"} ({selectedProvenanceRow?.source_type ?? "unknown"})</li>
+                      <li>Hierarchy mode: {hierarchyMode}</li>
+                      <li>Selected segment: {selectedHierarchyLevel.segment_text}</li>
+                      <li>Selected prefix: {matches?.selected_prefix ?? "-"}</li>
+                      <li>Matching asset count: {matches?.total_count ?? 0}</li>
+                      <li>Existing event policy: skip assets already assigned to another event</li>
+                    </ul>
+
+                    {requiresSingleFileConfirm ? (
+                      <div className={styles.warningBox}>
+                        <p className={styles.warningText}>This level appears to be a single file. This event may contain only this asset.</p>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={eventSingleFileConfirmChecked}
+                            onChange={(event) => setEventSingleFileConfirmChecked(event.target.checked)}
+                          />
+                          I understand this may create a very small event.
+                        </label>
+                      </div>
+                    ) : null}
+
+                    <p className={styles.notice}>
+                      This will create an event and assign eligible matching assets. No source files, provenance, captured dates, people, places, or tags will be changed.
+                    </p>
+
+                    {matches && matches.items.length > 0 ? (
+                      <>
+                        <p className={styles.matchSummary}>Sample matching assets</p>
+                        <ul className={styles.sampleList}>
+                          {matches.items.slice(0, 6).map((item) => (
+                            <li key={`event-sample-${item.asset_sha256}`} className={styles.sampleItem}>
+                              {item.filename}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+
+                    {eventActionError ? <p className={styles.error}>{eventActionError}</p> : null}
+
+                    {eventActionResult ? (
+                      <div className={styles.successBox}>
+                        <p className={styles.successText}>Created event "{eventActionResult.event_label ?? "(unlabeled)"}".</p>
+                        <p className={styles.status}>
+                          Assigned: {eventActionResult.assigned_count} | Skipped existing event: {eventActionResult.skipped_existing_event_count} | Failed: {eventActionResult.failed_count}
+                        </p>
+                        <p className={styles.notice}>Date source: {eventActionResult.date_range_source}</p>
+                        <div className={styles.dialogActions}>
+                          <button type="button" className={styles.actionButton} onClick={onOpenEvents}>
+                            Open Events
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            onClick={() => setIsEventDialogOpen(false)}
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={styles.dialogActions}>
+                        <button
+                          type="button"
+                          className={styles.actionButton}
+                          disabled={confirmEventActionDisabled}
+                          onClick={() => void submitCreateEvent()}
+                        >
+                          {isSubmittingEvent ? "Creating..." : "Confirm Create Event"}
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          disabled={isSubmittingEvent}
+                          onClick={() => setIsEventDialogOpen(false)}
                         >
                           Cancel
                         </button>

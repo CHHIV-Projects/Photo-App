@@ -93,3 +93,8 @@ This matrix captures current system readiness and intentional milestone boundari
 ## 9. Follow-up Status (12.58.3)
 - `Could become Album` moved from preview-only to active create flow in milestone 12.58.3.
 - Other candidate actions documented here remain preview-only/deferred.
+
+## 10. Follow-up Status (12.58.4)
+- `Could become Event` moved from preview-only to active create flow in milestone 12.58.4.
+- Album action remains enabled from 12.58.3.
+- Person/place/tag/date-metadata candidate actions remain preview-only.

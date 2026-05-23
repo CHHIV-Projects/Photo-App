@@ -111,3 +111,40 @@ class SourceReviewCreateAlbumResponse(BaseModel):
     already_present_count: int
     failed_count: int
     failures: list[SourceReviewCreateAlbumFailure]
+
+
+class SourceReviewCreateEventRequest(BaseModel):
+    provenance_id: int = Field(ge=1)
+    level_index: int = Field(ge=0)
+    hierarchy_mode: Literal["relative", "full_source_path"] = "relative"
+    event_label: str = Field(min_length=1, max_length=255)
+    start_at: str | None = None
+    end_at: str | None = None
+    existing_event_policy: Literal["skip_existing"] = "skip_existing"
+
+
+class SourceReviewCreateEventFailure(BaseModel):
+    asset_sha256: str
+    reason: str
+
+
+class SourceReviewCreateEventResponse(BaseModel):
+    outcome: Literal["created"]
+    event_id: int
+    event_label: str | None = None
+    provenance_id: int
+    hierarchy_mode: str
+    selected_level_index: int
+    selected_segment: str
+    selected_prefix: str
+    existing_event_policy: str
+    date_range_source: Literal["user_input", "asset_captured_at_fallback", "asset_created_at_fallback"]
+    effective_start_at: str
+    effective_end_at: str
+    matching_asset_count: int
+    requested_count: int
+    assigned_count: int
+    already_in_event_count: int
+    skipped_existing_event_count: int
+    failed_count: int
+    failures: list[SourceReviewCreateEventFailure]

@@ -365,6 +365,43 @@ export interface SourceReviewCreateAlbumResponse {
   failures: SourceReviewCreateAlbumFailure[];
 }
 
+export interface SourceReviewCreateEventRequest {
+  provenance_id: number;
+  level_index: number;
+  hierarchy_mode: "relative" | "full_source_path";
+  event_label: string;
+  start_at: string | null;
+  end_at: string | null;
+  existing_event_policy: "skip_existing";
+}
+
+export interface SourceReviewCreateEventFailure {
+  asset_sha256: string;
+  reason: string;
+}
+
+export interface SourceReviewCreateEventResponse {
+  outcome: "created";
+  event_id: number;
+  event_label: string | null;
+  provenance_id: number;
+  hierarchy_mode: string;
+  selected_level_index: number;
+  selected_segment: string;
+  selected_prefix: string;
+  existing_event_policy: string;
+  date_range_source: "user_input" | "asset_captured_at_fallback" | "asset_created_at_fallback";
+  effective_start_at: string;
+  effective_end_at: string;
+  matching_asset_count: number;
+  requested_count: number;
+  assigned_count: number;
+  already_in_event_count: number;
+  skipped_existing_event_count: number;
+  failed_count: number;
+  failures: SourceReviewCreateEventFailure[];
+}
+
 export interface CanonicalMetadataSummary {
   captured_at: string | null;
   camera_make: string | null;

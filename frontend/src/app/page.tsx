@@ -659,6 +659,10 @@ export default function HomePage() {
     setViewMode("albums");
   }
 
+  function handleOpenEventsFromSourceReview() {
+    setViewMode("events");
+  }
+
   async function loadPlaces() {
     setIsLoadingPlaces(true);
     setPlacesErrorMessage(null);
@@ -1170,6 +1174,7 @@ export default function HomePage() {
             assetSha256={sourceReviewAssetSha256 ?? selectedPhotoSha256}
             onOpenPhotoDetail={handleOpenPhotoFromSourceReview}
             onOpenAlbums={handleOpenAlbumsFromSourceReview}
+            onOpenEvents={handleOpenEventsFromSourceReview}
           />
         ) : viewMode === "albums" ? (
           <AlbumsView onOpenPhoto={handleOpenPhotoFromAlbums} />

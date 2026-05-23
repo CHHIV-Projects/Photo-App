@@ -6,11 +6,12 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, nullslast, select
+from sqlalchemy import and_, nullslast, select, update
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
 from app.models.collection import Collection
+from app.models.event import Event
 from app.models.provenance import Provenance
 from app.services.photos.batch_actions_service import batch_add_assets_to_album, batch_create_album_with_assets
 from app.services.photos.display_url_service import build_asset_display_url_contract
@@ -218,6 +219,29 @@ def _find_existing_album_by_name(db: Session, *, album_name: str) -> Collection 
         if _normalize_album_name_for_match(album.name) == normalized_target:
             return album
     return None
+
+
+def _parse_iso_datetime_or_date(value: str) -> datetime:
+    candidate = value.strip()
+    if not candidate:
+        raise SourceReviewValidationError("Date value cannot be blank.")
+
+    if "T" not in candidate and len(candidate) == 10:
+        candidate = f"{candidate}T00:00:00"
+
+    try:
+        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise SourceReviewValidationError(f"Invalid datetime format: {value!r}") from exc
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _require_valid_event_range(start_at: datetime, end_at: datetime) -> None:
+    if end_at < start_at:
+        raise SourceReviewValidationError("end_at must be greater than or equal to start_at.")
 
 
 def _build_match_context(
@@ -511,4 +535,136 @@ def create_album_from_source_review_level(
             {"asset_sha256": failure.asset_sha256, "reason": failure.reason}
             for failure in create_result.failures
         ],
+    }
+
+
+def create_event_from_source_review_level(
+    db: Session,
+    *,
+    provenance_id: int,
+    level_index: int,
+    hierarchy_mode: str,
+    event_label: str,
+    start_at: str | None,
+    end_at: str | None,
+    existing_event_policy: str,
+) -> dict:
+    cleaned_label = re.sub(r"\s+", " ", event_label.strip())
+    if not cleaned_label:
+        raise SourceReviewValidationError("Event label is required.")
+
+    if existing_event_policy != "skip_existing":
+        raise SourceReviewValidationError("existing_event_policy must be 'skip_existing'.")
+
+    context = _build_match_context(
+        db,
+        provenance_id=provenance_id,
+        level_index=level_index,
+        hierarchy_mode=hierarchy_mode,
+    )
+    matched_sha_list = list(context.matching_asset_to_path.keys())
+    if not matched_sha_list:
+        raise SourceReviewValidationError("No matching assets under the selected provenance level.")
+
+    asset_rows = list(
+        db.execute(
+            select(Asset.sha256, Asset.event_id, Asset.captured_at, Asset.created_at_utc)
+            .where(Asset.sha256.in_(matched_sha_list))
+        ).all()
+    )
+    asset_by_sha = {row.sha256: row for row in asset_rows}
+
+    failures = [
+        {"asset_sha256": sha, "reason": "not_found"}
+        for sha in matched_sha_list
+        if sha not in asset_by_sha
+    ]
+
+    eligible_sha_list = [
+        sha
+        for sha in matched_sha_list
+        if sha in asset_by_sha and asset_by_sha[sha].event_id is None
+    ]
+    skipped_existing_event_count = sum(
+        1 for sha in matched_sha_list if sha in asset_by_sha and asset_by_sha[sha].event_id is not None
+    )
+
+    if not eligible_sha_list:
+        raise SourceReviewValidationError(
+            "No eligible matching assets without existing event assignment were found for this level."
+        )
+
+    resolved_start: datetime
+    resolved_end: datetime
+    date_range_source: str
+
+    if start_at and end_at:
+        resolved_start = _parse_iso_datetime_or_date(start_at)
+        resolved_end = _parse_iso_datetime_or_date(end_at)
+        _require_valid_event_range(resolved_start, resolved_end)
+        date_range_source = "user_input"
+    elif start_at or end_at:
+        raise SourceReviewValidationError("Both start_at and end_at are required when specifying an explicit date range.")
+    else:
+        eligible_rows = [asset_by_sha[sha] for sha in eligible_sha_list]
+        captured_values = [row.captured_at for row in eligible_rows if row.captured_at is not None]
+        if captured_values:
+            resolved_start = min(captured_values)
+            resolved_end = max(captured_values)
+            date_range_source = "asset_captured_at_fallback"
+        else:
+            created_values = [row.created_at_utc for row in eligible_rows if row.created_at_utc is not None]
+            if created_values:
+                resolved_start = min(created_values)
+                resolved_end = max(created_values)
+                date_range_source = "asset_created_at_fallback"
+            else:
+                raise SourceReviewValidationError(
+                    "No date clue or usable asset date range is available. Event creation requires a date range."
+                )
+
+        _require_valid_event_range(resolved_start, resolved_end)
+
+    event = Event(
+        start_at=resolved_start,
+        end_at=resolved_end,
+        asset_count=0,
+        label=cleaned_label,
+    )
+    db.add(event)
+    db.flush()
+
+    update_result = db.execute(
+        update(Asset)
+        .where(
+            Asset.sha256.in_(eligible_sha_list),
+            Asset.event_id.is_(None),
+        )
+        .values(event_id=event.id, is_user_modified=True)
+    )
+    assigned_count = int(update_result.rowcount or 0)
+    event.asset_count = assigned_count
+
+    db.commit()
+
+    return {
+        "outcome": "created",
+        "event_id": event.id,
+        "event_label": event.label,
+        "provenance_id": context.provenance_id,
+        "hierarchy_mode": context.hierarchy_mode,
+        "selected_level_index": context.selected_level_index,
+        "selected_segment": context.selected_segment,
+        "selected_prefix": context.selected_prefix,
+        "existing_event_policy": existing_event_policy,
+        "date_range_source": date_range_source,
+        "effective_start_at": _to_utc_iso(resolved_start),
+        "effective_end_at": _to_utc_iso(resolved_end),
+        "matching_asset_count": len(matched_sha_list),
+        "requested_count": len(matched_sha_list),
+        "assigned_count": assigned_count,
+        "already_in_event_count": 0,
+        "skipped_existing_event_count": skipped_existing_event_count,
+        "failed_count": len(failures),
+        "failures": failures,
     }

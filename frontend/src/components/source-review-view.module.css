@@ -366,6 +366,12 @@
   font-weight: 600;
 }
 
+.dateGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .textInput {
   border: 1px solid #c8d7e4;
   border-radius: 8px;
@@ -465,6 +471,10 @@
 
 @media (max-width: 800px) {
   .assetSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .dateGrid {
     grid-template-columns: 1fr;
   }
 }

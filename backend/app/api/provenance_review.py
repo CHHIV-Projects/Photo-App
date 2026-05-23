@@ -10,12 +10,15 @@ from app.schemas.provenance_review import (
     SourceReviewAssetResponse,
     SourceReviewCreateAlbumRequest,
     SourceReviewCreateAlbumResponse,
+    SourceReviewCreateEventRequest,
+    SourceReviewCreateEventResponse,
     SourceReviewMatchesResponse,
 )
 from app.services.provenance.source_review_service import (
     SourceReviewNotFoundError,
     SourceReviewValidationError,
     create_album_from_source_review_level,
+    create_event_from_source_review_level,
     get_source_review_asset,
     get_source_review_matches,
 )
@@ -79,3 +82,27 @@ def post_source_review_create_album(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return SourceReviewCreateAlbumResponse(**result)
+
+
+@router.post("/create-event", response_model=SourceReviewCreateEventResponse)
+def post_source_review_create_event(
+    payload: SourceReviewCreateEventRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceReviewCreateEventResponse:
+    try:
+        result = create_event_from_source_review_level(
+            db,
+            provenance_id=payload.provenance_id,
+            level_index=payload.level_index,
+            hierarchy_mode=payload.hierarchy_mode,
+            event_label=payload.event_label,
+            start_at=payload.start_at,
+            end_at=payload.end_at,
+            existing_event_policy=payload.existing_event_policy,
+        )
+    except SourceReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SourceReviewValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return SourceReviewCreateEventResponse(**result)

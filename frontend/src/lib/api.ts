@@ -21,6 +21,8 @@ import type {
   SourceIntakeStopResponse,
   SourceReviewCreateAlbumRequest,
   SourceReviewCreateAlbumResponse,
+  SourceReviewCreateEventRequest,
+  SourceReviewCreateEventResponse,
   IcloudStagingCleanupRunRequest,
   IcloudStagingCleanupRunResponse,
   IcloudStagingCleanupStatusResponse,
@@ -365,6 +367,15 @@ export function createAlbumFromSourceReviewLevel(
   payload: SourceReviewCreateAlbumRequest
 ): Promise<SourceReviewCreateAlbumResponse> {
   return apiRequest<SourceReviewCreateAlbumResponse>("/api/provenance-review/create-album", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createEventFromSourceReviewLevel(
+  payload: SourceReviewCreateEventRequest
+): Promise<SourceReviewCreateEventResponse> {
+  return apiRequest<SourceReviewCreateEventResponse>("/api/provenance-review/create-event", {
     method: "POST",
     body: JSON.stringify(payload),
   });
