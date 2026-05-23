@@ -562,3 +562,207 @@ enable first write actioncreate collection/album from selected provenance levela
 ```
 
 Do not move to date/person/place/tag write actions until collection/album creation from provenance level is validated.
+
+
+
+
+
+# Answers to Coder Questions — Milestone 12.58.2
+
+## 1. Preview card wording
+
+Use softer, exploratory wording in the UI.
+
+Preferred labels:
+
+```text
+Could become Collection
+Could become Album
+Could become Event
+Possible Person Clue
+Possible Date Range
+Possible Tag / Title
+
+Each card should clearly show:
+
+Preview only
+No changes will be made
+
+Reason:
+
+This milestone is about candidate interpretation, not committing actions.
+
+Avoid wording that feels like an active command unless the button is clearly disabled.
+
+Acceptable button/card examples:
+
+Could become Album
+Preview only
+
+Create Album
+Disabled — coming later
+
+But I prefer the softer first style for 12.58.2.
+
+2. Proposed name normalization
+
+Use light cleanup, but preserve the raw folder text nearby.
+
+Preferred behavior:
+
+Raw segment:
+001. Family Pictures
+
+Proposed name:
+Family Pictures
+
+Light cleanup may include:
+
+trim leading/trailing whitespace
+collapse repeated spaces
+remove common numeric ordering prefixes like:
+  001.
+  1.
+  6.
+  03 -
+
+Do not aggressively rewrite names.
+
+Examples:
+
+001. Family Pictures -> Family Pictures
+6. Pic of Mary -> Pic of Mary
+3. 6-75 to 12-76 -> 6-75 to 12-76
+
+Always keep the original segment visible somewhere, such as:
+
+Source segment: 001. Family Pictures
+Proposed name: Family Pictures
+
+This lets us judge whether cleanup is helpful.
+
+3. Person clue extraction tolerance
+
+Enable conservative multi-name extraction now.
+
+Examples:
+
+Pic of Mary
+  Possible person clue: Mary
+
+Mary and Charlie
+  Possible person clues: Mary, Charlie
+
+Mary Charlie Final
+  Possible person clues: Mary, Charlie
+
+But keep it conservative and transparent.
+
+Rules:
+
+Use simple string/regex heuristics only.
+Prefer matching against existing Person display names and aliases where possible.
+Do not create people.
+Do not assign people.
+If uncertain, show generic Possible tag/title clue instead.
+
+If existing people/aliases include Mary and Charlie, showing both as possible person clues is useful.
+
+Do not overbuild NLP.
+
+4. Date clue display format
+
+Show both the raw detected text and a normalized interpretation when the normalization is obvious.
+
+Preferred examples:
+
+Raw clue: 6-75 to 12-76
+Possible date range: Jun 1975 to Dec 1976
+Preview only
+Raw clue: Christmas 2020
+Possible date/title clue: Christmas 2020
+Possible year: 2020
+Preview only
+Raw clue: Pictures of Mary 1962 to 1990's
+Possible date range: 1962 to 1999
+Preview only
+
+If normalization is uncertain, do not invent precision. Show raw only:
+
+Possible date clue: 6-75 to 12-76
+
+No date values should be written.
+
+5. Semantic root preview UX
+
+Use the disabled action card first, not a hierarchy re-render toggle.
+
+Preferred 12.58.2 UI:
+
+Could become Semantic Root
+Preview only / Coming later
+
+If enabled later, Source Review could start hierarchy mining from:
+Dad Files
+
+Reason:
+
+A local re-render toggle may be useful later, but it could confuse the current relative/full hierarchy model.
+
+For this milestone, keep semantic root as a preview/design concept.
+
+No persistence.
+
+No source_root_path mutation.
+
+No schema.
+
+6. Readiness matrix depth
+
+Keep the readiness matrix primarily in documentation.
+
+Do not put a developer/ops matrix into the normal Source Review UI.
+
+If coder wants a tiny expandable developer/debug section, that is acceptable only if it does not clutter the user-facing workspace.
+
+Required:
+
+docs/operations/source_review_candidate_actions_12_58_2.md
+
+should include the full action readiness matrix.
+
+UI should focus on candidate action previews, not backend readiness.
+
+7. Backend change tolerance
+
+Yes — keep backend unchanged unless a tiny read-only shape enhancement is needed.
+
+Preferred:
+
+frontend computes candidate preview cards from:
+  selected level
+  selected segment text
+  hierarchy mode
+  existing match payload/count/sample
+
+Backend changes are acceptable only if needed for clean read-only data shape.
+
+Do not add mutation endpoints.
+
+Do not add schema.
+
+Do not change ingestion/source semantics.
+
+Summary for Coder
+
+Proceed with:
+
+- Mostly frontend + documentation implementation.
+- Candidate cards use soft wording: "Could become..."
+- Proposed names use light cleanup, while preserving raw segment text.
+- Conservative multi-name person clue hints are allowed, preferably using existing people/aliases.
+- Date clues may show raw + normalized interpretation only when obvious.
+- Semantic root is a disabled/preview action card, not a persistent setting or hierarchy rewrite.
+- Readiness matrix belongs in documentation, not the main UI.
+- Backend remains unchanged unless a tiny read-only enhancement is truly needed.
+- No write actions, no schema changes, no persisted candidate table.

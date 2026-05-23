@@ -89,3 +89,7 @@ This matrix captures current system readiness and intentional milestone boundari
 ## 8. Validation Performed
 - Frontend TypeScript diagnostics for Source Review component and styles: no errors.
 - Frontend production build should be used as final validation for integration changes.
+
+## 9. Follow-up Status (12.58.3)
+- `Could become Album` moved from preview-only to active create flow in milestone 12.58.3.
+- Other candidate actions documented here remain preview-only/deferred.

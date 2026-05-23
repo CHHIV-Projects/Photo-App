@@ -334,6 +334,37 @@ export interface SourceReviewMatchesResponse {
   items: SourceReviewMatchAssetSummary[];
 }
 
+export interface SourceReviewCreateAlbumRequest {
+  provenance_id: number;
+  level_index: number;
+  hierarchy_mode: "relative" | "full_source_path";
+  album_name: string;
+  conflict_mode: "ask" | "use_existing";
+}
+
+export interface SourceReviewCreateAlbumFailure {
+  asset_sha256: string;
+  reason: string;
+}
+
+export interface SourceReviewCreateAlbumResponse {
+  outcome: "created" | "used_existing" | "name_conflict";
+  album_id: number;
+  album_name: string;
+  created_new_album: boolean;
+  provenance_id: number;
+  hierarchy_mode: string;
+  selected_level_index: number;
+  selected_segment: string;
+  selected_prefix: string;
+  matching_asset_count: number;
+  requested_count: number;
+  added_count: number;
+  already_present_count: number;
+  failed_count: number;
+  failures: SourceReviewCreateAlbumFailure[];
+}
+
 export interface CanonicalMetadataSummary {
   captured_at: string | null;
   camera_make: string | null;

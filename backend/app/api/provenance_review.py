@@ -6,10 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.schemas.provenance_review import SourceReviewAssetResponse, SourceReviewMatchesResponse
+from app.schemas.provenance_review import (
+    SourceReviewAssetResponse,
+    SourceReviewCreateAlbumRequest,
+    SourceReviewCreateAlbumResponse,
+    SourceReviewMatchesResponse,
+)
 from app.services.provenance.source_review_service import (
     SourceReviewNotFoundError,
     SourceReviewValidationError,
+    create_album_from_source_review_level,
     get_source_review_asset,
     get_source_review_matches,
 )
@@ -51,3 +57,25 @@ def get_source_review_prefix_matches(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return SourceReviewMatchesResponse(**payload)
+
+
+@router.post("/create-album", response_model=SourceReviewCreateAlbumResponse)
+def post_source_review_create_album(
+    payload: SourceReviewCreateAlbumRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceReviewCreateAlbumResponse:
+    try:
+        result = create_album_from_source_review_level(
+            db,
+            provenance_id=payload.provenance_id,
+            level_index=payload.level_index,
+            hierarchy_mode=payload.hierarchy_mode,
+            album_name=payload.album_name,
+            conflict_mode=payload.conflict_mode,
+        )
+    except SourceReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SourceReviewValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return SourceReviewCreateAlbumResponse(**result)

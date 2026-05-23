@@ -10,7 +10,9 @@ from sqlalchemy import and_, nullslast, select
 from sqlalchemy.orm import Session
 
 from app.models.asset import Asset
+from app.models.collection import Collection
 from app.models.provenance import Provenance
+from app.services.photos.batch_actions_service import batch_add_assets_to_album, batch_create_album_with_assets
 from app.services.photos.display_url_service import build_asset_display_url_contract
 
 
@@ -37,12 +39,29 @@ class ParsedPath:
     fallback_reason: str | None
 
 
+@dataclass(frozen=True)
+class MatchContext:
+    provenance_id: int
+    hierarchy_mode: str
+    selected_level_index: int
+    selected_segment: str
+    selected_prefix: str
+    matching_asset_to_path: dict[str, str]
+
+
 class SourceReviewNotFoundError(LookupError):
     pass
 
 
 class SourceReviewValidationError(ValueError):
     pass
+
+
+class SourceReviewConflictError(ValueError):
+    def __init__(self, *, album_id: int, album_name: str):
+        super().__init__("Album name conflict.")
+        self.album_id = album_id
+        self.album_name = album_name
 
 
 def _to_utc_iso(value: datetime | None) -> str | None:
@@ -185,6 +204,80 @@ def _source_context_clause(row: Provenance):
     return and_(*clauses)
 
 
+def _normalize_album_name_for_match(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip()).lower()
+
+
+def _find_existing_album_by_name(db: Session, *, album_name: str) -> Collection | None:
+    normalized_target = _normalize_album_name_for_match(album_name)
+    if not normalized_target:
+        return None
+
+    albums = list(db.scalars(select(Collection).order_by(Collection.id.asc())).all())
+    for album in albums:
+        if _normalize_album_name_for_match(album.name) == normalized_target:
+            return album
+    return None
+
+
+def _build_match_context(
+    db: Session,
+    *,
+    provenance_id: int,
+    level_index: int,
+    hierarchy_mode: str,
+) -> MatchContext:
+    selected = db.get(Provenance, provenance_id)
+    if selected is None:
+        raise SourceReviewNotFoundError(f"Provenance row {provenance_id} was not found.")
+
+    if hierarchy_mode not in {"relative", "full_source_path"}:
+        raise SourceReviewValidationError("hierarchy_mode must be 'relative' or 'full_source_path'.")
+
+    selected_parsed = _parse_full_source_path(selected) if hierarchy_mode == "full_source_path" else _parse_provenance_path(selected)
+    levels = _build_hierarchy_levels(selected_parsed)
+    if not levels:
+        raise SourceReviewValidationError("Selected provenance path has no hierarchy segments.")
+
+    if level_index < 0 or level_index >= len(levels):
+        raise SourceReviewValidationError(
+            f"level_index must be between 0 and {len(levels) - 1} for this provenance row."
+        )
+
+    selected_level = levels[level_index]
+    selected_prefix = selected_level["normalized_prefix"]
+
+    context_clause = _source_context_clause(selected)
+    candidate_rows = list(
+        db.scalars(
+            select(Provenance)
+            .where(context_clause)
+            .order_by(Provenance.id.asc())
+        ).all()
+    )
+
+    matching_asset_to_path: dict[str, str] = {}
+    prefix_lower = selected_prefix.lower()
+    for row in candidate_rows:
+        parsed = _parse_full_source_path(row) if hierarchy_mode == "full_source_path" else _parse_provenance_path(row)
+        normalized_path = parsed.normalized_path
+        if not normalized_path:
+            continue
+
+        normalized_lower = normalized_path.lower()
+        if normalized_lower == prefix_lower or normalized_lower.startswith(f"{prefix_lower}/"):
+            matching_asset_to_path.setdefault(row.asset_sha256, normalized_path)
+
+    return MatchContext(
+        provenance_id=provenance_id,
+        hierarchy_mode=hierarchy_mode,
+        selected_level_index=level_index,
+        selected_segment=selected_level["segment_text"],
+        selected_prefix=selected_prefix,
+        matching_asset_to_path=matching_asset_to_path,
+    )
+
+
 def _serialize_asset_summary(asset: Asset, *, provenance_count: int | None = None, matched_path_fragment: str | None = None) -> dict:
     contract = build_asset_display_url_contract(
         sha256=asset.sha256,
@@ -270,55 +363,21 @@ def get_source_review_matches(
     if limit <= 0:
         raise SourceReviewValidationError("limit must be greater than 0.")
 
-    selected = db.get(Provenance, provenance_id)
-    if selected is None:
-        raise SourceReviewNotFoundError(f"Provenance row {provenance_id} was not found.")
-
-    if hierarchy_mode not in {"relative", "full_source_path"}:
-        raise SourceReviewValidationError("hierarchy_mode must be 'relative' or 'full_source_path'.")
-
-    selected_parsed = _parse_full_source_path(selected) if hierarchy_mode == "full_source_path" else _parse_provenance_path(selected)
-    levels = _build_hierarchy_levels(selected_parsed)
-    if not levels:
-        raise SourceReviewValidationError("Selected provenance path has no hierarchy segments.")
-
-    if level_index < 0 or level_index >= len(levels):
-        raise SourceReviewValidationError(
-            f"level_index must be between 0 and {len(levels) - 1} for this provenance row."
-        )
-
-    selected_level = levels[level_index]
-    selected_prefix = selected_level["normalized_prefix"]
-
-    context_clause = _source_context_clause(selected)
-    candidate_rows = list(
-        db.scalars(
-            select(Provenance)
-            .where(context_clause)
-            .order_by(Provenance.id.asc())
-        ).all()
+    context = _build_match_context(
+        db,
+        provenance_id=provenance_id,
+        level_index=level_index,
+        hierarchy_mode=hierarchy_mode,
     )
 
-    matching_asset_to_path: dict[str, str] = {}
-    prefix_lower = selected_prefix.lower()
-    for row in candidate_rows:
-        parsed = _parse_full_source_path(row) if hierarchy_mode == "full_source_path" else _parse_provenance_path(row)
-        normalized_path = parsed.normalized_path
-        if not normalized_path:
-            continue
-
-        normalized_lower = normalized_path.lower()
-        if normalized_lower == prefix_lower or normalized_lower.startswith(f"{prefix_lower}/"):
-            matching_asset_to_path.setdefault(row.asset_sha256, normalized_path)
-
-    matched_sha_list = list(matching_asset_to_path.keys())
+    matched_sha_list = list(context.matching_asset_to_path.keys())
     if not matched_sha_list:
         return {
-            "provenance_id": provenance_id,
-            "hierarchy_mode": hierarchy_mode,
-            "selected_level_index": level_index,
-            "selected_segment": selected_level["segment_text"],
-            "selected_prefix": selected_prefix,
+            "provenance_id": context.provenance_id,
+            "hierarchy_mode": context.hierarchy_mode,
+            "selected_level_index": context.selected_level_index,
+            "selected_segment": context.selected_segment,
+            "selected_prefix": context.selected_prefix,
             "total_count": 0,
             "limit": limit,
             "is_limited": False,
@@ -333,21 +392,123 @@ def get_source_review_matches(
         ).all()
     )
 
-    total_count = len(matching_asset_to_path)
+    total_count = len(context.matching_asset_to_path)
     sliced_assets = assets[:limit]
     items = [
-        _serialize_asset_summary(asset, matched_path_fragment=matching_asset_to_path.get(asset.sha256))
+        _serialize_asset_summary(asset, matched_path_fragment=context.matching_asset_to_path.get(asset.sha256))
         for asset in sliced_assets
     ]
 
     return {
-        "provenance_id": provenance_id,
-        "hierarchy_mode": hierarchy_mode,
-        "selected_level_index": level_index,
-        "selected_segment": selected_level["segment_text"],
-        "selected_prefix": selected_prefix,
+        "provenance_id": context.provenance_id,
+        "hierarchy_mode": context.hierarchy_mode,
+        "selected_level_index": context.selected_level_index,
+        "selected_segment": context.selected_segment,
+        "selected_prefix": context.selected_prefix,
         "total_count": total_count,
         "limit": limit,
         "is_limited": total_count > limit,
         "items": items,
+    }
+
+
+def create_album_from_source_review_level(
+    db: Session,
+    *,
+    provenance_id: int,
+    level_index: int,
+    hierarchy_mode: str,
+    album_name: str,
+    conflict_mode: str,
+) -> dict:
+    cleaned_name = re.sub(r"\s+", " ", album_name.strip())
+    if not cleaned_name:
+        raise SourceReviewValidationError("Album name is required.")
+
+    if conflict_mode not in {"ask", "use_existing"}:
+        raise SourceReviewValidationError("conflict_mode must be 'ask' or 'use_existing'.")
+
+    context = _build_match_context(
+        db,
+        provenance_id=provenance_id,
+        level_index=level_index,
+        hierarchy_mode=hierarchy_mode,
+    )
+
+    matched_sha_list = list(context.matching_asset_to_path.keys())
+    if not matched_sha_list:
+        raise SourceReviewValidationError("No matching assets under the selected provenance level.")
+
+    existing_album = _find_existing_album_by_name(db, album_name=cleaned_name)
+    if existing_album and conflict_mode == "ask":
+        return {
+            "outcome": "name_conflict",
+            "album_id": existing_album.id,
+            "album_name": existing_album.name,
+            "created_new_album": False,
+            "provenance_id": context.provenance_id,
+            "hierarchy_mode": context.hierarchy_mode,
+            "selected_level_index": context.selected_level_index,
+            "selected_segment": context.selected_segment,
+            "selected_prefix": context.selected_prefix,
+            "matching_asset_count": len(matched_sha_list),
+            "requested_count": len(matched_sha_list),
+            "added_count": 0,
+            "already_present_count": 0,
+            "failed_count": 0,
+            "failures": [],
+        }
+
+    if existing_album and conflict_mode == "use_existing":
+        add_result = batch_add_assets_to_album(
+            db,
+            album_id=existing_album.id,
+            asset_sha256_list=matched_sha_list,
+        )
+        return {
+            "outcome": "used_existing",
+            "album_id": add_result.album_id,
+            "album_name": add_result.album_name,
+            "created_new_album": False,
+            "provenance_id": context.provenance_id,
+            "hierarchy_mode": context.hierarchy_mode,
+            "selected_level_index": context.selected_level_index,
+            "selected_segment": context.selected_segment,
+            "selected_prefix": context.selected_prefix,
+            "matching_asset_count": len(matched_sha_list),
+            "requested_count": add_result.requested_count,
+            "added_count": add_result.added_count,
+            "already_present_count": add_result.already_in_album_count,
+            "failed_count": len(add_result.failures),
+            "failures": [
+                {"asset_sha256": failure.asset_sha256, "reason": failure.reason}
+                for failure in add_result.failures
+            ],
+        }
+
+    create_result = batch_create_album_with_assets(
+        db,
+        name=cleaned_name,
+        description=None,
+        asset_sha256_list=matched_sha_list,
+    )
+    return {
+        "outcome": "created",
+        "album_id": create_result.album_id,
+        "album_name": create_result.album_name,
+        "created_new_album": True,
+        "provenance_id": context.provenance_id,
+        "hierarchy_mode": context.hierarchy_mode,
+        "selected_level_index": context.selected_level_index,
+        "selected_segment": context.selected_segment,
+        "selected_prefix": context.selected_prefix,
+        "matching_asset_count": len(matched_sha_list),
+        "requested_count": create_result.requested_count,
+        "added_count": create_result.added_count,
+        "already_present_count": create_result.already_in_album_count,
+        "failed_count": len(create_result.failures),
+        "failures": [
+            {"asset_sha256": failure.asset_sha256, "reason": failure.reason}
+            for failure in create_result.failures
+        ],
     }

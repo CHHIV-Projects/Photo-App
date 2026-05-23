@@ -19,6 +19,8 @@ import type {
   SourceIntakeRunResponse,
   SourceIntakeStatusSnapshot,
   SourceIntakeStopResponse,
+  SourceReviewCreateAlbumRequest,
+  SourceReviewCreateAlbumResponse,
   IcloudStagingCleanupRunRequest,
   IcloudStagingCleanupRunResponse,
   IcloudStagingCleanupStatusResponse,
@@ -357,6 +359,15 @@ export function getSourceReviewMatches(options: {
   }
 
   return apiRequest<SourceReviewMatchesResponse>(`/api/provenance-review/matches?${params.toString()}`);
+}
+
+export function createAlbumFromSourceReviewLevel(
+  payload: SourceReviewCreateAlbumRequest
+): Promise<SourceReviewCreateAlbumResponse> {
+  return apiRequest<SourceReviewCreateAlbumResponse>("/api/provenance-review/create-album", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getPhotoFaceOverlays(assetSha256List: string[]): Promise<PhotoFaceOverlayBatchResponse> {

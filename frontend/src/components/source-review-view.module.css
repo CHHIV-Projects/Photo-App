@@ -325,6 +325,122 @@
   justify-self: start;
 }
 
+.actionButton {
+  border: 1px solid #2f6f97;
+  background: #2f6f97;
+  color: #fff;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  justify-self: start;
+  cursor: pointer;
+}
+
+.actionButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.confirmPanel {
+  margin-top: 12px;
+  border: 1px solid #d6e3ed;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f9fcfe;
+  display: grid;
+  gap: 10px;
+}
+
+.confirmTitle {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #1f3f56;
+}
+
+.fieldLabel {
+  display: grid;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: #496276;
+  font-weight: 600;
+}
+
+.textInput {
+  border: 1px solid #c8d7e4;
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 0.86rem;
+  color: #264157;
+  background: #fff;
+}
+
+.contextList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  color: #4d6679;
+  font-size: 0.78rem;
+}
+
+.warningBox {
+  border: 1px solid #ecd8b1;
+  background: #fff7e8;
+  border-radius: 8px;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.warningText {
+  margin: 0;
+  color: #875d20;
+  font-size: 0.8rem;
+}
+
+.checkboxLabel {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.79rem;
+  color: #5d4829;
+}
+
+.sampleList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.sampleItem {
+  color: #4f6679;
+  font-size: 0.77rem;
+}
+
+.dialogActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.successBox {
+  border: 1px solid #c7e6d0;
+  background: #f3fcf6;
+  border-radius: 8px;
+  padding: 9px;
+  display: grid;
+  gap: 6px;
+}
+
+.successText {
+  margin: 0;
+  color: #255a34;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
 .debugPanel {
   background: #fff;
   border: 1px dashed #c7d6e3;

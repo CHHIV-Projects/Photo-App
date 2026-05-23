@@ -2,10 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { getPeople, getSourceReviewAsset, getSourceReviewMatches, resolveApiUrl } from "@/lib/api";
+import {
+  createAlbumFromSourceReviewLevel,
+  getPeople,
+  getSourceReviewAsset,
+  getSourceReviewMatches,
+  resolveApiUrl,
+} from "@/lib/api";
 import type {
   PersonSummary,
   SourceReviewAssetResponse,
+  SourceReviewCreateAlbumResponse,
   SourceReviewHierarchyLevel,
   SourceReviewMatchesResponse,
   SourceReviewProvenanceRow,
@@ -15,6 +22,7 @@ import styles from "./source-review-view.module.css";
 interface SourceReviewViewProps {
   assetSha256: string | null;
   onOpenPhotoDetail: (assetSha256: string) => void;
+  onOpenAlbums: () => void;
 }
 
 const MATCH_LIMIT = 50;
@@ -254,7 +262,7 @@ function buildCandidateCards(params: {
   ];
 }
 
-export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceReviewViewProps) {
+export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums }: SourceReviewViewProps) {
   const [assetResponse, setAssetResponse] = useState<SourceReviewAssetResponse | null>(null);
   const [hierarchyMode, setHierarchyMode] = useState<"relative" | "full_source_path">("relative");
   const [people, setPeople] = useState<PersonSummary[]>([]);
@@ -265,6 +273,13 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceRevie
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
   const [assetErrorMessage, setAssetErrorMessage] = useState<string | null>(null);
   const [matchesErrorMessage, setMatchesErrorMessage] = useState<string | null>(null);
+  const [isAlbumDialogOpen, setIsAlbumDialogOpen] = useState(false);
+  const [albumNameInput, setAlbumNameInput] = useState("");
+  const [singleFileConfirmChecked, setSingleFileConfirmChecked] = useState(false);
+  const [isSubmittingAlbum, setIsSubmittingAlbum] = useState(false);
+  const [albumActionError, setAlbumActionError] = useState<string | null>(null);
+  const [albumActionResult, setAlbumActionResult] = useState<SourceReviewCreateAlbumResponse | null>(null);
+  const [albumNameConflictResult, setAlbumNameConflictResult] = useState<SourceReviewCreateAlbumResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -366,6 +381,55 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceRevie
     });
   }, [selectedHierarchyLevel, matches, hierarchyMode, people]);
 
+  const proposedAlbumName = useMemo(() => {
+    if (!selectedHierarchyLevel) {
+      return "";
+    }
+    return buildSuggestedLabel(selectedHierarchyLevel.segment_text || "Untitled");
+  }, [selectedHierarchyLevel]);
+
+  const canCreateAlbum = Boolean(matches && matches.total_count > 0 && selectedProvenanceId !== null && selectedLevelIndex !== null);
+
+  const requiresSingleFileConfirm = Boolean(selectedHierarchyLevel?.is_filename);
+
+  const confirmActionDisabled =
+    !canCreateAlbum ||
+    !albumNameInput.trim() ||
+    isSubmittingAlbum ||
+    (requiresSingleFileConfirm && !singleFileConfirmChecked);
+
+  async function submitCreateAlbum(conflictMode: "ask" | "use_existing") {
+    if (!matches || selectedProvenanceId === null || selectedLevelIndex === null) {
+      return;
+    }
+
+    setIsSubmittingAlbum(true);
+    setAlbumActionError(null);
+
+    try {
+      const response = await createAlbumFromSourceReviewLevel({
+        provenance_id: selectedProvenanceId,
+        level_index: selectedLevelIndex,
+        hierarchy_mode: hierarchyMode,
+        album_name: albumNameInput,
+        conflict_mode: conflictMode,
+      });
+
+      if (response.outcome === "name_conflict") {
+        setAlbumNameConflictResult(response);
+        setAlbumActionResult(null);
+        return;
+      }
+
+      setAlbumNameConflictResult(null);
+      setAlbumActionResult(response);
+    } catch (error: unknown) {
+      setAlbumActionError(getErrorMessage(error, "Failed to create album from selected provenance level."));
+    } finally {
+      setIsSubmittingAlbum(false);
+    }
+  }
+
   useEffect(() => {
     setMatches(null);
     setMatchesErrorMessage(null);
@@ -419,11 +483,20 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceRevie
     }
   }, [hierarchyLevels, selectedLevelIndex, selectedProvenanceRow]);
 
+  useEffect(() => {
+    setIsAlbumDialogOpen(false);
+    setAlbumActionError(null);
+    setAlbumActionResult(null);
+    setAlbumNameConflictResult(null);
+    setSingleFileConfirmChecked(false);
+    setAlbumNameInput(proposedAlbumName);
+  }, [proposedAlbumName, selectedProvenanceId, selectedLevelIndex, hierarchyMode]);
+
   return (
     <div className={styles.root}>
       <header className={styles.header}>
         <h2 className={styles.title}>Source Review</h2>
-        <p className={styles.subtitle}>Read-only provenance workspace for hierarchy and path-prefix exploration.</p>
+        <p className={styles.subtitle}>Provenance workspace for hierarchy/prefix exploration with album creation enabled for selected levels.</p>
       </header>
 
       {!assetSha256 ? (
@@ -597,12 +670,12 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceRevie
           </section>
 
           <section className={styles.panel}>
-            <h3 className={styles.panelTitle}>Candidate Actions (Preview Only)</h3>
+            <h3 className={styles.panelTitle}>Candidate Actions</h3>
             {!selectedHierarchyLevel ? (
               <p className={styles.status}>Select a hierarchy level to preview candidate actions.</p>
             ) : (
               <>
-                <p className={styles.noticeStrong}>Preview only / No changes will be made.</p>
+                <p className={styles.noticeStrong}>Only Album creation is active in this milestone. Other actions remain preview-only.</p>
                 <p className={styles.notice}>
                   Raw segment: <span className={styles.segmentRaw}>{selectedHierarchyLevel.segment_text}</span>
                 </p>
@@ -612,12 +685,155 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceRevie
                       <p className={styles.candidateTitle}>{card.title}</p>
                       <p className={styles.candidateValue}>{card.proposedValue}</p>
                       <p className={styles.candidateDetail}>{card.detail}</p>
-                      <button type="button" className={styles.placeholderAction} disabled>
-                        Preview only / Coming later
-                      </button>
+                      {card.key === "album" ? (
+                        <button
+                          type="button"
+                          className={styles.actionButton}
+                          disabled={!canCreateAlbum || isLoadingMatches}
+                          onClick={() => {
+                            setAlbumNameInput(proposedAlbumName);
+                            setSingleFileConfirmChecked(false);
+                            setAlbumActionError(null);
+                            setAlbumActionResult(null);
+                            setAlbumNameConflictResult(null);
+                            setIsAlbumDialogOpen(true);
+                          }}
+                        >
+                          Create Album
+                        </button>
+                      ) : (
+                        <button type="button" className={styles.placeholderAction} disabled>
+                          Preview only / Coming later
+                        </button>
+                      )}
                     </article>
                   ))}
                 </div>
+
+                {isAlbumDialogOpen ? (
+                  <div className={styles.confirmPanel}>
+                    <h4 className={styles.confirmTitle}>Create Album from Selected Provenance Level</h4>
+                    <label className={styles.fieldLabel}>
+                      Album name
+                      <input
+                        type="text"
+                        value={albumNameInput}
+                        onChange={(event) => setAlbumNameInput(event.target.value)}
+                        className={styles.textInput}
+                        maxLength={255}
+                      />
+                    </label>
+
+                    <ul className={styles.contextList}>
+                      <li>Source: {selectedProvenanceRow?.source_label ?? "Unknown"} ({selectedProvenanceRow?.source_type ?? "unknown"})</li>
+                      <li>Hierarchy mode: {hierarchyMode}</li>
+                      <li>Selected segment: {selectedHierarchyLevel.segment_text}</li>
+                      <li>Selected prefix: {matches?.selected_prefix ?? "-"}</li>
+                      <li>Matching asset count: {matches?.total_count ?? 0}</li>
+                    </ul>
+
+                    {requiresSingleFileConfirm ? (
+                      <div className={styles.warningBox}>
+                        <p className={styles.warningText}>This level appears to be a single file. The album may contain only this asset.</p>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={singleFileConfirmChecked}
+                            onChange={(event) => setSingleFileConfirmChecked(event.target.checked)}
+                          />
+                          I understand this may create a very small album.
+                        </label>
+                      </div>
+                    ) : null}
+
+                    <p className={styles.notice}>
+                      This will create or use an album and add all matching assets under this prefix. No source files, provenance, dates, people, or events will be changed.
+                    </p>
+
+                    {matches && matches.items.length > 0 ? (
+                      <>
+                        <p className={styles.matchSummary}>Sample matching assets</p>
+                        <ul className={styles.sampleList}>
+                          {matches.items.slice(0, 6).map((item) => (
+                            <li key={`sample-${item.asset_sha256}`} className={styles.sampleItem}>
+                              {item.filename}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+
+                    {albumNameConflictResult ? (
+                      <div className={styles.warningBox}>
+                        <p className={styles.warningText}>An album with this name already exists: {albumNameConflictResult.album_name}</p>
+                        <div className={styles.dialogActions}>
+                          <button
+                            type="button"
+                            className={styles.actionButton}
+                            disabled={isSubmittingAlbum}
+                            onClick={() => void submitCreateAlbum("use_existing")}
+                          >
+                            Use Existing Album and Add Assets
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            disabled={isSubmittingAlbum}
+                            onClick={() => setAlbumNameConflictResult(null)}
+                          >
+                            Enter Different Name
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {albumActionError ? <p className={styles.error}>{albumActionError}</p> : null}
+
+                    {albumActionResult ? (
+                      <div className={styles.successBox}>
+                        <p className={styles.successText}>
+                          {albumActionResult.outcome === "created"
+                            ? `Created album "${albumActionResult.album_name}".`
+                            : `Used existing album "${albumActionResult.album_name}".`}
+                        </p>
+                        <p className={styles.status}>
+                          Added: {albumActionResult.added_count} | Already present: {albumActionResult.already_present_count} | Failed: {albumActionResult.failed_count}
+                        </p>
+                        <div className={styles.dialogActions}>
+                          <button type="button" className={styles.actionButton} onClick={onOpenAlbums}>
+                            Open Albums
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            onClick={() => setIsAlbumDialogOpen(false)}
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={styles.dialogActions}>
+                        <button
+                          type="button"
+                          className={styles.actionButton}
+                          disabled={confirmActionDisabled}
+                          onClick={() => void submitCreateAlbum("ask")}
+                        >
+                          {isSubmittingAlbum ? "Creating..." : "Confirm Create Album"}
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          disabled={isSubmittingAlbum}
+                          onClick={() => setIsAlbumDialogOpen(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </>
             )}
           </section>

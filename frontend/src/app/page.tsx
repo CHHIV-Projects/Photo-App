@@ -655,6 +655,10 @@ export default function HomePage() {
     handleSelectPhoto(sha256);
   }
 
+  function handleOpenAlbumsFromSourceReview() {
+    setViewMode("albums");
+  }
+
   async function loadPlaces() {
     setIsLoadingPlaces(true);
     setPlacesErrorMessage(null);
@@ -1165,6 +1169,7 @@ export default function HomePage() {
           <SourceReviewView
             assetSha256={sourceReviewAssetSha256 ?? selectedPhotoSha256}
             onOpenPhotoDetail={handleOpenPhotoFromSourceReview}
+            onOpenAlbums={handleOpenAlbumsFromSourceReview}
           />
         ) : viewMode === "albums" ? (
           <AlbumsView onOpenPhoto={handleOpenPhotoFromAlbums} />

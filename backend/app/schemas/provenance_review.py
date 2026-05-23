@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class SourceReviewAssetSummary(BaseModel):
@@ -78,3 +80,34 @@ class SourceReviewMatchesResponse(BaseModel):
     limit: int
     is_limited: bool
     items: list[SourceReviewMatchAssetSummary]
+
+
+class SourceReviewCreateAlbumRequest(BaseModel):
+    provenance_id: int = Field(ge=1)
+    level_index: int = Field(ge=0)
+    hierarchy_mode: Literal["relative", "full_source_path"] = "relative"
+    album_name: str = Field(min_length=1, max_length=255)
+    conflict_mode: Literal["ask", "use_existing"] = "ask"
+
+
+class SourceReviewCreateAlbumFailure(BaseModel):
+    asset_sha256: str
+    reason: str
+
+
+class SourceReviewCreateAlbumResponse(BaseModel):
+    outcome: Literal["created", "used_existing", "name_conflict"]
+    album_id: int
+    album_name: str
+    created_new_album: bool
+    provenance_id: int
+    hierarchy_mode: str
+    selected_level_index: int
+    selected_segment: str
+    selected_prefix: str
+    matching_asset_count: int
+    requested_count: int
+    added_count: int
+    already_present_count: int
+    failed_count: int
+    failures: list[SourceReviewCreateAlbumFailure]
