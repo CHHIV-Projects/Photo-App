@@ -287,8 +287,8 @@ function buildCandidateCards(params: {
     {
       key: "collection",
       title: "Could become Collection",
-      proposedValue: suggestedLabel,
-      detail: `${targetCountText} would be a candidate scope from ${modeText}.`,
+      proposedValue: "Broad top-level grouping from this provenance level.",
+      detail: `Preview only. Collection model alignment pending. ${targetCountText} would be a candidate scope from ${modeText}.`,
     },
     {
       key: "album",
