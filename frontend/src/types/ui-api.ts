@@ -259,6 +259,81 @@ export interface PhotoProvenance {
   source_hash: string | null;
 }
 
+export interface SourceReviewAssetSummary {
+  asset_sha256: string;
+  asset_sha_short: string;
+  filename: string;
+  image_url: string | null;
+  display_url: string | null;
+  original_url: string | null;
+  has_display_preview: boolean;
+  display_source: string | null;
+  captured_at: string | null;
+  provenance_count: number;
+}
+
+export interface SourceReviewHierarchyLevel {
+  level_index: number;
+  level_number: number;
+  segment_text: string;
+  normalized_prefix: string;
+  display_prefix: string;
+  is_filename: boolean;
+  is_technical_hint: boolean;
+}
+
+export interface SourceReviewProvenanceRow {
+  provenance_id: number;
+  source_path: string;
+  source_label: string | null;
+  source_type: string | null;
+  source_root_path: string | null;
+  source_relative_path: string | null;
+  ingestion_source_id: number | null;
+  ingestion_run_id: number | null;
+  ingested_at: string | null;
+  source_hash: string | null;
+  fallback_reason: string | null;
+  parse_mode_used: string;
+  parse_mode_options: string[];
+  derived_relative_path: string | null;
+  normalized_segments_relative: string[];
+  normalized_segments_full: string[];
+  hierarchy_levels_relative: SourceReviewHierarchyLevel[];
+  hierarchy_levels_full: SourceReviewHierarchyLevel[];
+  hierarchy_levels: SourceReviewHierarchyLevel[];
+}
+
+export interface SourceReviewAssetResponse {
+  asset: SourceReviewAssetSummary;
+  selected_provenance_id: number | null;
+  provenance_rows: SourceReviewProvenanceRow[];
+}
+
+export interface SourceReviewMatchAssetSummary {
+  asset_sha256: string;
+  filename: string;
+  image_url: string | null;
+  display_url: string | null;
+  original_url: string | null;
+  has_display_preview: boolean;
+  display_source: string | null;
+  captured_at: string | null;
+  matched_path_fragment: string | null;
+}
+
+export interface SourceReviewMatchesResponse {
+  provenance_id: number;
+  hierarchy_mode: string;
+  selected_level_index: number;
+  selected_segment: string;
+  selected_prefix: string;
+  total_count: number;
+  limit: number;
+  is_limited: boolean;
+  items: SourceReviewMatchAssetSummary[];
+}
+
 export interface CanonicalMetadataSummary {
   captured_at: string | null;
   camera_make: string | null;

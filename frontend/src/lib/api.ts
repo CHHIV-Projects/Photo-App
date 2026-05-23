@@ -59,6 +59,8 @@ import type {
   PlaceDetail,
   PlaceSummary,
   SearchPhotoListResponse,
+  SourceReviewAssetResponse,
+  SourceReviewMatchesResponse,
   TimelineSummaryResponse
 } from "@/types/ui-api";
 
@@ -331,6 +333,30 @@ export function searchPhotos(options: SearchPhotoQueryOptions = {}): Promise<Sea
 
 export function getPhotoDetail(sha256: string): Promise<PhotoDetail> {
   return apiRequest<PhotoDetail>(`/api/photos/${sha256}`);
+}
+
+export function getSourceReviewAsset(sha256: string): Promise<SourceReviewAssetResponse> {
+  return apiRequest<SourceReviewAssetResponse>(`/api/provenance-review/assets/${sha256}`);
+}
+
+export function getSourceReviewMatches(options: {
+  provenanceId: number;
+  levelIndex: number;
+  hierarchyMode?: "relative" | "full_source_path";
+  limit?: number;
+}): Promise<SourceReviewMatchesResponse> {
+  const params = new URLSearchParams({
+    provenance_id: String(options.provenanceId),
+    level_index: String(options.levelIndex),
+  });
+  if (options.hierarchyMode) {
+    params.set("hierarchy_mode", options.hierarchyMode);
+  }
+  if (options.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+
+  return apiRequest<SourceReviewMatchesResponse>(`/api/provenance-review/matches?${params.toString()}`);
 }
 
 export function getPhotoFaceOverlays(assetSha256List: string[]): Promise<PhotoFaceOverlayBatchResponse> {

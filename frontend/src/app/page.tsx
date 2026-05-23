@@ -12,6 +12,7 @@ import { DuplicateSuggestionsView } from "@/components/DuplicateSuggestionsView"
 import { PhotoReviewView } from "@/components/PhotoReviewView";
 import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
+import { SourceReviewView } from "@/components/SourceReviewView";
 import PlacesView from "@/components/PlacesView";
 import { TimelineView } from "@/components/TimelineView";
 import { UnassignedFacesView } from "@/components/UnassignedFacesView";
@@ -54,7 +55,7 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions" | "admin";
+type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "source-review" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions" | "admin";
 type ClusterFilterMode = "all" | "assigned" | "unassigned" | "ignored";
 
 function compareClustersForMergeTarget(a: ClusterSummary, b: ClusterSummary): number {
@@ -119,6 +120,7 @@ export default function HomePage() {
   const [photos, setPhotos] = useState<PhotoSummary[]>([]);
   const [selectedPhotoSha256, setSelectedPhotoSha256] = useState<string | null>(null);
   const [photoDetail, setPhotoDetail] = useState<PhotoDetail | null>(null);
+  const [sourceReviewAssetSha256, setSourceReviewAssetSha256] = useState<string | null>(null);
   const [isLoadingPhotos, setIsLoadingPhotos] = useState(true);
   const [isLoadingPhotoDetail, setIsLoadingPhotoDetail] = useState(false);
   const [photosErrorMessage, setPhotosErrorMessage] = useState<string | null>(null);
@@ -643,6 +645,16 @@ export default function HomePage() {
     handleSelectPhoto(sha256);
   }
 
+  function handleOpenSourceReview(sha256: string) {
+    setSourceReviewAssetSha256(sha256);
+    setViewMode("source-review");
+  }
+
+  function handleOpenPhotoFromSourceReview(sha256: string) {
+    setViewMode("photos");
+    handleSelectPhoto(sha256);
+  }
+
   async function loadPlaces() {
     setIsLoadingPlaces(true);
     setPlacesErrorMessage(null);
@@ -985,6 +997,13 @@ export default function HomePage() {
             </button>
             <button
               type="button"
+              className={`${styles.viewButton} ${viewMode === "source-review" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("source-review")}
+            >
+              Source Review
+            </button>
+            <button
+              type="button"
               className={`${styles.viewButton} ${viewMode === "albums" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("albums")}
             >
@@ -1136,10 +1155,16 @@ export default function HomePage() {
             isLoadingDetail={isLoadingPhotoDetail}
             photoDetailErrorMessage={photoDetailErrorMessage}
             onSelectPhoto={handleSelectPhoto}
+            onOpenSourceReview={handleOpenSourceReview}
             onPhotoDetailUpdated={setPhotoDetail}
             onSearchFiltersChange={handlePhotoSearchFiltersChange}
             onPageChange={handlePhotoSearchPageChange}
             onTimelineChange={handlePhotoTimelineChange}
+          />
+        ) : viewMode === "source-review" ? (
+          <SourceReviewView
+            assetSha256={sourceReviewAssetSha256 ?? selectedPhotoSha256}
+            onOpenPhotoDetail={handleOpenPhotoFromSourceReview}
           />
         ) : viewMode === "albums" ? (
           <AlbumsView onOpenPhoto={handleOpenPhotoFromAlbums} />

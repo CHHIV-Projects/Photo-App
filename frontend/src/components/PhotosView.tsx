@@ -53,6 +53,7 @@ interface Props {
   isLoadingDetail: boolean;
   photoDetailErrorMessage: string | null;
   onSelectPhoto: (sha256: string) => void;
+  onOpenSourceReview?: (sha256: string) => void;
   onPhotoDetailUpdated?: (detail: PhotoDetail) => void;
   onSearchFiltersChange?: (filters: {
     query: string;
@@ -89,6 +90,7 @@ export function PhotosView({
   isLoadingDetail,
   photoDetailErrorMessage,
   onSelectPhoto,
+  onOpenSourceReview,
   onPhotoDetailUpdated,
   onSearchFiltersChange,
   onPageChange,
@@ -1347,7 +1349,17 @@ export function PhotosView({
                   </section>
 
                   <section className={styles.metadataSection}>
-                    <h3 className={styles.metadataSectionTitle}>Provenance</h3>
+                    <div className={styles.sectionHeaderRow}>
+                      <h3 className={styles.metadataSectionTitle}>Provenance</h3>
+                      <button
+                        type="button"
+                        className={styles.sourceReviewButton}
+                        onClick={() => onOpenSourceReview?.(photoDetail.asset_sha256)}
+                        disabled={!onOpenSourceReview}
+                      >
+                        Open Source Review
+                      </button>
+                    </div>
                     {photoDetail.provenance.length === 0 ? (
                       <p className={styles.metadataValue}>No provenance available</p>
                     ) : (

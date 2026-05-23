@@ -308,6 +308,33 @@
   color: #35536e;
 }
 
+.sectionHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sourceReviewButton {
+  border: 1px solid #c3d7e7;
+  background: #eef6fc;
+  color: #24506f;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sourceReviewButton:hover {
+  background: #e2f0fa;
+}
+
+.sourceReviewButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .metadataRow {
   display: grid;
   gap: 3px;
