@@ -77,6 +77,18 @@
   font-size: 0.82rem;
 }
 
+.noticeStrong {
+  margin: 0;
+  color: #8a5b1f;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.segmentRaw {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #2e4860;
+}
+
 .assetSummary {
   display: grid;
   grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
@@ -263,6 +275,46 @@
   gap: 8px;
 }
 
+.candidateGrid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.candidateCard {
+  border: 1px solid #d6e2ec;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fdfefe;
+  display: grid;
+  gap: 6px;
+}
+
+.candidateTitle {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #35536e;
+}
+
+.candidateValue {
+  margin: 0;
+  color: #1f3d54;
+  font-weight: 700;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.candidateDetail {
+  margin: 0;
+  font-size: 0.77rem;
+  color: #5e7386;
+  min-height: 2.4em;
+}
+
 .placeholderAction {
   border: 1px solid #d3dde5;
   background: #f6f9fb;
@@ -270,6 +322,7 @@
   border-radius: 8px;
   padding: 6px 8px;
   font-size: 0.75rem;
+  justify-self: start;
 }
 
 .debugPanel {

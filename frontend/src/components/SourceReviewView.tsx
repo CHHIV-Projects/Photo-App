@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { getSourceReviewAsset, getSourceReviewMatches, resolveApiUrl } from "@/lib/api";
+import { getPeople, getSourceReviewAsset, getSourceReviewMatches, resolveApiUrl } from "@/lib/api";
 import type {
+  PersonSummary,
   SourceReviewAssetResponse,
+  SourceReviewHierarchyLevel,
   SourceReviewMatchesResponse,
   SourceReviewProvenanceRow,
 } from "@/types/ui-api";
@@ -16,6 +18,19 @@ interface SourceReviewViewProps {
 }
 
 const MATCH_LIMIT = 50;
+
+interface DateClue {
+  raw: string;
+  normalized: string | null;
+  isObvious: boolean;
+}
+
+interface CandidateCard {
+  key: string;
+  title: string;
+  proposedValue: string;
+  detail: string;
+}
 
 function formatDateTime(value: string | null): string {
   if (!value) {
@@ -32,9 +47,217 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function stripLeadingIndex(value: string): string {
+  return value
+    .replace(/^\s*\(?\d{1,4}\)?\s*(?:[.)]|-\s*|\s+-\s+)\s*/u, "")
+    .replace(/^\s*\(?\d{1,2}(?:\.\d{1,2})+\)?\s*-\s*/u, "");
+}
+
+function buildSuggestedLabel(rawSegment: string): string {
+  const noIndex = stripLeadingIndex(rawSegment);
+  const noExtension = noIndex.replace(/\.[a-zA-Z0-9]{2,5}$/u, "");
+  const cleaned = normalizeWhitespace(noExtension.replace(/[\-_]+/g, " "));
+  return cleaned || normalizeWhitespace(rawSegment);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function toFourDigitYear(value: string): number | null {
+  const trimmed = value.trim().replace(/['\u2019]s$/u, "");
+  if (!/^\d{2,4}$/u.test(trimmed)) {
+    return null;
+  }
+  if (trimmed.length === 4) {
+    const asInt = Number.parseInt(trimmed, 10);
+    return asInt >= 1800 && asInt <= 2100 ? asInt : null;
+  }
+  const twoDigit = Number.parseInt(trimmed, 10);
+  return twoDigit <= 29 ? 2000 + twoDigit : 1900 + twoDigit;
+}
+
+function normalizeMonth(monthValue: string): number | null {
+  const month = Number.parseInt(monthValue, 10);
+  if (Number.isNaN(month) || month < 1 || month > 12) {
+    return null;
+  }
+  return month;
+}
+
+function detectDateClue(segmentText: string): DateClue | null {
+  const raw = normalizeWhitespace(segmentText);
+  if (!raw) {
+    return null;
+  }
+
+  const monthRangeMatch = raw.match(/(\d{1,2})\s*[-/]\s*(\d{2,4})\s*(?:to|-|\u2013|\u2014)\s*(\d{1,2})\s*[-/]\s*(\d{2,4})/iu);
+  if (monthRangeMatch) {
+    const startMonth = normalizeMonth(monthRangeMatch[1]);
+    const startYear = toFourDigitYear(monthRangeMatch[2]);
+    const endMonth = normalizeMonth(monthRangeMatch[3]);
+    const endYear = toFourDigitYear(monthRangeMatch[4]);
+    if (startMonth && startYear && endMonth && endYear) {
+      return {
+        raw,
+        normalized: `${startYear}-${String(startMonth).padStart(2, "0")} to ${endYear}-${String(endMonth).padStart(2, "0")}`,
+        isObvious: true,
+      };
+    }
+    return { raw, normalized: null, isObvious: false };
+  }
+
+  const yearRangeMatch = raw.match(/((?:19|20)\d{2})\s*(?:to|-|\u2013|\u2014)\s*(\d{2,4}|\d{2}['\u2019]s)/iu);
+  if (yearRangeMatch) {
+    const startYear = toFourDigitYear(yearRangeMatch[1]);
+    let endYear: number | null = null;
+    if (/\d{2}['\u2019]s$/u.test(yearRangeMatch[2])) {
+      const decade = toFourDigitYear(yearRangeMatch[2]);
+      endYear = decade ? decade + 9 : null;
+    } else {
+      endYear = toFourDigitYear(yearRangeMatch[2]);
+    }
+    if (startYear && endYear) {
+      return {
+        raw,
+        normalized: `${startYear} to ${endYear}`,
+        isObvious: true,
+      };
+    }
+    return { raw, normalized: null, isObvious: false };
+  }
+
+  const singleYearMatch = raw.match(/\b((?:19|20)\d{2})\b/u);
+  if (singleYearMatch) {
+    return {
+      raw,
+      normalized: singleYearMatch[1],
+      isObvious: true,
+    };
+  }
+
+  return null;
+}
+
+function findPeopleClues(segmentText: string, people: PersonSummary[]): string[] {
+  const normalizedSegment = normalizeWhitespace(segmentText.toLowerCase());
+  if (!normalizedSegment) {
+    return [];
+  }
+
+  const matchedDisplayNames = new Set<string>();
+  for (const person of people) {
+    const candidates = [person.display_name, ...person.aliases]
+      .map((value) => normalizeWhitespace(value))
+      .filter((value) => value.length >= 3);
+    for (const candidate of candidates) {
+      const pattern = new RegExp(`\\b${escapeRegExp(candidate.toLowerCase()).replace(/\s+/g, "\\s+")}\\b`, "u");
+      if (pattern.test(normalizedSegment)) {
+        matchedDisplayNames.add(person.display_name);
+        break;
+      }
+    }
+  }
+
+  return [...matchedDisplayNames].sort((left, right) => left.localeCompare(right));
+}
+
+function buildCandidateCards(params: {
+  selectedSegmentText: string;
+  selectedPrefix: string | null;
+  hierarchyMode: "relative" | "full_source_path";
+  matchCount: number | null;
+  people: PersonSummary[];
+}): CandidateCard[] {
+  const suggestedLabel = buildSuggestedLabel(params.selectedSegmentText || "Untitled");
+  const peopleClues = findPeopleClues(params.selectedSegmentText, params.people);
+  const dateClue = detectDateClue(params.selectedSegmentText);
+  const targetCountText = params.matchCount === null ? "match count pending" : `${params.matchCount} matching assets`;
+  const modeText = params.hierarchyMode === "relative" ? "relative hierarchy" : "full source path hierarchy";
+  const selectedPrefixText = params.selectedPrefix ?? "(level not selected)";
+
+  const dateDetail = !dateClue
+    ? "No obvious date format detected from this segment."
+    : dateClue.normalized
+      ? `Raw: ${dateClue.raw} | Interpreted: ${dateClue.normalized}`
+      : `Raw: ${dateClue.raw}`;
+
+  const personDetail = peopleClues.length > 0
+    ? `Matched existing people/aliases: ${peopleClues.join(", ")}`
+    : "No conservative person-name match found in existing People aliases.";
+
+  return [
+    {
+      key: "collection",
+      title: "Could become Collection",
+      proposedValue: suggestedLabel,
+      detail: `${targetCountText} would be a candidate scope from ${modeText}.`,
+    },
+    {
+      key: "album",
+      title: "Could become Album",
+      proposedValue: suggestedLabel,
+      detail: `Preview based on selected prefix: ${selectedPrefixText}`,
+    },
+    {
+      key: "event",
+      title: "Could become Event",
+      proposedValue: suggestedLabel,
+      detail: dateDetail,
+    },
+    {
+      key: "person",
+      title: "Could suggest Person Clue",
+      proposedValue: peopleClues.length > 0 ? peopleClues.join(", ") : suggestedLabel,
+      detail: personDetail,
+    },
+    {
+      key: "date",
+      title: "Could suggest Date Clue",
+      proposedValue: dateClue?.normalized ?? dateClue?.raw ?? suggestedLabel,
+      detail: dateDetail,
+    },
+    {
+      key: "place",
+      title: "Could suggest Place Clue",
+      proposedValue: suggestedLabel,
+      detail: "Preview only. Place mapping requires manual review against Places entities.",
+    },
+    {
+      key: "tag",
+      title: "Could suggest Tag/Title",
+      proposedValue: suggestedLabel,
+      detail: "Light cleanup applied; raw segment remains visible for confidence checks.",
+    },
+    {
+      key: "review",
+      title: "Could mark as Reviewed",
+      proposedValue: targetCountText,
+      detail: "Preview only. No review state changes are written in this milestone.",
+    },
+    {
+      key: "ignore",
+      title: "Could ignore this level",
+      proposedValue: selectedPrefixText,
+      detail: "Preview only. Ignore behavior is intentionally disabled in this milestone.",
+    },
+    {
+      key: "semantic-root",
+      title: "Could become Semantic Root",
+      proposedValue: suggestedLabel,
+      detail: "Preview only / Coming later. No source_root_path mutation and no persistence.",
+    },
+  ];
+}
+
 export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceReviewViewProps) {
   const [assetResponse, setAssetResponse] = useState<SourceReviewAssetResponse | null>(null);
   const [hierarchyMode, setHierarchyMode] = useState<"relative" | "full_source_path">("relative");
+  const [people, setPeople] = useState<PersonSummary[]>([]);
   const [selectedProvenanceId, setSelectedProvenanceId] = useState<number | null>(null);
   const [selectedLevelIndex, setSelectedLevelIndex] = useState<number | null>(null);
   const [matches, setMatches] = useState<SourceReviewMatchesResponse | null>(null);
@@ -42,6 +265,24 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceRevie
   const [isLoadingMatches, setIsLoadingMatches] = useState(false);
   const [assetErrorMessage, setAssetErrorMessage] = useState<string | null>(null);
   const [matchesErrorMessage, setMatchesErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getPeople()
+      .then((response) => {
+        if (!cancelled) {
+          setPeople(response.items);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPeople([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setAssetResponse(null);
@@ -104,6 +345,26 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceRevie
       ? selectedProvenanceRow.hierarchy_levels_full
       : selectedProvenanceRow.hierarchy_levels_relative;
   }, [selectedProvenanceRow, hierarchyMode]);
+
+  const selectedHierarchyLevel: SourceReviewHierarchyLevel | null = useMemo(() => {
+    if (selectedLevelIndex === null) {
+      return null;
+    }
+    return hierarchyLevels.find((level) => level.level_index === selectedLevelIndex) ?? null;
+  }, [hierarchyLevels, selectedLevelIndex]);
+
+  const candidateCards = useMemo(() => {
+    if (!selectedHierarchyLevel) {
+      return [];
+    }
+    return buildCandidateCards({
+      selectedSegmentText: selectedHierarchyLevel.segment_text,
+      selectedPrefix: matches?.selected_prefix ?? null,
+      hierarchyMode,
+      matchCount: matches?.total_count ?? null,
+      people,
+    });
+  }, [selectedHierarchyLevel, matches, hierarchyMode, people]);
 
   useEffect(() => {
     setMatches(null);
@@ -336,25 +597,29 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail }: SourceRevie
           </section>
 
           <section className={styles.panel}>
-            <h3 className={styles.panelTitle}>Candidate Actions (Read-Only in 12.58.1)</h3>
-            <div className={styles.actionRow}>
-              {[
-                "Create Collection",
-                "Create Album",
-                "Create Event",
-                "Apply Person Clue",
-                "Apply Date Range",
-                "Apply Place Clue",
-                "Apply Tag",
-                "Mark Reviewed",
-                "Ignore Level",
-              ].map((label) => (
-                <button key={label} type="button" className={styles.placeholderAction} disabled>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className={styles.notice}>Coming later. This workspace is read-only for milestone 12.58.1.</p>
+            <h3 className={styles.panelTitle}>Candidate Actions (Preview Only)</h3>
+            {!selectedHierarchyLevel ? (
+              <p className={styles.status}>Select a hierarchy level to preview candidate actions.</p>
+            ) : (
+              <>
+                <p className={styles.noticeStrong}>Preview only / No changes will be made.</p>
+                <p className={styles.notice}>
+                  Raw segment: <span className={styles.segmentRaw}>{selectedHierarchyLevel.segment_text}</span>
+                </p>
+                <div className={styles.candidateGrid}>
+                  {candidateCards.map((card) => (
+                    <article key={card.key} className={styles.candidateCard}>
+                      <p className={styles.candidateTitle}>{card.title}</p>
+                      <p className={styles.candidateValue}>{card.proposedValue}</p>
+                      <p className={styles.candidateDetail}>{card.detail}</p>
+                      <button type="button" className={styles.placeholderAction} disabled>
+                        Preview only / Coming later
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </>
+            )}
           </section>
 
           {selectedProvenanceRow ? (

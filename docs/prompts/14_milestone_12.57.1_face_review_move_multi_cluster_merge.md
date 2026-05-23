@@ -626,7 +626,6 @@ or, if face workflows are stable enough:
 12.58 — Collections / Album / Event Design
 ```
 
-
 # Answers to Coder Questions — Milestone 12.57.1
 
 ## 1. Ignored source clusters in merge
