@@ -21,6 +21,7 @@ TABLE_DDLS = {
         """
         CREATE TABLE collections (
             id SERIAL PRIMARY KEY,
+            grouping_type VARCHAR(32) NOT NULL DEFAULT 'album',
             name VARCHAR(255) NOT NULL,
             description TEXT NULL,
             cover_asset_sha256 VARCHAR(64) NULL REFERENCES assets(sha256),
@@ -39,13 +40,26 @@ TABLE_DDLS = {
         )
         """
     ),
+    "collection_albums": (
+        """
+        CREATE TABLE collection_albums (
+            collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+            album_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+            added_at_utc TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (collection_id, album_id)
+        )
+        """
+    ),
 }
 
 INDEX_DDLS = {
+    "ix_collections_grouping_type": "CREATE INDEX ix_collections_grouping_type ON collections (grouping_type)",
     "ix_collections_updated_at_utc": "CREATE INDEX ix_collections_updated_at_utc ON collections (updated_at_utc)",
     "ix_collections_cover_asset_sha256": "CREATE INDEX ix_collections_cover_asset_sha256 ON collections (cover_asset_sha256)",
     "ix_collection_assets_asset_sha256": "CREATE INDEX ix_collection_assets_asset_sha256 ON collection_assets (asset_sha256)",
     "ix_collection_assets_added_at_utc": "CREATE INDEX ix_collection_assets_added_at_utc ON collection_assets (added_at_utc)",
+    "ix_collection_albums_album_id": "CREATE INDEX ix_collection_albums_album_id ON collection_albums (album_id)",
+    "ix_collection_albums_added_at_utc": "CREATE INDEX ix_collection_albums_added_at_utc ON collection_albums (added_at_utc)",
 }
 
 
@@ -67,6 +81,14 @@ def ensure_album_schema(db_session: Session) -> AlbumSchemaSummary:
         created_tables.append(table_name)
 
     inspector = inspect(bind)
+    collection_columns = {column["name"] for column in inspector.get_columns("collections")}
+    if "grouping_type" not in collection_columns:
+        db_session.execute(text("ALTER TABLE collections ADD COLUMN grouping_type VARCHAR(32)"))
+    db_session.execute(text("UPDATE collections SET grouping_type = 'album' WHERE grouping_type IS NULL"))
+    db_session.execute(text("ALTER TABLE collections ALTER COLUMN grouping_type SET DEFAULT 'album'"))
+    db_session.execute(text("ALTER TABLE collections ALTER COLUMN grouping_type SET NOT NULL"))
+
+    inspector = inspect(bind)
     created_indexes: list[str] = []
 
     existing_collection_indexes = {
@@ -77,11 +99,17 @@ def ensure_album_schema(db_session: Session) -> AlbumSchemaSummary:
         index["name"]
         for index in inspector.get_indexes("collection_assets")
     } if "collection_assets" in inspector.get_table_names() else set()
+    existing_collection_album_indexes = {
+        index["name"]
+        for index in inspector.get_indexes("collection_albums")
+    } if "collection_albums" in inspector.get_table_names() else set()
 
     for index_name, ddl in INDEX_DDLS.items():
         if index_name.startswith("ix_collections_") and index_name in existing_collection_indexes:
             continue
         if index_name.startswith("ix_collection_assets_") and index_name in existing_membership_indexes:
+            continue
+        if index_name.startswith("ix_collection_albums_") and index_name in existing_collection_album_indexes:
             continue
         db_session.execute(text(ddl))
         created_indexes.append(index_name)

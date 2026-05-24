@@ -647,3 +647,173 @@ Or:
 if Collection/Album model is stable enough to move toward v1 enrichment.
 
 Do not implement Google Vision in 12.58.5.
+
+
+
+
+
+# Answers to Coder Questions — Milestone 12.58.5
+
+## 1. Should Collection be a true new entity, or should we repurpose the existing Collection table?
+
+Do **not** create a new entity in 12.58.5.
+
+Also do **not** simply rename the current album-backed `Collection` behavior and pretend the model is aligned.
+
+For 12.58.5, treat this as a model-alignment/design milestone with very limited implementation.
+
+Current finding is important:
+
+```text
+The existing Collection table is currently functioning as the stored Album entity.
+The API is mounted as /api/albums.
+There is no collection-vs-album type field.
+There is no album-to-collection relationship.
+
+So the correct conclusion is:
+
+A true Collection-vs-Album distinction requires schema/API work.
+
+Do not rush that into this milestone unless the change is extremely small and safe, which it does not appear to be.
+
+Preferred 12.58.5 outcome:
+
+Document the gap clearly.
+Keep current Album creation working.
+Keep Collection card preview-only.
+Define the desired future model.
+Recommend the next schema/API milestone.
+2. Do Albums remain standalone for now, or add album-to-collection association in this milestone?
+
+Albums should remain standalone for now.
+
+Do not add album-to-collection association in 12.58.5.
+
+Reason:
+
+Album-to-Collection association requires a real relationship model.
+It should not be faked in UI.
+
+Desired future rule remains:
+
+Album can stand alone.
+Album can optionally belong to one or more Collections.
+Collection is top-level only.
+
+But implementation should be deferred until the data model supports it cleanly.
+
+Likely future table:
+
+collection_albums
+- collection_id
+- album_id
+
+or equivalent, depending on whether Album becomes a true separate entity/type.
+
+3. Should Source Review create a top-level Collection only, or also allow optionally creating an Album inside/alongside it?
+
+For 12.58.5:
+
+Do not enable Create Collection yet.
+Do not create Album-inside-Collection yet.
+
+Keep Source Review behavior as:
+
+Create Album = active, existing behavior
+Create Collection = preview-only / model alignment pending
+Create Event = available but deprioritized/experimental
+Other clues = preview-only
+
+The future desired Source Review actions are:
+
+Create Collection from this provenance level
+Create Album from this provenance level
+Optionally assign Album to one or more Collections
+
+But that should wait for the collection/album model milestone.
+
+4. Duplicate name policy
+
+Do not tighten naming rules in 12.58.5.
+
+Current duplicate behavior should be documented.
+
+For future design, my preference is:
+
+Albums:
+  duplicate names may be allowed, but Source Review should warn/use-existing where practical.
+
+Collections:
+  duplicate names should probably be discouraged or blocked by normalized name, because Collections are top-level.
+
+But do not implement new uniqueness rules now.
+
+12.58.5 should document the current behavior and recommend future rules.
+
+Revised 12.58.5 Scope
+
+Given the codebase finding, 12.58.5 should become:
+
+Collection and Album Model Alignment / Design
+
+not a write-action implementation milestone.
+
+Required deliverables:
+
+1. Document current model reality:
+   - Collection table currently backs Albums.
+   - /api/albums is the main grouping API.
+   - No collection-vs-album type field.
+   - No album-to-collection association.
+   - Assets can belong directly to current collection/album records.
+
+2. Document desired product model:
+   - Collection = top-level grouping.
+   - Album = standalone photo set.
+   - Album may optionally belong to one or more Collections.
+   - Collection may contain assets directly.
+   - Collection may contain albums later.
+   - Collections do not nest.
+
+3. Keep Source Review Album creation working.
+
+4. Keep Collection candidate preview-only with wording:
+   Collection model alignment pending.
+
+5. Do not add schema unless strictly documentation/diagnostic only.
+
+6. Recommend next implementation milestone:
+   12.58.6 — Collection / Album Data Model Implementation
+Suggested UI wording for 12.58.5
+
+For the Source Review Collection candidate card:
+
+Could become Collection
+Broad top-level grouping from this provenance level.
+
+Preview only
+Collection model alignment pending.
+
+For the Album card:
+
+Could become Album
+Photo set from this provenance level.
+
+Create Album
+
+For Event:
+
+Could become Event
+Experimental / lower priority.
+Summary for Coder
+
+Proceed with a conservative 12.58.5:
+
+- Do not create a new Collection entity yet.
+- Do not repurpose existing Collection UI vocabulary as if complete.
+- Do not add album-to-collection association yet.
+- Keep Albums standalone.
+- Keep Source Review Create Album working.
+- Keep Create Collection preview-only.
+- Document the model gap and desired future model.
+- Recommend a dedicated follow-up milestone for schema/API implementation.

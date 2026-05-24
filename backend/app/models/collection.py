@@ -1,4 +1,4 @@
-"""Collection model for manual user-curated albums."""
+"""Collection model for album/collection grouping records."""
 
 from __future__ import annotations
 
@@ -11,11 +11,12 @@ from app.db.session import Base
 
 
 class Collection(Base):
-    """Manual album container independent from system-generated grouping."""
+    """Grouping record used for both albums and top-level collections."""
 
     __tablename__ = "collections"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    grouping_type: Mapped[str] = mapped_column(String(32), nullable=False, server_default="album")
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     cover_asset_sha256: Mapped[str | None] = mapped_column(

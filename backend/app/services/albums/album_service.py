@@ -14,6 +14,8 @@ from app.models.face import Face
 from app.services.photos.display_url_service import build_asset_display_url_contract
 from app.services.timeline.timeline_service import effective_capture_time_trust_expr
 
+GROUPING_TYPE_ALBUM = "album"
+
 
 def _to_utc_iso(value: datetime | None) -> str | None:
     if value is None:
@@ -33,9 +35,16 @@ def _asset_image_url(sha256: str, extension: str, display_preview_path: str | No
 
 def _touch_collection(db: Session, collection_id: int) -> None:
     collection = db.get(Collection, collection_id)
-    if collection is None:
+    if collection is None or collection.grouping_type != GROUPING_TYPE_ALBUM:
         return
     collection.updated_at_utc = datetime.now(timezone.utc)
+
+
+def _get_album_or_raise(db: Session, album_id: int) -> Collection:
+    album = db.get(Collection, album_id)
+    if album is None or album.grouping_type != GROUPING_TYPE_ALBUM:
+        raise ValueError(f"Album ID {album_id} does not exist.")
+    return album
 
 
 def _cover_image_url_from_rows(*, cover_asset_sha256: str | None, membership_rows: list, asset_map: dict[str, tuple[str, str, str | None]]) -> str | None:
@@ -59,7 +68,7 @@ def create_album(db: Session, *, name: str, description: str | None) -> dict:
     if not cleaned_name:
         raise ValueError("Album name is required.")
 
-    album = Collection(name=cleaned_name, description=description)
+    album = Collection(name=cleaned_name, description=description, grouping_type=GROUPING_TYPE_ALBUM)
     db.add(album)
     db.commit()
     db.refresh(album)
@@ -79,9 +88,7 @@ def update_album(
     description: str | None,
     update_description: bool,
 ) -> dict:
-    album = db.get(Collection, album_id)
-    if album is None:
-        raise ValueError(f"Album ID {album_id} does not exist.")
+    album = _get_album_or_raise(db, album_id)
 
     if name is not None:
         cleaned_name = name.strip()
@@ -103,9 +110,7 @@ def update_album(
 
 
 def delete_album(db: Session, *, album_id: int) -> None:
-    album = db.get(Collection, album_id)
-    if album is None:
-        raise ValueError(f"Album ID {album_id} does not exist.")
+    album = _get_album_or_raise(db, album_id)
 
     db.delete(album)
     db.commit()
@@ -117,7 +122,9 @@ def list_albums(db: Session) -> list[dict]:
             CollectionAsset.collection_id,
             func.count(CollectionAsset.asset_sha256).label("asset_count"),
         )
+        .join(Collection, Collection.id == CollectionAsset.collection_id)
         .join(Asset, Asset.sha256 == CollectionAsset.asset_sha256)
+        .where(Collection.grouping_type == GROUPING_TYPE_ALBUM)
         .where(Asset.visibility_status == "visible")
         .group_by(CollectionAsset.collection_id)
         .subquery()
@@ -133,6 +140,7 @@ def list_albums(db: Session) -> list[dict]:
             func.coalesce(member_count_subq.c.asset_count, 0).label("asset_count"),
         )
         .outerjoin(member_count_subq, member_count_subq.c.collection_id == Collection.id)
+        .where(Collection.grouping_type == GROUPING_TYPE_ALBUM)
         .order_by(Collection.updated_at_utc.desc(), Collection.id.desc())
     ).all()
 
@@ -183,6 +191,7 @@ def list_albums_for_asset(db: Session, *, asset_sha256: str) -> list[dict]:
     rows = db.execute(
         select(Collection.id, Collection.name)
         .join(CollectionAsset, CollectionAsset.collection_id == Collection.id)
+        .where(Collection.grouping_type == GROUPING_TYPE_ALBUM)
         .where(CollectionAsset.asset_sha256 == asset_sha256)
         .order_by(Collection.updated_at_utc.desc(), Collection.id.desc())
     ).all()
@@ -191,9 +200,7 @@ def list_albums_for_asset(db: Session, *, asset_sha256: str) -> list[dict]:
 
 
 def get_album_detail(db: Session, *, album_id: int) -> dict:
-    album = db.get(Collection, album_id)
-    if album is None:
-        raise ValueError(f"Album ID {album_id} does not exist.")
+    album = _get_album_or_raise(db, album_id)
 
     face_count_subq = (
         select(Face.asset_sha256, func.count(Face.id).label("face_count"))
@@ -261,9 +268,7 @@ def get_album_detail(db: Session, *, album_id: int) -> dict:
 
 
 def add_assets_to_album(db: Session, *, album_id: int, asset_sha256_list: list[str]) -> dict:
-    album = db.get(Collection, album_id)
-    if album is None:
-        raise ValueError(f"Album ID {album_id} does not exist.")
+    _get_album_or_raise(db, album_id)
 
     unique_asset_sha256 = [value for value in dict.fromkeys(asset_sha256_list) if value.strip()]
     if not unique_asset_sha256:
@@ -308,9 +313,7 @@ def add_assets_to_album(db: Session, *, album_id: int, asset_sha256_list: list[s
 
 
 def remove_assets_from_album(db: Session, *, album_id: int, asset_sha256_list: list[str]) -> dict:
-    album = db.get(Collection, album_id)
-    if album is None:
-        raise ValueError(f"Album ID {album_id} does not exist.")
+    _get_album_or_raise(db, album_id)
 
     unique_asset_sha256 = [value for value in dict.fromkeys(asset_sha256_list) if value.strip()]
     if not unique_asset_sha256:

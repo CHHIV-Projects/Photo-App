@@ -13,8 +13,12 @@ from app.models.asset import Asset
 from app.models.collection import Collection
 from app.models.event import Event
 from app.models.provenance import Provenance
+from app.services.collections.collection_service import add_assets_to_collection, create_collection
 from app.services.photos.batch_actions_service import batch_add_assets_to_album, batch_create_album_with_assets
 from app.services.photos.display_url_service import build_asset_display_url_contract
+
+GROUPING_TYPE_ALBUM = "album"
+GROUPING_TYPE_COLLECTION = "collection"
 
 
 TECHNICAL_SEGMENT_HINTS = {
@@ -214,10 +218,34 @@ def _find_existing_album_by_name(db: Session, *, album_name: str) -> Collection 
     if not normalized_target:
         return None
 
-    albums = list(db.scalars(select(Collection).order_by(Collection.id.asc())).all())
+    albums = list(
+        db.scalars(
+            select(Collection)
+            .where(Collection.grouping_type == GROUPING_TYPE_ALBUM)
+            .order_by(Collection.id.asc())
+        ).all()
+    )
     for album in albums:
         if _normalize_album_name_for_match(album.name) == normalized_target:
             return album
+    return None
+
+
+def _find_existing_collection_by_name(db: Session, *, collection_name: str) -> Collection | None:
+    normalized_target = _normalize_album_name_for_match(collection_name)
+    if not normalized_target:
+        return None
+
+    rows = list(
+        db.scalars(
+            select(Collection)
+            .where(Collection.grouping_type == GROUPING_TYPE_COLLECTION)
+            .order_by(Collection.id.asc())
+        ).all()
+    )
+    for row in rows:
+        if _normalize_album_name_for_match(row.name) == normalized_target:
+            return row
     return None
 
 
@@ -535,6 +563,59 @@ def create_album_from_source_review_level(
             {"asset_sha256": failure.asset_sha256, "reason": failure.reason}
             for failure in create_result.failures
         ],
+    }
+
+
+def create_collection_from_source_review_level(
+    db: Session,
+    *,
+    provenance_id: int,
+    level_index: int,
+    hierarchy_mode: str,
+    collection_name: str,
+) -> dict:
+    cleaned_name = re.sub(r"\s+", " ", collection_name.strip())
+    if not cleaned_name:
+        raise SourceReviewValidationError("Collection name is required.")
+
+    context = _build_match_context(
+        db,
+        provenance_id=provenance_id,
+        level_index=level_index,
+        hierarchy_mode=hierarchy_mode,
+    )
+
+    matched_sha_list = list(context.matching_asset_to_path.keys())
+    if not matched_sha_list:
+        raise SourceReviewValidationError("No matching assets under the selected provenance level.")
+
+    existing_collection = _find_existing_collection_by_name(db, collection_name=cleaned_name)
+    if existing_collection is not None:
+        raise SourceReviewValidationError("A Collection with this normalized name already exists.")
+
+    created = create_collection(db, name=cleaned_name, description=None)
+    add_result = add_assets_to_collection(
+        db,
+        collection_id=int(created["collection_id"]),
+        asset_sha256_list=matched_sha_list,
+    )
+
+    return {
+        "outcome": "created",
+        "collection_id": int(created["collection_id"]),
+        "collection_name": str(created["name"]),
+        "created_new_collection": True,
+        "provenance_id": context.provenance_id,
+        "hierarchy_mode": context.hierarchy_mode,
+        "selected_level_index": context.selected_level_index,
+        "selected_segment": context.selected_segment,
+        "selected_prefix": context.selected_prefix,
+        "matching_asset_count": len(matched_sha_list),
+        "requested_count": len(matched_sha_list),
+        "added_count": int(add_result.get("inserted_count", 0) or 0),
+        "already_present_count": int(add_result.get("already_present_count", 0) or 0),
+        "failed_count": 0,
+        "failures": [],
     }
 
 

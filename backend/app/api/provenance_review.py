@@ -10,6 +10,8 @@ from app.schemas.provenance_review import (
     SourceReviewAssetResponse,
     SourceReviewCreateAlbumRequest,
     SourceReviewCreateAlbumResponse,
+    SourceReviewCreateCollectionRequest,
+    SourceReviewCreateCollectionResponse,
     SourceReviewCreateEventRequest,
     SourceReviewCreateEventResponse,
     SourceReviewMatchesResponse,
@@ -18,6 +20,7 @@ from app.services.provenance.source_review_service import (
     SourceReviewNotFoundError,
     SourceReviewValidationError,
     create_album_from_source_review_level,
+    create_collection_from_source_review_level,
     create_event_from_source_review_level,
     get_source_review_asset,
     get_source_review_matches,
@@ -82,6 +85,27 @@ def post_source_review_create_album(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return SourceReviewCreateAlbumResponse(**result)
+
+
+@router.post("/create-collection", response_model=SourceReviewCreateCollectionResponse)
+def post_source_review_create_collection(
+    payload: SourceReviewCreateCollectionRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceReviewCreateCollectionResponse:
+    try:
+        result = create_collection_from_source_review_level(
+            db,
+            provenance_id=payload.provenance_id,
+            level_index=payload.level_index,
+            hierarchy_mode=payload.hierarchy_mode,
+            collection_name=payload.collection_name,
+        )
+    except SourceReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SourceReviewValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return SourceReviewCreateCollectionResponse(**result)
 
 
 @router.post("/create-event", response_model=SourceReviewCreateEventResponse)

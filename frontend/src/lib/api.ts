@@ -21,6 +21,8 @@ import type {
   SourceIntakeStopResponse,
   SourceReviewCreateAlbumRequest,
   SourceReviewCreateAlbumResponse,
+  SourceReviewCreateCollectionRequest,
+  SourceReviewCreateCollectionResponse,
   SourceReviewCreateEventRequest,
   SourceReviewCreateEventResponse,
   IcloudStagingCleanupRunRequest,
@@ -33,6 +35,8 @@ import type {
   AlbumDetail,
   AlbumMembershipSummary,
   AlbumSummary,
+  CollectionDetail,
+  CollectionSummary,
   CreatePersonResponse,
   ClusterDetail,
   ClusterSuggestionResponse,
@@ -367,6 +371,15 @@ export function createAlbumFromSourceReviewLevel(
   payload: SourceReviewCreateAlbumRequest
 ): Promise<SourceReviewCreateAlbumResponse> {
   return apiRequest<SourceReviewCreateAlbumResponse>("/api/provenance-review/create-album", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createCollectionFromSourceReviewLevel(
+  payload: SourceReviewCreateCollectionRequest
+): Promise<SourceReviewCreateCollectionResponse> {
+  return apiRequest<SourceReviewCreateCollectionResponse>("/api/provenance-review/create-collection", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -735,6 +748,53 @@ export function removeAssetsFromAlbum(
   return apiRequest<{ success: boolean }>(`/api/albums/${albumId}/assets`, {
     method: "DELETE",
     body: JSON.stringify({ asset_sha256_list: assetSha256List })
+  });
+}
+
+export function getCollections(): Promise<ListResponse<CollectionSummary>> {
+  return apiRequest<ListResponse<CollectionSummary>>("/api/collections");
+}
+
+export function getCollectionDetail(collectionId: number): Promise<CollectionDetail> {
+  return apiRequest<CollectionDetail>(`/api/collections/${collectionId}`);
+}
+
+export function createCollection(
+  name: string,
+  description: string | null = null
+): Promise<CollectionSummary> {
+  return apiRequest<CollectionSummary>("/api/collections", {
+    method: "POST",
+    body: JSON.stringify({ name, description })
+  });
+}
+
+export function addAssetsToCollection(
+  collectionId: number,
+  assetSha256List: string[]
+): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/collections/${collectionId}/assets`, {
+    method: "POST",
+    body: JSON.stringify({ asset_sha256_list: assetSha256List })
+  });
+}
+
+export function addAlbumToCollection(
+  collectionId: number,
+  albumId: number
+): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/collections/${collectionId}/albums`, {
+    method: "POST",
+    body: JSON.stringify({ album_id: albumId })
+  });
+}
+
+export function removeAlbumFromCollection(
+  collectionId: number,
+  albumId: number
+): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/collections/${collectionId}/albums/${albumId}`, {
+    method: "DELETE"
   });
 }
 

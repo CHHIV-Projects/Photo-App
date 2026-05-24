@@ -14,6 +14,7 @@ from app.services.albums.album_service import add_assets_to_album, create_album
 
 VISIBILITY_VISIBLE = "visible"
 VISIBILITY_DEMOTED = "demoted"
+GROUPING_TYPE_ALBUM = "album"
 
 
 @dataclass(frozen=True)
@@ -117,7 +118,7 @@ def batch_add_assets_to_album(
     asset_sha256_list: list[str],
 ) -> BatchAlbumResult:
     album = db.get(Collection, album_id)
-    if album is None:
+    if album is None or album.grouping_type != GROUPING_TYPE_ALBUM:
         raise ValueError(f"Album ID {album_id} does not exist.")
 
     normalized_assets = _normalize_sha_list(asset_sha256_list)

@@ -225,6 +225,34 @@ export interface AlbumDetail {
   items: PhotoSummary[];
 }
 
+export interface CollectionSummary {
+  collection_id: number;
+  name: string;
+  description: string | null;
+  direct_asset_count: number;
+  album_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionAlbumSummary {
+  album_id: number;
+  name: string;
+  asset_count: number;
+}
+
+export interface CollectionDetail {
+  collection_id: number;
+  name: string;
+  description: string | null;
+  direct_asset_count: number;
+  album_count: number;
+  created_at: string;
+  updated_at: string;
+  direct_assets: PhotoSummary[];
+  albums: CollectionAlbumSummary[];
+}
+
 export interface PhotoEventSummary {
   event_id: number;
   label: string | null;
@@ -363,6 +391,36 @@ export interface SourceReviewCreateAlbumResponse {
   already_present_count: number;
   failed_count: number;
   failures: SourceReviewCreateAlbumFailure[];
+}
+
+export interface SourceReviewCreateCollectionRequest {
+  provenance_id: number;
+  level_index: number;
+  hierarchy_mode: "relative" | "full_source_path";
+  collection_name: string;
+}
+
+export interface SourceReviewCreateCollectionFailure {
+  asset_sha256: string;
+  reason: string;
+}
+
+export interface SourceReviewCreateCollectionResponse {
+  outcome: "created";
+  collection_id: number;
+  collection_name: string;
+  created_new_collection: boolean;
+  provenance_id: number;
+  hierarchy_mode: string;
+  selected_level_index: number;
+  selected_segment: string;
+  selected_prefix: string;
+  matching_asset_count: number;
+  requested_count: number;
+  added_count: number;
+  already_present_count: number;
+  failed_count: number;
+  failures: SourceReviewCreateCollectionFailure[];
 }
 
 export interface SourceReviewCreateEventRequest {

@@ -7,6 +7,7 @@ import { ClusterList } from "@/components/ClusterList";
 import { EventsView } from "@/components/EventsView";
 import AdminView from "@/components/AdminView";
 import { AlbumsView } from "@/components/AlbumsView";
+import { CollectionsView } from "@/components/CollectionsView";
 import { DuplicateGroupsView } from "@/components/DuplicateGroupsView";
 import { DuplicateSuggestionsView } from "@/components/DuplicateSuggestionsView";
 import { PhotoReviewView } from "@/components/PhotoReviewView";
@@ -55,7 +56,7 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "source-review" | "albums" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions" | "admin";
+type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "source-review" | "albums" | "collections" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions" | "admin";
 type ClusterFilterMode = "all" | "assigned" | "unassigned" | "ignored";
 
 function compareClustersForMergeTarget(a: ClusterSummary, b: ClusterSummary): number {
@@ -659,6 +660,10 @@ export default function HomePage() {
     setViewMode("albums");
   }
 
+  function handleOpenCollectionsFromSourceReview() {
+    setViewMode("collections");
+  }
+
   function handleOpenEventsFromSourceReview() {
     setViewMode("events");
   }
@@ -1019,6 +1024,13 @@ export default function HomePage() {
             </button>
             <button
               type="button"
+              className={`${styles.viewButton} ${viewMode === "collections" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("collections")}
+            >
+              Collections
+            </button>
+            <button
+              type="button"
               className={`${styles.viewButton} ${viewMode === "timeline" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("timeline")}
             >
@@ -1174,10 +1186,13 @@ export default function HomePage() {
             assetSha256={sourceReviewAssetSha256 ?? selectedPhotoSha256}
             onOpenPhotoDetail={handleOpenPhotoFromSourceReview}
             onOpenAlbums={handleOpenAlbumsFromSourceReview}
+            onOpenCollections={handleOpenCollectionsFromSourceReview}
             onOpenEvents={handleOpenEventsFromSourceReview}
           />
         ) : viewMode === "albums" ? (
           <AlbumsView onOpenPhoto={handleOpenPhotoFromAlbums} />
+        ) : viewMode === "collections" ? (
+          <CollectionsView />
         ) : viewMode === "timeline" ? (
           <TimelineView />
         ) : viewMode === "places" ? (

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   createAlbumFromSourceReviewLevel,
+  createCollectionFromSourceReviewLevel,
   createEventFromSourceReviewLevel,
   getPeople,
   getSourceReviewAsset,
@@ -14,6 +15,7 @@ import type {
   PersonSummary,
   SourceReviewAssetResponse,
   SourceReviewCreateAlbumResponse,
+  SourceReviewCreateCollectionResponse,
   SourceReviewCreateEventResponse,
   SourceReviewHierarchyLevel,
   SourceReviewMatchesResponse,
@@ -25,6 +27,7 @@ interface SourceReviewViewProps {
   assetSha256: string | null;
   onOpenPhotoDetail: (assetSha256: string) => void;
   onOpenAlbums: () => void;
+  onOpenCollections: () => void;
   onOpenEvents: () => void;
 }
 
@@ -288,7 +291,7 @@ function buildCandidateCards(params: {
       key: "collection",
       title: "Could become Collection",
       proposedValue: "Broad top-level grouping from this provenance level.",
-      detail: `Preview only. Collection model alignment pending. ${targetCountText} would be a candidate scope from ${modeText}.`,
+      detail: `${targetCountText} would be a candidate top-level grouping from ${modeText}.`,
     },
     {
       key: "album",
@@ -347,7 +350,7 @@ function buildCandidateCards(params: {
   ];
 }
 
-export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums, onOpenEvents }: SourceReviewViewProps) {
+export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums, onOpenCollections, onOpenEvents }: SourceReviewViewProps) {
   const [assetResponse, setAssetResponse] = useState<SourceReviewAssetResponse | null>(null);
   const [hierarchyMode, setHierarchyMode] = useState<"relative" | "full_source_path">("relative");
   const [people, setPeople] = useState<PersonSummary[]>([]);
@@ -360,6 +363,12 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
   const [matchesErrorMessage, setMatchesErrorMessage] = useState<string | null>(null);
   const [isAlbumDialogOpen, setIsAlbumDialogOpen] = useState(false);
   const [albumNameInput, setAlbumNameInput] = useState("");
+  const [isCollectionDialogOpen, setIsCollectionDialogOpen] = useState(false);
+  const [collectionNameInput, setCollectionNameInput] = useState("");
+  const [collectionSingleFileConfirmChecked, setCollectionSingleFileConfirmChecked] = useState(false);
+  const [isSubmittingCollection, setIsSubmittingCollection] = useState(false);
+  const [collectionActionError, setCollectionActionError] = useState<string | null>(null);
+  const [collectionActionResult, setCollectionActionResult] = useState<SourceReviewCreateCollectionResponse | null>(null);
   const [singleFileConfirmChecked, setSingleFileConfirmChecked] = useState(false);
   const [isSubmittingAlbum, setIsSubmittingAlbum] = useState(false);
   const [albumActionError, setAlbumActionError] = useState<string | null>(null);
@@ -482,6 +491,13 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
     return buildSuggestedLabel(selectedHierarchyLevel.segment_text || "Untitled");
   }, [selectedHierarchyLevel]);
 
+  const proposedCollectionName = useMemo(() => {
+    if (!selectedHierarchyLevel) {
+      return "";
+    }
+    return buildSuggestedLabel(selectedHierarchyLevel.segment_text || "Untitled");
+  }, [selectedHierarchyLevel]);
+
   const proposedEventName = useMemo(() => {
     if (!selectedHierarchyLevel) {
       return "";
@@ -497,6 +513,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
   }, [selectedHierarchyLevel]);
 
   const canCreateAlbum = Boolean(matches && matches.total_count > 0 && selectedProvenanceId !== null && selectedLevelIndex !== null);
+  const canCreateCollection = canCreateAlbum;
   const canCreateEvent = canCreateAlbum;
 
   const requiresSingleFileConfirm = Boolean(selectedHierarchyLevel?.is_filename);
@@ -506,6 +523,12 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
     !albumNameInput.trim() ||
     isSubmittingAlbum ||
     (requiresSingleFileConfirm && !singleFileConfirmChecked);
+
+  const confirmCollectionActionDisabled =
+    !canCreateCollection ||
+    !collectionNameInput.trim() ||
+    isSubmittingCollection ||
+    (requiresSingleFileConfirm && !collectionSingleFileConfirmChecked);
 
   const confirmEventActionDisabled =
     !canCreateEvent ||
@@ -542,6 +565,29 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
       setAlbumActionError(getErrorMessage(error, "Failed to create album from selected provenance level."));
     } finally {
       setIsSubmittingAlbum(false);
+    }
+  }
+
+  async function submitCreateCollection() {
+    if (!matches || selectedProvenanceId === null || selectedLevelIndex === null) {
+      return;
+    }
+
+    setIsSubmittingCollection(true);
+    setCollectionActionError(null);
+
+    try {
+      const response = await createCollectionFromSourceReviewLevel({
+        provenance_id: selectedProvenanceId,
+        level_index: selectedLevelIndex,
+        hierarchy_mode: hierarchyMode,
+        collection_name: collectionNameInput,
+      });
+      setCollectionActionResult(response);
+    } catch (error: unknown) {
+      setCollectionActionError(getErrorMessage(error, "Failed to create collection from selected provenance level."));
+    } finally {
+      setIsSubmittingCollection(false);
     }
   }
 
@@ -625,6 +671,11 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
   }, [hierarchyLevels, selectedLevelIndex, selectedProvenanceRow]);
 
   useEffect(() => {
+    setIsCollectionDialogOpen(false);
+    setCollectionActionError(null);
+    setCollectionActionResult(null);
+    setCollectionSingleFileConfirmChecked(false);
+    setCollectionNameInput(proposedCollectionName);
     setIsAlbumDialogOpen(false);
     setAlbumActionError(null);
     setAlbumActionResult(null);
@@ -644,6 +695,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
     parsedEventDateCandidate.interpretation,
     parsedEventDateCandidate.startDate,
     proposedAlbumName,
+    proposedCollectionName,
     proposedEventName,
     selectedProvenanceId,
     selectedLevelIndex,
@@ -654,7 +706,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
     <div className={styles.root}>
       <header className={styles.header}>
         <h2 className={styles.title}>Source Review</h2>
-        <p className={styles.subtitle}>Provenance workspace for hierarchy/prefix exploration with album and event creation enabled for selected levels.</p>
+        <p className={styles.subtitle}>Provenance workspace for hierarchy/prefix exploration with collection, album, and event creation enabled for selected levels.</p>
       </header>
 
       {!assetSha256 ? (
@@ -833,7 +885,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
               <p className={styles.status}>Select a hierarchy level to preview candidate actions.</p>
             ) : (
               <>
-                <p className={styles.noticeStrong}>Album and Event creation are active in this milestone. Other actions remain preview-only.</p>
+                <p className={styles.noticeStrong}>Collection, Album, and Event creation are active in this milestone. Other actions remain preview-only.</p>
                 <p className={styles.notice}>
                   Raw segment: <span className={styles.segmentRaw}>{selectedHierarchyLevel.segment_text}</span>
                 </p>
@@ -843,7 +895,22 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
                       <p className={styles.candidateTitle}>{card.title}</p>
                       <p className={styles.candidateValue}>{card.proposedValue}</p>
                       <p className={styles.candidateDetail}>{card.detail}</p>
-                      {card.key === "album" ? (
+                      {card.key === "collection" ? (
+                        <button
+                          type="button"
+                          className={styles.actionButton}
+                          disabled={!canCreateCollection || isLoadingMatches}
+                          onClick={() => {
+                            setCollectionNameInput(proposedCollectionName);
+                            setCollectionSingleFileConfirmChecked(false);
+                            setCollectionActionError(null);
+                            setCollectionActionResult(null);
+                            setIsCollectionDialogOpen(true);
+                          }}
+                        >
+                          Create Collection
+                        </button>
+                      ) : card.key === "album" ? (
                         <button
                           type="button"
                           className={styles.actionButton}
@@ -885,6 +952,103 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
                     </article>
                   ))}
                 </div>
+
+                {isCollectionDialogOpen ? (
+                  <div className={styles.confirmPanel}>
+                    <h4 className={styles.confirmTitle}>Create Collection from Selected Provenance Level</h4>
+                    <label className={styles.fieldLabel}>
+                      Collection name
+                      <input
+                        type="text"
+                        value={collectionNameInput}
+                        onChange={(event) => setCollectionNameInput(event.target.value)}
+                        className={styles.textInput}
+                        maxLength={255}
+                      />
+                    </label>
+
+                    <ul className={styles.contextList}>
+                      <li>Source: {selectedProvenanceRow?.source_label ?? "Unknown"} ({selectedProvenanceRow?.source_type ?? "unknown"})</li>
+                      <li>Hierarchy mode: {hierarchyMode}</li>
+                      <li>Selected segment: {selectedHierarchyLevel.segment_text}</li>
+                      <li>Selected prefix: {matches?.selected_prefix ?? "-"}</li>
+                      <li>Matching asset count: {matches?.total_count ?? 0}</li>
+                    </ul>
+
+                    {requiresSingleFileConfirm ? (
+                      <div className={styles.warningBox}>
+                        <p className={styles.warningText}>This level appears to be a single file. The collection may contain only this asset.</p>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={collectionSingleFileConfirmChecked}
+                            onChange={(event) => setCollectionSingleFileConfirmChecked(event.target.checked)}
+                          />
+                          I understand this may create a very small collection.
+                        </label>
+                      </div>
+                    ) : null}
+
+                    <p className={styles.notice}>
+                      This will create a top-level collection and add matching assets directly to it. No source files, provenance, dates, people, or events will be changed.
+                    </p>
+
+                    {matches && matches.items.length > 0 ? (
+                      <>
+                        <p className={styles.matchSummary}>Sample matching assets</p>
+                        <ul className={styles.sampleList}>
+                          {matches.items.slice(0, 6).map((item) => (
+                            <li key={`collection-sample-${item.asset_sha256}`} className={styles.sampleItem}>
+                              {item.filename}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+
+                    {collectionActionError ? <p className={styles.error}>{collectionActionError}</p> : null}
+
+                    {collectionActionResult ? (
+                      <div className={styles.successBox}>
+                        <p className={styles.successText}>Created collection "{collectionActionResult.collection_name}".</p>
+                        <p className={styles.status}>
+                          Added: {collectionActionResult.added_count} | Already present: {collectionActionResult.already_present_count} | Failed: {collectionActionResult.failed_count}
+                        </p>
+                        <div className={styles.dialogActions}>
+                          <button type="button" className={styles.actionButton} onClick={onOpenCollections}>
+                            Open Collections
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            onClick={() => setIsCollectionDialogOpen(false)}
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={styles.dialogActions}>
+                        <button
+                          type="button"
+                          className={styles.actionButton}
+                          disabled={confirmCollectionActionDisabled}
+                          onClick={() => void submitCreateCollection()}
+                        >
+                          {isSubmittingCollection ? "Creating..." : "Confirm Create Collection"}
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          disabled={isSubmittingCollection}
+                          onClick={() => setIsCollectionDialogOpen(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
 
                 {isAlbumDialogOpen ? (
                   <div className={styles.confirmPanel}>

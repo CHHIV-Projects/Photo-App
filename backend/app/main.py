@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.admin import router as admin_router
 from app.api.albums import router as albums_router
+from app.api.collections import router as collections_router
 from app.api.clusters import router as clusters_router
 from app.api.duplicates import router as duplicates_router
 from app.api.events import router as events_router
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
 	app.include_router(admin_router)
 	app.include_router(health_router)
 	app.include_router(albums_router)
+	app.include_router(collections_router)
 	app.include_router(clusters_router)
 	app.include_router(duplicates_router)
 	app.include_router(events_router)

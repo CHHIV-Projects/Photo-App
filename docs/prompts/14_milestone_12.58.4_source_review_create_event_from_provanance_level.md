@@ -713,3 +713,179 @@ or, if event behavior needs adjustment:
 ```
 
 Do not enable standalone date metadata correction until event/date grouping is validated.
+
+
+
+
+# Answers to Coder Questions — Milestone 12.58.4
+
+## 1. No-date clue fallback
+
+Yes, use a fallback date range from eligible matching assets when no trustworthy date clue is detected.
+
+Preferred rule:
+
+```text
+If provenance segment has a trustworthy parsed date/date range:
+  use parsed date/date range as proposed event start/end
+
+If no trustworthy date clue exists:
+  infer proposed event start/end from eligible matching assets:
+    min captured_at
+    max captured_at
+
+If captured_at is missing for some assets:
+  ignore missing captured_at for range calculation
+
+If all eligible assets lack captured_at:
+  use created_at / ingested_at fallback only if already available and clearly labeled as low-confidence
+
+UI must label fallback clearly:
+
+Date range inferred from matching asset dates.
+
+or:
+
+Low-confidence date range inferred from available asset timestamps.
+
+Do not imply provenance supplied a date if the date came from asset metadata.
+
+If there is no usable date at all and Event requires non-null start_at / end_at, then block creation with a clear message:
+
+No date clue or usable asset date range is available. Event creation requires a date range.
+
+Do not invent today's date or arbitrary placeholder dates.
+
+2. Existing event policy
+
+Confirmed.
+
+Default policy:
+
+skip_existing
+
+Do not overwrite assets that already have any event_id.
+
+Result counts should include:
+
+assigned_count
+skipped_existing_event_count
+failed_count
+
+If some assets already belong to the event being created/used, count separately if feasible:
+
+already_in_event_count
+
+But minimum required:
+
+assigned_count
+skipped_existing_event_count
+failed_count
+
+No silent overwrite.
+
+3. Duplicate event behavior
+
+Keep v1 simple: allow create-new events and document duplicate behavior.
+
+Do not build a use-existing-event conflict flow in 12.58.4 unless it is trivial.
+
+Reason:
+
+Event names may legitimately repeat across years, people, places, or contexts.
+
+For 12.58.4, duplicate event handling can be:
+
+same label/date range may create a new event
+document current behavior
+
+If coder can cheaply detect a likely duplicate, show a non-blocking warning:
+
+A similar event may already exist.
+
+But do not make duplicate-event resolution a major part of this milestone.
+
+4. Filename-level guard
+
+Yes. Use the same pattern as 12.58.3.
+
+If selected hierarchy level is the filename/final path element:
+
+show warning
+require explicit checkbox confirmation before final create
+
+Suggested wording:
+
+This level appears to be a single file. This event may contain only this asset.
+
+Do not block completely.
+
+5. Date precision persistence
+
+Confirmed.
+
+Do not add schema for date precision in 12.58.4.
+
+Since Event has no precision field:
+
+precision remains UI/result text only
+
+Store only what the Event model currently supports:
+
+label
+start_at
+end_at
+
+But show the user the interpretation:
+
+Interpreted as month range: June 1975 to December 1976
+
+Document that precision persistence is deferred.
+
+Implementation Direction Confirmation
+
+Proceed with a narrow provenance-aware event endpoint, following the 12.58.3 pattern.
+
+Preferred backend behavior:
+
+POST /api/provenance-review/create-event
+
+Inputs:
+  provenance_id
+  level_index
+  hierarchy_mode
+  event_label
+  start_at
+  end_at
+  existing_event_policy = skip_existing
+
+Backend:
+  recompute full matching asset set using Source Review prefix rules
+  create event
+  assign only eligible assets with no existing event_id
+  skip assets already assigned to an event
+  return result counts
+
+Use existing event services if practical, but add the narrow endpoint if needed.
+
+Safety guardrails
+- Do not update Asset.captured_at.
+- Do not modify metadata observations.
+- Do not overwrite existing event_id by default.
+- Do not change event clustering/rebuild behavior.
+- Do not change provenance/source paths.
+- Do not alter album behavior from 12.58.3.
+Summary for Coder
+
+Proceed with:
+
+- Parsed date/date range if trustworthy.
+- Else fallback to min/max eligible asset captured_at.
+- If no usable date range exists, block event creation.
+- Default existing-event policy = skip_existing.
+- Duplicate event names/date ranges allowed for v1; document behavior.
+- Filename-level event creation requires explicit checkbox confirmation.
+- Date precision is UI/documentation only; no schema change.
+- Add narrow provenance-review create-event endpoint.
+- Keep Album action working.
+- Keep person/place/tag/date metadata actions preview-only.

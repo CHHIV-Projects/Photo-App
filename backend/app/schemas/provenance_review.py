@@ -113,6 +113,36 @@ class SourceReviewCreateAlbumResponse(BaseModel):
     failures: list[SourceReviewCreateAlbumFailure]
 
 
+class SourceReviewCreateCollectionFailure(BaseModel):
+    asset_sha256: str
+    reason: str
+
+
+class SourceReviewCreateCollectionRequest(BaseModel):
+    provenance_id: int = Field(ge=1)
+    level_index: int = Field(ge=0)
+    hierarchy_mode: Literal["relative", "full_source_path"] = "relative"
+    collection_name: str = Field(min_length=1, max_length=255)
+
+
+class SourceReviewCreateCollectionResponse(BaseModel):
+    outcome: Literal["created"]
+    collection_id: int
+    collection_name: str
+    created_new_collection: bool
+    provenance_id: int
+    hierarchy_mode: str
+    selected_level_index: int
+    selected_segment: str
+    selected_prefix: str
+    matching_asset_count: int
+    requested_count: int
+    added_count: int
+    already_present_count: int
+    failed_count: int
+    failures: list[SourceReviewCreateCollectionFailure]
+
+
 class SourceReviewCreateEventRequest(BaseModel):
     provenance_id: int = Field(ge=1)
     level_index: int = Field(ge=0)
