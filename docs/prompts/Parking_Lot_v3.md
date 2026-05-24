@@ -884,6 +884,12 @@ Medium.
 
 ---
 
+```
+## UX-007 — Collection Polish### SummaryDefer Collection UI/UX polish until the broader Source Review / Album / Collection workflow has more real usage and testing.### PurposeImprove the usability, navigation, and visual clarity of Collections after the core functionality is stable.### Candidate Improvements- Reusable shared Collection picker component.- Richer Collection detail view.- Better display of:  - direct assets in Collection  - Albums linked to Collection  - asset count  - album count- Direct navigation/preselection after creating or adding to a Collection.- Improved Collection search/filter UX.- Better visual distinction between Collections and Albums.- Collection membership removal workflows.- Duplicate Collection name conflict UX:  - use existing  - rename  - cancel- Better result messaging after:  - create Collection  - add assets to Collection  - link Album to Collection- Layout polish for Collections tab and Source Review Collection actions.### Out of Scope- Collection hierarchy / nested Collections- Google Vision- semantic search- source file cleanup- duplicate/canonical logic- ingestion changes### PriorityDeferred. Collections are currently functional enough for continued workflow development. Revisit after more real-world testing.
+```
+
+---
+
 # 5. Face / Identity System
 
 ---
@@ -1531,5 +1537,69 @@ Explore assisted inference for missing dates or metadata.
 ### Constraint
 
 Non-deterministic inference must remain clearly labeled and user-approved.
+
+---
+
+```
+## SEARCH-004 — Photo Review Search Hierarchy and Search Bar Improvements### SummaryRevisit Photo Review search/filter behavior to support smarter hierarchical filtering and less rigid search behavior.### ProblemPhoto Review search remains too structured and does not yet feel like a flexible search system. Current dropdown/search behavior may not respect hierarchy between filters.Example issue:```textIf a specific Collection is selected,available Albums should be limited to Albums within that Collection.
+```
+
+### Desired Direction
+
+Improve Photo Review search so filters are context-aware and hierarchical where appropriate.
+
+### Candidate Improvements
+
+- Collection-aware Album filtering:
+  - selecting a Collection limits Album options to Albums linked to that Collection
+  - standalone Albums remain available when no Collection is selected
+- Review how Collection, Album, Event, Date, Person, Place, Source, and media filters interact.
+- Define search hierarchy rules:
+  - Collection → Albums
+  - Album → Assets
+  - Source → Provenance paths
+  - Year → Month/date range
+  - Person → assets/faces associated with that person
+  - Place → GPS/place/landmark candidates
+- Reexamine the free-text search bar.
+- Make search bar less rigid and less dependent on hard-coded parsing.
+- Support better plain-text search across available indexed fields:
+  - filename
+  - album name
+  - collection name
+  - person name / alias
+  - source/provenance path
+  - event label
+  - place/tag fields when available
+- Avoid incorrect assumptions such as treating unknown text as camera search.
+- Consider clearer chips for active filters.
+- Consider dependent dropdown behavior:
+  - dropdown options update based on active higher-level filters.
+- Consider “All / within selected Collection / standalone” behavior for Albums.
+
+### Design Questions
+
+- Should Collection be the highest-level filter in Photo Review?
+- Should Albums shown in the Album dropdown depend on Collection selection?
+- Should Date filters apply globally or only within current Collection/Album selection?
+- How should Source Review provenance filters interact with Collection/Album filters?
+- Should search bar search all text fields by default?
+- Should structured prefixes still exist, such as:
+  - `person:Mary`
+  - `album:Christmas`
+  - `source:Dad Files`
+- How should future Google Vision place/landmark clues and future semantic/object clues be included?
+
+### Out of Scope
+
+- Full semantic search
+- Google Vision implementation
+- LLaMA/local model integration
+- major database search redesign unless separately scoped
+- changing ingestion/source behavior
+
+### Priority
+
+Deferred but important before production-level usability. Revisit after Source Review / Collections / Albums core workflows stabilize.
 
 ---

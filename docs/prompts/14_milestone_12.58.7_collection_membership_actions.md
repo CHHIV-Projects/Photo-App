@@ -572,3 +572,170 @@ or:
 ```
 
 Do not move to Google Vision until Collection/Album membership actions are stable enough for v1 use.
+
+
+
+
+
+# Answers to Coder Questions — Milestone 12.58.7
+
+## 1. Count reporting endpoint
+
+Evolve the existing endpoint if it is safe:
+
+```text
+POST /api/collections/{collection_id}/assets
+
+Preferred behavior:
+
+return requested_count
+return added_count
+return already_present_count
+return failed_count
+
+Reason:
+
+This endpoint already represents adding assets to a Collection.
+Count reporting is a natural improvement.
+
+Do not break existing callers. If current callers expect only success, preserve backward compatibility by adding fields rather than changing required request shape.
+
+If changing the existing response risks breaking code, add a narrow counted batch endpoint, but preferred path is to enhance the existing endpoint.
+
+2. Source Review action placement
+
+Use a separate button/action named:
+
+Add to Existing Collection
+
+This should be in addition to:
+
+Create Collection
+
+Reason:
+
+Create Collection and Add to Existing Collection are different user intentions.
+They should not be hidden inside the same dialog for v1.
+
+Preferred Source Review Collection candidate area:
+
+Could become Collection
+
+[Create Collection]
+[Add to Existing Collection]
+
+Keep wording clear.
+
+3. Photo Review confirmation dialog
+
+Use a confirmation dialog.
+
+Do not make it one-click for 12.58.7.
+
+Reason:
+
+Adding many selected assets to a Collection is a batch operation.
+The user should see the target Collection and selected count before confirming.
+
+Minimum confirmation content:
+
+selected Collection
+selected asset count
+sample thumbnails or filenames if easy
+safety note
+confirm/cancel
+4. Collection picker UX
+
+Include name search in 12.58.7 if reasonably simple.
+
+Preferred:
+
+search/filter by Collection name
+list matching Collections
+select one
+
+Minimum acceptable if time is tight:
+
+simple dropdown list
+
+But I prefer search because Collections will become important top-level containers and the list may grow.
+
+Do not show Albums in the Collection picker.
+
+5. No Collections exist behavior
+
+Show a blocking message and provide an Open Collections shortcut.
+
+Preferred message:
+
+No Collections exist yet. Create a Collection first.
+
+Add:
+
+[Open Collections]
+
+Do not create a new Collection from this dialog in 12.58.7 unless it is trivial. The core scope is adding to existing Collections.
+
+6. Source Review add-to-existing endpoint
+
+Use the preferred provenance-aware endpoint:
+
+POST /api/provenance-review/add-to-collection
+
+Reason:
+
+Source Review add-to-existing must recompute the full matching asset set server-side.
+It should not rely on the frontend sample list.
+
+This endpoint should reuse collection service logic for the actual idempotent membership add.
+
+Layering:
+
+provenance-review endpoint:
+  validates provenance row / hierarchy level / hierarchy mode
+  recomputes full matching asset set
+  validates target is grouping_type = collection
+  calls collection service add-assets method
+  returns counts
+7. Create new Collection and add
+
+Explicitly defer this for 12.58.7.
+
+Keep the scope tight:
+
+Add to Existing Collection only
+
+The user can already create Collections from Source Review and the Collections tab. We can add a combined create-and-add flow later if needed.
+
+8. Failure details
+
+Show summary counts in the main UI.
+
+Preferred UI:
+
+Requested: 143
+Added: 92
+Already present: 51
+Failed: 0
+
+If failures occur, show a concise message:
+
+Some assets could not be added. See logs/details.
+
+Per-asset failure rows are optional and can be placed in an expandable details section if easy, but not required for 12.58.7.
+
+Do not overbuild failure display unless the backend already returns clear per-asset reasons.
+
+Summary for Coder
+
+Proceed with:
+
+- Enhance existing collection asset-add endpoint with count reporting if safe.
+- Add provenance-aware POST /api/provenance-review/add-to-collection.
+- Source Review gets separate “Add to Existing Collection” action.
+- Photo Review gets confirmed “Add selected to Collection” batch action.
+- Include Collection picker with search if reasonably simple.
+- If no Collections exist, block and offer Open Collections.
+- Do not add create-new-Collection-and-add in this milestone.
+- UI result can show counts only; per-asset failure details optional.
+- Preserve Album, Collection, Source Review, and Photo Review existing behavior.

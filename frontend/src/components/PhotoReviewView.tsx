@@ -499,6 +499,30 @@ export function PhotoReviewView({
   }, []);
 
   useEffect(() => {
+    let isCancelled = false;
+
+    async function loadCollections(): Promise<void> {
+      try {
+        const response = await getCollections();
+        if (isCancelled) {
+          return;
+        }
+        const sorted = [...response.items].sort((a, b) => a.name.localeCompare(b.name));
+        setCollections(sorted);
+      } catch {
+        if (!isCancelled) {
+          setCollections([]);
+        }
+      }
+    }
+
+    void loadCollections();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (albums.length === 0) {
       setSelectedAlbumId(null);
       return;
@@ -1006,6 +1030,7 @@ export function PhotoReviewView({
     setPeopleSearchQuery("");
     setSelectedAlbumForFilter(null);
     setSelectedEventId(null);
+    setSelectedCollectionId(null);
     setPlaceQuery("");
     setProvenanceQuery("");
   }
@@ -1235,6 +1260,20 @@ export function PhotoReviewView({
           </label>
 
           <label className={styles.fieldLabel}>
+            Collection
+            <select
+              value={selectedCollectionId ?? ""}
+              onChange={(event) => setSelectedCollectionId(event.target.value ? Number(event.target.value) : null)}
+              className={styles.select}
+            >
+              <option value="">All collections</option>
+              {collections.map((collection) => (
+                <option key={collection.collection_id} value={collection.collection_id}>{collection.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className={styles.fieldLabel}>
             Album
             <select
               value={selectedAlbumForFilter ?? ""}
@@ -1263,6 +1302,7 @@ export function PhotoReviewView({
               ))}
             </select>
           </label>
+
         </div>
 
         <div className={styles.fieldRow}>
