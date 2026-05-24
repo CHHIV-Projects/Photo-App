@@ -18,11 +18,9 @@ from app.models.place_geocoding_run import PlaceGeocodingRun
 from app.services.location.geocoding_service import (
     GEOCODE_STATUS_FAILED,
     GEOCODE_STATUS_NEVER_TRIED,
-    GEOCODE_STATUS_SUCCESS,
+    apply_reverse_geocode_result_to_place,
     reverse_geocode_coordinate,
 )
-from app.services.places.observation_service import CreatePlaceObservationInput, create_place_observation
-from app.services.places.policy import should_block_provider_canonical_overwrite
 from app.services.location.place_geocoding_schema import ensure_place_geocoding_schema
 
 # Reports written to storage/logs/place_geocoding_reports/ relative to project root.
@@ -241,6 +239,12 @@ def _background_place_geocoding_run(run_id: int) -> None:
                     "status": STATUS_FAILED,
                     "reason": "missing_api_key",
                     "message": "GOOGLE_MAPS_API_KEY is not configured",
+                    "places_evaluated": 0,
+                    "provider_calls_attempted": 0,
+                    "observations_created": 0,
+                    "canonical_updated": 0,
+                    "canonical_skipped_locked": 0,
+                    "places_with_no_result": 0,
                     "total_places": 0,
                     "processed_places": 0,
                     "succeeded_places": 0,
@@ -263,6 +267,12 @@ def _background_place_geocoding_run(run_id: int) -> None:
 
         succeeded = 0
         failed = 0
+        places_evaluated = 0
+        provider_calls_attempted = 0
+        observations_created = 0
+        canonical_updated = 0
+        canonical_skipped_locked = 0
+        places_with_no_result = 0
         now_utc = _utc_now()
 
         for place in pending_places:
@@ -280,44 +290,30 @@ def _background_place_geocoding_run(run_id: int) -> None:
             db.commit()
 
             try:
+                provider_calls_attempted += 1
+                places_evaluated += 1
                 response = reverse_geocode_coordinate(
                     latitude=place.representative_latitude,
                     longitude=place.representative_longitude,
                     api_key=settings.google_maps_api_key,
                 )
-                create_place_observation(
+                apply_result = apply_reverse_geocode_result_to_place(
                     db,
-                    CreatePlaceObservationInput(
-                        place_id=place.place_id,
-                        source_type="reverse_geocode",
-                        observation_type="address",
-                        status="pending",
-                        raw_label=response.result.formatted_address,
-                        formatted_address=response.result.formatted_address,
-                        street=response.result.street,
-                        city=response.result.city,
-                        county=response.result.county,
-                        state=response.result.state,
-                        postal_code=response.result.postal_code,
-                        country=response.result.country,
-                        latitude=place.representative_latitude,
-                        longitude=place.representative_longitude,
-                        raw_response_json=response.raw_payload,
-                    ),
+                    place=place,
+                    response=response,
+                    geocoded_at=now_utc,
                 )
-                if not should_block_provider_canonical_overwrite(place):
-                    place.formatted_address = response.result.formatted_address
-                    place.street = response.result.street
-                    place.city = response.result.city
-                    place.county = response.result.county
-                    place.state = response.result.state
-                    place.postal_code = response.result.postal_code
-                    place.country = response.result.country
-                place.geocode_status = GEOCODE_STATUS_SUCCESS
-                place.geocode_error = None
-                place.geocoded_at = now_utc
                 succeeded += 1
+                observations_created += int(apply_result.observation_created)
+                canonical_updated += int(apply_result.canonical_updated)
+                canonical_skipped_locked += int(apply_result.canonical_skipped_locked)
+                places_with_no_result += int(apply_result.no_result)
             except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                managed_place = db.get(Place, place.place_id)
+                if managed_place is not None:
+                    managed_place.geocode_status = GEOCODE_STATUS_FAILED
+                    managed_place.geocode_error = str(exc) or exc.__class__.__name__
                 place.geocode_status = GEOCODE_STATUS_FAILED
                 place.geocode_error = str(exc) or exc.__class__.__name__
                 failed += 1
@@ -326,12 +322,43 @@ def _background_place_geocoding_run(run_id: int) -> None:
             run.processed_places = succeeded + failed
             run.succeeded_places = succeeded
             run.failed_places = failed
+            run.last_run_summary = json.dumps(
+                {
+                    "status": STATUS_RUNNING,
+                    "places_evaluated": places_evaluated,
+                    "provider_calls_attempted": provider_calls_attempted,
+                    "observations_created": observations_created,
+                    "canonical_updated": canonical_updated,
+                    "canonical_skipped_locked": canonical_skipped_locked,
+                    "places_with_no_result": places_with_no_result,
+                    "total_places": run.total_places,
+                    "processed_places": run.processed_places,
+                    "succeeded_places": run.succeeded_places,
+                    "failed_places": run.failed_places,
+                    "current_place_id": run.current_place_id,
+                }
+            )
             db.commit()
 
         # Mark as completed
         run.status = STATUS_COMPLETED
         run.finished_at = _utc_now()
         run.current_place_id = None
+        run.last_run_summary = json.dumps(
+            {
+                "status": STATUS_COMPLETED,
+                "places_evaluated": places_evaluated,
+                "provider_calls_attempted": provider_calls_attempted,
+                "observations_created": observations_created,
+                "canonical_updated": canonical_updated,
+                "canonical_skipped_locked": canonical_skipped_locked,
+                "places_with_no_result": places_with_no_result,
+                "total_places": run.total_places,
+                "processed_places": run.processed_places,
+                "succeeded_places": run.succeeded_places,
+                "failed_places": run.failed_places,
+            }
+        )
         db.commit()
         _write_report(run)
 
@@ -344,6 +371,12 @@ def _background_place_geocoding_run(run_id: int) -> None:
                 {
                     "status": STATUS_FAILED,
                     "error": str(exc),
+                    "places_evaluated": run.processed_places,
+                    "provider_calls_attempted": run.processed_places,
+                    "observations_created": None,
+                    "canonical_updated": None,
+                    "canonical_skipped_locked": None,
+                    "places_with_no_result": None,
                     "total_places": run.total_places,
                     "processed_places": run.processed_places,
                     "succeeded_places": run.succeeded_places,
@@ -380,6 +413,13 @@ def _write_report(run: PlaceGeocodingRun) -> None:
     if run.started_at and run.finished_at:
         elapsed = (run.finished_at - run.started_at).total_seconds()
 
+    parsed_summary = None
+    if run.last_run_summary:
+        try:
+            parsed_summary = json.loads(run.last_run_summary)
+        except json.JSONDecodeError:
+            parsed_summary = None
+
     report = {
         "run_id": run.id,
         "status": run.status,
@@ -392,6 +432,7 @@ def _write_report(run: PlaceGeocodingRun) -> None:
         "failed_places": run.failed_places,
         "last_error": run.last_error,
         "created_by": run.created_by,
+        "summary": parsed_summary,
     }
 
     with open(report_path, "w") as f:

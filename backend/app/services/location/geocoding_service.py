@@ -90,17 +90,32 @@ class ReverseGeocodeResult:
 
 @dataclass(frozen=True)
 class ReverseGeocodeResponse:
+    status: str
     result: ReverseGeocodeResult
     raw_payload: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class PlaceGeocodingSummary:
+    places_evaluated: int
     eligible_places: int
-    attempted_calls: int
+    provider_calls_attempted: int
     successful: int
     failed: int
     skipped_due_to_cap: int
+    observations_created: int
+    canonical_updated: int
+    canonical_skipped_locked: int
+    places_with_no_result: int
+
+
+@dataclass(frozen=True)
+class ReverseGeocodeApplyResult:
+    provider_succeeded: bool
+    observation_created: bool
+    canonical_updated: bool
+    canonical_skipped_locked: bool
+    no_result: bool
 
 
 def _normalize_text(value: str | None) -> str | None:
@@ -179,7 +194,76 @@ def reverse_geocode_coordinate(latitude: float, longitude: float, api_key: str) 
         error_message = _normalize_text(payload.get("error_message"))
         raise RuntimeError(error_message or f"Google geocoding status: {status}")
 
-    return ReverseGeocodeResponse(result=parse_reverse_geocode_result(payload), raw_payload=payload)
+    return ReverseGeocodeResponse(status=status, result=parse_reverse_geocode_result(payload), raw_payload=payload)
+
+
+def apply_reverse_geocode_result_to_place(
+    db_session: Session,
+    *,
+    place: Place,
+    response: ReverseGeocodeResponse,
+    geocoded_at: datetime,
+) -> ReverseGeocodeApplyResult:
+    if response.status == "ZERO_RESULTS":
+        place.geocode_status = GEOCODE_STATUS_SUCCESS
+        place.geocode_error = None
+        place.geocoded_at = geocoded_at
+        return ReverseGeocodeApplyResult(
+            provider_succeeded=True,
+            observation_created=False,
+            canonical_updated=False,
+            canonical_skipped_locked=False,
+            no_result=True,
+        )
+
+    create_place_observation(
+        db_session,
+        CreatePlaceObservationInput(
+            place_id=place.place_id,
+            source_type="reverse_geocode",
+            observation_type="address",
+            status="pending",
+            raw_label=response.result.formatted_address,
+            formatted_address=response.result.formatted_address,
+            street=response.result.street,
+            city=response.result.city,
+            county=response.result.county,
+            state=response.result.state,
+            postal_code=response.result.postal_code,
+            country=response.result.country,
+            latitude=place.representative_latitude,
+            longitude=place.representative_longitude,
+            raw_response_json=response.raw_payload,
+        ),
+        commit=False,
+    )
+
+    canonical_updated = False
+    canonical_skipped_locked = False
+    if should_block_provider_canonical_overwrite(place):
+        canonical_skipped_locked = True
+    else:
+        place.formatted_address = response.result.formatted_address
+        place.street = response.result.street
+        place.city = response.result.city
+        place.county = response.result.county
+        place.state = response.result.state
+        place.postal_code = response.result.postal_code
+        place.country = response.result.country
+        place.address_source = "reverse_geocode"
+        canonical_updated = True
+
+    place.geocode_status = GEOCODE_STATUS_SUCCESS
+    place.geocode_error = None
+    place.geocoded_at = geocoded_at
+
+    return ReverseGeocodeApplyResult(
+        provider_succeeded=True,
+        observation_created=True,
+        canonical_updated=canonical_updated,
+        canonical_skipped_locked=canonical_skipped_locked,
+        no_result=False,
+    )
 
 
 def _state_label(state: str | None, country: str | None, country_code: str | None) -> str | None:
@@ -227,13 +311,35 @@ def enrich_places_with_reverse_geocoding(
     if max_calls is None:
         max_calls = settings.place_geocode_max_calls_per_run
     if max_calls <= 0:
-        return PlaceGeocodingSummary(eligible_places=0, attempted_calls=0, successful=0, failed=0, skipped_due_to_cap=0)
+        return PlaceGeocodingSummary(
+            places_evaluated=0,
+            eligible_places=0,
+            provider_calls_attempted=0,
+            successful=0,
+            failed=0,
+            skipped_due_to_cap=0,
+            observations_created=0,
+            canonical_updated=0,
+            canonical_skipped_locked=0,
+            places_with_no_result=0,
+        )
 
     query = select(Place).order_by(Place.place_id.asc())
     if place_ids is not None:
         unique_place_ids = [int(place_id) for place_id in dict.fromkeys(place_ids)]
         if not unique_place_ids:
-            return PlaceGeocodingSummary(eligible_places=0, attempted_calls=0, successful=0, failed=0, skipped_due_to_cap=0)
+            return PlaceGeocodingSummary(
+                places_evaluated=0,
+                eligible_places=0,
+                provider_calls_attempted=0,
+                successful=0,
+                failed=0,
+                skipped_due_to_cap=0,
+                observations_created=0,
+                canonical_updated=0,
+                canonical_skipped_locked=0,
+                places_with_no_result=0,
+            )
         query = query.where(Place.place_id.in_(unique_place_ids))
 
     eligible_statuses = [GEOCODE_STATUS_NEVER_TRIED]
@@ -243,12 +349,28 @@ def enrich_places_with_reverse_geocoding(
 
     places = list(db_session.scalars(query).all())
     if not places:
-        return PlaceGeocodingSummary(eligible_places=0, attempted_calls=0, successful=0, failed=0, skipped_due_to_cap=0)
+        return PlaceGeocodingSummary(
+            places_evaluated=0,
+            eligible_places=0,
+            provider_calls_attempted=0,
+            successful=0,
+            failed=0,
+            skipped_due_to_cap=0,
+            observations_created=0,
+            canonical_updated=0,
+            canonical_skipped_locked=0,
+            places_with_no_result=0,
+        )
 
     now_utc = datetime.now(timezone.utc)
-    attempted_calls = 0
+    provider_calls_attempted = 0
+    places_evaluated = 0
     successful = 0
     failed = 0
+    observations_created = 0
+    canonical_updated = 0
+    canonical_skipped_locked = 0
+    places_with_no_result = 0
 
     api_key = settings.google_maps_api_key
     if not api_key:
@@ -258,67 +380,65 @@ def enrich_places_with_reverse_geocoding(
         db_session.commit()
         processed = min(len(places), max_calls)
         return PlaceGeocodingSummary(
+            places_evaluated=processed,
             eligible_places=len(places),
-            attempted_calls=0,
+            provider_calls_attempted=0,
             successful=0,
             failed=processed,
             skipped_due_to_cap=max(0, len(places) - max_calls),
+            observations_created=0,
+            canonical_updated=0,
+            canonical_skipped_locked=0,
+            places_with_no_result=0,
         )
 
     for place in places[:max_calls]:
+        provider_calls_attempted += 1
+        places_evaluated += 1
         try:
             response = reverse_geocode_coordinate(
                 latitude=place.representative_latitude,
                 longitude=place.representative_longitude,
                 api_key=api_key,
             )
-            attempted_calls += 1
         except Exception as exc:  # noqa: BLE001
             place.geocode_status = GEOCODE_STATUS_FAILED
             place.geocode_error = str(exc) or exc.__class__.__name__
+            db_session.commit()
             failed += 1
             continue
 
-        create_place_observation(
-            db_session,
-            CreatePlaceObservationInput(
-                place_id=place.place_id,
-                source_type="reverse_geocode",
-                observation_type="address",
-                status="pending",
-                raw_label=response.result.formatted_address,
-                formatted_address=response.result.formatted_address,
-                street=response.result.street,
-                city=response.result.city,
-                county=response.result.county,
-                state=response.result.state,
-                postal_code=response.result.postal_code,
-                country=response.result.country,
-                latitude=place.representative_latitude,
-                longitude=place.representative_longitude,
-                raw_response_json=response.raw_payload,
-            ),
-        )
+        try:
+            apply_result = apply_reverse_geocode_result_to_place(
+                db_session,
+                place=place,
+                response=response,
+                geocoded_at=now_utc,
+            )
+            db_session.commit()
+            successful += 1
+            observations_created += int(apply_result.observation_created)
+            canonical_updated += int(apply_result.canonical_updated)
+            canonical_skipped_locked += int(apply_result.canonical_skipped_locked)
+            places_with_no_result += int(apply_result.no_result)
+        except Exception as exc:  # noqa: BLE001
+            db_session.rollback()
+            managed_place = db_session.get(Place, place.place_id)
+            if managed_place is not None:
+                managed_place.geocode_status = GEOCODE_STATUS_FAILED
+                managed_place.geocode_error = str(exc) or exc.__class__.__name__
+                db_session.commit()
+            failed += 1
 
-        if not should_block_provider_canonical_overwrite(place):
-            place.formatted_address = response.result.formatted_address
-            place.street = response.result.street
-            place.city = response.result.city
-            place.county = response.result.county
-            place.state = response.result.state
-            place.postal_code = response.result.postal_code
-            place.country = response.result.country
-
-        place.geocode_status = GEOCODE_STATUS_SUCCESS
-        place.geocode_error = None
-        place.geocoded_at = now_utc
-        successful += 1
-
-    db_session.commit()
     return PlaceGeocodingSummary(
+        places_evaluated=places_evaluated,
         eligible_places=len(places),
-        attempted_calls=attempted_calls,
+        provider_calls_attempted=provider_calls_attempted,
         successful=successful,
         failed=failed,
         skipped_due_to_cap=max(0, len(places) - max_calls),
+        observations_created=observations_created,
+        canonical_updated=canonical_updated,
+        canonical_skipped_locked=canonical_skipped_locked,
+        places_with_no_result=places_with_no_result,
     )

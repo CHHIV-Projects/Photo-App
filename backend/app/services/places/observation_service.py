@@ -67,7 +67,12 @@ def _clean_text(value: str | None) -> str | None:
     return cleaned or None
 
 
-def create_place_observation(db: Session, payload: CreatePlaceObservationInput) -> PlaceObservation:
+def create_place_observation(
+    db: Session,
+    payload: CreatePlaceObservationInput,
+    *,
+    commit: bool = True,
+) -> PlaceObservation:
     """Persist one place observation with validation."""
     if payload.asset_sha256 is None and payload.place_id is None:
         raise ValueError("At least one of asset_sha256 or place_id is required.")
@@ -110,8 +115,9 @@ def create_place_observation(db: Session, payload: CreatePlaceObservationInput) 
         raw_response_json=payload.raw_response_json,
     )
     db.add(observation)
-    db.commit()
-    db.refresh(observation)
+    if commit:
+        db.commit()
+        db.refresh(observation)
     return observation
 
 

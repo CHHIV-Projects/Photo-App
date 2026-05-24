@@ -34,11 +34,16 @@ def main() -> int:
         "schema_created_tables": schema_summary.created_tables,
         "schema_added_columns": schema_summary.added_columns,
         "schema_created_indexes": schema_summary.created_indexes,
+        "places_evaluated": geocode_summary.places_evaluated,
         "eligible_places": geocode_summary.eligible_places,
-        "attempted_calls": geocode_summary.attempted_calls,
+        "provider_calls_attempted": geocode_summary.provider_calls_attempted,
         "successful": geocode_summary.successful,
         "failed": geocode_summary.failed,
         "skipped_due_to_cap": geocode_summary.skipped_due_to_cap,
+        "observations_created": geocode_summary.observations_created,
+        "canonical_updated": geocode_summary.canonical_updated,
+        "canonical_skipped_locked": geocode_summary.canonical_skipped_locked,
+        "places_with_no_result": geocode_summary.places_with_no_result,
         "max_calls_per_run": settings.place_geocode_max_calls_per_run,
     }
     print(json.dumps(payload, indent=2))
