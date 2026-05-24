@@ -3,7 +3,7 @@
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import type { ForwardedRef } from "react";
 import type { PlaceSummary, PlaceDetail, PhotoSummary } from "@/types/ui-api";
-import { getPlaces, getPlaceDetail, resolveApiUrl, updatePlaceLabel } from "@/lib/api";
+import { addPlaceAlias, deletePlaceAlias, getPlaceDetail, getPlaces, resolveApiUrl, updatePlaceLabel } from "@/lib/api";
 import styles from "./places-view.module.css";
 
 interface PlacesViewProps {
@@ -24,6 +24,9 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
   const [labelDraft, setLabelDraft] = useState("");
   const [isSavingLabel, setIsSavingLabel] = useState(false);
   const [labelErrorMessage, setLabelErrorMessage] = useState("");
+  const [aliasDraft, setAliasDraft] = useState("");
+  const [aliasErrorMessage, setAliasErrorMessage] = useState("");
+  const [isSavingAlias, setIsSavingAlias] = useState(false);
   const placeListRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const photoListRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
@@ -177,6 +180,57 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
     }
   };
 
+  const handleAddAlias = async () => {
+    if (!selectedPlaceId || !aliasDraft.trim()) return;
+    setIsSavingAlias(true);
+    setAliasErrorMessage("");
+    try {
+      const created = await addPlaceAlias(selectedPlaceId, aliasDraft.trim());
+      setPlaceDetail((prev) => {
+        if (!prev || prev.place_id !== selectedPlaceId) return prev;
+        return {
+          ...prev,
+          aliases: [...prev.aliases, created].sort((a, b) => a.alias.localeCompare(b.alias)),
+        };
+      });
+      setAliasDraft("");
+      setPlaces((prev) => prev.map((place) => (
+        place.place_id === selectedPlaceId
+          ? { ...place, alias_count: place.alias_count + 1 }
+          : place
+      )));
+    } catch (err) {
+      setAliasErrorMessage(err instanceof Error ? err.message : "Failed to add alias");
+    } finally {
+      setIsSavingAlias(false);
+    }
+  };
+
+  const handleDeleteAlias = async (aliasId: number) => {
+    if (!selectedPlaceId) return;
+    setIsSavingAlias(true);
+    setAliasErrorMessage("");
+    try {
+      await deletePlaceAlias(selectedPlaceId, aliasId);
+      setPlaceDetail((prev) => {
+        if (!prev || prev.place_id !== selectedPlaceId) return prev;
+        return {
+          ...prev,
+          aliases: prev.aliases.filter((alias) => alias.id !== aliasId),
+        };
+      });
+      setPlaces((prev) => prev.map((place) => (
+        place.place_id === selectedPlaceId
+          ? { ...place, alias_count: Math.max(0, place.alias_count - 1) }
+          : place
+      )));
+    } catch (err) {
+      setAliasErrorMessage(err instanceof Error ? err.message : "Failed to delete alias");
+    } finally {
+      setIsSavingAlias(false);
+    }
+  };
+
   // Auto-scroll photo to selected
   useEffect(() => {
     if (selectedPhotoId) {
@@ -314,6 +368,51 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
               )}
             </div>
             {labelErrorMessage && <div className={styles.error}>{labelErrorMessage}</div>}
+            <div className={styles.aliasSection}>
+              <div className={styles.aliasHeader}>Aliases</div>
+              <div className={styles.aliasEditorRow}>
+                <input
+                  type="text"
+                  value={aliasDraft}
+                  onChange={(event) => setAliasDraft(event.target.value)}
+                  className={styles.labelInput}
+                  placeholder="Add alias (e.g., Home, Audrey's House)"
+                  maxLength={255}
+                />
+                <button
+                  type="button"
+                  className={styles.labelButtonPrimary}
+                  onClick={() => {
+                    void handleAddAlias();
+                  }}
+                  disabled={isSavingAlias || !aliasDraft.trim()}
+                >
+                  Add Alias
+                </button>
+              </div>
+              {aliasErrorMessage && <div className={styles.error}>{aliasErrorMessage}</div>}
+              <div className={styles.aliasList}>
+                {(placeDetail.aliases ?? []).length === 0 && (
+                  <div className={styles.aliasEmpty}>No aliases yet.</div>
+                )}
+                {(placeDetail.aliases ?? []).map((alias) => (
+                  <div key={alias.id} className={styles.aliasChip}>
+                    <span>{alias.alias}</span>
+                    <button
+                      type="button"
+                      className={styles.aliasDeleteButton}
+                      onClick={() => {
+                        void handleDeleteAlias(alias.id);
+                      }}
+                      disabled={isSavingAlias}
+                      aria-label={`Delete alias ${alias.alias}`}
+                    >
+                      x
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
             {isLoadingPlaceDetail && <div className={styles.loading}>Loading photos...</div>}
             {placeDetailErrorMessage && (
               <div className={styles.error}>{placeDetailErrorMessage}</div>

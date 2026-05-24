@@ -14,12 +14,14 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.db.session import SessionLocal
 from app.services.location.place_geocoding_schema import ensure_place_geocoding_schema
 from app.services.location.place_geocoding_service import start_place_geocoding_background
+from app.services.places.place_schema import ensure_place_schema
 
 
 def main() -> int:
     """Start place geocoding in the background."""
     db_session = SessionLocal()
     try:
+        place_schema_summary = ensure_place_schema(db_session)
         schema_summary = ensure_place_geocoding_schema(db_session.connection())
 
         result = start_place_geocoding_background(created_by="manual_script")
@@ -31,6 +33,7 @@ def main() -> int:
             "total_places": result.status.total_places,
             "pending_places": result.status.total_places,  # At start, all are pending
             "schema_created_tables": schema_summary.created_tables,
+            "place_schema_created_tables": place_schema_summary.created_tables,
         }
 
         print(json.dumps(payload, indent=2))

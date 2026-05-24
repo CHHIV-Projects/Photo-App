@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.place import Place
+from app.services.places.observation_service import CreatePlaceObservationInput, create_place_observation
+from app.services.places.policy import should_block_provider_canonical_overwrite
 
 GEOCODE_STATUS_NEVER_TRIED = "never_tried"
 GEOCODE_STATUS_SUCCESS = "success"
@@ -86,6 +88,12 @@ class ReverseGeocodeResult:
 
 
 @dataclass(frozen=True)
+class ReverseGeocodeResponse:
+    result: ReverseGeocodeResult
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class PlaceGeocodingSummary:
     eligible_places: int
     attempted_calls: int
@@ -151,7 +159,7 @@ def parse_reverse_geocode_result(payload: dict[str, Any]) -> ReverseGeocodeResul
     )
 
 
-def reverse_geocode_coordinate(latitude: float, longitude: float, api_key: str) -> ReverseGeocodeResult:
+def reverse_geocode_coordinate(latitude: float, longitude: float, api_key: str) -> ReverseGeocodeResponse:
     response = httpx.get(
         _GOOGLE_GEOCODE_URL,
         params={
@@ -168,7 +176,7 @@ def reverse_geocode_coordinate(latitude: float, longitude: float, api_key: str) 
         error_message = _normalize_text(payload.get("error_message"))
         raise RuntimeError(error_message or f"Google geocoding status: {status}")
 
-    return parse_reverse_geocode_result(payload)
+    return ReverseGeocodeResponse(result=parse_reverse_geocode_result(payload), raw_payload=payload)
 
 
 def _state_label(state: str | None, country: str | None, country_code: str | None) -> str | None:
@@ -256,7 +264,7 @@ def enrich_places_with_reverse_geocoding(
 
     for place in places[:max_calls]:
         try:
-            result = reverse_geocode_coordinate(
+            response = reverse_geocode_coordinate(
                 latitude=place.representative_latitude,
                 longitude=place.representative_longitude,
                 api_key=api_key,
@@ -268,12 +276,29 @@ def enrich_places_with_reverse_geocoding(
             failed += 1
             continue
 
-        place.formatted_address = result.formatted_address
-        place.street = result.street
-        place.city = result.city
-        place.county = result.county
-        place.state = result.state
-        place.country = result.country
+        create_place_observation(
+            db_session,
+            CreatePlaceObservationInput(
+                place_id=place.place_id,
+                source_type="reverse_geocode",
+                observation_type="address",
+                status="pending",
+                raw_label=response.result.formatted_address,
+                formatted_address=response.result.formatted_address,
+                latitude=place.representative_latitude,
+                longitude=place.representative_longitude,
+                raw_response_json=response.raw_payload,
+            ),
+        )
+
+        if not should_block_provider_canonical_overwrite(place):
+            place.formatted_address = response.result.formatted_address
+            place.street = response.result.street
+            place.city = response.result.city
+            place.county = response.result.county
+            place.state = response.result.state
+            place.country = response.result.country
+
         place.geocode_status = GEOCODE_STATUS_SUCCESS
         place.geocode_error = None
         place.geocoded_at = now_utc

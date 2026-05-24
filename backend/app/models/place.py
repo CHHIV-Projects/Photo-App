@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -28,6 +28,13 @@ class Place(Base):
     geocode_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="never_tried")
     geocode_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     geocoded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    place_type: Mapped[str] = mapped_column(String(64), nullable=False, server_default="generic")
+    postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    user_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    user_verified_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    address_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    address_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

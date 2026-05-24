@@ -742,8 +742,21 @@ export interface PlaceSummary {
   city: string | null;
   county: string | null;
   state: string | null;
+  postal_code: string | null;
   country: string | null;
   geocode_status: string;
+  place_type: string;
+  user_verified: boolean;
+  address_locked: boolean;
+  alias_count: number;
+}
+
+export interface PlaceAliasSummary {
+  id: number;
+  place_id: string;
+  alias: string;
+  alias_normalized: string;
+  created_at_utc: string | null;
 }
 
 export interface PlaceDetail {
@@ -753,12 +766,37 @@ export interface PlaceDetail {
   user_label: string | null;
   display_label: string;
   formatted_address: string | null;
+  street: string | null;
   city: string | null;
   county: string | null;
   state: string | null;
+  postal_code: string | null;
   country: string | null;
   geocode_status: string;
+  place_type: string;
+  user_verified: boolean;
+  user_verified_at_utc: string | null;
+  address_locked: boolean;
+  address_source: string | null;
+  notes: string | null;
+  aliases: PlaceAliasSummary[];
   photos: PhotoSummary[];
+}
+
+export interface PlacePatchRequest {
+  user_label?: string | null;
+  place_type?: string;
+  formatted_address?: string | null;
+  street?: string | null;
+  city?: string | null;
+  county?: string | null;
+  state?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
+  user_verified?: boolean;
+  address_locked?: boolean;
+  address_source?: string | null;
+  notes?: string | null;
 }
 
 export interface AdminDuplicateTypeCount {

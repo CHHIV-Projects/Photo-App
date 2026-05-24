@@ -67,7 +67,9 @@ import type {
   PhotoBatchAlbumSummaryResponse,
   PhotoBatchVisibilityResponse,
   PhotoSummary,
+  PlaceAliasSummary,
   PlaceDetail,
+  PlacePatchRequest,
   PlaceSummary,
   SearchPhotoListResponse,
   SourceReviewAssetResponse,
@@ -603,6 +605,30 @@ export function updatePlaceLabel(placeId: string, userLabel: string | null): Pro
   return apiRequest<PlaceDetail>(`/api/places/${placeId}/label`, {
     method: "POST",
     body: JSON.stringify({ user_label: userLabel })
+  });
+}
+
+export function patchPlace(placeId: string, payload: PlacePatchRequest): Promise<PlaceDetail> {
+  return apiRequest<PlaceDetail>(`/api/places/${placeId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getPlaceAliases(placeId: string): Promise<ListResponse<PlaceAliasSummary>> {
+  return apiRequest<ListResponse<PlaceAliasSummary>>(`/api/places/${placeId}/aliases`);
+}
+
+export function addPlaceAlias(placeId: string, alias: string): Promise<PlaceAliasSummary> {
+  return apiRequest<PlaceAliasSummary>(`/api/places/${placeId}/aliases`, {
+    method: "POST",
+    body: JSON.stringify({ alias }),
+  });
+}
+
+export function deletePlaceAlias(placeId: string, aliasId: number): Promise<{ success: boolean }> {
+  return apiRequest<{ success: boolean }>(`/api/places/${placeId}/aliases/${aliasId}`, {
+    method: "DELETE",
   });
 }
 

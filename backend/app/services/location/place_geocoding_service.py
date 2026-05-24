@@ -21,6 +21,8 @@ from app.services.location.geocoding_service import (
     GEOCODE_STATUS_SUCCESS,
     reverse_geocode_coordinate,
 )
+from app.services.places.observation_service import CreatePlaceObservationInput, create_place_observation
+from app.services.places.policy import should_block_provider_canonical_overwrite
 from app.services.location.place_geocoding_schema import ensure_place_geocoding_schema
 
 # Reports written to storage/logs/place_geocoding_reports/ relative to project root.
@@ -278,18 +280,32 @@ def _background_place_geocoding_run(run_id: int) -> None:
             db.commit()
 
             try:
-                result = reverse_geocode_coordinate(
+                response = reverse_geocode_coordinate(
                     latitude=place.representative_latitude,
                     longitude=place.representative_longitude,
                     api_key=settings.google_maps_api_key,
                 )
-                # Update place with geocoded data
-                place.formatted_address = result.formatted_address
-                place.street = result.street
-                place.city = result.city
-                place.county = result.county
-                place.state = result.state
-                place.country = result.country
+                create_place_observation(
+                    db,
+                    CreatePlaceObservationInput(
+                        place_id=place.place_id,
+                        source_type="reverse_geocode",
+                        observation_type="address",
+                        status="pending",
+                        raw_label=response.result.formatted_address,
+                        formatted_address=response.result.formatted_address,
+                        latitude=place.representative_latitude,
+                        longitude=place.representative_longitude,
+                        raw_response_json=response.raw_payload,
+                    ),
+                )
+                if not should_block_provider_canonical_overwrite(place):
+                    place.formatted_address = response.result.formatted_address
+                    place.street = response.result.street
+                    place.city = response.result.city
+                    place.county = response.result.county
+                    place.state = response.result.state
+                    place.country = response.result.country
                 place.geocode_status = GEOCODE_STATUS_SUCCESS
                 place.geocode_error = None
                 place.geocoded_at = now_utc

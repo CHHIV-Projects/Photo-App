@@ -19,6 +19,7 @@ from app.models.collection import Collection
 from app.models.collection_asset import CollectionAsset
 from app.models.event import Event
 from app.models.place import Place
+from app.models.place_alias import PlaceAlias
 from app.services.photos.display_url_service import build_asset_display_url_contract
 from app.services.metadata.metadata_normalizer import VIDEO_EXTENSIONS
 from app.services.timeline.timeline_service import TimelineFilter, apply_asset_time_filters, effective_capture_time_trust_expr
@@ -228,6 +229,7 @@ def search_photos(
         place_filter_subq = (
             select(Asset.sha256)
             .outerjoin(Place, Asset.place_id == Place.place_id)
+            .outerjoin(PlaceAlias, PlaceAlias.place_id == Place.place_id)
             .where(
                 or_(
                     func.lower(func.coalesce(Place.user_label, "")).like(q),
@@ -235,8 +237,10 @@ def search_photos(
                     func.lower(func.coalesce(Place.city, "")).like(q),
                     func.lower(func.coalesce(Place.state, "")).like(q),
                     func.lower(func.coalesce(Place.country, "")).like(q),
+                    func.lower(func.coalesce(PlaceAlias.alias, "")).like(q),
                 )
             )
+            .distinct()
             .subquery()
         )
         base_query = base_query.where(Asset.sha256.in_(select(place_filter_subq.c.sha256)))
