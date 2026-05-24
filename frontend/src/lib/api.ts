@@ -69,6 +69,8 @@ import type {
   PhotoSummary,
   PlaceAliasSummary,
   PlaceDetail,
+  PlaceObservationPatchRequest,
+  PlaceObservationSummary,
   PlacePatchRequest,
   PlaceSummary,
   SearchPhotoListResponse,
@@ -629,6 +631,22 @@ export function addPlaceAlias(placeId: string, alias: string): Promise<PlaceAlia
 export function deletePlaceAlias(placeId: string, aliasId: number): Promise<{ success: boolean }> {
   return apiRequest<{ success: boolean }>(`/api/places/${placeId}/aliases/${aliasId}`, {
     method: "DELETE",
+  });
+}
+
+export function getPlaceObservations(placeId: string, limit: number = 100): Promise<ListResponse<PlaceObservationSummary>> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return apiRequest<ListResponse<PlaceObservationSummary>>(`/api/places/${placeId}/observations?${params.toString()}`);
+}
+
+export function patchPlaceObservation(
+  placeId: string,
+  observationId: number,
+  payload: PlaceObservationPatchRequest,
+): Promise<PlaceObservationSummary> {
+  return apiRequest<PlaceObservationSummary>(`/api/places/${placeId}/observations/${observationId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
   });
 }
 

@@ -285,6 +285,169 @@
   color: #8897a7;
 }
 
+.section {
+  padding: 10px 15px;
+  border-bottom: 1px solid #eee;
+}
+
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2a3f55;
+  margin-bottom: 6px;
+}
+
+.inlineHint {
+  font-size: 12px;
+  color: #5e6d7b;
+  margin-bottom: 10px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 8px 12px;
+}
+
+.fieldLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #4f5f70;
+  font-weight: 600;
+}
+
+.fieldLabelWide {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #4f5f70;
+  font-weight: 600;
+}
+
+.fieldCheckbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #2a3f55;
+  font-weight: 600;
+}
+
+.textAreaInput {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 7px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  background: #f8fafc;
+  box-sizing: border-box;
+}
+
+.selectInput {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  background: #f8fafc;
+  box-sizing: border-box;
+}
+
+.rowActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.badgeRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.inlineBadge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #c4d1df;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: #36506a;
+  background: #f3f8fc;
+}
+
+.observationList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.observationCard {
+  border: 1px solid #e1e8ef;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f9fcff;
+}
+
+.observationTop {
+  margin-bottom: 4px;
+}
+
+.observationAddress {
+  font-size: 13px;
+  color: #22384e;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.observationMeta {
+  font-size: 12px;
+  color: #627486;
+}
+
+.observationDetails {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #dbe5ef;
+  border-radius: 6px;
+  background: #f2f6fa;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.applyDialog {
+  margin-top: 10px;
+  border: 1px solid #cbd8e5;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f3f8fd;
+}
+
+.applyDialogTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f3f5d;
+  margin-bottom: 8px;
+}
+
+.applyDialogText {
+  font-size: 12px;
+  color: #36506a;
+  margin-bottom: 4px;
+}
+
 .photoGrid {
   flex: 1;
   overflow-y: auto;

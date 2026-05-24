@@ -83,6 +83,7 @@ class ReverseGeocodeResult:
     city: str | None
     county: str | None
     state: str | None
+    postal_code: str | None
     country: str | None
     country_code: str | None
 
@@ -129,7 +130,7 @@ def _build_street(street_number: str | None, route: str | None) -> str | None:
 def parse_reverse_geocode_result(payload: dict[str, Any]) -> ReverseGeocodeResult:
     results = payload.get("results") or []
     if not results:
-        return ReverseGeocodeResult(None, None, None, None, None, None, None)
+        return ReverseGeocodeResult(None, None, None, None, None, None, None, None)
 
     top = results[0]
 
@@ -146,6 +147,7 @@ def parse_reverse_geocode_result(payload: dict[str, Any]) -> ReverseGeocodeResul
     city = next((candidate for candidate in city_candidates if candidate), None)
     county = _component_values(top, "administrative_area_level_2")[0]
     state = _component_values(top, "administrative_area_level_1")[0]
+    postal_code = _component_values(top, "postal_code")[0]
     country, country_code = _component_values(top, "country")
 
     return ReverseGeocodeResult(
@@ -154,6 +156,7 @@ def parse_reverse_geocode_result(payload: dict[str, Any]) -> ReverseGeocodeResul
         city=city,
         county=county,
         state=state,
+        postal_code=postal_code,
         country=country,
         country_code=country_code,
     )
@@ -285,6 +288,12 @@ def enrich_places_with_reverse_geocoding(
                 status="pending",
                 raw_label=response.result.formatted_address,
                 formatted_address=response.result.formatted_address,
+                street=response.result.street,
+                city=response.result.city,
+                county=response.result.county,
+                state=response.result.state,
+                postal_code=response.result.postal_code,
+                country=response.result.country,
                 latitude=place.representative_latitude,
                 longitude=place.representative_longitude,
                 raw_response_json=response.raw_payload,
@@ -297,6 +306,7 @@ def enrich_places_with_reverse_geocoding(
             place.city = response.result.city
             place.county = response.result.county
             place.state = response.result.state
+            place.postal_code = response.result.postal_code
             place.country = response.result.country
 
         place.geocode_status = GEOCODE_STATUS_SUCCESS

@@ -294,6 +294,12 @@ def _background_place_geocoding_run(run_id: int) -> None:
                         status="pending",
                         raw_label=response.result.formatted_address,
                         formatted_address=response.result.formatted_address,
+                        street=response.result.street,
+                        city=response.result.city,
+                        county=response.result.county,
+                        state=response.result.state,
+                        postal_code=response.result.postal_code,
+                        country=response.result.country,
                         latitude=place.representative_latitude,
                         longitude=place.representative_longitude,
                         raw_response_json=response.raw_payload,
@@ -305,6 +311,7 @@ def _background_place_geocoding_run(run_id: int) -> None:
                     place.city = response.result.city
                     place.county = response.result.county
                     place.state = response.result.state
+                    place.postal_code = response.result.postal_code
                     place.country = response.result.country
                 place.geocode_status = GEOCODE_STATUS_SUCCESS
                 place.geocode_error = None

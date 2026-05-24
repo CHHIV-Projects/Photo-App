@@ -48,6 +48,12 @@ class CreatePlaceObservationInput:
     place_id: int | None = None
     raw_label: str | None = None
     formatted_address: str | None = None
+    street: str | None = None
+    city: str | None = None
+    county: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
     latitude: float | None = None
     longitude: float | None = None
     confidence: float | None = None
@@ -92,6 +98,12 @@ def create_place_observation(db: Session, payload: CreatePlaceObservationInput) 
         status=status,
         raw_label=_clean_text(payload.raw_label),
         formatted_address=_clean_text(payload.formatted_address),
+        street=_clean_text(payload.street),
+        city=_clean_text(payload.city),
+        county=_clean_text(payload.county),
+        state=_clean_text(payload.state),
+        postal_code=_clean_text(payload.postal_code),
+        country=_clean_text(payload.country),
         latitude=payload.latitude,
         longitude=payload.longitude,
         confidence=payload.confidence,
@@ -114,3 +126,55 @@ def list_place_observations(db: Session, place_id: int, *, limit: int = 100) -> 
             .limit(resolved_limit)
         ).all()
     )
+
+
+def update_place_observation_status(
+    db: Session,
+    *,
+    place_id: int,
+    observation_id: int,
+    status: str,
+    apply_to_canonical: bool,
+    set_user_verified: bool,
+    set_address_locked: bool,
+) -> tuple[PlaceObservation, Place | None]:
+    """Update observation status and optionally apply supported fields to place canonical data."""
+    normalized_status = _clean_text(status)
+    if normalized_status is None or normalized_status not in VALID_PLACE_OBSERVATION_STATUSES:
+        raise ValueError("Invalid status for place observation.")
+
+    place = db.get(Place, int(place_id))
+    if place is None:
+        raise ValueError(f"Place {place_id} does not exist.")
+
+    observation = db.get(PlaceObservation, int(observation_id))
+    if observation is None or observation.place_id != place.place_id:
+        raise ValueError("Observation does not exist for this place.")
+
+    if apply_to_canonical:
+        if normalized_status != "accepted":
+            raise ValueError("apply_to_canonical requires status=accepted.")
+        if observation.observation_type != "address":
+            raise ValueError("apply_to_canonical is supported only for address observations.")
+
+        place.formatted_address = observation.formatted_address
+        place.street = observation.street
+        place.city = observation.city
+        place.county = observation.county
+        place.state = observation.state
+        place.postal_code = observation.postal_code
+        place.country = observation.country
+        place.address_source = observation.source_type
+
+        if set_user_verified:
+            place.user_verified = True
+        if set_address_locked:
+            place.address_locked = True
+
+    observation.status = normalized_status
+    db.commit()
+    db.refresh(observation)
+    if apply_to_canonical:
+        db.refresh(place)
+        return observation, place
+    return observation, None

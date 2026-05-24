@@ -18,6 +18,7 @@ from app.schemas.places import (
     PlaceDetail,
     PlaceListResponse,
     PlaceObservationListResponse,
+    PlaceObservationPatchRequest,
     PlaceObservationSummary,
     PlacePatchRequest,
     PlaceSummary,
@@ -26,6 +27,7 @@ from app.services.photos.display_url_service import build_asset_display_url_cont
 from app.services.places.observation_service import (
     MAX_PLACE_OBSERVATION_LIST_LIMIT,
     list_place_observations,
+    update_place_observation_status,
 )
 
 MAX_PLACE_USER_LABEL_LENGTH = 120
@@ -597,6 +599,12 @@ def get_place_observation_list(db: Session, place_id: str, *, limit: int = MAX_P
             status=row.status,
             raw_label=row.raw_label,
             formatted_address=row.formatted_address,
+            street=row.street,
+            city=row.city,
+            county=row.county,
+            state=row.state,
+            postal_code=row.postal_code,
+            country=row.country,
             latitude=row.latitude,
             longitude=row.longitude,
             confidence=row.confidence,
@@ -606,3 +614,48 @@ def get_place_observation_list(db: Session, place_id: str, *, limit: int = MAX_P
         for row in rows
     ]
     return PlaceObservationListResponse(count=len(items), items=items)
+
+
+def patch_place_observation(
+    db: Session,
+    *,
+    place_id: str,
+    observation_id: int,
+    payload: PlaceObservationPatchRequest,
+) -> PlaceObservationSummary:
+    """Patch one observation status and optionally apply address fields to canonical place."""
+    place_pk = _parse_place_id(place_id)
+    if place_pk is None:
+        raise ValueError("Invalid place_id.")
+
+    observation, _ = update_place_observation_status(
+        db,
+        place_id=place_pk,
+        observation_id=observation_id,
+        status=payload.status,
+        apply_to_canonical=payload.apply_to_canonical,
+        set_user_verified=payload.set_user_verified,
+        set_address_locked=payload.set_address_locked,
+    )
+
+    return PlaceObservationSummary(
+        id=observation.id,
+        place_id=(str(observation.place_id) if observation.place_id is not None else None),
+        asset_sha256=observation.asset_sha256,
+        source_type=observation.source_type,
+        observation_type=observation.observation_type,
+        status=observation.status,
+        raw_label=observation.raw_label,
+        formatted_address=observation.formatted_address,
+        street=observation.street,
+        city=observation.city,
+        county=observation.county,
+        state=observation.state,
+        postal_code=observation.postal_code,
+        country=observation.country,
+        latitude=observation.latitude,
+        longitude=observation.longitude,
+        confidence=observation.confidence,
+        raw_response_json=observation.raw_response_json,
+        created_at_utc=observation.created_at_utc,
+    )

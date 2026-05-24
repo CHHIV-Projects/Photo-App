@@ -783,6 +783,35 @@ export interface PlaceDetail {
   photos: PhotoSummary[];
 }
 
+export interface PlaceObservationSummary {
+  id: number;
+  place_id: string | null;
+  asset_sha256: string | null;
+  source_type: string;
+  observation_type: string;
+  status: string;
+  raw_label: string | null;
+  formatted_address: string | null;
+  street: string | null;
+  city: string | null;
+  county: string | null;
+  state: string | null;
+  postal_code: string | null;
+  country: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  confidence: number | null;
+  raw_response_json: Record<string, unknown> | null;
+  created_at_utc: string | null;
+}
+
+export interface PlaceObservationPatchRequest {
+  status: "pending" | "accepted" | "rejected" | "ignored" | "superseded";
+  apply_to_canonical?: boolean;
+  set_user_verified?: boolean;
+  set_address_locked?: boolean;
+}
+
 export interface PlacePatchRequest {
   user_label?: string | null;
   place_type?: string;

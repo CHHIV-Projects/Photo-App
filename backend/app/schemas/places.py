@@ -35,6 +35,12 @@ class PlaceObservationSummary(BaseModel):
     status: str
     raw_label: str | None = None
     formatted_address: str | None = None
+    street: str | None = None
+    city: str | None = None
+    county: str | None = None
+    state: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
     latitude: float | None = None
     longitude: float | None = None
     confidence: float | None = None
@@ -121,3 +127,10 @@ class PlacePatchRequest(BaseModel):
     address_locked: bool | None = None
     address_source: str | None = None
     notes: str | None = None
+
+
+class PlaceObservationPatchRequest(BaseModel):
+    status: str
+    apply_to_canonical: bool = False
+    set_user_verified: bool = False
+    set_address_locked: bool = False

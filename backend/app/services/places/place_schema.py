@@ -43,6 +43,15 @@ PLACE_COLUMN_DDLS = {
     "notes": "ALTER TABLE places ADD COLUMN notes TEXT NULL",
 }
 
+PLACE_OBSERVATION_COLUMN_DDLS = {
+    "street": "ALTER TABLE place_observations ADD COLUMN street VARCHAR(255) NULL",
+    "city": "ALTER TABLE place_observations ADD COLUMN city VARCHAR(255) NULL",
+    "county": "ALTER TABLE place_observations ADD COLUMN county VARCHAR(255) NULL",
+    "state": "ALTER TABLE place_observations ADD COLUMN state VARCHAR(255) NULL",
+    "postal_code": "ALTER TABLE place_observations ADD COLUMN postal_code VARCHAR(32) NULL",
+    "country": "ALTER TABLE place_observations ADD COLUMN country VARCHAR(255) NULL",
+}
+
 INDEX_DDLS = {
     "ix_assets_place_id": "CREATE INDEX IF NOT EXISTS ix_assets_place_id ON assets (place_id)",
     "ix_places_geocode_status": "CREATE INDEX IF NOT EXISTS ix_places_geocode_status ON places (geocode_status)",
@@ -86,6 +95,7 @@ def ensure_place_schema(db_session: Session) -> PlaceSchemaSummary:
     inspector = inspect(bind)
     existing_asset_columns = {column["name"] for column in inspector.get_columns("assets")}
     existing_place_columns = {column["name"] for column in inspector.get_columns("places")}
+    existing_place_observation_columns = {column["name"] for column in inspector.get_columns("place_observations")}
 
     added_columns: list[str] = []
     for column_name, ddl in ASSET_COLUMN_DDLS.items():
@@ -99,6 +109,12 @@ def ensure_place_schema(db_session: Session) -> PlaceSchemaSummary:
             continue
         db_session.execute(text(ddl))
         added_columns.append(f"places.{column_name}")
+
+    for column_name, ddl in PLACE_OBSERVATION_COLUMN_DDLS.items():
+        if column_name in existing_place_observation_columns:
+            continue
+        db_session.execute(text(ddl))
+        added_columns.append(f"place_observations.{column_name}")
 
     inspector = inspect(bind)
     existing_asset_indexes = {index["name"] for index in inspector.get_indexes("assets")}

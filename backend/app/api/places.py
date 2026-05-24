@@ -13,6 +13,8 @@ from app.schemas.places import (
     PlaceLabelUpdateRequest,
     PlaceListResponse,
     PlaceObservationListResponse,
+    PlaceObservationPatchRequest,
+    PlaceObservationSummary,
     PlacePatchRequest,
 )
 from app.schemas.ui_api import SuccessResponse
@@ -23,6 +25,7 @@ from app.services.places import (
     get_place_observation_list,
     list_place_aliases,
     list_places,
+    patch_place_observation,
     patch_place,
     update_place_user_label,
 )
@@ -131,6 +134,27 @@ def get_place_observations_endpoint(
     """List recent observations for one place."""
     try:
         return get_place_observation_list(db, place_id, limit=limit)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
+@router.patch("/{place_id}/observations/{observation_id}", response_model=PlaceObservationSummary)
+def patch_place_observation_endpoint(
+    place_id: str,
+    observation_id: int,
+    payload: PlaceObservationPatchRequest,
+    db: Session = Depends(get_db_session),
+) -> PlaceObservationSummary:
+    """Patch one observation status and optionally apply address data to canonical place."""
+    try:
+        return patch_place_observation(
+            db,
+            place_id=place_id,
+            observation_id=observation_id,
+            payload=payload,
+        )
     except ValueError as exc:
         message = str(exc)
         status_code = 404 if "does not exist" in message else 400
