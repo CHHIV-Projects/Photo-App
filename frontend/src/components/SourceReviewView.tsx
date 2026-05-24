@@ -3,16 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  addToCollectionFromSourceReviewLevel,
   createAlbumFromSourceReviewLevel,
   createCollectionFromSourceReviewLevel,
   createEventFromSourceReviewLevel,
+  getCollections,
   getPeople,
   getSourceReviewAsset,
   getSourceReviewMatches,
   resolveApiUrl,
 } from "@/lib/api";
 import type {
+  CollectionSummary,
   PersonSummary,
+  SourceReviewAddToCollectionResponse,
   SourceReviewAssetResponse,
   SourceReviewCreateAlbumResponse,
   SourceReviewCreateCollectionResponse,
@@ -369,6 +373,14 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
   const [isSubmittingCollection, setIsSubmittingCollection] = useState(false);
   const [collectionActionError, setCollectionActionError] = useState<string | null>(null);
   const [collectionActionResult, setCollectionActionResult] = useState<SourceReviewCreateCollectionResponse | null>(null);
+  const [isAddToCollectionDialogOpen, setIsAddToCollectionDialogOpen] = useState(false);
+  const [availableCollections, setAvailableCollections] = useState<CollectionSummary[]>([]);
+  const [isLoadingCollections, setIsLoadingCollections] = useState(false);
+  const [collectionSearchInput, setCollectionSearchInput] = useState("");
+  const [selectedExistingCollectionId, setSelectedExistingCollectionId] = useState<number | null>(null);
+  const [isSubmittingAddToCollection, setIsSubmittingAddToCollection] = useState(false);
+  const [addToCollectionError, setAddToCollectionError] = useState<string | null>(null);
+  const [addToCollectionResult, setAddToCollectionResult] = useState<SourceReviewAddToCollectionResponse | null>(null);
   const [singleFileConfirmChecked, setSingleFileConfirmChecked] = useState(false);
   const [isSubmittingAlbum, setIsSubmittingAlbum] = useState(false);
   const [albumActionError, setAlbumActionError] = useState<string | null>(null);
@@ -530,6 +542,25 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
     isSubmittingCollection ||
     (requiresSingleFileConfirm && !collectionSingleFileConfirmChecked);
 
+  const confirmAddToCollectionActionDisabled =
+    !canCreateCollection ||
+    selectedExistingCollectionId === null ||
+    isSubmittingAddToCollection ||
+    (requiresSingleFileConfirm && !collectionSingleFileConfirmChecked);
+
+  const filteredCollections = useMemo(() => {
+    const query = collectionSearchInput.trim().toLowerCase();
+    if (!query) {
+      return availableCollections;
+    }
+    return availableCollections.filter((item) => item.name.toLowerCase().includes(query));
+  }, [availableCollections, collectionSearchInput]);
+
+  const selectedExistingCollection = useMemo(
+    () => availableCollections.find((item) => item.collection_id === selectedExistingCollectionId) ?? null,
+    [availableCollections, selectedExistingCollectionId]
+  );
+
   const confirmEventActionDisabled =
     !canCreateEvent ||
     !eventLabelInput.trim() ||
@@ -588,6 +619,55 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
       setCollectionActionError(getErrorMessage(error, "Failed to create collection from selected provenance level."));
     } finally {
       setIsSubmittingCollection(false);
+    }
+  }
+
+  async function loadCollectionsForPicker(preferredCollectionId?: number | null) {
+    setIsLoadingCollections(true);
+    setAddToCollectionError(null);
+    try {
+      const response = await getCollections();
+      setAvailableCollections(response.items);
+      if (response.items.length === 0) {
+        setSelectedExistingCollectionId(null);
+        return;
+      }
+
+      const candidateId = preferredCollectionId ?? selectedExistingCollectionId;
+      if (candidateId !== null && response.items.some((item) => item.collection_id === candidateId)) {
+        setSelectedExistingCollectionId(candidateId);
+        return;
+      }
+      setSelectedExistingCollectionId(response.items[0].collection_id);
+    } catch (error: unknown) {
+      setAvailableCollections([]);
+      setSelectedExistingCollectionId(null);
+      setAddToCollectionError(getErrorMessage(error, "Failed to load collections."));
+    } finally {
+      setIsLoadingCollections(false);
+    }
+  }
+
+  async function submitAddToExistingCollection() {
+    if (!matches || selectedProvenanceId === null || selectedLevelIndex === null || selectedExistingCollectionId === null) {
+      return;
+    }
+
+    setIsSubmittingAddToCollection(true);
+    setAddToCollectionError(null);
+
+    try {
+      const response = await addToCollectionFromSourceReviewLevel({
+        provenance_id: selectedProvenanceId,
+        level_index: selectedLevelIndex,
+        hierarchy_mode: hierarchyMode,
+        collection_id: selectedExistingCollectionId,
+      });
+      setAddToCollectionResult(response);
+    } catch (error: unknown) {
+      setAddToCollectionError(getErrorMessage(error, "Failed to add matching assets to collection."));
+    } finally {
+      setIsSubmittingAddToCollection(false);
     }
   }
 
@@ -675,6 +755,14 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
     setCollectionActionError(null);
     setCollectionActionResult(null);
     setCollectionSingleFileConfirmChecked(false);
+    setIsAddToCollectionDialogOpen(false);
+    setAvailableCollections([]);
+    setCollectionSearchInput("");
+    setSelectedExistingCollectionId(null);
+    setIsLoadingCollections(false);
+    setIsSubmittingAddToCollection(false);
+    setAddToCollectionError(null);
+    setAddToCollectionResult(null);
     setCollectionNameInput(proposedCollectionName);
     setIsAlbumDialogOpen(false);
     setAlbumActionError(null);
@@ -896,20 +984,37 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
                       <p className={styles.candidateValue}>{card.proposedValue}</p>
                       <p className={styles.candidateDetail}>{card.detail}</p>
                       {card.key === "collection" ? (
-                        <button
-                          type="button"
-                          className={styles.actionButton}
-                          disabled={!canCreateCollection || isLoadingMatches}
-                          onClick={() => {
-                            setCollectionNameInput(proposedCollectionName);
-                            setCollectionSingleFileConfirmChecked(false);
-                            setCollectionActionError(null);
-                            setCollectionActionResult(null);
-                            setIsCollectionDialogOpen(true);
-                          }}
-                        >
-                          Create Collection
-                        </button>
+                        <div className={styles.collectionActionStack}>
+                          <button
+                            type="button"
+                            className={styles.actionButton}
+                            disabled={!canCreateCollection || isLoadingMatches}
+                            onClick={() => {
+                              setCollectionNameInput(proposedCollectionName);
+                              setCollectionSingleFileConfirmChecked(false);
+                              setCollectionActionError(null);
+                              setCollectionActionResult(null);
+                              setIsCollectionDialogOpen(true);
+                            }}
+                          >
+                            Create Collection
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            disabled={!canCreateCollection || isLoadingMatches}
+                            onClick={() => {
+                              setCollectionSingleFileConfirmChecked(false);
+                              setCollectionSearchInput("");
+                              setAddToCollectionError(null);
+                              setAddToCollectionResult(null);
+                              setIsAddToCollectionDialogOpen(true);
+                              void loadCollectionsForPicker();
+                            }}
+                          >
+                            Add to Existing Collection
+                          </button>
+                        </div>
                       ) : card.key === "album" ? (
                         <button
                           type="button"
@@ -1042,6 +1147,138 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
                           className={styles.secondaryButton}
                           disabled={isSubmittingCollection}
                           onClick={() => setIsCollectionDialogOpen(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {isAddToCollectionDialogOpen ? (
+                  <div className={styles.confirmPanel}>
+                    <h4 className={styles.confirmTitle}>Add Matching Assets to Existing Collection</h4>
+
+                    <ul className={styles.contextList}>
+                      <li>Source: {selectedProvenanceRow?.source_label ?? "Unknown"} ({selectedProvenanceRow?.source_type ?? "unknown"})</li>
+                      <li>Hierarchy mode: {hierarchyMode}</li>
+                      <li>Selected segment: {selectedHierarchyLevel.segment_text}</li>
+                      <li>Selected prefix: {matches?.selected_prefix ?? "-"}</li>
+                      <li>Matching asset count: {matches?.total_count ?? 0}</li>
+                    </ul>
+
+                    {requiresSingleFileConfirm ? (
+                      <div className={styles.warningBox}>
+                        <p className={styles.warningText}>This level appears to be a single file. The selected collection may receive only this asset.</p>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={collectionSingleFileConfirmChecked}
+                            onChange={(event) => setCollectionSingleFileConfirmChecked(event.target.checked)}
+                          />
+                          I understand this may add very few assets.
+                        </label>
+                      </div>
+                    ) : null}
+
+                    <p className={styles.notice}>This operation recomputes all matching assets on the server and adds them idempotently to the selected Collection.</p>
+
+                    {isLoadingCollections ? (
+                      <p className={styles.status}>Loading collections...</p>
+                    ) : availableCollections.length === 0 ? (
+                      <div className={styles.warningBox}>
+                        <p className={styles.warningText}>No Collections exist yet. Create a Collection first.</p>
+                        <div className={styles.dialogActions}>
+                          <button type="button" className={styles.actionButton} onClick={onOpenCollections}>
+                            Open Collections
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <label className={styles.fieldLabel}>
+                          Find collection
+                          <input
+                            type="text"
+                            value={collectionSearchInput}
+                            onChange={(event) => setCollectionSearchInput(event.target.value)}
+                            className={styles.textInput}
+                            placeholder="Search by collection name"
+                          />
+                        </label>
+                        <div className={styles.collectionPickerList}>
+                          {filteredCollections.length === 0 ? (
+                            <p className={styles.status}>No collections match this search.</p>
+                          ) : (
+                            filteredCollections.map((item) => (
+                              <button
+                                key={item.collection_id}
+                                type="button"
+                                className={`${styles.collectionPickerItem} ${selectedExistingCollectionId === item.collection_id ? styles.collectionPickerItemActive : ""}`.trim()}
+                                onClick={() => setSelectedExistingCollectionId(item.collection_id)}
+                              >
+                                <span className={styles.rowPrimary}>{item.name}</span>
+                                <span className={styles.rowSubtle}>{item.direct_asset_count} direct assets | {item.album_count} albums</span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                    {matches && matches.items.length > 0 ? (
+                      <>
+                        <p className={styles.matchSummary}>Sample matching assets</p>
+                        <ul className={styles.sampleList}>
+                          {matches.items.slice(0, 6).map((item) => (
+                            <li key={`collection-add-sample-${item.asset_sha256}`} className={styles.sampleItem}>
+                              {item.filename}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+
+                    {selectedExistingCollection ? (
+                      <p className={styles.noticeStrong}>Target Collection: {selectedExistingCollection.name}</p>
+                    ) : null}
+
+                    {addToCollectionError ? <p className={styles.error}>{addToCollectionError}</p> : null}
+
+                    {addToCollectionResult ? (
+                      <div className={styles.successBox}>
+                        <p className={styles.successText}>Added matching assets to "{addToCollectionResult.collection_name}".</p>
+                        <p className={styles.status}>
+                          Requested: {addToCollectionResult.requested_count} | Added: {addToCollectionResult.added_count} | Already present: {addToCollectionResult.already_present_count} | Failed: {addToCollectionResult.failed_count}
+                        </p>
+                        <div className={styles.dialogActions}>
+                          <button type="button" className={styles.actionButton} onClick={onOpenCollections}>
+                            Open Collections
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.secondaryButton}
+                            onClick={() => setIsAddToCollectionDialogOpen(false)}
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className={styles.dialogActions}>
+                        <button
+                          type="button"
+                          className={styles.actionButton}
+                          disabled={confirmAddToCollectionActionDisabled || availableCollections.length === 0}
+                          onClick={() => void submitAddToExistingCollection()}
+                        >
+                          {isSubmittingAddToCollection ? "Adding..." : "Confirm Add to Existing Collection"}
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          disabled={isSubmittingAddToCollection}
+                          onClick={() => setIsAddToCollectionDialogOpen(false)}
                         >
                           Cancel
                         </button>

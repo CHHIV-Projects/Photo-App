@@ -54,6 +54,14 @@ class CollectionAssetMembershipRequest(BaseModel):
     asset_sha256_list: list[str] = Field(min_length=1)
 
 
+class CollectionAssetMembershipSummaryResponse(BaseModel):
+    success: bool
+    requested_count: int
+    added_count: int
+    already_present_count: int
+    failed_count: int
+
+
 class CollectionAlbumLinkRequest(BaseModel):
     album_id: int = Field(ge=1)
 

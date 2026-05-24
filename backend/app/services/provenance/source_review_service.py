@@ -619,6 +619,53 @@ def create_collection_from_source_review_level(
     }
 
 
+def add_to_existing_collection_from_source_review_level(
+    db: Session,
+    *,
+    provenance_id: int,
+    level_index: int,
+    hierarchy_mode: str,
+    collection_id: int,
+) -> dict:
+    context = _build_match_context(
+        db,
+        provenance_id=provenance_id,
+        level_index=level_index,
+        hierarchy_mode=hierarchy_mode,
+    )
+
+    matched_sha_list = list(context.matching_asset_to_path.keys())
+    if not matched_sha_list:
+        raise SourceReviewValidationError("No matching assets under the selected provenance level.")
+
+    target_collection = db.get(Collection, collection_id)
+    if target_collection is None or target_collection.grouping_type != GROUPING_TYPE_COLLECTION:
+        raise SourceReviewNotFoundError(f"Collection {collection_id} does not exist.")
+
+    add_result = add_assets_to_collection(
+        db,
+        collection_id=collection_id,
+        asset_sha256_list=matched_sha_list,
+    )
+
+    return {
+        "outcome": "added_to_existing",
+        "collection_id": int(target_collection.id),
+        "collection_name": str(target_collection.name),
+        "provenance_id": context.provenance_id,
+        "hierarchy_mode": context.hierarchy_mode,
+        "selected_level_index": context.selected_level_index,
+        "selected_segment": context.selected_segment,
+        "selected_prefix": context.selected_prefix,
+        "matching_asset_count": len(matched_sha_list),
+        "requested_count": int(add_result.get("requested_count", 0) or 0),
+        "added_count": int(add_result.get("inserted_count", 0) or 0),
+        "already_present_count": int(add_result.get("already_present_count", 0) or 0),
+        "failed_count": 0,
+        "failures": [],
+    }
+
+
 def create_event_from_source_review_level(
     db: Session,
     *,

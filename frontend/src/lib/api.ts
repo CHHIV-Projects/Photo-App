@@ -21,6 +21,8 @@ import type {
   SourceIntakeStopResponse,
   SourceReviewCreateAlbumRequest,
   SourceReviewCreateAlbumResponse,
+  SourceReviewAddToCollectionRequest,
+  SourceReviewAddToCollectionResponse,
   SourceReviewCreateCollectionRequest,
   SourceReviewCreateCollectionResponse,
   SourceReviewCreateEventRequest,
@@ -36,6 +38,7 @@ import type {
   AlbumMembershipSummary,
   AlbumSummary,
   CollectionDetail,
+  CollectionAssetMembershipSummaryResponse,
   CollectionSummary,
   CreatePersonResponse,
   ClusterDetail,
@@ -380,6 +383,15 @@ export function createCollectionFromSourceReviewLevel(
   payload: SourceReviewCreateCollectionRequest
 ): Promise<SourceReviewCreateCollectionResponse> {
   return apiRequest<SourceReviewCreateCollectionResponse>("/api/provenance-review/create-collection", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function addToCollectionFromSourceReviewLevel(
+  payload: SourceReviewAddToCollectionRequest
+): Promise<SourceReviewAddToCollectionResponse> {
+  return apiRequest<SourceReviewAddToCollectionResponse>("/api/provenance-review/add-to-collection", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -772,8 +784,8 @@ export function createCollection(
 export function addAssetsToCollection(
   collectionId: number,
   assetSha256List: string[]
-): Promise<{ success: boolean }> {
-  return apiRequest<{ success: boolean }>(`/api/collections/${collectionId}/assets`, {
+): Promise<CollectionAssetMembershipSummaryResponse> {
+  return apiRequest<CollectionAssetMembershipSummaryResponse>(`/api/collections/${collectionId}/assets`, {
     method: "POST",
     body: JSON.stringify({ asset_sha256_list: assetSha256List })
   });

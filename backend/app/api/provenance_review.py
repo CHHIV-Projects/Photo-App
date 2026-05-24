@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.schemas.provenance_review import (
+    SourceReviewAddToCollectionRequest,
+    SourceReviewAddToCollectionResponse,
     SourceReviewAssetResponse,
     SourceReviewCreateAlbumRequest,
     SourceReviewCreateAlbumResponse,
@@ -19,6 +21,7 @@ from app.schemas.provenance_review import (
 from app.services.provenance.source_review_service import (
     SourceReviewNotFoundError,
     SourceReviewValidationError,
+    add_to_existing_collection_from_source_review_level,
     create_album_from_source_review_level,
     create_collection_from_source_review_level,
     create_event_from_source_review_level,
@@ -106,6 +109,27 @@ def post_source_review_create_collection(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return SourceReviewCreateCollectionResponse(**result)
+
+
+@router.post("/add-to-collection", response_model=SourceReviewAddToCollectionResponse)
+def post_source_review_add_to_collection(
+    payload: SourceReviewAddToCollectionRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceReviewAddToCollectionResponse:
+    try:
+        result = add_to_existing_collection_from_source_review_level(
+            db,
+            provenance_id=payload.provenance_id,
+            level_index=payload.level_index,
+            hierarchy_mode=payload.hierarchy_mode,
+            collection_id=payload.collection_id,
+        )
+    except SourceReviewNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SourceReviewValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return SourceReviewAddToCollectionResponse(**result)
 
 
 @router.post("/create-event", response_model=SourceReviewCreateEventResponse)

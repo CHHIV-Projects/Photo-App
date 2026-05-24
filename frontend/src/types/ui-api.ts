@@ -253,6 +253,14 @@ export interface CollectionDetail {
   albums: CollectionAlbumSummary[];
 }
 
+export interface CollectionAssetMembershipSummaryResponse {
+  success: boolean;
+  requested_count: number;
+  added_count: number;
+  already_present_count: number;
+  failed_count: number;
+}
+
 export interface PhotoEventSummary {
   event_id: number;
   label: string | null;
@@ -421,6 +429,35 @@ export interface SourceReviewCreateCollectionResponse {
   already_present_count: number;
   failed_count: number;
   failures: SourceReviewCreateCollectionFailure[];
+}
+
+export interface SourceReviewAddToCollectionRequest {
+  provenance_id: number;
+  level_index: number;
+  hierarchy_mode: "relative" | "full_source_path";
+  collection_id: number;
+}
+
+export interface SourceReviewAddToCollectionFailure {
+  asset_sha256: string;
+  reason: string;
+}
+
+export interface SourceReviewAddToCollectionResponse {
+  outcome: "added_to_existing";
+  collection_id: number;
+  collection_name: string;
+  provenance_id: number;
+  hierarchy_mode: string;
+  selected_level_index: number;
+  selected_segment: string;
+  selected_prefix: string;
+  matching_asset_count: number;
+  requested_count: number;
+  added_count: number;
+  already_present_count: number;
+  failed_count: number;
+  failures: SourceReviewAddToCollectionFailure[];
 }
 
 export interface SourceReviewCreateEventRequest {

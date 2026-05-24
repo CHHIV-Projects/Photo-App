@@ -303,6 +303,7 @@ def add_assets_to_collection(db: Session, *, collection_id: int, asset_sha256_li
 
     return {
         "success": True,
+        "requested_count": len(unique_asset_sha256),
         "inserted_count": inserted_count,
         "already_present_count": len(existing_memberships),
     }

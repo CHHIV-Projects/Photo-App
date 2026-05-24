@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db_session
 from app.schemas.collections import (
     CollectionAssetMembershipRequest,
+    CollectionAssetMembershipSummaryResponse,
     CollectionAlbumLinkRequest,
     CollectionDetail,
     CollectionListResponse,
@@ -84,18 +85,24 @@ def delete_collection_route(collection_id: int, db: Session = Depends(get_db_ses
     return SuccessResponse(success=True)
 
 
-@router.post("/{collection_id}/assets", response_model=SuccessResponse)
+@router.post("/{collection_id}/assets", response_model=CollectionAssetMembershipSummaryResponse)
 def add_collection_assets(
     collection_id: int,
     payload: CollectionAssetMembershipRequest,
     db: Session = Depends(get_db_session),
-) -> SuccessResponse:
+) -> CollectionAssetMembershipSummaryResponse:
     try:
-        add_assets_to_collection(db, collection_id=collection_id, asset_sha256_list=payload.asset_sha256_list)
+        result = add_assets_to_collection(db, collection_id=collection_id, asset_sha256_list=payload.asset_sha256_list)
     except ValueError as exc:
         status_code = 404 if "does not exist" in str(exc) else 400
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-    return SuccessResponse(success=True)
+    return CollectionAssetMembershipSummaryResponse(
+        success=True,
+        requested_count=int(result.get("requested_count", 0) or 0),
+        added_count=int(result.get("inserted_count", 0) or 0),
+        already_present_count=int(result.get("already_present_count", 0) or 0),
+        failed_count=0,
+    )
 
 
 @router.delete("/{collection_id}/assets", response_model=SuccessResponse)

@@ -5,12 +5,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PresentationViewer } from "@/components/PresentationViewer";
 import styles from "@/components/photo-review-view.module.css";
 import {
+  addAssetsToCollection,
   assignFaceToPerson,
   assignPerson,
   batchAddPhotosToAlbum,
   batchCreateAlbumFromPhotos,
   batchUpdatePhotoVisibility,
   createPerson,
+  getCollections,
   getAlbums,
   getEvents,
   getPhotoFaceOverlays,
@@ -22,6 +24,7 @@ import {
 } from "@/lib/api";
 import type {
   AlbumSummary,
+  CollectionSummary,
   EventSummary,
   FaceInPhoto,
   PersonSummary,
@@ -200,6 +203,11 @@ export function PhotoReviewView({
   const [people, setPeople] = useState<PersonSummary[]>([]);
   const [events, setEvents] = useState<EventSummary[]>([]);
   const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
+  const [collections, setCollections] = useState<CollectionSummary[]>([]);
+  const [isCollectionConfirmOpen, setIsCollectionConfirmOpen] = useState(false);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
+  const [collectionSearchQuery, setCollectionSearchQuery] = useState("");
+  const [isLoadingCollections, setIsLoadingCollections] = useState(false);
 
   const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
   const [presentationStartIndex, setPresentationStartIndex] = useState<number | null>(null);
@@ -252,6 +260,24 @@ export function PhotoReviewView({
 
   const selectedCount = selectedAssets.size;
   const selectedShaList = useMemo(() => Array.from(selectedAssets), [selectedAssets]);
+
+  const selectedCollection = useMemo(
+    () => collections.find((item) => item.collection_id === selectedCollectionId) ?? null,
+    [collections, selectedCollectionId]
+  );
+
+  const filteredCollections = useMemo(() => {
+    const query = collectionSearchQuery.trim().toLowerCase();
+    if (!query) {
+      return collections;
+    }
+    return collections.filter((item) => item.name.toLowerCase().includes(query));
+  }, [collections, collectionSearchQuery]);
+
+  const selectedAssetLabelSamples = useMemo(() => {
+    const bySha = new Map(items.map((item) => [item.asset_sha256, item.filename]));
+    return selectedShaList.slice(0, 6).map((sha) => bySha.get(sha) ?? `${sha.slice(0, 12)}...`);
+  }, [items, selectedShaList]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -324,6 +350,29 @@ export function PhotoReviewView({
       isCancelled = true;
     };
   }, []);
+
+  async function loadCollectionsForBatch(preferredCollectionId?: number | null): Promise<void> {
+    setIsLoadingCollections(true);
+    try {
+      const response = await getCollections();
+      setCollections(response.items);
+      if (response.items.length === 0) {
+        setSelectedCollectionId(null);
+        return;
+      }
+      const candidateId = preferredCollectionId ?? selectedCollectionId;
+      if (candidateId !== null && response.items.some((item) => item.collection_id === candidateId)) {
+        setSelectedCollectionId(candidateId);
+        return;
+      }
+      setSelectedCollectionId(response.items[0].collection_id);
+    } catch {
+      setCollections([]);
+      setSelectedCollectionId(null);
+    } finally {
+      setIsLoadingCollections(false);
+    }
+  }
 
   useEffect(() => {
     let isCancelled = false;
@@ -1008,6 +1057,31 @@ export function PhotoReviewView({
     }
   }
 
+  async function handleBatchAddToCollection(): Promise<void> {
+    if (selectedShaList.length === 0 || selectedCollectionId === null) {
+      return;
+    }
+
+    setIsRunningBatchAction(true);
+    setBatchMessage(null);
+
+    try {
+      const response = await addAssetsToCollection(selectedCollectionId, selectedShaList);
+      const collectionName = selectedCollection?.name ?? `Collection #${selectedCollectionId}`;
+      setBatchMessage(
+        `${collectionName}: requested ${response.requested_count}, added ${response.added_count}, already present ${response.already_present_count}, failed ${response.failed_count}.`
+      );
+      setSelectedAssets(new Set());
+      setIsCollectionConfirmOpen(false);
+      await loadCollectionsForBatch(selectedCollectionId);
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : "Failed to add selected assets to collection.";
+      setErrorMessage(message);
+    } finally {
+      setIsRunningBatchAction(false);
+    }
+  }
+
   async function handleBatchCreateAlbum(): Promise<void> {
     if (selectedShaList.length === 0) {
       return;
@@ -1332,8 +1406,100 @@ export function PhotoReviewView({
             <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={() => void handleBatchCreateAlbum()}>Create album from selected</button>
             <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={handleSelectAllVisible}>Select all visible</button>
             <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={handleClearSelection}>Clear selection</button>
-            <button type="button" className={styles.actionButton} disabled>Add to Collection (12.52)</button>
+            <button
+              type="button"
+              className={styles.actionButton}
+              disabled={isRunningBatchAction}
+              onClick={() => {
+                setCollectionSearchQuery("");
+                setErrorMessage(null);
+                setIsCollectionConfirmOpen(true);
+                void loadCollectionsForBatch();
+              }}
+            >
+              Add selected to Collection
+            </button>
             <button type="button" className={styles.actionButton} disabled>Create Collection (12.52)</button>
+          </div>
+        </div>
+      ) : null}
+
+      {isCollectionConfirmOpen ? (
+        <div className={styles.batchConfirmPanel}>
+          <h3 className={styles.batchConfirmTitle}>Add Selected Assets to Collection</h3>
+          <p className={styles.batchConfirmMeta}>Selected assets: {selectedCount}</p>
+          <p className={styles.batchConfirmMeta}>This adds assets idempotently. Existing memberships are kept and counted.</p>
+
+          {isLoadingCollections ? (
+            <p className={styles.batchConfirmMeta}>Loading collections...</p>
+          ) : collections.length === 0 ? (
+            <div className={styles.batchConfirmWarning}>
+              <p>No Collections exist yet. Create a Collection first.</p>
+            </div>
+          ) : (
+            <>
+              <label className={styles.fieldLabelWide}>
+                Find Collection
+                <input
+                  type="text"
+                  value={collectionSearchQuery}
+                  onChange={(event) => setCollectionSearchQuery(event.target.value)}
+                  className={styles.input}
+                  placeholder="Search by name"
+                />
+              </label>
+              <div className={styles.collectionPickerList}>
+                {filteredCollections.length === 0 ? (
+                  <p className={styles.batchConfirmMeta}>No collections match this search.</p>
+                ) : (
+                  filteredCollections.map((item) => (
+                    <button
+                      key={item.collection_id}
+                      type="button"
+                      className={`${styles.collectionPickerItem} ${selectedCollectionId === item.collection_id ? styles.collectionPickerItemActive : ""}`.trim()}
+                      onClick={() => setSelectedCollectionId(item.collection_id)}
+                    >
+                      <span>{item.name}</span>
+                      <span>{item.direct_asset_count} direct assets | {item.album_count} albums</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+
+          {selectedAssetLabelSamples.length > 0 ? (
+            <div>
+              <p className={styles.batchConfirmMeta}>Sample selected assets</p>
+              <ul className={styles.batchConfirmSampleList}>
+                {selectedAssetLabelSamples.map((label, index) => (
+                  <li key={`selected-collection-sample-${index}`}>{label}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {selectedCollection ? (
+            <p className={styles.batchConfirmMeta}>Target Collection: {selectedCollection.name}</p>
+          ) : null}
+
+          <div className={styles.batchConfirmActions}>
+            <button
+              type="button"
+              className={styles.actionButton}
+              disabled={isRunningBatchAction || selectedCollectionId === null || collections.length === 0}
+              onClick={() => void handleBatchAddToCollection()}
+            >
+              {isRunningBatchAction ? "Adding..." : "Confirm Add to Collection"}
+            </button>
+            <button
+              type="button"
+              className={styles.actionButton}
+              disabled={isRunningBatchAction}
+              onClick={() => setIsCollectionConfirmOpen(false)}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       ) : null}
