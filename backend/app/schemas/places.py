@@ -26,6 +26,20 @@ class PlaceAliasCreateRequest(BaseModel):
     alias: str
 
 
+class PlaceObservationAssetSummary(BaseModel):
+    asset_sha256: str
+    filename: str | None = None
+    image_url: str | None = None
+    display_url: str | None = None
+
+
+class PlaceObservationLinkedPlaceSummary(BaseModel):
+    place_id: str
+    display_label: str
+    latitude: float
+    longitude: float
+
+
 class PlaceObservationSummary(BaseModel):
     id: int
     place_id: str | None = None
@@ -46,6 +60,8 @@ class PlaceObservationSummary(BaseModel):
     confidence: float | None = None
     raw_response_json: dict[str, Any] | None = None
     created_at_utc: datetime | None = None
+    asset: PlaceObservationAssetSummary | None = None
+    linked_place: PlaceObservationLinkedPlaceSummary | None = None
 
 
 class PlaceObservationListResponse(BaseModel):
@@ -134,3 +150,12 @@ class PlaceObservationPatchRequest(BaseModel):
     apply_to_canonical: bool = False
     set_user_verified: bool = False
     set_address_locked: bool = False
+
+
+class GlobalPlaceObservationPatchRequest(BaseModel):
+    status: str
+    place_id: str | None = None
+
+
+class PlaceObservationCreatePlaceRequest(BaseModel):
+    user_label: str

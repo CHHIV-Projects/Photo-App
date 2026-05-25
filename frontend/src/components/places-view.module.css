@@ -416,6 +416,53 @@
   color: #627486;
 }
 
+.landmarkAssetRow {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.landmarkAssetThumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  border: 1px solid #d8e4ef;
+  object-fit: cover;
+  background: #edf4fa;
+}
+
+.landmarkAssetButton {
+  border: 1px solid #c4cfdb;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #f7fafc;
+  color: #2a3f55;
+}
+
+.landmarkAssetButton:hover {
+  border-color: #9bb9d4;
+  background: #e8f3fc;
+}
+
+.landmarkActionGrid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.landmarkActionBlock {
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  padding: 8px;
+  background: #f5faff;
+}
+
 .observationDetails {
   margin-top: 8px;
   padding: 8px;
@@ -525,4 +572,10 @@
 .faceCount {
   font-size: 11px;
   color: #666;
+}
+
+@media (max-width: 1100px) {
+  .landmarkActionGrid {
+    grid-template-columns: 1fr;
+  }
 }

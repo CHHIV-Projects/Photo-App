@@ -12,10 +12,15 @@ from app.models.asset import Asset
 from app.models.face import Face
 from app.models.place import Place
 from app.models.place_alias import PlaceAlias
+from app.models.place_observation import PlaceObservation
 from app.schemas.photos import PhotoSummary
 from app.schemas.places import (
+    GlobalPlaceObservationPatchRequest,
     PlaceAliasSummary,
     PlaceDetail,
+    PlaceObservationAssetSummary,
+    PlaceObservationCreatePlaceRequest,
+    PlaceObservationLinkedPlaceSummary,
     PlaceListResponse,
     PlaceObservationListResponse,
     PlaceObservationPatchRequest,
@@ -28,6 +33,9 @@ from app.services.places.observation_service import (
     MAX_PLACE_OBSERVATION_LIST_LIMIT,
     list_place_observations,
     update_place_observation_status,
+    VALID_PLACE_OBSERVATION_SOURCE_TYPES,
+    VALID_PLACE_OBSERVATION_STATUSES,
+    VALID_PLACE_OBSERVATION_TYPES,
 )
 
 MAX_PLACE_USER_LABEL_LENGTH = 120
@@ -180,6 +188,33 @@ def _normalize_place_type(value: str | None) -> str:
     return normalized
 
 
+def _normalize_name_for_conflict(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip()).lower()
+
+
+def _ensure_place_name_not_conflicting(db: Session, *, user_label: str, exclude_place_id: int | None = None) -> None:
+    normalized = _normalize_name_for_conflict(user_label)
+    if not normalized:
+        raise ValueError("Place name is required.")
+
+    existing_alias = db.scalars(
+        select(PlaceAlias).where(PlaceAlias.alias_normalized == normalized)
+    ).first()
+    if existing_alias is not None and (exclude_place_id is None or existing_alias.place_id != exclude_place_id):
+        raise ValueError("This place name conflicts with an existing Place name or alias.")
+
+    statement = select(Place).where(
+        Place.user_label.is_not(None),
+        func.lower(func.regexp_replace(func.trim(Place.user_label), r"\s+", " ", "g")) == normalized,
+    )
+    if exclude_place_id is not None:
+        statement = statement.where(Place.place_id != exclude_place_id)
+
+    conflicting_place = db.scalars(statement).first()
+    if conflicting_place is not None:
+        raise ValueError("This place name conflicts with an existing Place name or alias.")
+
+
 def _normalize_address_source(value: str | None) -> str | None:
     normalized = _clean_text(value)
     if normalized is None:
@@ -230,6 +265,84 @@ def _to_alias_summary(alias: PlaceAlias) -> PlaceAliasSummary:
         alias_normalized=alias.alias_normalized,
         created_at_utc=alias.created_at_utc,
     )
+
+
+def _to_observation_summary(
+    observation: PlaceObservation,
+    *,
+    asset_by_sha: dict[str, PlaceObservationAssetSummary],
+    place_by_id: dict[int, PlaceObservationLinkedPlaceSummary],
+) -> PlaceObservationSummary:
+    asset_summary: PlaceObservationAssetSummary | None = None
+    if observation.asset_sha256:
+        asset_summary = asset_by_sha.get(observation.asset_sha256)
+
+    linked_place: PlaceObservationLinkedPlaceSummary | None = None
+    if observation.place_id is not None:
+        linked_place = place_by_id.get(observation.place_id)
+
+    return PlaceObservationSummary(
+        id=observation.id,
+        place_id=(str(observation.place_id) if observation.place_id is not None else None),
+        asset_sha256=observation.asset_sha256,
+        source_type=observation.source_type,
+        observation_type=observation.observation_type,
+        status=observation.status,
+        raw_label=observation.raw_label,
+        formatted_address=observation.formatted_address,
+        street=observation.street,
+        city=observation.city,
+        county=observation.county,
+        state=observation.state,
+        postal_code=observation.postal_code,
+        country=observation.country,
+        latitude=observation.latitude,
+        longitude=observation.longitude,
+        confidence=observation.confidence,
+        raw_response_json=observation.raw_response_json,
+        created_at_utc=observation.created_at_utc,
+        asset=asset_summary,
+        linked_place=linked_place,
+    )
+
+
+def _build_observation_summaries(db: Session, rows: list[PlaceObservation]) -> list[PlaceObservationSummary]:
+    sha_list = sorted({row.asset_sha256 for row in rows if row.asset_sha256})
+    place_id_list = sorted({row.place_id for row in rows if row.place_id is not None})
+
+    asset_by_sha: dict[str, PlaceObservationAssetSummary] = {}
+    if sha_list:
+        assets = list(
+            db.scalars(select(Asset).where(Asset.sha256.in_(sha_list))).all()
+        )
+        for asset in assets:
+            contract = build_asset_display_url_contract(
+                sha256=asset.sha256,
+                extension=asset.extension,
+                display_preview_path=asset.display_preview_path,
+            )
+            asset_by_sha[asset.sha256] = PlaceObservationAssetSummary(
+                asset_sha256=asset.sha256,
+                filename=asset.original_filename,
+                image_url=contract.image_url,
+                display_url=contract.display_url,
+            )
+
+    place_by_id: dict[int, PlaceObservationLinkedPlaceSummary] = {}
+    if place_id_list:
+        places = list(db.scalars(select(Place).where(Place.place_id.in_(place_id_list))).all())
+        for place in places:
+            place_by_id[place.place_id] = PlaceObservationLinkedPlaceSummary(
+                place_id=str(place.place_id),
+                display_label=_place_display_label(place=place),
+                latitude=place.representative_latitude,
+                longitude=place.representative_longitude,
+            )
+
+    return [
+        _to_observation_summary(row, asset_by_sha=asset_by_sha, place_by_id=place_by_id)
+        for row in rows
+    ]
 
 
 def list_places(db: Session) -> PlaceListResponse:
@@ -659,3 +772,131 @@ def patch_place_observation(
         raw_response_json=observation.raw_response_json,
         created_at_utc=observation.created_at_utc,
     )
+
+
+def list_global_place_observations(
+    db: Session,
+    *,
+    source_type: str | None,
+    observation_type: str | None,
+    status: str | None,
+    limit: int,
+    offset: int,
+) -> PlaceObservationListResponse:
+    resolved_limit = max(1, min(int(limit), 500))
+    resolved_offset = max(0, int(offset))
+
+    normalized_source_type = _clean_text(source_type)
+    if normalized_source_type is not None and normalized_source_type not in VALID_PLACE_OBSERVATION_SOURCE_TYPES:
+        raise ValueError("Invalid source_type for place observation.")
+
+    normalized_observation_type = _clean_text(observation_type)
+    if normalized_observation_type is not None and normalized_observation_type not in VALID_PLACE_OBSERVATION_TYPES:
+        raise ValueError("Invalid observation_type for place observation.")
+
+    normalized_status = _clean_text(status)
+    if normalized_status is not None and normalized_status not in VALID_PLACE_OBSERVATION_STATUSES:
+        raise ValueError("Invalid status for place observation.")
+
+    statement = select(PlaceObservation)
+    if normalized_source_type is not None:
+        statement = statement.where(PlaceObservation.source_type == normalized_source_type)
+    if normalized_observation_type is not None:
+        statement = statement.where(PlaceObservation.observation_type == normalized_observation_type)
+    if normalized_status is not None:
+        statement = statement.where(PlaceObservation.status == normalized_status)
+
+    rows = list(
+        db.scalars(
+            statement
+            .order_by(PlaceObservation.created_at_utc.desc(), PlaceObservation.id.desc())
+            .offset(resolved_offset)
+            .limit(resolved_limit)
+        ).all()
+    )
+
+    items = _build_observation_summaries(db, rows)
+    return PlaceObservationListResponse(count=len(items), items=items)
+
+
+def patch_global_place_observation(
+    db: Session,
+    *,
+    observation_id: int,
+    payload: GlobalPlaceObservationPatchRequest,
+) -> PlaceObservationSummary:
+    normalized_status = _clean_text(payload.status)
+    if normalized_status is None or normalized_status not in VALID_PLACE_OBSERVATION_STATUSES:
+        raise ValueError("Invalid status for place observation.")
+
+    observation = db.get(PlaceObservation, int(observation_id))
+    if observation is None:
+        raise ValueError("Observation does not exist.")
+
+    target_place_id: int | None = None
+    if payload.place_id is not None:
+        parsed_place_id = _parse_place_id(payload.place_id)
+        if parsed_place_id is None:
+            raise ValueError("Invalid place_id.")
+        target_place = db.get(Place, parsed_place_id)
+        if target_place is None:
+            raise ValueError(f"Place {payload.place_id} does not exist.")
+        if normalized_status != "accepted":
+            raise ValueError("Linking a place requires status=accepted.")
+        target_place_id = parsed_place_id
+
+    observation.status = normalized_status
+    if target_place_id is not None:
+        observation.place_id = target_place_id
+
+    db.commit()
+    db.refresh(observation)
+    return _build_observation_summaries(db, [observation])[0]
+
+
+def create_place_from_observation(
+    db: Session,
+    *,
+    observation_id: int,
+    payload: PlaceObservationCreatePlaceRequest,
+) -> PlaceObservationSummary:
+    observation = db.get(PlaceObservation, int(observation_id))
+    if observation is None:
+        raise ValueError("Observation does not exist.")
+
+    if observation.latitude is None or observation.longitude is None:
+        raise ValueError(
+            "This landmark observation does not include coordinates, so a new Place cannot be created from it yet. "
+            "You can link it to an existing Place instead."
+        )
+
+    normalized_user_label = _normalize_user_label(payload.user_label)
+    if normalized_user_label is None:
+        raise ValueError("Place name is required.")
+
+    _ensure_place_name_not_conflicting(db, user_label=normalized_user_label)
+
+    created = Place(
+        representative_latitude=observation.latitude,
+        representative_longitude=observation.longitude,
+        user_label=normalized_user_label,
+        formatted_address=observation.formatted_address,
+        street=observation.street,
+        city=observation.city,
+        county=observation.county,
+        state=observation.state,
+        postal_code=observation.postal_code,
+        country=observation.country,
+        place_type="landmark",
+        geocode_status="never_tried",
+        address_source=observation.source_type,
+    )
+    db.add(created)
+    db.flush()
+
+    observation.place_id = created.place_id
+    observation.status = "accepted"
+
+    db.commit()
+    db.refresh(observation)
+    return _build_observation_summaries(db, [observation])[0]

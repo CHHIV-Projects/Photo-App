@@ -1,0 +1,982 @@
+```
+# Milestone 12.60.1 — Google Vision Landmark Observation Review and Place Linking## GoalAdd a user-facing review workflow for **Google Vision landmark observations** created by the 12.60 selected-asset test harness.This milestone builds on:```text12.59 — Place, Location, Address, and Landmark Model Planning12.59.1 — Place Model Foundation12.59.2 — Place Address Correction UI and Observation Review12.59.3 — Reverse Geocode Observation Policy Update12.60 — Google Vision Landmark Candidate Planning and Test Harness
+```
+
+12.60 implemented:
+
+```
+selected-asset Google Vision test harnessdry-run defaultexplicit --live gatesafe derivative preparationlandmark / label / object feature switcheslandmark observations persisted as pending place_observationslabel/object results report-onlyno automatic Place creationno automatic Place assignmentno automatic metadata changes
+```
+
+12.60.1 should now make landmark observations useful by letting the user review them and decide what to do.
+
+The core workflow:
+
+```
+Google Vision landmark observation→ review in UI→ accept/reject/ignore→ link accepted observation to existing Placeor→ create new Place with place_type = landmark
+```
+
+No automatic Place creation or assignment.
+
+---
+
+## Product Purpose
+
+Google Vision may identify landmarks or recognizable places from image content.
+
+Examples:
+
+```
+Saddleback CollegeDisneylandEmpire State BuildingGolden Gate BridgeMission San Juan Capistrano
+```
+
+These are useful only if the user can review and confirm them.
+
+The system should treat Vision output as provider evidence:
+
+```
+Vision result = candidate observationUser decision = accepted/rejected/ignored/link/createCanonical Place truth = only after user action
+```
+
+---
+
+## Core Principle
+
+Do not treat Google Vision results as automatic truth.
+
+For this milestone:
+
+```
+Accepting a landmark observation does not automatically assign every similar photo.Accepting a landmark observation does not automatically overwrite Place data.Creating a new Place requires explicit user confirmation.Linking to an existing Place requires explicit user confirmation.
+```
+
+---
+
+## Current Observation Shape
+
+12.60 creates landmark observations as:
+
+```
+place_observation:  asset_sha256 = selected asset  place_id = null  source_type = google_vision  observation_type = landmark  status = pending  raw_label = landmark name  confidence = provider score  latitude / longitude if provider returns it  raw_response_json = trimmed landmark candidate payload
+```
+
+12.60.1 should use these observations.
+
+---
+
+## Scope
+
+### In Scope
+
+Implement:
+
+- UI listing of pending Google Vision landmark observations
+- ability to inspect landmark observation details
+- ability to see associated asset thumbnail/preview if available
+- actions:
+  - Accept only
+  - Reject
+  - Ignore
+  - Link to existing Place
+  - Create new Place from observation
+- existing Place picker/search for linking
+- create Place with `place_type = landmark`
+- store accepted observation linkage to Place when applicable
+- observation status updates
+- no automatic bulk assignment
+- no automatic canonical metadata overwrite
+- documentation and validation
+
+### Conditional Scope
+
+If safe and not too large:
+
+- show confidence score visually
+- show provider lat/lon if returned
+- show raw payload in expandable debug/details
+- add “Open asset” or “Open photo detail” link
+- add filter for pending / accepted / rejected / ignored landmark observations
+- show if an observation is already linked to a Place
+
+### Out of Scope
+
+Do not implement:
+
+- automatic Place creation
+- automatic Place assignment without user confirmation
+- automatic assignment of other photos to the same Place
+- automatic address overwrite
+- automatic coordinate overwrite
+- map UI
+- multi-place-per-asset model
+- Google Vision broad batch jobs
+- Web Detection
+- label/tag persistence
+- object candidate persistence
+- object/semantic search
+- LLaMA/local model integration
+- Source Review place write action
+- ingestion/source changes
+- media/vault changes
+- duplicate/canonical changes
+- captured_at changes
+
+---
+
+## Required Reconnaissance Before Coding
+
+Inspect current 12.60 implementation and current Places UI.
+
+Relevant files likely include:
+
+```
+backend/app/models/place.pybackend/app/models/place_observation.pybackend/app/schemas/places.pybackend/app/api/places.pybackend/app/services/places/observation_service.pybackend/app/services/places/__init__.pybackend/app/services/vision/google_vision_service.pybackend/scripts/run_google_vision_test.pyfrontend/src/components/PlacesView.tsxfrontend/src/components/places-view.module.cssfrontend/src/lib/api.tsfrontend/src/types/ui-api.tsfrontend/src/components/PhotoReviewView.tsxfrontend/src/components/PhotosView.tsx
+```
+
+Document:
+
+```
+how Google Vision landmark observations are storedhow observations are currently listed in Places UIwhether asset-linked observations without place_id can be queriedwhether observation status update supports place_id=null observationshow to show asset thumbnail/filename for asset_sha256 observationshow existing Place picker/search can be reusedhow new Place creation works today
+```
+
+---
+
+## Key Design Issue: Asset-Linked Observations with No Place
+
+Existing observation UI may be Place-detail based:
+
+```
+GET /api/places/{place_id}/observations
+```
+
+But Google Vision landmark observations initially have:
+
+```
+place_id = nullasset_sha256 = selected asset
+```
+
+Therefore, 12.60.1 likely needs a way to list unlinked landmark observations.
+
+Possible endpoint:
+
+```
+GET /api/place-observations?source_type=google_vision&observation_type=landmark&status=pending
+```
+
+or project-consistent equivalent.
+
+Minimum required:
+
+```
+A UI can list pending google_vision / landmark observations even when place_id is null.
+```
+
+Do not fake this by requiring a Place before review.
+
+---
+
+## Required UI Behavior
+
+## 1. Landmark Observation Review Area
+
+Add a review area in the most appropriate location.
+
+Preferred options:
+
+```
+Places view:  section/tab for Landmark ObservationsorAdmin / Tools area:  Google Vision Landmark Review
+```
+
+For 12.60.1, it is acceptable to place this inside Places view if easiest.
+
+Minimum list row should show:
+
+```
+thumbnail or small preview if availableasset filename if availableraw landmark labelconfidencelat/lon if returnedstatussource_type = google_visioncreated dateactions
+```
+
+Example:
+
+```
+Disneyland Parkconfidence: 0.91asset: IMG_1234.HEICstatus: pending[Accept only] [Link to Place] [Create Place] [Reject] [Ignore]
+```
+
+---
+
+## 2. Observation Detail
+
+User should be able to inspect details.
+
+Show:
+
+```
+raw_labelconfidencesource_typeobservation_typeasset thumbnail/filenameasset_sha256, possibly shortenedprovider lat/lon if availablestatuscreated_at
+```
+
+Optional expandable details:
+
+```
+raw_response_jsonbounding polygontechnical IDs
+```
+
+Raw JSON should be hidden by default.
+
+---
+
+## 3. Accept Only
+
+Action:
+
+```
+Accept only
+```
+
+Behavior:
+
+```
+status = acceptedplace_id remains null unless already linkedno Place is createdno Place is updatedno asset-place link is changed
+```
+
+Use case:
+
+```
+User agrees the Vision result is valid evidence but does not want to create/link a Place yet.
+```
+
+---
+
+## 4. Reject
+
+Action:
+
+```
+Reject
+```
+
+Behavior:
+
+```
+status = rejectedno Place changesno asset changes
+```
+
+Use case:
+
+```
+Vision result is wrong.
+```
+
+---
+
+## 5. Ignore
+
+Action:
+
+```
+Ignore
+```
+
+Behavior:
+
+```
+status = ignoredno Place changesno asset changes
+```
+
+Use case:
+
+```
+Vision result may be irrelevant or not worth acting on.
+```
+
+---
+
+## 6. Link to Existing Place
+
+Action:
+
+```
+Link to Existing Place
+```
+
+Behavior:
+
+```
+user selects existing Placeobservation.place_id = selected Placeobservation.status = accepteddo not automatically change asset.place_id unless explicitly designed and confirmeddo not overwrite Place canonical fields
+```
+
+Important:
+
+```
+Linking an observation to a Place means:  this provider observation supports that Place.It does not necessarily mean:  assign this asset to that Place automatically.
+```
+
+For 12.60.1, preferred behavior:
+
+```
+link observation to Place onlydo not change asset.place_id
+```
+
+If coder believes assigning asset.place_id is necessary or already expected by Places model, ask before implementing.
+
+---
+
+## 7. Create New Place from Observation
+
+Action:
+
+```
+Create New Place
+```
+
+Confirmation should show:
+
+```
+Proposed Place name = observation.raw_labelplace_type = landmarklat/lon from observation if availablesource = google_visionasset reference
+```
+
+On confirm:
+
+```
+create Place  user_label = raw_label  place_type = landmark  representative lat/lon from observation if available  address_source = google_vision or vision_landmark if field supportslink observation.place_id to new Placeset observation.status = accepteddo not automatically assign asset.place_id unless explicitly confirmed
+```
+
+Do not overwrite existing Places.
+
+If a Place with same normalized name already exists:
+
+```
+show conflictsuggest Link to Existing Place insteaddo not silently create duplicate
+```
+
+---
+
+## Place Picker Requirements
+
+For linking to an existing Place, provide a simple Place picker/search.
+
+Search should include:
+
+```
+Place.user_labelPlace aliasesformatted addresscity/state/country if already supported
+```
+
+Minimum:
+
+```
+type/search existing Placesselect oneconfirm link
+```
+
+Do not create a large redesign.
+
+---
+
+## New Place Creation Rules
+
+When creating a Place from a landmark observation:
+
+```
+place_type = landmarkuser_label = observation.raw_label
+```
+
+Coordinates:
+
+```
+If observation latitude/longitude exists:  may populate representative Place coordinatesIf no coordinates:  create Place without coordinates if model permits  otherwise block with clear message
+```
+
+Address fields:
+
+```
+Do not invent address.Do not reverse geocode automatically.
+```
+
+Verification:
+
+```
+Do not mark user_verified by default unless the confirmation explicitly asks and user chooses.Do not address_lock by default.
+```
+
+Recommended default:
+
+```
+user_verified = falseaddress_locked = falseaddress_source = google_vision or null
+```
+
+---
+
+## Backend Requirements
+
+## 1. Observation List Endpoint
+
+Add or extend endpoint to list observations independent of Place.
+
+Example:
+
+```
+GET /api/place-observations
+```
+
+Query params:
+
+```
+source_typeobservation_typestatuslimitoffset
+```
+
+Minimum required query:
+
+```
+source_type=google_visionobservation_type=landmarkstatus=pending
+```
+
+Response should include:
+
+```
+observation fieldsasset summary if asset_sha256 presentlinked Place summary if place_id present
+```
+
+Asset summary may include:
+
+```
+asset_sha256filenamethumbnail_url if availablemedia_type
+```
+
+---
+
+## 2. Observation Update Endpoint
+
+Existing place-scoped endpoint may not work for `place_id = null` observations.
+
+Add or extend endpoint such as:
+
+```
+PATCH /api/place-observations/{observation_id}
+```
+
+Payload:
+
+```
+{  "status": "accepted",  "place_id": 123}
+```
+
+Support:
+
+```
+status updateplace_id link update
+```
+
+Validation:
+
+```
+status must be accepted/rejected/ignored/pending if allowedplace_id must exist if suppliedplace_id must refer to Place
+```
+
+---
+
+## 3. Link Observation to Place
+
+Implement service method:
+
+```
+link_observation_to_place(observation_id, place_id)
+```
+
+Behavior:
+
+```
+validate observation existsvalidate place existsset place_idset status = accepted unless caller requests otherwisedo not mutate asset.place_id
+```
+
+---
+
+## 4. Create Place from Observation
+
+Implement narrow service/API path if not already available.
+
+Possible endpoint:
+
+```
+POST /api/place-observations/{observation_id}/create-place
+```
+
+Payload:
+
+```
+{  "user_label": "Disneyland Park",  "place_type": "landmark",  "use_observation_coordinates": true}
+```
+
+Behavior:
+
+```
+validate observation existsvalidate source_type/google_vision and observation_type/landmark where appropriatecheck normalized name conflictcreate Placelink observation to new Placeset observation status = acceptedreturn Place summary
+```
+
+Do not assign asset.place_id.
+
+---
+
+## 5. Duplicate Place Name Handling
+
+If creating a Place from observation and the normalized label conflicts with an existing Place user_label or alias:
+
+```
+block creationreturn conflictsuggest linking to existing Place
+```
+
+Do not silently create duplicates.
+
+---
+
+## Frontend Requirements
+
+## 1. Add Landmark Review Section
+
+Add a simple section to Places view or Admin view:
+
+```
+Google Vision Landmark Observations
+```
+
+Filters:
+
+```
+status: pending / accepted / rejected / ignored
+```
+
+Minimum acceptable:
+
+```
+show pending observations only
+```
+
+Preferred:
+
+```
+filter by status
+```
+
+---
+
+## 2. Observation Row Actions
+
+For each observation:
+
+```
+Accept onlyLink to PlaceCreate PlaceRejectIgnoreDetails
+```
+
+Actions should update row state without full page reload if practical.
+
+---
+
+## 3. Link Existing Place Flow
+
+On click:
+
+```
+open small picker/dialogsearch Placesselect Placeconfirm
+```
+
+Result:
+
+```
+observation linkedstatus acceptedrow updates
+```
+
+---
+
+## 4. Create Place Flow
+
+On click:
+
+```
+open confirmation dialog/panelshow proposed Place nameplace_type = landmarkshow coordinates if presentconfirm/cancel
+```
+
+Result:
+
+```
+Place createdobservation linkedstatus acceptedrow updates
+```
+
+Optionally offer:
+
+```
+Open Place
+```
+
+---
+
+## 5. No Automatic Asset Assignment
+
+UI should not imply that linking/creating Place automatically assigns the photo to the Place.
+
+Suggested wording:
+
+```
+This links the Vision observation to a Place. It does not automatically change the photo's assigned Place.
+```
+
+If future workflow should assign asset.place_id, that must be a separate milestone.
+
+---
+
+## Safety Requirements
+
+Do not:
+
+```
+call Google Vision in this UIsend images externallyrun Vision from this review screenauto-create Placesauto-link observations without user actionauto-assign asset.place_idoverwrite Place canonical addressoverwrite Place coordinates without confirmationcreate Tagswrite label/object candidatesmodify source/provenancemodify media/vaultchange ingestionchange duplicate/canonical logicchange captured_at
+```
+
+Allowed writes:
+
+```
+observation status updatesobservation place_id linknew Place creation from explicit confirmation
+```
+
+---
+
+## Validation Requirements
+
+### Observation Listing
+
+Validate:
+
+```
+pending google_vision/landmark observations list appearsasset thumbnail/filename appears when availableconfidence/raw label/status displayed
+```
+
+### Accept/Reject/Ignore
+
+Validate:
+
+```
+Accept only changes status to acceptedReject changes status to rejectedIgnore changes status to ignoredno Place or asset changes occur
+```
+
+### Link Existing Place
+
+Validate:
+
+```
+select existing Placeconfirm linkobservation.place_id updatedstatus acceptedasset.place_id unchangedPlace canonical fields unchanged
+```
+
+### Create Place
+
+Validate:
+
+```
+create Place from landmark observationPlace created with place_type=landmarkPlace user_label from raw_labelcoordinates copied only if available and allowedobservation linked to new Placestatus acceptedasset.place_id unchanged
+```
+
+### Duplicate Place Name
+
+Validate:
+
+```
+attempt create Place where name conflicts with existing Place/aliascreation blockeduser directed to link existing Place
+```
+
+### Regression
+
+Validate:
+
+```
+Places view still loadsPlace address correction still worksPlace aliases still workObservation review from 12.59.2 still worksReverse geocode observations still workPhoto Review still loadsSource Review still worksGoogle Vision harness from 12.60 still worksfrontend build passesbackend diagnostics/tests pass
+```
+
+---
+
+## Documentation Requirements
+
+Create or update:
+
+```
+docs/operations/google_vision_landmark_review_place_linking_12_60_1.md
+```
+
+Document:
+
+1. purpose
+2. observation listing behavior
+3. Accept / Reject / Ignore behavior
+4. link-to-existing-Place behavior
+5. create-new-Place behavior
+6. duplicate Place handling
+7. no-automatic-asset-assignment rule
+8. safety guarantees
+9. validation performed
+10. known limitations
+11. recommended next milestone
+
+---
+
+## Deliverables
+
+Required deliverables:
+
+1. landmark observation list UI
+2. independent observation list API for unlinked observations
+3. observation status update support for unlinked observations
+4. link observation to existing Place
+5. create Place from landmark observation
+6. duplicate Place conflict handling
+7. documentation
+8. coder closeout response
+
+Expected closeout file:
+
+```
+docs/prompts/Coder response 12.60.1.md
+```
+
+---
+
+## Definition of Done
+
+12.60.1 is complete when:
+
+- pending Google Vision landmark observations can be reviewed in UI
+- user can accept/reject/ignore observations
+- user can link an observation to an existing Place
+- user can create a new landmark Place from an observation
+- no asset Place assignment happens automatically
+- no canonical address or coordinates are overwritten without user action
+- Places, aliases, address correction, and reverse geocode observation workflows still work
+- documentation explains behavior and limitations
+
+---
+
+## Required Coder Closeout Response
+
+Create:
+
+```
+docs/prompts/Coder response 12.60.1.md
+```
+
+The closeout response should include:
+
+1. Milestone title and date
+2. Scope completed
+3. Files inspected
+4. Files modified or added
+5. Observation listing behavior
+6. Observation action behavior
+7. Link-to-Place behavior
+8. Create-Place behavior
+9. Duplicate Place conflict behavior
+10. Asset assignment safety confirmation
+11. API changes
+12. UI changes
+13. Validation performed
+14. Deviations from prompt
+15. Known limitations
+16. Recommended next milestone
+
+---
+
+## Recommended Next Milestone
+
+Likely next milestone:
+
+```
+12.60.2 — Google Vision Landmark Asset-to-Place Assignment Review
+```
+
+Possible scope:
+
+```
+After a landmark observation is linked to a Place,allow user to optionally assign the source asset to that Placewith confirmation.
+```
+
+Alternative:
+
+```
+12.61 — Google Vision Label/Object Candidate Model Planning
+```
+
+if Landmark review is stable and we want to move toward label/object candidates.
+
+
+
+
+
+# Answers to Coder Questions — Milestone 12.60.1
+
+## 1. Placement
+
+Yes. Put the new landmark review area inside the existing **Places view** for 12.60.1.
+
+Preferred UI location:
+
+```text
+Places view
+  Existing Places list/detail
+  New section/tab/panel:
+    Google Vision Landmark Observations
+
+Do not create a separate Admin screen yet.
+
+Reason:
+
+Landmark observations are part of the Place workflow.
+Keeping review inside Places view reduces navigation complexity for v1.
+2. No-coordinate Create Place behavior
+
+Yes. If the current Place model requires non-null representative latitude/longitude, block Create Place when the Vision observation has no lat/lon.
+
+Preferred message:
+
+This landmark observation does not include coordinates, so a new Place cannot be created from it yet.
+You can link it to an existing Place instead.
+
+Do not invent coordinates.
+
+Do not use asset GPS as a fallback in 12.60.1 unless explicitly reviewed in a later milestone.
+
+Reason:
+
+Create Place from Vision should be deterministic and evidence-based.
+If Vision did not return coordinates, we should not guess.
+
+Future option:
+
+Allow create Place without coordinates if the Place model is relaxed later.
+
+But not in 12.60.1.
+
+3. Link/Create side effects
+
+Confirmed.
+
+Both actions should automatically set the observation status to accepted:
+
+Link to Existing Place:
+  observation.place_id = selected Place
+  observation.status = accepted
+  asset.place_id unchanged
+
+Create New Place:
+  create Place
+  observation.place_id = new Place
+  observation.status = accepted
+  asset.place_id unchanged
+
+Important:
+
+Do not change asset.place_id in 12.60.1.
+
+That will be a separate review/assignment milestone if needed.
+
+4. Accept-only semantics
+
+Confirmed.
+
+Accept-only behavior:
+
+If observation is unlinked:
+  status = accepted
+  place_id remains null
+
+If observation is already linked:
+  status = accepted
+  existing place_id remains unchanged
+
+Accept-only means:
+
+User accepts the Vision result as valid evidence,
+but does not necessarily link/create a Place yet.
+5. Place picker source
+
+Yes. Use the existing Places list/search from places.py for the picker in 12.60.1.
+
+Do not add a separate dedicated picker endpoint unless current API shape is insufficient.
+
+Minimum picker behavior:
+
+search/list existing Places
+select one
+confirm link
+
+The picker should benefit from existing place search behavior, including aliases if already wired.
+
+6. Review list default filter
+
+Default to pending only.
+
+Preferred:
+
+default filter:
+  pending
+
+optional if quick:
+  pending / accepted / rejected / ignored
+
+Minimum acceptable for 12.60.1:
+
+show pending Google Vision landmark observations only
+
+But adding a simple status filter is useful if low-risk.
+
+Implementation Direction Confirmation
+
+Coder’s recommended endpoint shape is approved:
+
+GET /api/place-observations
+  filters:
+    source_type
+    observation_type
+    status
+    limit
+    offset
+
+PATCH /api/place-observations/{id}
+  supports:
+    status update
+    optional place_id link
+
+POST /api/place-observations/{id}/create-place
+  supports:
+    explicit landmark Place creation from observation
+
+Response should include:
+
+observation fields
+asset summary:
+  sha
+  filename
+  thumbnail/display URL if available
+
+linked Place summary if place_id exists
+Required write boundaries
+
+Keep writes narrow:
+
+Allowed:
+  observation status update
+  observation.place_id link
+  explicit new Place creation from user confirmation
+
+Not allowed:
+  asset.place_id assignment
+  canonical Place overwrite
+  automatic Place creation
+  automatic Place linking
+  tag/object writes
+  Google Vision execution from this UI
+Summary for Coder
+
+Proceed with:
+
+- Add landmark review inside Places view.
+- Default review list to pending Google Vision landmark observations.
+- Add independent observation endpoints for unlinked observations.
+- Add Accept / Reject / Ignore.
+- Add Link to Existing Place.
+- Add Create New Place only when observation has lat/lon.
+- Create new Place as place_type=landmark.
+- Link/Create sets observation status=accepted.
+- Accept-only leaves place_id as-is.
+- Do not change asset.place_id.
+- Reuse existing Places list/search for picker.

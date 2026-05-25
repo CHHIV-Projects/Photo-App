@@ -69,7 +69,9 @@ import type {
   PhotoSummary,
   PlaceAliasSummary,
   PlaceDetail,
+  GlobalPlaceObservationPatchRequest,
   PlaceObservationPatchRequest,
+  PlaceObservationCreatePlaceRequest,
   PlaceObservationSummary,
   PlacePatchRequest,
   PlaceSummary,
@@ -646,6 +648,52 @@ export function patchPlaceObservation(
 ): Promise<PlaceObservationSummary> {
   return apiRequest<PlaceObservationSummary>(`/api/places/${placeId}/observations/${observationId}`, {
     method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface GlobalPlaceObservationQueryOptions {
+  sourceType?: string;
+  observationType?: string;
+  status?: "pending" | "accepted" | "rejected" | "ignored" | "superseded";
+  limit?: number;
+  offset?: number;
+}
+
+export function getGlobalPlaceObservations(
+  options: GlobalPlaceObservationQueryOptions = {},
+): Promise<ListResponse<PlaceObservationSummary>> {
+  const params = new URLSearchParams();
+  if (options.sourceType) {
+    params.set("source_type", options.sourceType);
+  }
+  if (options.observationType) {
+    params.set("observation_type", options.observationType);
+  }
+  if (options.status) {
+    params.set("status", options.status);
+  }
+  params.set("limit", String(options.limit ?? 100));
+  params.set("offset", String(options.offset ?? 0));
+  return apiRequest<ListResponse<PlaceObservationSummary>>(`/api/place-observations?${params.toString()}`);
+}
+
+export function patchGlobalPlaceObservation(
+  observationId: number,
+  payload: GlobalPlaceObservationPatchRequest,
+): Promise<PlaceObservationSummary> {
+  return apiRequest<PlaceObservationSummary>(`/api/place-observations/${observationId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createPlaceFromObservation(
+  observationId: number,
+  payload: PlaceObservationCreatePlaceRequest,
+): Promise<PlaceObservationSummary> {
+  return apiRequest<PlaceObservationSummary>(`/api/place-observations/${observationId}/create-place`, {
+    method: "POST",
     body: JSON.stringify(payload),
   });
 }

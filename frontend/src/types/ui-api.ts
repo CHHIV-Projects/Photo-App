@@ -803,6 +803,22 @@ export interface PlaceObservationSummary {
   confidence: number | null;
   raw_response_json: Record<string, unknown> | null;
   created_at_utc: string | null;
+  asset: PlaceObservationAssetSummary | null;
+  linked_place: PlaceObservationLinkedPlaceSummary | null;
+}
+
+export interface PlaceObservationAssetSummary {
+  asset_sha256: string;
+  filename: string | null;
+  image_url: string | null;
+  display_url: string | null;
+}
+
+export interface PlaceObservationLinkedPlaceSummary {
+  place_id: string;
+  display_label: string;
+  latitude: number;
+  longitude: number;
 }
 
 export interface PlaceObservationPatchRequest {
@@ -810,6 +826,15 @@ export interface PlaceObservationPatchRequest {
   apply_to_canonical?: boolean;
   set_user_verified?: boolean;
   set_address_locked?: boolean;
+}
+
+export interface GlobalPlaceObservationPatchRequest {
+  status: "pending" | "accepted" | "rejected" | "ignored" | "superseded";
+  place_id?: string | null;
+}
+
+export interface PlaceObservationCreatePlaceRequest {
+  user_label: string;
 }
 
 export interface PlacePatchRequest {

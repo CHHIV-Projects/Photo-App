@@ -16,6 +16,7 @@ from app.api.faces import router as faces_router
 from app.api.health import router as health_router
 from app.api.people import router as people_router
 from app.api.photos import router as photos_router
+from app.api.place_observations import router as place_observations_router
 from app.api.places import router as places_router
 from app.api.provenance_review import router as provenance_review_router
 from app.api.search import router as search_router
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
 	app.include_router(faces_router)
 	app.include_router(people_router)
 	app.include_router(photos_router)
+	app.include_router(place_observations_router)
 	app.include_router(places_router)
 	app.include_router(provenance_review_router)
 	app.include_router(search_router)

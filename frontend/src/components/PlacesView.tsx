@@ -11,10 +11,13 @@ import type {
 } from "@/types/ui-api";
 import {
   addPlaceAlias,
+  createPlaceFromObservation,
+  getGlobalPlaceObservations,
   deletePlaceAlias,
   getPlaceDetail,
   getPlaceObservations,
   getPlaces,
+  patchGlobalPlaceObservation,
   patchPlace,
   patchPlaceObservation,
   resolveApiUrl,
@@ -44,6 +47,10 @@ const PLACE_TYPE_OPTIONS = [
   "unknown",
 ] as const;
 
+const LANDMARK_STATUS_OPTIONS = ["pending", "accepted", "rejected", "ignored"] as const;
+
+type LandmarkStatusFilter = (typeof LANDMARK_STATUS_OPTIONS)[number];
+
 export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
   const [places, setPlaces] = useState<PlaceSummary[]>([]);
   const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
@@ -54,14 +61,21 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
   const [isLoadingPlaces, setIsLoadingPlaces] = useState(false);
   const [isLoadingPlaceDetail, setIsLoadingPlaceDetail] = useState(false);
   const [isLoadingObservations, setIsLoadingObservations] = useState(false);
+  const [isLoadingLandmarkObservations, setIsLoadingLandmarkObservations] = useState(false);
   const [isSavingCanonical, setIsSavingCanonical] = useState(false);
   const [isSavingAlias, setIsSavingAlias] = useState(false);
   const [updatingObservationId, setUpdatingObservationId] = useState<number | null>(null);
+  const [updatingLandmarkObservationId, setUpdatingLandmarkObservationId] = useState<number | null>(null);
   const [placesErrorMessage, setPlacesErrorMessage] = useState("");
   const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState("");
   const [observationErrorMessage, setObservationErrorMessage] = useState("");
+  const [landmarkObservationErrorMessage, setLandmarkObservationErrorMessage] = useState("");
   const [canonicalErrorMessage, setCanonicalErrorMessage] = useState("");
   const [aliasErrorMessage, setAliasErrorMessage] = useState("");
+  const [landmarkObservationStatusFilter, setLandmarkObservationStatusFilter] = useState<LandmarkStatusFilter>("pending");
+  const [landmarkObservations, setLandmarkObservations] = useState<PlaceObservationSummary[]>([]);
+  const [landmarkLinkPlaceByObservationId, setLandmarkLinkPlaceByObservationId] = useState<Record<number, string>>({});
+  const [landmarkCreateNameByObservationId, setLandmarkCreateNameByObservationId] = useState<Record<number, string>>({});
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [placeSearch, setPlaceSearch] = useState("");
   const [aliasDraft, setAliasDraft] = useState("");
@@ -155,6 +169,123 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
       setObservations([]);
     } finally {
       setIsLoadingObservations(false);
+    }
+  };
+
+  const loadLandmarkObservations = async (statusFilter: LandmarkStatusFilter) => {
+    setIsLoadingLandmarkObservations(true);
+    setLandmarkObservationErrorMessage("");
+    try {
+      const response = await getGlobalPlaceObservations({
+        sourceType: "google_vision",
+        observationType: "landmark",
+        status: statusFilter,
+        limit: 200,
+        offset: 0,
+      });
+      setLandmarkObservations(response.items);
+      setLandmarkCreateNameByObservationId((prev) => {
+        const next = { ...prev };
+        for (const item of response.items) {
+          if (!next[item.id] && item.raw_label) {
+            next[item.id] = item.raw_label;
+          }
+        }
+        return next;
+      });
+    } catch (err) {
+      setLandmarkObservationErrorMessage(err instanceof Error ? err.message : "Failed to load Google Vision landmark observations");
+      setLandmarkObservations([]);
+    } finally {
+      setIsLoadingLandmarkObservations(false);
+    }
+  };
+
+  const replaceLandmarkObservation = (updated: PlaceObservationSummary) => {
+    setLandmarkObservations((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+  };
+
+  const removeLandmarkObservation = (observationId: number) => {
+    setLandmarkObservations((prev) => prev.filter((item) => item.id !== observationId));
+  };
+
+  const handleLandmarkStatusOnly = async (
+    observationId: number,
+    status: "accepted" | "rejected" | "ignored",
+  ) => {
+    setUpdatingLandmarkObservationId(observationId);
+    setLandmarkObservationErrorMessage("");
+    try {
+      const updated = await patchGlobalPlaceObservation(observationId, { status });
+      if (landmarkObservationStatusFilter === "pending" && updated.status !== "pending") {
+        removeLandmarkObservation(observationId);
+      } else {
+        replaceLandmarkObservation(updated);
+      }
+    } catch (err) {
+      setLandmarkObservationErrorMessage(err instanceof Error ? err.message : "Failed to update landmark observation");
+    } finally {
+      setUpdatingLandmarkObservationId(null);
+    }
+  };
+
+  const handleLandmarkLinkToPlace = async (observationId: number) => {
+    const placeId = landmarkLinkPlaceByObservationId[observationId];
+    if (!placeId) {
+      setLandmarkObservationErrorMessage("Select a place before linking.");
+      return;
+    }
+
+    setUpdatingLandmarkObservationId(observationId);
+    setLandmarkObservationErrorMessage("");
+    try {
+      const updated = await patchGlobalPlaceObservation(observationId, {
+        status: "accepted",
+        place_id: placeId,
+      });
+
+      if (landmarkObservationStatusFilter === "pending") {
+        removeLandmarkObservation(observationId);
+      } else {
+        replaceLandmarkObservation(updated);
+      }
+      await loadPlaces();
+      if (selectedPlaceId === placeId) {
+        await loadPlaceDetail(placeId);
+        await loadPlaceObservations(placeId);
+      }
+    } catch (err) {
+      setLandmarkObservationErrorMessage(err instanceof Error ? err.message : "Failed to link landmark observation");
+    } finally {
+      setUpdatingLandmarkObservationId(null);
+    }
+  };
+
+  const handleLandmarkCreatePlace = async (observation: PlaceObservationSummary) => {
+    const draftName = (landmarkCreateNameByObservationId[observation.id] ?? "").trim();
+    if (!draftName) {
+      setLandmarkObservationErrorMessage("Place name is required to create a Place from this observation.");
+      return;
+    }
+
+    setUpdatingLandmarkObservationId(observation.id);
+    setLandmarkObservationErrorMessage("");
+    try {
+      const updated = await createPlaceFromObservation(observation.id, { user_label: draftName });
+      if (landmarkObservationStatusFilter === "pending") {
+        removeLandmarkObservation(observation.id);
+      } else {
+        replaceLandmarkObservation(updated);
+      }
+
+      await loadPlaces();
+      if (updated.place_id) {
+        setSelectedPlaceId(updated.place_id);
+      }
+    } catch (err) {
+      setLandmarkObservationErrorMessage(err instanceof Error ? err.message : "Failed to create a Place from landmark observation");
+    } finally {
+      setUpdatingLandmarkObservationId(null);
     }
   };
 
@@ -290,6 +421,10 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
   }, []);
 
   useEffect(() => {
+    void loadLandmarkObservations(landmarkObservationStatusFilter);
+  }, [landmarkObservationStatusFilter]);
+
+  useEffect(() => {
     if (selectedPlaceId) {
       void loadPlaceDetail(selectedPlaceId);
       void loadPlaceObservations(selectedPlaceId);
@@ -359,6 +494,171 @@ export default function PlacesView({ onOpenPhoto }: PlacesViewProps) {
       </div>
 
       <div className={styles.placeDetail}>
+        <div className={styles.section}>
+          <div className={styles.sectionTitle}>Google Vision Landmark Observations</div>
+          <div className={styles.inlineHint}>Review Google Vision landmark evidence independently of existing place links.</div>
+          <div className={styles.rowActions}>
+            <label className={styles.fieldLabel}>Status
+              <select
+                className={styles.selectInput}
+                value={landmarkObservationStatusFilter}
+                onChange={(event) => setLandmarkObservationStatusFilter(event.target.value as LandmarkStatusFilter)}
+              >
+                {LANDMARK_STATUS_OPTIONS.map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {isLoadingLandmarkObservations && <div className={styles.loading}>Loading Google Vision landmark observations...</div>}
+          {landmarkObservationErrorMessage && <div className={styles.error}>{landmarkObservationErrorMessage}</div>}
+          {!isLoadingLandmarkObservations && landmarkObservations.length === 0 && (
+            <div className={styles.aliasEmpty}>No Google Vision landmark observations in this status.</div>
+          )}
+          <div className={styles.observationList}>
+            {landmarkObservations.map((observation) => {
+              const candidateText = observation.raw_label
+                || observation.formatted_address
+                || [observation.city, observation.state, observation.country].filter(Boolean).join(", ");
+              const hasCoordinates = observation.latitude !== null && observation.longitude !== null;
+              const selectedLinkPlaceId = landmarkLinkPlaceByObservationId[observation.id] ?? "";
+              const draftCreateName = landmarkCreateNameByObservationId[observation.id] ?? "";
+              const assetImageUrl = resolveApiUrl(observation.asset?.display_url ?? observation.asset?.image_url ?? null);
+
+              return (
+                <div key={observation.id} className={styles.observationCard}>
+                  <div className={styles.observationTop}>
+                    <div className={styles.badgeRow}>
+                      <span className={styles.inlineBadge}>{observation.source_type}</span>
+                      <span className={styles.inlineBadge}>{observation.observation_type}</span>
+                      <span className={styles.inlineBadge}>status: {observation.status}</span>
+                      {observation.linked_place && <span className={styles.inlineBadge}>linked: {observation.linked_place.display_label}</span>}
+                    </div>
+                    <div className={styles.observationAddress}>{candidateText || "(No landmark label)"}</div>
+                    <div className={styles.observationMeta}>
+                      {observation.confidence !== null && observation.confidence !== undefined ? `confidence: ${observation.confidence}` : ""}
+                      {observation.created_at_utc
+                        ? `${observation.confidence !== null && observation.confidence !== undefined ? " | " : ""}created: ${new Date(observation.created_at_utc).toLocaleString()}`
+                        : ""}
+                    </div>
+                    {observation.asset && (
+                      <div className={styles.landmarkAssetRow}>
+                        {assetImageUrl && (
+                          <img
+                            src={assetImageUrl}
+                            alt={observation.asset.filename ?? observation.asset.asset_sha256}
+                            className={styles.landmarkAssetThumb}
+                          />
+                        )}
+                        <button
+                          type="button"
+                          className={styles.landmarkAssetButton}
+                          onClick={() => {
+                            if (observation.asset) {
+                              onOpenPhoto(observation.asset.asset_sha256);
+                            }
+                          }}
+                        >
+                          Open asset: {observation.asset.filename ?? observation.asset.asset_sha256}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={styles.rowActions}>
+                    <button
+                      type="button"
+                      className={styles.labelButtonPrimary}
+                      disabled={updatingLandmarkObservationId === observation.id}
+                      onClick={() => { void handleLandmarkStatusOnly(observation.id, "accepted"); }}
+                    >
+                      Accept
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.labelButtonDanger}
+                      disabled={updatingLandmarkObservationId === observation.id}
+                      onClick={() => { void handleLandmarkStatusOnly(observation.id, "rejected"); }}
+                    >
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.labelButton}
+                      disabled={updatingLandmarkObservationId === observation.id}
+                      onClick={() => { void handleLandmarkStatusOnly(observation.id, "ignored"); }}
+                    >
+                      Ignore
+                    </button>
+                  </div>
+
+                  <div className={styles.landmarkActionGrid}>
+                    <div className={styles.landmarkActionBlock}>
+                      <div className={styles.aliasHeader}>Link to Existing Place</div>
+                      <div className={styles.aliasEditorRow}>
+                        <select
+                          className={styles.selectInput}
+                          value={selectedLinkPlaceId}
+                          onChange={(event) => setLandmarkLinkPlaceByObservationId((prev) => ({
+                            ...prev,
+                            [observation.id]: event.target.value,
+                          }))}
+                        >
+                          <option value="">Select place...</option>
+                          {places.map((place) => (
+                            <option key={place.place_id} value={place.place_id}>
+                              {place.display_label} ({formatCoordinates(place.latitude, place.longitude)})
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className={styles.labelButtonPrimary}
+                          disabled={updatingLandmarkObservationId === observation.id || !selectedLinkPlaceId}
+                          onClick={() => { void handleLandmarkLinkToPlace(observation.id); }}
+                        >
+                          Link + Accept
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className={styles.landmarkActionBlock}>
+                      <div className={styles.aliasHeader}>Create New Place</div>
+                      <div className={styles.aliasEditorRow}>
+                        <input
+                          type="text"
+                          maxLength={120}
+                          className={styles.labelInput}
+                          placeholder="Landmark place name"
+                          value={draftCreateName}
+                          onChange={(event) => setLandmarkCreateNameByObservationId((prev) => ({
+                            ...prev,
+                            [observation.id]: event.target.value,
+                          }))}
+                        />
+                        <button
+                          type="button"
+                          className={styles.labelButtonPrimary}
+                          disabled={updatingLandmarkObservationId === observation.id || !hasCoordinates || !draftCreateName.trim()}
+                          onClick={() => { void handleLandmarkCreatePlace(observation); }}
+                        >
+                          Create + Accept
+                        </button>
+                      </div>
+                      {!hasCoordinates && (
+                        <div className={styles.inlineHint}>
+                          This landmark observation does not include coordinates, so a new Place cannot be created from it yet.
+                          You can link it to an existing Place instead.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         {placeDetail && (
           <>
             <div className={styles.detailHeader}>
