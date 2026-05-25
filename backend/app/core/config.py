@@ -96,6 +96,11 @@ class Settings:
 	)
 	google_maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
 	place_geocode_max_calls_per_run: int = int(os.getenv("PLACE_GEOCODE_MAX_CALLS_PER_RUN", "100"))
+	vision_enabled: bool = os.getenv("VISION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+	vision_max_images_per_run: int = int(os.getenv("VISION_MAX_IMAGES_PER_RUN", "10"))
+	google_cloud_project: str = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+	google_application_credentials: str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+	google_cloud_vision_api_key: str = os.getenv("GOOGLE_CLOUD_VISION_API_KEY", "").strip()
 
 	@property
 	def database_url(self) -> str:

@@ -480,3 +480,111 @@ Potential scope:
 ```
 define credential/config strategyselect 1–10 image test harnesssend resized derivative onlystore Google Vision landmark output as place_observationsno automatic canonical Place creationno automatic place assignment
 ```
+
+
+# Answers to Coder Questions — Milestone 12.59.3
+
+## 1. ZERO_RESULTS behavior
+
+Yes. Treat provider `ZERO_RESULTS` as **no result**.
+
+Preferred behavior:
+
+```text
+ZERO_RESULTS:
+  do not create place_observation
+  do not update canonical Place address fields
+  count/report as places_with_no_result
+  continue run
+
+Reason:
+
+An empty provider result is not useful evidence.
+Creating a mostly-empty pending observation would clutter the observation model.
+
+If the provider response contains meaningful diagnostic metadata, it may be logged or included in run summary, but it should not become a normal address observation.
+
+2. Reporting storage
+
+Keep richer counters lightweight for 12.59.3.
+
+Preferred:
+
+last_run_summary
+JSON report
+script stdout/log output
+
+Do not add new persisted columns to place_geocoding_runs unless implementation already has an easy JSON summary field or similar.
+
+Recommended counters:
+
+places_evaluated
+provider_calls_attempted
+observations_created
+canonical_updated
+canonical_skipped_locked
+places_with_no_result
+failed_count
+
+Reason:
+
+These counters are operationally useful, but not yet important enough to justify schema expansion.
+
+If existing run model has a flexible JSON summary field, use it. Otherwise report via script output/log/documentation.
+
+3. Protected skip geocode status
+
+Yes. If provider evaluation succeeded but canonical update was blocked because the Place is verified/locked, count it as a successful provider evaluation.
+
+Preferred behavior:
+
+Provider returned usable result.
+Observation created.
+Canonical overwrite skipped due to user_verified/address_locked.
+geocode_status = success
+geocoded_at updated
+canonical_skipped_locked_count += 1
+
+Reason:
+
+The geocode lookup succeeded.
+The system intentionally protected the canonical Place fields.
+
+This distinction is important:
+
+success = provider lookup succeeded
+canonical update skipped = policy decision, not failure
+4. Per-place transaction behavior
+
+Yes. Tighten per-place transaction behavior so these succeed or fail together for a single Place:
+
+observation creation
+canonical address update, if allowed
+geocode status/timestamp update
+run counter/result update for that place, where practical
+
+Preferred rule:
+
+For each Place:
+  either the observation + canonical/status changes for that Place are committed together
+  or they are rolled back together and counted as failed
+
+Reason:
+
+A persisted observation with failed canonical/status update could create confusing partial state.
+
+If full atomicity is difficult because of existing service structure, at minimum:
+
+Remove immediate commit from observation creation when used inside geocode workflow.
+Let the caller/session control commit.
+Document any remaining partial-success limitation.
+Summary for Coder
+
+Proceed with this contract:
+
+- ZERO_RESULTS = no observation, count as no_result.
+- Richer counters go to summary/report/stdout for 12.59.3; no new run-table columns unless there is already a flexible JSON field.
+- Verified/locked protected skip still counts as geocode success if provider returned usable result.
+- Observation creation + canonical/status update should be atomic per Place.
+- Continue to create observations for usable provider results even when canonical overwrite is skipped.
+- Do not overwrite user_verified or address_locked canonical fields.

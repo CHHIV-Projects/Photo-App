@@ -17,3 +17,4 @@ ImageHash
 timm
 torch
 torchvision
+google-cloud-vision
