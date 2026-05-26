@@ -1,6 +1,7 @@
 # Milestone 12.60.3 - Visual Enrichment Workspace Foundation
 
 ## Goal
+
 Create the first version of a dedicated **Visual Enrichment** workspace for Google Vision-driven enrichment.
 
 This milestone should move the Google Vision / landmark review workflow toward the correct product home:
