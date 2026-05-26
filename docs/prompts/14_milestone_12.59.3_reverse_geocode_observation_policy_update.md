@@ -481,7 +481,6 @@ Potential scope:
 define credential/config strategyselect 1–10 image test harnesssend resized derivative onlystore Google Vision landmark output as place_observationsno automatic canonical Place creationno automatic place assignment
 ```
 
-
 # Answers to Coder Questions — Milestone 12.59.3
 
 ## 1. ZERO_RESULTS behavior

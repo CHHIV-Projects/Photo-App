@@ -15,6 +15,7 @@ import { PeopleView } from "@/components/PeopleView";
 import { PhotosView } from "@/components/PhotosView";
 import { SourceReviewView } from "@/components/SourceReviewView";
 import PlacesView from "@/components/PlacesView";
+import VisualEnrichmentView from "@/components/VisualEnrichmentView";
 import { TimelineView } from "@/components/TimelineView";
 import { UnassignedFacesView } from "@/components/UnassignedFacesView";
 import styles from "@/components/review-screen.module.css";
@@ -56,7 +57,7 @@ import type {
   PlaceSummary
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "source-review" | "albums" | "collections" | "timeline" | "events" | "places" | "duplicate-groups" | "duplicate-suggestions" | "admin";
+type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "source-review" | "albums" | "collections" | "timeline" | "events" | "places" | "visual-enrichment" | "duplicate-groups" | "duplicate-suggestions" | "admin";
 type ClusterFilterMode = "all" | "assigned" | "unassigned" | "ignored";
 
 function compareClustersForMergeTarget(a: ClusterSummary, b: ClusterSummary): number {
@@ -1052,6 +1053,13 @@ export default function HomePage() {
             </button>
             <button
               type="button"
+              className={`${styles.viewButton} ${viewMode === "visual-enrichment" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("visual-enrichment")}
+            >
+              Visual Enrichment
+            </button>
+            <button
+              type="button"
               className={`${styles.viewButton} ${viewMode === "duplicate-groups" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("duplicate-groups")}
             >
@@ -1197,6 +1205,10 @@ export default function HomePage() {
           <TimelineView />
         ) : viewMode === "places" ? (
           <PlacesView
+            onOpenPhoto={handleOpenPhotoFromPlaces}
+          />
+        ) : viewMode === "visual-enrichment" ? (
+          <VisualEnrichmentView
             onOpenPhoto={handleOpenPhotoFromPlaces}
           />
         ) : viewMode === "duplicate-groups" ? (

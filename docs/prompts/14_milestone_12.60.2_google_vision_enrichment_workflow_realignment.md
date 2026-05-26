@@ -1,6 +1,7 @@
 # Milestone 12.60.2 — Google Vision Enrichment Workflow Realignment
 
 ## Goal
+
 Pause implementation and realign the Google Vision / Landmark workflow around the corrected product direction.
 
 This is a **reconnaissance / design / documentation-only milestone**.
@@ -14,6 +15,7 @@ This milestone should clarify how Google Vision should be used going forward bef
 ---
 
 ## Context
+
 Recent milestones implemented the technical foundation for Google Vision and Place observation workflows:
 
 ```text
@@ -315,9 +317,9 @@ For duplicate groups:
 Run Vision on canonical asset.
 Review result.
 If accepted, allow user to optionally apply landmark/context to:
-	exact duplicates
-	near-duplicate group
-	selected related assets
+    exact duplicates
+    near-duplicate group
+    selected related assets
 ```
 
 Do not automatically propagate to all same-lat/lon assets.
