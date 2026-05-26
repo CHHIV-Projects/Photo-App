@@ -129,6 +129,47 @@ class PlaceObservationsApiTests(unittest.TestCase):
         self.assertEqual(body["status"], "accepted")
         self.assertEqual(body["place_id"], "23")
 
+    def test_accept_as_context_returns_payload(self) -> None:
+        expected = {
+            "context_label": {
+                "id": 41,
+                "asset_sha256": "abc",
+                "asset_filename": "IMG_4819.JPG",
+                "label": "Midgley Bridge",
+                "label_normalized": "midgley bridge",
+                "context_type": "landmark",
+                "source_type": "google_vision",
+                "source_observation_id": 15,
+                "status": "active",
+                "confidence": 0.91,
+                "created_at_utc": "2026-05-26T10:00:00Z",
+            },
+            "observation_status": "accepted",
+            "already_present": False,
+        }
+        with patch("app.api.place_observations.accept_landmark_observation_as_context", return_value=expected):
+            response = self.client.post(
+                "/api/place-observations/15/accept-as-context",
+                json={"label": "Midgley Bridge"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["context_label"]["context_type"], "landmark")
+        self.assertEqual(body["observation_status"], "accepted")
+
+    def test_accept_as_context_maps_not_found_to_404(self) -> None:
+        with patch(
+            "app.api.place_observations.accept_landmark_observation_as_context",
+            side_effect=ValueError("Observation does not exist."),
+        ):
+            response = self.client.post(
+                "/api/place-observations/999/accept-as-context",
+                json={},
+            )
+
+        self.assertEqual(response.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

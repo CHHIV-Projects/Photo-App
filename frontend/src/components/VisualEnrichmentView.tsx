@@ -3,11 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  acceptObservationAsContext,
+  getAssetContextLabels,
   getGlobalPlaceObservations,
   patchGlobalPlaceObservation,
   resolveApiUrl,
 } from "@/lib/api";
-import type { PlaceObservationSummary } from "@/types/ui-api";
+import type { AssetContextLabelSummary, PlaceObservationSummary } from "@/types/ui-api";
 import styles from "./visual-enrichment-view.module.css";
 
 interface VisualEnrichmentViewProps {
@@ -30,6 +32,8 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
   const [errorMessage, setErrorMessage] = useState("");
   const [updatingObservationId, setUpdatingObservationId] = useState<number | null>(null);
   const [expandedObservationIds, setExpandedObservationIds] = useState<Set<number>>(new Set());
+  const [contextLabelsByAsset, setContextLabelsByAsset] = useState<Record<string, AssetContextLabelSummary[]>>({});
+  const [labelDraftByObservation, setLabelDraftByObservation] = useState<Record<number, string>>({});
 
   const loadObservations = async (nextStatus: ObservationStatusFilter) => {
     setIsLoading(true);
@@ -48,6 +52,26 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
       setObservations([]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadContextLabels = async () => {
+    try {
+      const response = await getAssetContextLabels({
+        contextType: "landmark",
+        status: "active",
+        sourceType: "google_vision",
+        limit: 500,
+        offset: 0,
+      });
+      const grouped: Record<string, AssetContextLabelSummary[]> = {};
+      for (const item of response.items) {
+        grouped[item.asset_sha256] = grouped[item.asset_sha256] ?? [];
+        grouped[item.asset_sha256].push(item);
+      }
+      setContextLabelsByAsset(grouped);
+    } catch {
+      // Keep candidate loading resilient if context-label list fetch fails.
     }
   };
 
@@ -79,9 +103,47 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
     }
   };
 
+  const handleAcceptAsContext = async (observation: PlaceObservationSummary) => {
+    setUpdatingObservationId(observation.id);
+    setErrorMessage("");
+    try {
+      const draft = labelDraftByObservation[observation.id]?.trim();
+      const response = await acceptObservationAsContext(observation.id, {
+        label: draft || undefined,
+      });
+      if (statusFilter === "pending" && response.observation_status !== "pending") {
+        removeObservation(observation.id);
+      } else {
+        upsertObservation({
+          ...observation,
+          status: response.observation_status,
+        });
+      }
+
+      setContextLabelsByAsset((prev) => {
+        const existingForAsset = prev[response.context_label.asset_sha256] ?? [];
+        const alreadyThere = existingForAsset.some((item) => item.id === response.context_label.id);
+        return {
+          ...prev,
+          [response.context_label.asset_sha256]: alreadyThere
+            ? existingForAsset
+            : [response.context_label, ...existingForAsset],
+        };
+      });
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to accept candidate as context");
+    } finally {
+      setUpdatingObservationId(null);
+    }
+  };
+
   useEffect(() => {
     void loadObservations(statusFilter);
   }, [statusFilter]);
+
+  useEffect(() => {
+    void loadContextLabels();
+  }, []);
 
   const candidateCountLabel = useMemo(() => {
     const count = observations.length;
@@ -131,6 +193,8 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
               || observation.formatted_address
               || [observation.city, observation.state, observation.country].filter(Boolean).join(", ")
               || "(No suggested context label)";
+            const existingContextLabels = assetSha ? (contextLabelsByAsset[assetSha] ?? []) : [];
+            const labelDraft = labelDraftByObservation[observation.id] ?? candidateLabel;
 
             return (
               <article key={observation.id} className={styles.candidateCard}>
@@ -160,14 +224,46 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
 
                 <div className={styles.candidateLabel}>Suggested context: {candidateLabel}</div>
 
+                <div className={styles.labelInputRow}>
+                  <label className={styles.labelInputLabel} htmlFor={`context-label-${observation.id}`}>
+                    Context label
+                  </label>
+                  <input
+                    id={`context-label-${observation.id}`}
+                    className={styles.labelInput}
+                    value={labelDraft}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setLabelDraftByObservation((prev) => ({
+                        ...prev,
+                        [observation.id]: value,
+                      }));
+                    }}
+                    disabled={updatingObservationId === observation.id}
+                  />
+                </div>
+
+                {existingContextLabels.length > 0 && (
+                  <div className={styles.existingContextRow}>
+                    <span className={styles.existingContextLabel}>Existing context:</span>
+                    <div className={styles.existingContextBadges}>
+                      {existingContextLabels.map((item) => (
+                        <span key={item.id} className={styles.badge}>
+                          {item.context_type}: {item.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className={styles.actionRow}>
                   <button
                     type="button"
                     className={styles.primaryButton}
                     disabled={updatingObservationId === observation.id}
-                    onClick={() => { void handleStatusUpdate(observation.id, "accepted"); }}
+                    onClick={() => { void handleAcceptAsContext(observation); }}
                   >
-                    Accept
+                    Accept as Context
                   </button>
                   <button
                     type="button"

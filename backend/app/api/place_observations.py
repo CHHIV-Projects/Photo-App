@@ -6,6 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
+from app.schemas.context_labels import (
+    AcceptObservationAsContextRequest,
+    AcceptObservationAsContextResponse,
+)
 from app.schemas.places import (
     GlobalPlaceObservationPatchRequest,
     PlaceObservationCreatePlaceRequest,
@@ -17,6 +21,7 @@ from app.services.places import (
     list_global_place_observations,
     patch_global_place_observation,
 )
+from app.services.context_labels.service import accept_landmark_observation_as_context
 
 router = APIRouter(prefix="/api/place-observations", tags=["place-observations"])
 
@@ -72,6 +77,25 @@ def create_place_from_observation_endpoint(
     """Create a landmark place from an observation and link the observation to it."""
     try:
         return create_place_from_observation(
+            db,
+            observation_id=observation_id,
+            payload=payload,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
+@router.post("/{observation_id}/accept-as-context", response_model=AcceptObservationAsContextResponse)
+def accept_observation_as_context_endpoint(
+    observation_id: int,
+    payload: AcceptObservationAsContextRequest,
+    db: Session = Depends(get_db_session),
+) -> AcceptObservationAsContextResponse:
+    """Accept a Google Vision landmark observation as a durable asset context label."""
+    try:
+        return accept_landmark_observation_as_context(
             db,
             observation_id=observation_id,
             payload=payload,

@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.admin import router as admin_router
 from app.api.albums import router as albums_router
+from app.api.asset_context_labels import router as asset_context_labels_router
 from app.api.collections import router as collections_router
 from app.api.clusters import router as clusters_router
 from app.api.duplicates import router as duplicates_router
@@ -24,6 +25,7 @@ from app.api.timeline import router as timeline_router
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.albums.album_schema import ensure_album_schema
+from app.services.context_labels.schema import ensure_asset_context_label_schema
 from app.services.duplicates.adjudication_schema import ensure_duplicate_adjudication_schema
 from app.services.duplicates.processing_schema import ensure_duplicate_processing_schema
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
@@ -69,6 +71,7 @@ def create_app() -> FastAPI:
 	)
 	app.include_router(admin_router)
 	app.include_router(health_router)
+	app.include_router(asset_context_labels_router)
 	app.include_router(albums_router)
 	app.include_router(collections_router)
 	app.include_router(clusters_router)
@@ -94,6 +97,7 @@ def create_app() -> FastAPI:
 			ensure_duplicate_suggestion_schema(db_session)
 			ensure_duplicate_processing_schema(db_session)
 			ensure_place_schema(db_session)
+			ensure_asset_context_label_schema(db_session)
 			ensure_display_adjustment_schema(db_session)
 			ensure_face_processing_schema(db_session)
 			ensure_heic_preview_schema(db_session)

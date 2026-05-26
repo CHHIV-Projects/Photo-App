@@ -70,6 +70,9 @@ import type {
   PlaceAliasSummary,
   PlaceDetail,
   GlobalPlaceObservationPatchRequest,
+  AcceptObservationAsContextRequest,
+  AcceptObservationAsContextResponse,
+  AssetContextLabelSummary,
   PlaceObservationPatchRequest,
   PlaceObservationCreatePlaceRequest,
   PlaceObservationSummary,
@@ -693,6 +696,46 @@ export function createPlaceFromObservation(
   payload: PlaceObservationCreatePlaceRequest,
 ): Promise<PlaceObservationSummary> {
   return apiRequest<PlaceObservationSummary>(`/api/place-observations/${observationId}/create-place`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface AssetContextLabelQueryOptions {
+  assetSha256?: string;
+  contextType?: string;
+  status?: "active" | "hidden" | "rejected" | "all";
+  sourceType?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function getAssetContextLabels(
+  options: AssetContextLabelQueryOptions = {},
+): Promise<ListResponse<AssetContextLabelSummary>> {
+  const params = new URLSearchParams();
+  if (options.assetSha256) {
+    params.set("asset_sha256", options.assetSha256);
+  }
+  if (options.contextType) {
+    params.set("context_type", options.contextType);
+  }
+  if (options.status) {
+    params.set("status", options.status);
+  }
+  if (options.sourceType) {
+    params.set("source_type", options.sourceType);
+  }
+  params.set("limit", String(options.limit ?? 100));
+  params.set("offset", String(options.offset ?? 0));
+  return apiRequest<ListResponse<AssetContextLabelSummary>>(`/api/asset-context-labels?${params.toString()}`);
+}
+
+export function acceptObservationAsContext(
+  observationId: number,
+  payload: AcceptObservationAsContextRequest,
+): Promise<AcceptObservationAsContextResponse> {
+  return apiRequest<AcceptObservationAsContextResponse>(`/api/place-observations/${observationId}/accept-as-context`, {
     method: "POST",
     body: JSON.stringify(payload),
   });

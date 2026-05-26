@@ -837,6 +837,30 @@ export interface PlaceObservationCreatePlaceRequest {
   user_label: string;
 }
 
+export interface AssetContextLabelSummary {
+  id: number;
+  asset_sha256: string;
+  asset_filename: string;
+  label: string;
+  label_normalized: string;
+  context_type: string;
+  source_type: string;
+  source_observation_id: number | null;
+  status: string;
+  confidence: number | null;
+  created_at_utc: string;
+}
+
+export interface AcceptObservationAsContextRequest {
+  label?: string;
+}
+
+export interface AcceptObservationAsContextResponse {
+  context_label: AssetContextLabelSummary;
+  observation_status: string;
+  already_present: boolean;
+}
+
 export interface PlacePatchRequest {
   user_label?: string | null;
   place_type?: string;
