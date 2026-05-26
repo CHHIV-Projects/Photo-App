@@ -841,6 +841,10 @@ export interface AssetContextLabelSummary {
   id: number;
   asset_sha256: string;
   asset_filename: string;
+  asset_image_url?: string | null;
+  asset_display_url?: string | null;
+  duplicate_group_id?: number | null;
+  is_canonical?: boolean | null;
   label: string;
   label_normalized: string;
   context_type: string;
@@ -859,6 +863,39 @@ export interface AcceptObservationAsContextResponse {
   context_label: AssetContextLabelSummary;
   observation_status: string;
   already_present: boolean;
+}
+
+export interface ContextLabelPropagationTargetSummary {
+  asset_sha256: string;
+  asset_filename: string;
+  image_url: string | null;
+  display_url: string | null;
+  duplicate_group_id: number;
+  is_canonical: boolean;
+  already_has_label: boolean;
+  selectable: boolean;
+  default_selected: boolean;
+}
+
+export interface ContextLabelPropagationPreviewResponse {
+  source_label: AssetContextLabelSummary;
+  duplicate_group_id: number | null;
+  eligible_target_count: number;
+  targets: ContextLabelPropagationTargetSummary[];
+  message: string | null;
+}
+
+export interface ContextLabelPropagationRequest {
+  target_asset_sha256s: string[];
+}
+
+export interface ContextLabelPropagationResponse {
+  source_label_id: number;
+  requested_count: number;
+  added_count: number;
+  already_present_count: number;
+  skipped_count: number;
+  failed_count: number;
 }
 
 export interface PlacePatchRequest {

@@ -5,11 +5,18 @@ import { useEffect, useMemo, useState } from "react";
 import {
   acceptObservationAsContext,
   getAssetContextLabels,
+  getContextLabelPropagationPreview,
   getGlobalPlaceObservations,
   patchGlobalPlaceObservation,
+  propagateContextLabel,
   resolveApiUrl,
 } from "@/lib/api";
-import type { AssetContextLabelSummary, PlaceObservationSummary } from "@/types/ui-api";
+import type {
+  AssetContextLabelSummary,
+  ContextLabelPropagationPreviewResponse,
+  ContextLabelPropagationResponse,
+  PlaceObservationSummary,
+} from "@/types/ui-api";
 import styles from "./visual-enrichment-view.module.css";
 
 interface VisualEnrichmentViewProps {
@@ -34,6 +41,11 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
   const [expandedObservationIds, setExpandedObservationIds] = useState<Set<number>>(new Set());
   const [contextLabelsByAsset, setContextLabelsByAsset] = useState<Record<string, AssetContextLabelSummary[]>>({});
   const [labelDraftByObservation, setLabelDraftByObservation] = useState<Record<number, string>>({});
+  const [propagationPreview, setPropagationPreview] = useState<ContextLabelPropagationPreviewResponse | null>(null);
+  const [selectedPropagationTargets, setSelectedPropagationTargets] = useState<Set<string>>(new Set());
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [isPropagating, setIsPropagating] = useState(false);
+  const [propagationResult, setPropagationResult] = useState<ContextLabelPropagationResponse | null>(null);
 
   const loadObservations = async (nextStatus: ObservationStatusFilter) => {
     setIsLoading(true);
@@ -60,7 +72,6 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
       const response = await getAssetContextLabels({
         contextType: "landmark",
         status: "active",
-        sourceType: "google_vision",
         limit: 500,
         offset: 0,
       });
@@ -137,6 +148,63 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
     }
   };
 
+  const openPropagationPreview = async (label: AssetContextLabelSummary) => {
+    setIsPreviewLoading(true);
+    setErrorMessage("");
+    setPropagationResult(null);
+    try {
+      const response = await getContextLabelPropagationPreview(label.id);
+      setPropagationPreview(response);
+      const defaults = new Set(
+        response.targets.filter((item) => item.default_selected && item.selectable).map((item) => item.asset_sha256),
+      );
+      setSelectedPropagationTargets(defaults);
+      if (response.message) {
+        setErrorMessage(response.message);
+      }
+    } catch (err) {
+      setPropagationPreview(null);
+      setSelectedPropagationTargets(new Set());
+      setErrorMessage(err instanceof Error ? err.message : "Failed to load propagation preview");
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  };
+
+  const togglePropagationTarget = (assetSha: string) => {
+    setSelectedPropagationTargets((prev) => {
+      const next = new Set(prev);
+      if (next.has(assetSha)) {
+        next.delete(assetSha);
+      } else {
+        next.add(assetSha);
+      }
+      return next;
+    });
+  };
+
+  const handleConfirmPropagation = async () => {
+    if (!propagationPreview) {
+      return;
+    }
+    setIsPropagating(true);
+    setErrorMessage("");
+    try {
+      const targetList = Array.from(selectedPropagationTargets);
+      const result = await propagateContextLabel(propagationPreview.source_label.id, {
+        target_asset_sha256s: targetList,
+      });
+      setPropagationResult(result);
+      await loadContextLabels();
+      setPropagationPreview(null);
+      setSelectedPropagationTargets(new Set());
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to propagate context label");
+    } finally {
+      setIsPropagating(false);
+    }
+  };
+
   useEffect(() => {
     void loadObservations(statusFilter);
   }, [statusFilter]);
@@ -179,6 +247,12 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
 
         {isLoading && <p className={styles.loading}>Loading candidates...</p>}
         {errorMessage && <p className={styles.error}>{errorMessage}</p>}
+        {propagationResult && (
+          <p className={styles.success}>
+            Added: {propagationResult.added_count} | Already present: {propagationResult.already_present_count} |
+            Skipped: {propagationResult.skipped_count} | Failed: {propagationResult.failed_count}
+          </p>
+        )}
         {!isLoading && observations.length === 0 && (
           <p className={styles.empty}>No Google Vision landmark/context candidates in this status.</p>
         )}
@@ -248,9 +322,21 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
                     <span className={styles.existingContextLabel}>Existing context:</span>
                     <div className={styles.existingContextBadges}>
                       {existingContextLabels.map((item) => (
-                        <span key={item.id} className={styles.badge}>
-                          {item.context_type}: {item.label}
-                        </span>
+                        <div key={item.id} className={styles.contextChip}>
+                          <span className={styles.badge}>
+                            {item.context_type}: {item.label}
+                          </span>
+                          {item.context_type === "landmark" && item.status === "active" && item.duplicate_group_id ? (
+                            <button
+                              type="button"
+                              className={styles.inlineActionButton}
+                              disabled={isPreviewLoading || isPropagating}
+                              onClick={() => { void openPropagationPreview(item); }}
+                            >
+                              Propagate to Duplicate Group
+                            </button>
+                          ) : null}
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -326,6 +412,80 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
           })}
         </div>
       </section>
+
+      {propagationPreview && (
+        <section className={styles.section}>
+          <h3 className={styles.sectionTitle}>Propagate Context Label</h3>
+          <p className={styles.sectionSubtitle}>
+            This will apply the accepted context label to selected duplicate-group members. It will not change Places,
+            locations, source files, or metadata.
+          </p>
+          <div className={styles.previewSummary}>
+            <span className={styles.badge}>Label: {propagationPreview.source_label.context_type}: {propagationPreview.source_label.label}</span>
+            {propagationPreview.duplicate_group_id !== null && (
+              <span className={styles.badge}>Duplicate group: #{propagationPreview.duplicate_group_id}</span>
+            )}
+            <span className={styles.badge}>Eligible targets: {propagationPreview.eligible_target_count}</span>
+          </div>
+
+          {propagationPreview.message && <p className={styles.empty}>{propagationPreview.message}</p>}
+
+          {propagationPreview.targets.length > 0 && (
+            <div className={styles.targetList}>
+              {propagationPreview.targets.map((target) => {
+                const previewUrl = resolveApiUrl(target.display_url ?? target.image_url ?? null);
+                const checked = selectedPropagationTargets.has(target.asset_sha256);
+                return (
+                  <label key={target.asset_sha256} className={styles.targetRow}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={!target.selectable || isPropagating}
+                      onChange={() => togglePropagationTarget(target.asset_sha256)}
+                    />
+                    <div className={styles.targetThumbShell}>
+                      {previewUrl ? (
+                        <img src={previewUrl} alt={target.asset_filename} className={styles.thumbnail} />
+                      ) : (
+                        <div className={styles.thumbnailPlaceholder}>N/A</div>
+                      )}
+                    </div>
+                    <div className={styles.targetText}>
+                      <div className={styles.assetName}>{target.asset_filename}</div>
+                      <div className={styles.metaLine}>
+                        {target.already_has_label ? "already present" : "will add"}
+                        {target.is_canonical ? " | canonical" : ""}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          <div className={styles.actionRow}>
+            <button
+              type="button"
+              className={styles.primaryButton}
+              disabled={isPropagating || selectedPropagationTargets.size === 0}
+              onClick={() => { void handleConfirmPropagation(); }}
+            >
+              Confirm Propagation
+            </button>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={isPropagating}
+              onClick={() => {
+                setPropagationPreview(null);
+                setSelectedPropagationTargets(new Set());
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>Candidate Selection</h3>

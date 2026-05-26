@@ -73,6 +73,91 @@ class AssetContextLabelsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_get_propagation_preview_returns_targets(self) -> None:
+        expected = {
+            "source_label": {
+                "id": 7,
+                "asset_sha256": "abc123",
+                "asset_filename": "IMG_4819.JPG",
+                "asset_image_url": "/media/previews/aa.jpg",
+                "asset_display_url": "/media/previews/aa.jpg",
+                "duplicate_group_id": 739,
+                "is_canonical": False,
+                "label": "Midgley Bridge",
+                "label_normalized": "midgley bridge",
+                "context_type": "landmark",
+                "source_type": "google_vision",
+                "source_observation_id": 15,
+                "status": "active",
+                "confidence": 0.9,
+                "created_at_utc": "2026-05-26T10:00:00Z",
+            },
+            "duplicate_group_id": 739,
+            "eligible_target_count": 1,
+            "targets": [
+                {
+                    "asset_sha256": "xyz456",
+                    "asset_filename": "IMG_4819_export.JPG",
+                    "image_url": "/media/previews/bb.jpg",
+                    "display_url": "/media/previews/bb.jpg",
+                    "duplicate_group_id": 739,
+                    "is_canonical": True,
+                    "already_has_label": False,
+                    "selectable": True,
+                    "default_selected": True,
+                }
+            ],
+            "message": None,
+        }
+        with patch("app.api.asset_context_labels.get_context_label_propagation_preview", return_value=expected):
+            response = self.client.get("/api/asset-context-labels/7/propagation-preview")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["duplicate_group_id"], 739)
+        self.assertEqual(body["targets"][0]["asset_sha256"], "xyz456")
+
+    def test_get_propagation_preview_missing_label_maps_to_404(self) -> None:
+        with patch(
+            "app.api.asset_context_labels.get_context_label_propagation_preview",
+            side_effect=ValueError("Context label does not exist."),
+        ):
+            response = self.client.get("/api/asset-context-labels/999/propagation-preview")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_post_propagate_returns_counts(self) -> None:
+        expected = {
+            "source_label_id": 7,
+            "requested_count": 2,
+            "added_count": 1,
+            "already_present_count": 1,
+            "skipped_count": 0,
+            "failed_count": 0,
+        }
+        with patch("app.api.asset_context_labels.propagate_context_label_to_duplicate_group_members", return_value=expected):
+            response = self.client.post(
+                "/api/asset-context-labels/7/propagate",
+                json={"target_asset_sha256s": ["xyz456", "aaa111"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["added_count"], 1)
+        self.assertEqual(body["already_present_count"], 1)
+
+    def test_post_propagate_invalid_target_returns_400(self) -> None:
+        with patch(
+            "app.api.asset_context_labels.propagate_context_label_to_duplicate_group_members",
+            side_effect=ValueError("Target asset xyz is outside the source duplicate group."),
+        ):
+            response = self.client.post(
+                "/api/asset-context-labels/7/propagate",
+                json={"target_asset_sha256s": ["xyz"]},
+            )
+
+        self.assertEqual(response.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,8 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
-from app.schemas.context_labels import AssetContextLabelListResponse
-from app.services.context_labels.service import list_asset_context_labels
+from app.schemas.context_labels import (
+    AssetContextLabelListResponse,
+    ContextLabelPropagationPreviewResponse,
+    ContextLabelPropagationRequest,
+    ContextLabelPropagationResponse,
+)
+from app.services.context_labels.service import (
+    get_context_label_propagation_preview,
+    list_asset_context_labels,
+    propagate_context_label_to_duplicate_group_members,
+)
 
 router = APIRouter(prefix="/api/asset-context-labels", tags=["asset-context-labels"])
 
@@ -35,3 +44,39 @@ def get_asset_context_labels_endpoint(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{label_id}/propagation-preview", response_model=ContextLabelPropagationPreviewResponse)
+def get_context_label_propagation_preview_endpoint(
+    label_id: int,
+    db: Session = Depends(get_db_session),
+) -> ContextLabelPropagationPreviewResponse:
+    """Preview duplicate-group propagation targets for one active landmark context label."""
+    try:
+        return get_context_label_propagation_preview(
+            db,
+            label_id=label_id,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
+@router.post("/{label_id}/propagate", response_model=ContextLabelPropagationResponse)
+def propagate_context_label_endpoint(
+    label_id: int,
+    payload: ContextLabelPropagationRequest,
+    db: Session = Depends(get_db_session),
+) -> ContextLabelPropagationResponse:
+    """Propagate one active landmark context label to selected duplicate-group members."""
+    try:
+        return propagate_context_label_to_duplicate_group_members(
+            db,
+            label_id=label_id,
+            payload=payload,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
