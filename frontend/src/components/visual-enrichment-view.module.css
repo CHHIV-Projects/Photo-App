@@ -42,6 +42,23 @@
   gap: 8px;
 }
 
+.selectionControls {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.checkboxLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #3f5162;
+  font-weight: 600;
+}
+
 .filterLabel {
   display: flex;
   align-items: center;
@@ -262,6 +279,52 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.previewTable {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runControls {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.advancedPanel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #d8e3ee;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.resultsPanel {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resultCard {
+  border: 1px solid #d8e3ee;
+  border-radius: 8px;
+  padding: 8px;
+  background: #f8fbff;
+}
+
+.resultGrid {
+  margin-top: 6px;
+  display: grid;
+  gap: 4px;
 }
 
 .targetRow {

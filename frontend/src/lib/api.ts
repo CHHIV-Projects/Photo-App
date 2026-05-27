@@ -40,6 +40,8 @@ import type {
   CollectionDetail,
   CollectionAssetMembershipSummaryResponse,
   CollectionSummary,
+  VisualEnrichmentCandidatePreviewResponse,
+  VisualEnrichmentRunResponse,
   CreatePersonResponse,
   ClusterDetail,
   ClusterSuggestionResponse,
@@ -923,6 +925,35 @@ export function getCollections(): Promise<ListResponse<CollectionSummary>> {
 
 export function getCollectionDetail(collectionId: number): Promise<CollectionDetail> {
   return apiRequest<CollectionDetail>(`/api/collections/${collectionId}`);
+}
+
+export function previewVisualEnrichmentCandidates(payload: {
+  pool_type: "collection";
+  pool_id: number;
+  canonical_only: boolean;
+  exclude_existing_observations: boolean;
+  exclude_existing_context_labels: boolean;
+  limit?: number;
+}): Promise<VisualEnrichmentCandidatePreviewResponse> {
+  return apiRequest<VisualEnrichmentCandidatePreviewResponse>("/api/visual-enrichment/candidates/preview", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function runVisualEnrichmentGoogleVision(payload: {
+  asset_sha256s: string[];
+  live: boolean;
+  mock_provider: boolean;
+  feature_landmark: boolean;
+  feature_web: boolean;
+  feature_label: boolean;
+  feature_object: boolean;
+}): Promise<VisualEnrichmentRunResponse> {
+  return apiRequest<VisualEnrichmentRunResponse>("/api/visual-enrichment/run-google-vision", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function createCollection(

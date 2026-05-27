@@ -261,6 +261,63 @@ export interface CollectionAssetMembershipSummaryResponse {
   failed_count: number;
 }
 
+export interface VisualEnrichmentCandidatePreviewAsset {
+  asset_sha256: string;
+  filename: string;
+  image_url: string | null;
+  display_url: string | null;
+  is_canonical: boolean;
+  duplicate_group_id: number | null;
+  has_landmark_observation: boolean;
+  has_landmark_context_label: boolean;
+}
+
+export interface VisualEnrichmentCandidatePreviewResponse {
+  candidate_count: number;
+  excluded_existing_observations_count: number;
+  excluded_existing_context_labels_count: number;
+  run_count: number;
+  showing_count: number;
+  assets: VisualEnrichmentCandidatePreviewAsset[];
+}
+
+export interface VisualEnrichmentRunResponse {
+  requested_count: number;
+  processed_count: number;
+  provider_calls_attempted: number;
+  observations_created_count: number;
+  no_landmark_count: number;
+  failed_count: number;
+  report_path: string;
+  mode: "live" | "dry_run";
+  features_requested: string[];
+  asset_results: VisualEnrichmentAssetRunSummary[];
+}
+
+export interface VisualEnrichmentScoredItem {
+  description: string;
+  score: number | null;
+}
+
+export interface VisualEnrichmentObjectItem {
+  name: string;
+  score: number | null;
+}
+
+export interface VisualEnrichmentAssetRunSummary {
+  asset_sha256: string;
+  filename: string;
+  status: string;
+  error: string | null;
+  landmarks: VisualEnrichmentScoredItem[];
+  web_entities: VisualEnrichmentScoredItem[];
+  best_guess_labels: string[];
+  labels: VisualEnrichmentScoredItem[];
+  objects: VisualEnrichmentObjectItem[];
+  created_observations: number;
+  no_landmark: boolean;
+}
+
 export interface PhotoEventSummary {
   event_id: number;
   label: string | null;

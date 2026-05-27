@@ -22,6 +22,7 @@ from app.api.places import router as places_router
 from app.api.provenance_review import router as provenance_review_router
 from app.api.search import router as search_router
 from app.api.timeline import router as timeline_router
+from app.api.visual_enrichment import router as visual_enrichment_router
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.services.albums.album_schema import ensure_album_schema
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
 	app.include_router(provenance_review_router)
 	app.include_router(search_router)
 	app.include_router(timeline_router)
+	app.include_router(visual_enrichment_router)
 
 	@app.on_event("startup")
 	def _sync_face_incremental_schema() -> None:

@@ -42,9 +42,10 @@ DERIVATIVE_DEBUG_DIR = BACKEND_ROOT / "storage" / "logs" / "google_vision_deriva
 MEDIA_PREVIEW_PREFIX = "/media/previews/"
 
 VISION_FEATURE_LANDMARK = "landmark"
+VISION_FEATURE_WEB = "web"
 VISION_FEATURE_LABEL = "label"
 VISION_FEATURE_OBJECT = "object"
-SUPPORTED_FEATURES = (VISION_FEATURE_LANDMARK, VISION_FEATURE_LABEL, VISION_FEATURE_OBJECT)
+SUPPORTED_FEATURES = (VISION_FEATURE_LANDMARK, VISION_FEATURE_WEB, VISION_FEATURE_LABEL, VISION_FEATURE_OBJECT)
 
 DEFAULT_DERIVATIVE_LONG_EDGE = 1280
 MIN_REUSE_PREVIEW_LONG_EDGE = 1024
@@ -90,6 +91,13 @@ class ObjectCandidate:
     name: str
     confidence: float | None
     bounding_poly: list[dict[str, float | None]]
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class WebEntityCandidate:
+    description: str
+    confidence: float | None
     raw_payload: dict[str, Any]
 
 
@@ -151,6 +159,8 @@ def check_google_vision_runtime(*, live: bool) -> GoogleVisionRuntimeCheck:
 def _feature_type_for_rest(feature: str) -> str:
     if feature == VISION_FEATURE_LANDMARK:
         return "LANDMARK_DETECTION"
+    if feature == VISION_FEATURE_WEB:
+        return "WEB_DETECTION"
     if feature == VISION_FEATURE_LABEL:
         return "LABEL_DETECTION"
     if feature == VISION_FEATURE_OBJECT:
@@ -269,6 +279,36 @@ def _parse_objects_from_rest(payload: dict[str, Any]) -> list[ObjectCandidate]:
     return items
 
 
+def _parse_web_from_rest(payload: dict[str, Any]) -> tuple[list[WebEntityCandidate], list[str]]:
+    web_payload = payload.get("webDetection", {}) or {}
+    entities: list[WebEntityCandidate] = []
+    for row in web_payload.get("webEntities", []) or []:
+        description = str(row.get("description") or "").strip()
+        if not description:
+            continue
+        entities.append(
+            WebEntityCandidate(
+                description=description,
+                confidence=float(row.get("score")) if row.get("score") is not None else None,
+                raw_payload={
+                    "provider": "google_vision",
+                    "feature": "WEB_DETECTION",
+                    "description": row.get("description"),
+                    "score": row.get("score"),
+                    "entity_id": row.get("entityId"),
+                    "mock_provider": False,
+                },
+            )
+        )
+
+    best_guess_labels = [
+        str(row.get("label") or "").strip()
+        for row in web_payload.get("bestGuessLabels", []) or []
+        if str(row.get("label") or "").strip()
+    ]
+    return entities, best_guess_labels
+
+
 def _detect_with_google_vision_api_key(image_bytes: bytes, *, features: tuple[str, ...]) -> dict[str, Any]:
     if not settings.google_cloud_vision_api_key:
         raise RuntimeError("GOOGLE_CLOUD_VISION_API_KEY is not configured.")
@@ -278,7 +318,13 @@ def _detect_with_google_vision_api_key(image_bytes: bytes, *, features: tuple[st
         "requests": [
             {
                 "image": {"content": encoded},
-                "features": [{"type": _feature_type_for_rest(feature)} for feature in features],
+                "features": [
+                    {
+                        "type": _feature_type_for_rest(feature),
+                        **({"maxResults": 10} if feature == VISION_FEATURE_LANDMARK else {}),
+                    }
+                    for feature in features
+                ],
             }
         ]
     }
@@ -303,12 +349,18 @@ def _detect_with_google_vision_api_key(image_bytes: bytes, *, features: tuple[st
         raise RuntimeError(message)
 
     landmarks = _parse_landmarks_from_rest(first)
+    web_entities, best_guess_labels = _parse_web_from_rest(first)
     labels = _parse_labels_from_rest(first)
     objects = _parse_objects_from_rest(first)
 
     raw: dict[str, Any] = {}
     if VISION_FEATURE_LANDMARK in features:
         raw[VISION_FEATURE_LANDMARK] = [item.raw_payload for item in landmarks]
+    if VISION_FEATURE_WEB in features:
+        raw[VISION_FEATURE_WEB] = {
+            "web_entities": [item.raw_payload for item in web_entities],
+            "best_guess_labels": best_guess_labels,
+        }
     if VISION_FEATURE_LABEL in features:
         raw[VISION_FEATURE_LABEL] = [item.raw_payload for item in labels]
     if VISION_FEATURE_OBJECT in features:
@@ -316,6 +368,8 @@ def _detect_with_google_vision_api_key(image_bytes: bytes, *, features: tuple[st
 
     return {
         "landmarks": landmarks,
+        "web_entities": web_entities,
+        "best_guess_labels": best_guess_labels,
         "labels": labels,
         "objects": objects,
         "raw": raw,
@@ -540,6 +594,37 @@ def _parse_objects(annotation: Any, *, mock_provider: bool = False) -> list[Obje
     return items
 
 
+def _parse_web(annotation: Any, *, mock_provider: bool = False) -> tuple[list[WebEntityCandidate], list[str]]:
+    entities: list[WebEntityCandidate] = []
+    web_detection = getattr(annotation, "web_detection", None)
+    if web_detection is not None:
+        for row in getattr(web_detection, "web_entities", []) or []:
+            description = str(getattr(row, "description", "") or "").strip()
+            if not description:
+                continue
+            entities.append(
+                WebEntityCandidate(
+                    description=description,
+                    confidence=float(getattr(row, "score", 0.0)) if getattr(row, "score", None) is not None else None,
+                    raw_payload={
+                        "provider": "google_vision",
+                        "feature": "WEB_DETECTION",
+                        "description": description,
+                        "score": float(getattr(row, "score", 0.0)) if getattr(row, "score", None) is not None else None,
+                        "entity_id": getattr(row, "entity_id", None),
+                        "mock_provider": mock_provider,
+                    },
+                )
+            )
+
+    best_guess_labels = [
+        str(getattr(row, "label", "") or "").strip()
+        for row in getattr(web_detection, "best_guess_labels", []) or []
+        if str(getattr(row, "label", "") or "").strip()
+    ]
+    return entities, best_guess_labels
+
+
 def detect_with_google_vision(
     image_bytes: bytes,
     *,
@@ -558,15 +643,27 @@ def detect_with_google_vision(
 
     raw: dict[str, Any] = {}
     landmarks: list[LandmarkCandidate] = []
+    web_entities: list[WebEntityCandidate] = []
+    best_guess_labels: list[str] = []
     labels: list[LabelCandidate] = []
     objects: list[ObjectCandidate] = []
 
     if VISION_FEATURE_LANDMARK in features:
-        response = client.landmark_detection(image=image)
+        response = client.landmark_detection(image=image, max_results=10)
         if response.error.message:
             raise RuntimeError(f"Landmark detection failed: {response.error.message}")
         landmarks = _parse_landmarks(response)
         raw[VISION_FEATURE_LANDMARK] = [item.raw_payload for item in landmarks]
+
+    if VISION_FEATURE_WEB in features:
+        response = client.web_detection(image=image)
+        if response.error.message:
+            raise RuntimeError(f"Web detection failed: {response.error.message}")
+        web_entities, best_guess_labels = _parse_web(response)
+        raw[VISION_FEATURE_WEB] = {
+            "web_entities": [item.raw_payload for item in web_entities],
+            "best_guess_labels": best_guess_labels,
+        }
 
     if VISION_FEATURE_LABEL in features:
         response = client.label_detection(image=image)
@@ -584,6 +681,8 @@ def detect_with_google_vision(
 
     return {
         "landmarks": landmarks,
+        "web_entities": web_entities,
+        "best_guess_labels": best_guess_labels,
         "labels": labels,
         "objects": objects,
         "raw": raw,
@@ -613,11 +712,29 @@ def detect_with_mock_provider(asset_sha256: str, *, features: tuple[str, ...]) -
             self.bounding_poly = type("MockObjPoly", (), {"normalized_vertices": []})()
 
     landmarks: list[LandmarkCandidate] = []
+    web_entities: list[WebEntityCandidate] = []
+    best_guess_labels: list[str] = []
     labels: list[LabelCandidate] = []
     objects: list[ObjectCandidate] = []
 
     if VISION_FEATURE_LANDMARK in features:
         landmarks = _parse_landmarks(type("MockResponse", (), {"landmark_annotations": [_MockLandmark(f"Mock Landmark {asset_sha256[:8]}")]})(), mock_provider=True)
+    if VISION_FEATURE_WEB in features:
+        web_entities = [
+            WebEntityCandidate(
+                description=f"Mock Entity {asset_sha256[:8]}",
+                confidence=0.88,
+                raw_payload={
+                    "provider": "google_vision",
+                    "feature": "WEB_DETECTION",
+                    "description": f"Mock Entity {asset_sha256[:8]}",
+                    "score": 0.88,
+                    "entity_id": None,
+                    "mock_provider": True,
+                },
+            )
+        ]
+        best_guess_labels = [f"mock-{asset_sha256[:8]}"]
     if VISION_FEATURE_LABEL in features:
         labels = _parse_labels(type("MockResponse", (), {"label_annotations": [_MockLabel("mock-label")]})(), mock_provider=True)
     if VISION_FEATURE_OBJECT in features:
@@ -625,10 +742,16 @@ def detect_with_mock_provider(asset_sha256: str, *, features: tuple[str, ...]) -
 
     return {
         "landmarks": landmarks,
+        "web_entities": web_entities,
+        "best_guess_labels": best_guess_labels,
         "labels": labels,
         "objects": objects,
         "raw": {
             VISION_FEATURE_LANDMARK: [item.raw_payload for item in landmarks],
+            VISION_FEATURE_WEB: {
+                "web_entities": [item.raw_payload for item in web_entities],
+                "best_guess_labels": best_guess_labels,
+            },
             VISION_FEATURE_LABEL: [item.raw_payload for item in labels],
             VISION_FEATURE_OBJECT: [item.raw_payload for item in objects],
         },
@@ -661,6 +784,36 @@ def persist_landmark_observations(
         )
         created += 1
     return created
+
+
+def persist_landmark_observations_with_ids(
+    db: Session,
+    *,
+    asset_sha256: str,
+    landmarks: list[LandmarkCandidate],
+) -> list[int]:
+    created_ids: list[int] = []
+    for candidate in landmarks:
+        observation = create_place_observation(
+            db,
+            CreatePlaceObservationInput(
+                asset_sha256=asset_sha256,
+                place_id=None,
+                source_type="google_vision",
+                observation_type="landmark",
+                status="pending",
+                raw_label=candidate.name,
+                latitude=candidate.latitude,
+                longitude=candidate.longitude,
+                confidence=candidate.confidence,
+                raw_response_json=candidate.raw_payload,
+            ),
+            commit=False,
+        )
+        db.flush()
+        if observation.id is not None:
+            created_ids.append(int(observation.id))
+    return created_ids
 
 
 def write_google_vision_report(report: dict[str, Any]) -> Path:
