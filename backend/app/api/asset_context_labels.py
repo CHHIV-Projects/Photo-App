@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.schemas.context_labels import (
+    AssetContextLabelSummaryBatchRequest,
+    AssetContextLabelSummaryBatchResponse,
     AssetContextLabelListResponse,
     ContextLabelPropagationPreviewResponse,
     ContextLabelPropagationRequest,
@@ -14,11 +16,24 @@ from app.schemas.context_labels import (
 )
 from app.services.context_labels.service import (
     get_context_label_propagation_preview,
+    list_active_landmark_context_summaries,
     list_asset_context_labels,
     propagate_context_label_to_duplicate_group_members,
 )
 
 router = APIRouter(prefix="/api/asset-context-labels", tags=["asset-context-labels"])
+
+
+@router.post("/summary", response_model=AssetContextLabelSummaryBatchResponse)
+def get_asset_context_label_summary_batch_endpoint(
+    payload: AssetContextLabelSummaryBatchRequest,
+    db: Session = Depends(get_db_session),
+) -> AssetContextLabelSummaryBatchResponse:
+    """Return active landmark context summaries for an explicit asset list."""
+    try:
+        return list_active_landmark_context_summaries(db, payload=payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("", response_model=AssetContextLabelListResponse)

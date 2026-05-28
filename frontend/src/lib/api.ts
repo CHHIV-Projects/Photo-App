@@ -74,6 +74,7 @@ import type {
   GlobalPlaceObservationPatchRequest,
   AcceptObservationAsContextRequest,
   AcceptObservationAsContextResponse,
+  AssetContextLabelSummaryBatchResponse,
   AssetContextLabelSummary,
   ContextLabelPropagationPreviewResponse,
   ContextLabelPropagationRequest,
@@ -734,6 +735,15 @@ export function getAssetContextLabels(
   params.set("limit", String(options.limit ?? 100));
   params.set("offset", String(options.offset ?? 0));
   return apiRequest<ListResponse<AssetContextLabelSummary>>(`/api/asset-context-labels?${params.toString()}`);
+}
+
+export function getAssetContextLabelSummaries(
+  assetSha256s: string[],
+): Promise<AssetContextLabelSummaryBatchResponse> {
+  return apiRequest<AssetContextLabelSummaryBatchResponse>("/api/asset-context-labels/summary", {
+    method: "POST",
+    body: JSON.stringify({ asset_sha256s: assetSha256s }),
+  });
 }
 
 export function acceptObservationAsContext(

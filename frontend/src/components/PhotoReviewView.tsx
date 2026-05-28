@@ -13,6 +13,7 @@ import {
   batchUpdatePhotoVisibility,
   createPerson,
   getCollections,
+  getAssetContextLabelSummaries,
   getAlbums,
   getEvents,
   getPhotoFaceOverlays,
@@ -31,6 +32,7 @@ import type {
   PhotoFaceOverlayAsset,
   PhotoSummary,
   SearchPhotoSummary,
+  VisualEnrichmentWorkingSetAsset,
 } from "@/types/ui-api";
 
 const MONTH_MAP: Record<string, string> = {
@@ -135,6 +137,7 @@ interface PhotoReviewViewProps {
   onOpenPhotoDetail: (sha256: string) => void;
   onOpenDuplicateGroup: (groupId: number) => void;
   onFaceAssignmentsChanged?: () => void;
+  onSendToVisualEnrichment?: (assets: VisualEnrichmentWorkingSetAsset[]) => void;
 }
 
 const PAGE_SIZE = 80;
@@ -190,6 +193,7 @@ export function PhotoReviewView({
   onOpenPhotoDetail,
   onOpenDuplicateGroup,
   onFaceAssignmentsChanged,
+  onSendToVisualEnrichment,
 }: PhotoReviewViewProps) {
   const [items, setItems] = useState<SearchPhotoSummary[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -210,6 +214,7 @@ export function PhotoReviewView({
   const [isLoadingCollections, setIsLoadingCollections] = useState(false);
 
   const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
+  const [landmarkSummaryByAsset, setLandmarkSummaryByAsset] = useState<Record<string, { labels: string[]; count: number }>>({});
   const [presentationStartIndex, setPresentationStartIndex] = useState<number | null>(null);
   const [presentationHasPendingRefresh, setPresentationHasPendingRefresh] = useState(false);
 
@@ -278,6 +283,38 @@ export function PhotoReviewView({
     const bySha = new Map(items.map((item) => [item.asset_sha256, item.filename]));
     return selectedShaList.slice(0, 6).map((sha) => bySha.get(sha) ?? `${sha.slice(0, 12)}...`);
   }, [items, selectedShaList]);
+
+  useEffect(() => {
+    const visibleShas = items.map((item) => item.asset_sha256);
+    if (visibleShas.length === 0) {
+      setLandmarkSummaryByAsset({});
+      return;
+    }
+
+    let isCancelled = false;
+    async function loadLandmarkSummary(): Promise<void> {
+      try {
+        const response = await getAssetContextLabelSummaries(visibleShas);
+        if (isCancelled) {
+          return;
+        }
+        const next: Record<string, { labels: string[]; count: number }> = {};
+        for (const item of response.items) {
+          next[item.asset_sha256] = { labels: item.landmark_labels, count: item.count };
+        }
+        setLandmarkSummaryByAsset(next);
+      } catch {
+        if (!isCancelled) {
+          setLandmarkSummaryByAsset({});
+        }
+      }
+    }
+
+    void loadLandmarkSummary();
+    return () => {
+      isCancelled = true;
+    };
+  }, [items]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -963,6 +1000,35 @@ export function PhotoReviewView({
     setSelectedAssets(new Set(items.map((item) => item.asset_sha256)));
   }
 
+  function handleSendToVisualEnrichment(): void {
+    if (!onSendToVisualEnrichment) {
+      return;
+    }
+    if (selectedShaList.length === 0) {
+      setErrorMessage("Select one or more assets first.");
+      return;
+    }
+
+    const selectedSet = new Set(selectedShaList);
+    const payload: VisualEnrichmentWorkingSetAsset[] = items
+      .filter((item) => selectedSet.has(item.asset_sha256))
+      .map((item) => {
+        const landmarkSummary = landmarkSummaryByAsset[item.asset_sha256];
+        return {
+          asset_sha256: item.asset_sha256,
+          filename: item.filename,
+          image_url: item.image_url,
+          display_url: item.display_url,
+          is_canonical: item.is_canonical,
+          duplicate_group_id: item.duplicate_group_id,
+          landmark_labels: landmarkSummary?.labels ?? [],
+          landmark_count: landmarkSummary?.count ?? 0,
+        };
+      });
+
+    onSendToVisualEnrichment(payload);
+  }
+
   const filteredPeopleOptions = useMemo(() => {
     const q = peopleSearchQuery.trim().toLowerCase();
     return people.filter((person) => {
@@ -1424,6 +1490,24 @@ export function PhotoReviewView({
         </div>
 
         <div className={styles.countRow}>{items.length} / {totalCount} photos</div>
+        <div className={styles.primaryActionsRow}>
+          <button type="button" className={styles.actionButton} disabled={isRunningBatchAction || items.length === 0} onClick={handleSelectAllVisible}>
+            Select all visible
+          </button>
+          <button type="button" className={styles.actionButton} disabled={isRunningBatchAction || selectedCount === 0} onClick={handleClearSelection}>
+            Deselect all
+          </button>
+          <button
+            type="button"
+            className={styles.actionButton}
+            disabled={isRunningBatchAction || selectedCount === 0}
+            onClick={handleSendToVisualEnrichment}
+            title={selectedCount === 0 ? "Select one or more assets first." : ""}
+          >
+            Send to Visual Enrichment
+          </button>
+          <span className={styles.primaryActionMeta}>Selected: {selectedCount}</span>
+        </div>
       </div>
 
       {selectedCount > 0 ? (
@@ -1446,6 +1530,9 @@ export function PhotoReviewView({
             <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={() => void handleBatchCreateAlbum()}>Create album from selected</button>
             <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={handleSelectAllVisible}>Select all visible</button>
             <button type="button" className={styles.actionButton} disabled={isRunningBatchAction} onClick={handleClearSelection}>Clear selection</button>
+            <button type="button" className={styles.actionButton} disabled={isRunningBatchAction || selectedCount === 0} onClick={handleSendToVisualEnrichment}>
+              Send to Visual Enrichment
+            </button>
             <button
               type="button"
               className={styles.actionButton}
@@ -1724,6 +1811,17 @@ export function PhotoReviewView({
             </div>
 
             <div className={styles.filename} title={item.filename}>{item.filename}</div>
+
+            {landmarkSummaryByAsset[item.asset_sha256]?.count ? (
+              <div className={styles.badgeRow}>
+                <span className={styles.badgeLandmark}>
+                  Landmark: {landmarkSummaryByAsset[item.asset_sha256].labels[0]}
+                  {landmarkSummaryByAsset[item.asset_sha256].count > 1
+                    ? ` +${landmarkSummaryByAsset[item.asset_sha256].count - 1}`
+                    : ""}
+                </span>
+              </div>
+            ) : null}
 
             {(item.has_live_photo_motion_companion || item.is_live_photo_motion_companion) && (
               <div className={styles.badgeRow}>

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   acceptObservationAsContext,
+  getAssetContextLabelSummaries,
   getCollections,
   getAssetContextLabels,
   getContextLabelPropagationPreview,
@@ -22,11 +23,14 @@ import type {
   PlaceObservationSummary,
   VisualEnrichmentCandidatePreviewResponse,
   VisualEnrichmentRunResponse,
+  VisualEnrichmentWorkingSetAsset,
 } from "@/types/ui-api";
 import styles from "./visual-enrichment-view.module.css";
 
 interface VisualEnrichmentViewProps {
   onOpenPhoto: (sha256: string) => void;
+  selectedWorkingSetAssets: VisualEnrichmentWorkingSetAsset[];
+  onClearWorkingSet: () => void;
 }
 
 const STATUS_OPTIONS = ["pending", "accepted", "rejected", "ignored"] as const;
@@ -38,7 +42,7 @@ function shortSha(value: string | null | undefined): string {
   return value.slice(0, 12);
 }
 
-export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentViewProps) {
+export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAssets, onClearWorkingSet }: VisualEnrichmentViewProps) {
   const [statusFilter, setStatusFilter] = useState<ObservationStatusFilter>("pending");
   const [observations, setObservations] = useState<PlaceObservationSummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -59,16 +63,20 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
   const [excludeExistingContextLabels, setExcludeExistingContextLabels] = useState(true);
   const [candidatePreview, setCandidatePreview] = useState<VisualEnrichmentCandidatePreviewResponse | null>(null);
   const [previewSelection, setPreviewSelection] = useState<Set<string>>(new Set());
+  const [candidateSource, setCandidateSource] = useState<"selected" | "collection">("collection");
+  const [showCollectionSource, setShowCollectionSource] = useState(false);
   const [isCandidatePreviewLoading, setIsCandidatePreviewLoading] = useState(false);
   const [isRunningCandidates, setIsRunningCandidates] = useState(false);
   const [runResult, setRunResult] = useState<VisualEnrichmentRunResponse | null>(null);
-  const [runLiveMode, setRunLiveMode] = useState(false);
-  const [runUseMockProvider, setRunUseMockProvider] = useState(true);
+  const [runLiveMode, setRunLiveMode] = useState(true);
+  const [runUseMockProvider, setRunUseMockProvider] = useState(false);
   const [runFeatureLandmark, setRunFeatureLandmark] = useState(true);
   const [runFeatureWeb, setRunFeatureWeb] = useState(false);
   const [runFeatureLabel, setRunFeatureLabel] = useState(false);
   const [runFeatureObject, setRunFeatureObject] = useState(false);
   const [showAdvancedDiagnostics, setShowAdvancedDiagnostics] = useState(false);
+  const [showDeveloperControls, setShowDeveloperControls] = useState(false);
+  const [landmarkSummaryByAsset, setLandmarkSummaryByAsset] = useState<Record<string, { labels: string[]; count: number }>>({});
 
   const loadObservations = async (nextStatus: ObservationStatusFilter) => {
     setIsLoading(true);
@@ -162,6 +170,20 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
           [response.context_label.asset_sha256]: alreadyThere
             ? existingForAsset
             : [response.context_label, ...existingForAsset],
+        };
+      });
+      setLandmarkSummaryByAsset((prev) => {
+        const existing = prev[response.context_label.asset_sha256];
+        const existingLabels = existing?.labels ?? [];
+        if (existingLabels.includes(response.context_label.label)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [response.context_label.asset_sha256]: {
+            labels: [response.context_label.label, ...existingLabels],
+            count: (existing?.count ?? 0) + 1,
+          },
         };
       });
     } catch (err) {
@@ -283,14 +305,17 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
   };
 
   const handleRunCandidates = async () => {
-    if (!candidatePreview) {
+    const assetSha256s = candidateSource === "selected"
+      ? selectedWorkingSetAssets.map((item) => item.asset_sha256)
+      : Array.from(previewSelection);
+
+    if (candidateSource === "collection" && !candidatePreview) {
       setErrorMessage("Preview candidates before running.");
       return;
     }
 
-    const assetSha256s = Array.from(previewSelection);
     if (assetSha256s.length === 0) {
-      setErrorMessage("Select at least one candidate to run.");
+      setErrorMessage(candidateSource === "selected" ? "No selected assets available to run." : "Select at least one candidate to run.");
       return;
     }
 
@@ -345,10 +370,78 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
     void loadCollections();
   }, []);
 
+  useEffect(() => {
+    if (selectedWorkingSetAssets.length > 0) {
+      setCandidateSource("selected");
+    } else if (candidateSource === "selected") {
+      setCandidateSource("collection");
+    }
+  }, [selectedWorkingSetAssets, candidateSource]);
+
+  useEffect(() => {
+    const shas = selectedWorkingSetAssets.map((item) => item.asset_sha256);
+    if (shas.length === 0) {
+      return;
+    }
+    let isCancelled = false;
+    async function loadSummary(): Promise<void> {
+      try {
+        const response = await getAssetContextLabelSummaries(shas);
+        if (isCancelled) {
+          return;
+        }
+        const next: Record<string, { labels: string[]; count: number }> = {};
+        for (const item of response.items) {
+          next[item.asset_sha256] = { labels: item.landmark_labels, count: item.count };
+        }
+        setLandmarkSummaryByAsset((prev) => ({ ...prev, ...next }));
+      } catch {
+        // Keep selected-asset mode usable when summary lookup fails.
+      }
+    }
+
+    void loadSummary();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedWorkingSetAssets]);
+
   const candidateCountLabel = useMemo(() => {
     const count = observations.length;
     return `${count} ${count === 1 ? "candidate" : "candidates"}`;
   }, [observations]);
+
+  const runAssetCount = candidateSource === "selected"
+    ? selectedWorkingSetAssets.length
+    : previewSelection.size;
+
+  const formatLandmarkSummary = (assetSha: string): string | null => {
+    const summary = landmarkSummaryByAsset[assetSha];
+    if (!summary || summary.count === 0) {
+      return null;
+    }
+    return `Landmark: ${summary.labels[0]}${summary.count > 1 ? ` +${summary.count - 1}` : ""}`;
+  };
+
+  const getSelectedAssetStatus = (assetSha: string): string => {
+    if ((landmarkSummaryByAsset[assetSha]?.count ?? 0) > 0) {
+      return "Accepted context";
+    }
+    const runAssetResult = runResult?.asset_results.find((item) => item.asset_sha256 === assetSha);
+    if (!runAssetResult) {
+      return "Not run";
+    }
+    if (runAssetResult.status === "failed") {
+      return "Reviewed / ignored";
+    }
+    if (runAssetResult.landmarks.length > 0 || runAssetResult.web_entities.length > 0 || runAssetResult.labels.length > 0 || runAssetResult.objects.length > 0) {
+      return runAssetResult.no_landmark ? "No landmark found" : "Suggestions available";
+    }
+    if (runAssetResult.no_landmark) {
+      return "No landmark found";
+    }
+    return "Not run";
+  };
 
   return (
     <div className={styles.container}>
@@ -622,10 +715,95 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>Candidate Selection</h3>
         <p className={styles.sectionSubtitle}>
-          Collection pool preview only in this milestone. Landmark detection runs on explicit assets selected from this preview.
+          Photo Review selected assets are primary when present. Collection pool remains available as a secondary source.
         </p>
 
-        <div className={styles.selectionControls}>
+        <div className={styles.sourceSwitchRow}>
+          <button
+            type="button"
+            className={candidateSource === "selected" ? styles.primaryButton : styles.secondaryButton}
+            disabled={selectedWorkingSetAssets.length === 0}
+            onClick={() => setCandidateSource("selected")}
+          >
+            Selected Assets from Photo Review ({selectedWorkingSetAssets.length})
+          </button>
+          <button
+            type="button"
+            className={candidateSource === "collection" ? styles.primaryButton : styles.secondaryButton}
+            onClick={() => {
+              setCandidateSource("collection");
+              setShowCollectionSource(true);
+            }}
+          >
+            Collection Candidate Pool
+          </button>
+          {selectedWorkingSetAssets.length > 0 ? (
+            <button type="button" className={styles.secondaryButton} onClick={onClearWorkingSet}>
+              Clear Selected Working Set
+            </button>
+          ) : null}
+        </div>
+
+        {candidateSource === "selected" && (
+          <>
+            <div className={styles.previewSummary}>
+              <span className={styles.badge}>Working set: {selectedWorkingSetAssets.length}</span>
+            </div>
+            <div className={styles.workingSetList}>
+              {selectedWorkingSetAssets.map((asset) => {
+                const previewUrl = resolveApiUrl(asset.display_url ?? asset.image_url ?? null);
+                const landmarkSummary = formatLandmarkSummary(asset.asset_sha256);
+                return (
+                  <article key={asset.asset_sha256} className={styles.workingSetCard}>
+                    <div className={styles.targetThumbShell}>
+                      {previewUrl ? (
+                        <img src={previewUrl} alt={asset.filename} className={styles.thumbnail} />
+                      ) : (
+                        <div className={styles.thumbnailPlaceholder}>N/A</div>
+                      )}
+                    </div>
+                    <div className={styles.targetText}>
+                      <div className={styles.assetName}>{asset.filename}</div>
+                      <div className={styles.metaLine}>
+                        {shortSha(asset.asset_sha256)}
+                        {asset.is_canonical ? " | canonical" : " | duplicate"}
+                        {asset.duplicate_group_id ? ` | group #${asset.duplicate_group_id}` : ""}
+                      </div>
+                      <div className={styles.metaLine}>{getSelectedAssetStatus(asset.asset_sha256)}</div>
+                      {landmarkSummary ? <div className={styles.metaLine}>{landmarkSummary}</div> : null}
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      onClick={() => onOpenPhoto(asset.asset_sha256)}
+                    >
+                      Open
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {candidateSource === "collection" && (
+          <>
+            {selectedWorkingSetAssets.length > 0 && !showCollectionSource ? (
+              <div className={styles.previewSummary}>
+                <span className={styles.badge}>Collection source is secondary while selected assets are active.</span>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  onClick={() => setShowCollectionSource(true)}
+                >
+                  Show Collection Source
+                </button>
+              </div>
+            ) : null}
+
+            {(selectedWorkingSetAssets.length === 0 || showCollectionSource) ? (
+              <>
+                <div className={styles.selectionControls}>
           <label className={styles.filterLabel}>
             Collection
             <select
@@ -677,203 +855,225 @@ export default function VisualEnrichmentView({ onOpenPhoto }: VisualEnrichmentVi
           >
             {isCandidatePreviewLoading ? "Previewing..." : "Preview Candidates"}
           </button>
-        </div>
-
-        {candidatePreview && (
-          <>
-            <div className={styles.previewSummary}>
-              <span className={styles.badge}>Candidates: {candidatePreview.candidate_count}</span>
-              <span className={styles.badge}>Excluded observations: {candidatePreview.excluded_existing_observations_count}</span>
-              <span className={styles.badge}>Excluded context labels: {candidatePreview.excluded_existing_context_labels_count}</span>
-              <span className={styles.badge}>Run count: {candidatePreview.run_count}</span>
-              <span className={styles.badge}>Showing: {candidatePreview.showing_count}</span>
-            </div>
-
-            <div className={styles.runControls}>
-              <label className={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={runLiveMode}
-                  onChange={(event) => setRunLiveMode(event.target.checked)}
-                  disabled={isRunningCandidates}
-                />
-                Live mode (calls Google Vision)
-              </label>
-
-              <label className={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  checked={runUseMockProvider}
-                  onChange={(event) => setRunUseMockProvider(event.target.checked)}
-                  disabled={isRunningCandidates || runLiveMode}
-                />
-                Use mock provider when dry-run
-              </label>
-
-              <button
-                type="button"
-                className={styles.secondaryButton}
-                disabled={isRunningCandidates}
-                onClick={() => setShowAdvancedDiagnostics((prev) => !prev)}
-              >
-                {showAdvancedDiagnostics ? "Hide Advanced Diagnostics" : "Advanced Diagnostics"}
-              </button>
-
-              {showAdvancedDiagnostics && (
-                <div className={styles.advancedPanel}>
-                  <label className={styles.checkboxLabel}>
-                    <input
-                      type="checkbox"
-                      checked={runFeatureLandmark}
-                      onChange={(event) => setRunFeatureLandmark(event.target.checked)}
-                      disabled={isRunningCandidates}
-                    />
-                    Landmark Detection
-                  </label>
-                  <label className={styles.checkboxLabel}>
-                    <input
-                      type="checkbox"
-                      checked={runFeatureWeb}
-                      onChange={(event) => setRunFeatureWeb(event.target.checked)}
-                      disabled={isRunningCandidates}
-                    />
-                    Web Detection
-                  </label>
-                  <label className={styles.checkboxLabel}>
-                    <input
-                      type="checkbox"
-                      checked={runFeatureLabel}
-                      onChange={(event) => setRunFeatureLabel(event.target.checked)}
-                      disabled={isRunningCandidates}
-                    />
-                    Label Diagnostics
-                  </label>
-                  <label className={styles.checkboxLabel}>
-                    <input
-                      type="checkbox"
-                      checked={runFeatureObject}
-                      onChange={(event) => setRunFeatureObject(event.target.checked)}
-                      disabled={isRunningCandidates}
-                    />
-                    Object Diagnostics
-                  </label>
                 </div>
-              )}
 
-              <button
-                type="button"
-                className={styles.primaryButton}
-                disabled={isRunningCandidates || previewSelection.size === 0}
-                onClick={() => { void handleRunCandidates(); }}
-              >
-                {isRunningCandidates ? "Running..." : `Run Selected (${previewSelection.size})`}
-              </button>
-            </div>
-
-            {runResult && (
+                {candidatePreview && (
               <>
-                <p className={styles.success}>
-                  Mode: {runResult.mode} | Requested: {runResult.requested_count} | Processed: {runResult.processed_count} |
-                  Created pending observations: {runResult.observations_created_count} | No landmark: {runResult.no_landmark_count} |
-                  Failed: {runResult.failed_count}
-                </p>
-                <div className={styles.resultsPanel}>
-                  {runResult.asset_results.map((assetResult) => (
-                    <article key={assetResult.asset_sha256} className={styles.resultCard}>
-                      <div className={styles.assetName}>{assetResult.filename}</div>
-                      <div className={styles.metaLine}>
-                        {shortSha(assetResult.asset_sha256)} | status: {assetResult.status}
-                        {assetResult.no_landmark ? " | no landmark" : ""}
-                        {assetResult.error ? ` | error: ${assetResult.error}` : ""}
-                      </div>
-                      <div className={styles.resultGrid}>
-                        <div>
-                          <strong>Landmarks:</strong>{" "}
-                          {assetResult.landmarks.length > 0
-                            ? assetResult.landmarks.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
-                            : "none"}
+                <div className={styles.previewSummary}>
+                  <span className={styles.badge}>Candidates: {candidatePreview.candidate_count}</span>
+                  <span className={styles.badge}>Excluded observations: {candidatePreview.excluded_existing_observations_count}</span>
+                  <span className={styles.badge}>Excluded context labels: {candidatePreview.excluded_existing_context_labels_count}</span>
+                  <span className={styles.badge}>Run count: {candidatePreview.run_count}</span>
+                  <span className={styles.badge}>Showing: {candidatePreview.showing_count}</span>
+                </div>
+
+                <div className={styles.previewTable}>
+                  {candidatePreview.assets.map((asset) => {
+                    const checked = previewSelection.has(asset.asset_sha256);
+                    const previewUrl = resolveApiUrl(asset.display_url ?? asset.image_url ?? null);
+                    return (
+                      <label key={asset.asset_sha256} className={styles.targetRow}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={isRunningCandidates}
+                          onChange={() => togglePreviewCandidate(asset.asset_sha256)}
+                        />
+                        <div className={styles.targetThumbShell}>
+                          {previewUrl ? (
+                            <img src={previewUrl} alt={asset.filename} className={styles.thumbnail} />
+                          ) : (
+                            <div className={styles.thumbnailPlaceholder}>N/A</div>
+                          )}
                         </div>
-                        {runResult.features_requested.includes("web") && (
-                          <div>
-                            <strong>Web Entities:</strong>{" "}
-                            {assetResult.web_entities.length > 0
-                              ? assetResult.web_entities.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
-                              : "none"}
+                        <div className={styles.targetText}>
+                          <div className={styles.assetName}>{asset.filename}</div>
+                          <div className={styles.metaLine}>
+                            {shortSha(asset.asset_sha256)}
+                            {asset.is_canonical ? " | canonical" : " | duplicate"}
+                            {asset.duplicate_group_id ? ` | group #${asset.duplicate_group_id}` : ""}
+                            {asset.has_landmark_observation ? " | has observation" : ""}
+                            {asset.has_landmark_context_label ? " | has context label" : ""}
                           </div>
-                        )}
-                        {runResult.features_requested.includes("web") && (
-                          <div>
-                            <strong>Best Guess:</strong>{" "}
-                            {assetResult.best_guess_labels.length > 0 ? assetResult.best_guess_labels.join("; ") : "none"}
-                          </div>
-                        )}
-                        {runResult.features_requested.includes("label") && (
-                          <div>
-                            <strong>Labels:</strong>{" "}
-                            {assetResult.labels.length > 0
-                              ? assetResult.labels.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
-                              : "none"}
-                          </div>
-                        )}
-                        {runResult.features_requested.includes("object") && (
-                          <div>
-                            <strong>Objects:</strong>{" "}
-                            {assetResult.objects.length > 0
-                              ? assetResult.objects.map((item) => `${item.name} (${item.score ?? "n/a"})`).join("; ")
-                              : "none"}
-                          </div>
-                        )}
-                      </div>
-                      <div className={styles.metaLine}>Created observations: {assetResult.created_observations}</div>
-                    </article>
-                  ))}
+                        </div>
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          disabled={isRunningCandidates}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            onOpenPhoto(asset.asset_sha256);
+                          }}
+                        >
+                          Open
+                        </button>
+                      </label>
+                    );
+                  })}
                 </div>
               </>
-            )}
+                )}
+              </>
+            ) : null}
+          </>
+        )}
 
-            <div className={styles.previewTable}>
-              {candidatePreview.assets.map((asset) => {
-                const checked = previewSelection.has(asset.asset_sha256);
-                const previewUrl = resolveApiUrl(asset.display_url ?? asset.image_url ?? null);
-                return (
-                  <label key={asset.asset_sha256} className={styles.targetRow}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={isRunningCandidates}
-                      onChange={() => togglePreviewCandidate(asset.asset_sha256)}
-                    />
-                    <div className={styles.targetThumbShell}>
-                      {previewUrl ? (
-                        <img src={previewUrl} alt={asset.filename} className={styles.thumbnail} />
-                      ) : (
-                        <div className={styles.thumbnailPlaceholder}>N/A</div>
-                      )}
+        <div className={styles.runControls}>
+          <span className={styles.badge}>Mode: {runLiveMode ? "Live" : "Dry-run"}</span>
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            disabled={isRunningCandidates}
+            onClick={() => setShowAdvancedDiagnostics((prev) => !prev)}
+          >
+            {showAdvancedDiagnostics ? "Hide Diagnostics" : "Diagnostics"}
+          </button>
+          <button
+            type="button"
+            className={styles.secondaryButton}
+            disabled={isRunningCandidates}
+            onClick={() => setShowDeveloperControls((prev) => !prev)}
+          >
+            {showDeveloperControls ? "Hide Developer" : "Developer Options"}
+          </button>
+
+          <button
+            type="button"
+            className={styles.primaryButton}
+            disabled={isRunningCandidates || runAssetCount === 0}
+            onClick={() => { void handleRunCandidates(); }}
+          >
+            {isRunningCandidates ? "Running..." : `Run Selected (${runAssetCount})`}
+          </button>
+        </div>
+
+        {showAdvancedDiagnostics && (
+          <div className={styles.advancedPanel}>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={runFeatureLandmark}
+                onChange={(event) => setRunFeatureLandmark(event.target.checked)}
+                disabled={isRunningCandidates}
+              />
+              Landmark Detection
+            </label>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={runFeatureWeb}
+                onChange={(event) => setRunFeatureWeb(event.target.checked)}
+                disabled={isRunningCandidates}
+              />
+              Web Detection
+            </label>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={runFeatureLabel}
+                onChange={(event) => setRunFeatureLabel(event.target.checked)}
+                disabled={isRunningCandidates}
+              />
+              Label Diagnostics
+            </label>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={runFeatureObject}
+                onChange={(event) => setRunFeatureObject(event.target.checked)}
+                disabled={isRunningCandidates}
+              />
+              Object Diagnostics
+            </label>
+          </div>
+        )}
+
+        {showDeveloperControls && (
+          <div className={styles.advancedPanel}>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={runLiveMode}
+                onChange={(event) => {
+                  const nextLiveMode = event.target.checked;
+                  setRunLiveMode(nextLiveMode);
+                  if (nextLiveMode) {
+                    setRunUseMockProvider(false);
+                  }
+                }}
+                disabled={isRunningCandidates}
+              />
+              Use live provider calls
+            </label>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={runUseMockProvider}
+                onChange={(event) => setRunUseMockProvider(event.target.checked)}
+                disabled={isRunningCandidates || runLiveMode}
+              />
+              Use mock provider in dry-run
+            </label>
+          </div>
+        )}
+
+        {runResult && (
+          <>
+            <p className={styles.success}>
+              Mode: {runResult.mode} | Requested: {runResult.requested_count} | Processed: {runResult.processed_count} |
+              Created pending observations: {runResult.observations_created_count} | No landmark: {runResult.no_landmark_count} |
+              Failed: {runResult.failed_count}
+            </p>
+            <div className={styles.resultsPanel}>
+              {runResult.asset_results.map((assetResult) => (
+                <article key={assetResult.asset_sha256} className={styles.resultCard}>
+                  <div className={styles.assetName}>{assetResult.filename}</div>
+                  <div className={styles.metaLine}>
+                    {shortSha(assetResult.asset_sha256)} | status: {assetResult.status}
+                    {assetResult.no_landmark ? " | no landmark" : ""}
+                    {assetResult.error ? ` | error: ${assetResult.error}` : ""}
+                  </div>
+                  <div className={styles.resultGrid}>
+                    <div>
+                      <strong>Landmarks:</strong>{" "}
+                      {assetResult.landmarks.length > 0
+                        ? assetResult.landmarks.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
+                        : "none"}
                     </div>
-                    <div className={styles.targetText}>
-                      <div className={styles.assetName}>{asset.filename}</div>
-                      <div className={styles.metaLine}>
-                        {shortSha(asset.asset_sha256)}
-                        {asset.is_canonical ? " | canonical" : " | duplicate"}
-                        {asset.duplicate_group_id ? ` | group #${asset.duplicate_group_id}` : ""}
-                        {asset.has_landmark_observation ? " | has observation" : ""}
-                        {asset.has_landmark_context_label ? " | has context label" : ""}
+                    {runResult.features_requested.includes("web") && (
+                      <div>
+                        <strong>Web Entities:</strong>{" "}
+                        {assetResult.web_entities.length > 0
+                          ? assetResult.web_entities.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
+                          : "none"}
                       </div>
-                    </div>
-                    <button
-                      type="button"
-                      className={styles.secondaryButton}
-                      disabled={isRunningCandidates}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        onOpenPhoto(asset.asset_sha256);
-                      }}
-                    >
-                      Open
-                    </button>
-                  </label>
-                );
-              })}
+                    )}
+                    {runResult.features_requested.includes("web") && (
+                      <div>
+                        <strong>Best Guess:</strong>{" "}
+                        {assetResult.best_guess_labels.length > 0 ? assetResult.best_guess_labels.join("; ") : "none"}
+                      </div>
+                    )}
+                    {runResult.features_requested.includes("label") && (
+                      <div>
+                        <strong>Labels:</strong>{" "}
+                        {assetResult.labels.length > 0
+                          ? assetResult.labels.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
+                          : "none"}
+                      </div>
+                    )}
+                    {runResult.features_requested.includes("object") && (
+                      <div>
+                        <strong>Objects:</strong>{" "}
+                        {assetResult.objects.length > 0
+                          ? assetResult.objects.map((item) => `${item.name} (${item.score ?? "n/a"})`).join("; ")
+                          : "none"}
+                      </div>
+                    )}
+                  </div>
+                  <div className={styles.metaLine}>Created observations: {assetResult.created_observations}</div>
+                </article>
+              ))}
             </div>
           </>
         )}

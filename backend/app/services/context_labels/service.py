@@ -13,6 +13,9 @@ from app.models.place_observation import PlaceObservation
 from app.schemas.context_labels import (
     AcceptObservationAsContextRequest,
     AcceptObservationAsContextResponse,
+    AssetContextLabelSummaryBatchRequest,
+    AssetContextLabelSummaryBatchResponse,
+    AssetLandmarkContextSummary,
     AssetContextLabelListResponse,
     AssetContextLabelSummary,
     ContextLabelPropagationPreviewResponse,
@@ -147,6 +150,59 @@ def list_asset_context_labels(
 
     items = [_to_summary(row, asset_by_sha=asset_by_sha) for row in rows]
     return AssetContextLabelListResponse(count=len(items), items=items)
+
+
+def list_active_landmark_context_summaries(
+    db: Session,
+    *,
+    payload: AssetContextLabelSummaryBatchRequest,
+) -> AssetContextLabelSummaryBatchResponse:
+    ordered_shas: list[str] = []
+    seen: set[str] = set()
+    for raw_sha in payload.asset_sha256s:
+        normalized = _clean_text(raw_sha)
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        ordered_shas.append(lowered)
+
+    if not ordered_shas:
+        return AssetContextLabelSummaryBatchResponse(count=0, items=[])
+
+    labels = list(
+        db.scalars(
+            select(AssetContextLabel)
+            .where(AssetContextLabel.asset_sha256.in_(ordered_shas))
+            .where(AssetContextLabel.context_type == "landmark")
+            .where(AssetContextLabel.status == "active")
+            .order_by(AssetContextLabel.created_at_utc.desc(), AssetContextLabel.id.desc())
+        ).all()
+    )
+
+    by_sha: dict[str, list[str]] = {}
+    for row in labels:
+        key = row.asset_sha256.lower()
+        current = by_sha.setdefault(key, [])
+        if row.label not in current:
+            current.append(row.label)
+
+    items: list[AssetLandmarkContextSummary] = []
+    for sha in ordered_shas:
+        label_list = by_sha.get(sha)
+        if not label_list:
+            continue
+        items.append(
+            AssetLandmarkContextSummary(
+                asset_sha256=sha,
+                landmark_labels=label_list,
+                count=len(label_list),
+            )
+        )
+
+    return AssetContextLabelSummaryBatchResponse(count=len(items), items=items)
 
 
 def accept_landmark_observation_as_context(

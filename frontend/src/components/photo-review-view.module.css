@@ -93,6 +93,19 @@
   font-weight: 600;
 }
 
+.primaryActionsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.primaryActionMeta {
+  font-size: 0.8rem;
+  color: #516274;
+  font-weight: 700;
+}
+
 .errorMessage {
   padding: 12px;
   border: 1px solid #e4acb2;
@@ -375,7 +388,8 @@
 .badgePositive,
 .badgeWarning,
 .badgeLivePhoto,
-.badgeLivePhotoMotion {
+.badgeLivePhotoMotion,
+.badgeLandmark {
   display: inline-flex;
   align-items: center;
   padding: 2px 6px;
@@ -413,6 +427,12 @@
   background: #ecf6fa;
   border-color: #9ec8d7;
   color: #1d5360;
+}
+
+.badgeLandmark {
+  background: #f0f3ff;
+  border-color: #bfc8f2;
+  color: #253b8a;
 }
 
 .actionRow {

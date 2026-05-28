@@ -54,7 +54,8 @@ import type {
   PhotoDetail,
   PhotoSummary,
   PlaceDetail,
-  PlaceSummary
+  PlaceSummary,
+  VisualEnrichmentWorkingSetAsset,
 } from "@/types/ui-api";
 
 type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "source-review" | "albums" | "collections" | "timeline" | "events" | "places" | "visual-enrichment" | "duplicate-groups" | "duplicate-suggestions" | "admin";
@@ -155,9 +156,19 @@ export default function HomePage() {
   const [placesErrorMessage, setPlacesErrorMessage] = useState<string | null>(null);
   const [placeDetailErrorMessage, setPlaceDetailErrorMessage] = useState<string | null>(null);
   const [focusedDuplicateGroupId, setFocusedDuplicateGroupId] = useState<number | null>(null);
+  const [visualEnrichmentWorkingSet, setVisualEnrichmentWorkingSet] = useState<VisualEnrichmentWorkingSetAsset[]>([]);
   const latestPhotoDetailRequestShaRef = useRef<string | null>(null);
   const CLUSTER_PAGE_SIZE = 50;
   const PHOTO_SEARCH_PAGE_SIZE = 100;
+
+  const handleSendToVisualEnrichment = useCallback((assets: VisualEnrichmentWorkingSetAsset[]) => {
+    setVisualEnrichmentWorkingSet(assets);
+    setViewMode("visual-enrichment");
+  }, []);
+
+  const handleClearVisualEnrichmentWorkingSet = useCallback(() => {
+    setVisualEnrichmentWorkingSet([]);
+  }, []);
 
   useEffect(() => {
     void loadClusters();
@@ -1087,6 +1098,7 @@ export default function HomePage() {
             onOpenPhotoDetail={handleOpenPhotoDetailFromReview}
             onOpenDuplicateGroup={handleOpenDuplicateGroupFromReview}
             onFaceAssignmentsChanged={handlePhotoReviewFaceAssignmentsChanged}
+            onSendToVisualEnrichment={handleSendToVisualEnrichment}
           />
         ) : viewMode === "review" ? (
           <div className={styles.layout}>
@@ -1210,6 +1222,8 @@ export default function HomePage() {
         ) : viewMode === "visual-enrichment" ? (
           <VisualEnrichmentView
             onOpenPhoto={handleOpenPhotoFromPlaces}
+            selectedWorkingSetAssets={visualEnrichmentWorkingSet}
+            onClearWorkingSet={handleClearVisualEnrichmentWorkingSet}
           />
         ) : viewMode === "duplicate-groups" ? (
           <DuplicateGroupsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} focusGroupId={focusedDuplicateGroupId} />

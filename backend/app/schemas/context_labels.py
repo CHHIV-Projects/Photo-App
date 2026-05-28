@@ -30,6 +30,21 @@ class AssetContextLabelListResponse(BaseModel):
     items: list[AssetContextLabelSummary]
 
 
+class AssetContextLabelSummaryBatchRequest(BaseModel):
+    asset_sha256s: list[str]
+
+
+class AssetLandmarkContextSummary(BaseModel):
+    asset_sha256: str
+    landmark_labels: list[str]
+    count: int
+
+
+class AssetContextLabelSummaryBatchResponse(BaseModel):
+    count: int
+    items: list[AssetLandmarkContextSummary]
+
+
 class AcceptObservationAsContextRequest(BaseModel):
     label: str | None = None
 

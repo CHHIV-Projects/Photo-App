@@ -403,6 +403,28 @@ export interface SourceReviewAssetResponse {
   provenance_rows: SourceReviewProvenanceRow[];
 }
 
+export interface AssetLandmarkContextSummary {
+  asset_sha256: string;
+  landmark_labels: string[];
+  count: number;
+}
+
+export interface AssetContextLabelSummaryBatchResponse {
+  count: number;
+  items: AssetLandmarkContextSummary[];
+}
+
+export interface VisualEnrichmentWorkingSetAsset {
+  asset_sha256: string;
+  filename: string;
+  image_url: string | null;
+  display_url: string | null;
+  is_canonical: boolean;
+  duplicate_group_id: number | null;
+  landmark_labels: string[];
+  landmark_count: number;
+}
+
 export interface SourceReviewMatchAssetSummary {
   asset_sha256: string;
   filename: string;

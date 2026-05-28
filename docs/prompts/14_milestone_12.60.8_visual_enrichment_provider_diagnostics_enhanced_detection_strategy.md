@@ -634,3 +634,181 @@ Potential scope:
 ```
 separate workflow for assets without geolocation metadatause visual/web/context clues as possible location candidatesrequire explicit user confirmation before applying location data
 ```
+
+# Answers to Coder Questions — Milestone 12.60.8
+
+## 1. Exclusion logic for ignored/rejected observations
+
+For 12.60.8, change the **default preview exclusion** so previously reviewed Google Vision landmark observations are excluded by default, including:
+
+```text
+pending
+accepted
+ignored
+rejected
+
+Reason:
+
+If an asset was already reviewed and ignored/rejected, rerunning it by default creates churn and makes the queue feel stuck or repetitive.
+
+Preferred UI behavior:
+
+Exclude previously reviewed landmark observations = checked by default
+
+Definition:
+
+previously reviewed = pending / accepted / ignored / rejected google_vision landmark observation exists
+
+If practical, expose this as a toggle:
+
+[x] Exclude previously reviewed landmark observations
+
+A later workflow can include an explicit “include rejected/ignored again” option, but default should reduce duplicate noise.
+
+2. Per-asset diagnostics response size
+
+Use compact per-asset summaries in the API response and write full details to the JSON report.
+
+Preferred:
+
+API response:
+  compact top-summary enough for UI display
+
+JSON report:
+  full diagnostic details / fuller provider payload
+
+Compact response should include enough to show:
+
+asset sha
+filename
+thumbnail/display URL if already available
+landmark count
+top landmark candidates
+web entity / best guess summary if requested
+top labels if requested
+top objects if requested
+created observation count
+no landmark flag
+error if any
+
+Reason:
+
+The UI needs immediate transparency, but we should not overload the API response with full raw provider payloads.
+3. UI advanced diagnostic defaults
+
+Keep Label and Object diagnostics off by default.
+
+Default run options:
+
+Landmark Detection = on
+Web Detection = off
+Label Diagnostics = off
+Object Diagnostics = off
+
+Reason:
+
+Landmark remains the primary workflow.
+Web/Label/Object are diagnostic tools and should be explicitly enabled by the user.
+
+However, the UI should make them easy to turn on for testing.
+
+Preferred advanced options section:
+
+Advanced diagnostics:
+  [ ] Web Detection
+  [ ] Label Diagnostics
+  [ ] Object Diagnostics
+4. GPS context experiment
+
+Defer GPS context for 12.60.8.
+
+Reason:
+
+GPS context can bias results toward the photographer location rather than the visible subject.
+It also adds another variable while we are still trying to understand Landmark/Web/Label/Object behavior.
+
+Document it as a future experiment.
+
+Do not implement imageContext.latLongRect yet.
+
+5. High-sensitivity mode
+
+Do not implement a bundled high-sensitivity mode yet.
+
+For 12.60.8, use manual explicit toggles instead:
+
+Landmark maxResults expanded
+Web Detection optional
+Label Diagnostics optional
+Object Diagnostics optional
+
+Reason:
+
+A bundled mode hides which setting helped.
+Right now we need diagnostics and transparency more than an opaque “try harder” button.
+
+Document future high-sensitivity mode as a possible later feature using:
+
+larger derivative
+web detection
+label/object diagnostics
+possible crop strategy
+possible GPS context
+
+but do not bundle it now.
+
+Implementation Direction Confirmation
+
+Proceed with coder’s recommendation:
+
+- Add Web, Label, and Object as explicit opt-in toggles.
+- Keep all off by default except Landmark.
+- Landmark remains the only persistence path for place_observations.
+- Return compact per-asset diagnostic summaries in API response.
+- Write full diagnostics to JSON report.
+- Add no-hit transparency section in UI after run.
+- Defer GPS context.
+- Defer bundled high-sensitivity mode.
+- Strengthen live confirmation text when Web Detection is enabled.
+  Persistence rule
+
+For 12.60.8:
+
+Landmark Detection results:
+  may create pending google_vision / landmark observations as currently designed.
+
+Web Detection:
+  diagnostic/report/UI only.
+
+Label Detection:
+  diagnostic/report/UI only.
+
+Object Localization:
+  diagnostic/report/UI only.
+
+Do not create:
+
+asset_context_labels
+asset_content_tags
+Places
+Place links
+asset.place_id changes
+UI wording note
+
+When Web Detection is enabled, include a clear warning:
+
+Web Detection may return broader web/entity matches and Google Lens-like context. These results are diagnostic only and will not be automatically accepted or applied.
+No-hit transparency requirement
+
+The UI should clearly show processed assets with no landmark result.
+
+Example:
+
+IMG_1234.jpg
+No strict landmark found.
+Top diagnostic clues:
+  Web: Air Force Academy Cadet Chapel
+  Labels: chapel, architecture, building
+  Objects: building
+
+This is the main practical fix for the current testing problem.

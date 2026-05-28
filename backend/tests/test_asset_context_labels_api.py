@@ -73,6 +73,28 @@ class AssetContextLabelsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    def test_summary_batch_returns_items(self) -> None:
+        expected = {
+            "count": 1,
+            "items": [
+                {
+                    "asset_sha256": "abc123",
+                    "landmark_labels": ["Midgley Bridge", "Sedona"],
+                    "count": 2,
+                }
+            ],
+        }
+        with patch("app.api.asset_context_labels.list_active_landmark_context_summaries", return_value=expected):
+            response = self.client.post(
+                "/api/asset-context-labels/summary",
+                json={"asset_sha256s": ["abc123", "def456"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["items"][0]["asset_sha256"], "abc123")
+
     def test_get_propagation_preview_returns_targets(self) -> None:
         expected = {
             "source_label": {
