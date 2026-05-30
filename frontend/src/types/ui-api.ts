@@ -414,6 +414,19 @@ export interface AssetContextLabelSummaryBatchResponse {
   items: AssetLandmarkContextSummary[];
 }
 
+export interface AssetContextLabelCreateRequest {
+  asset_sha256: string;
+  label: string;
+  context_type: string;
+  source_type: string;
+  confidence?: number | null;
+}
+
+export interface AssetContextLabelCreateResponse {
+  context_label: AssetContextLabelSummary;
+  already_present: boolean;
+}
+
 export interface VisualEnrichmentWorkingSetAsset {
   asset_sha256: string;
   filename: string;

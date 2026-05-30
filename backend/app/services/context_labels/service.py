@@ -13,6 +13,8 @@ from app.models.place_observation import PlaceObservation
 from app.schemas.context_labels import (
     AcceptObservationAsContextRequest,
     AcceptObservationAsContextResponse,
+    AssetContextLabelCreateRequest,
+    AssetContextLabelCreateResponse,
     AssetContextLabelSummaryBatchRequest,
     AssetContextLabelSummaryBatchResponse,
     AssetLandmarkContextSummary,
@@ -36,7 +38,8 @@ VALID_CONTEXT_TYPES = {
     "unknown",
 }
 VALID_CONTEXT_STATUSES = {"active", "hidden", "rejected"}
-VALID_CONTEXT_SOURCE_TYPES = {"google_vision", "user", "propagated", "provenance", "system"}
+VALID_CONTEXT_SOURCE_TYPES = {"google_vision", "google_vision_web", "user", "propagated", "provenance", "system"}
+VALID_CREATE_CONTEXT_SOURCE_TYPES = {"google_vision", "google_vision_web", "user"}
 
 
 def _clean_text(value: str | None) -> str | None:
@@ -150,6 +153,65 @@ def list_asset_context_labels(
 
     items = [_to_summary(row, asset_by_sha=asset_by_sha) for row in rows]
     return AssetContextLabelListResponse(count=len(items), items=items)
+
+
+def create_asset_context_label(
+    db: Session,
+    *,
+    payload: AssetContextLabelCreateRequest,
+) -> AssetContextLabelCreateResponse:
+    asset_sha256 = _clean_text(payload.asset_sha256)
+    if asset_sha256 is None:
+        raise ValueError("asset_sha256 is required.")
+
+    asset = db.get(Asset, asset_sha256)
+    if asset is None:
+        raise ValueError("Asset does not exist.")
+
+    context_type = _clean_text(payload.context_type) or "landmark"
+    if context_type != "landmark":
+        raise ValueError("Only context_type=landmark is supported in this milestone.")
+
+    source_type = _clean_text(payload.source_type) or "user"
+    if source_type not in VALID_CREATE_CONTEXT_SOURCE_TYPES:
+        raise ValueError("Invalid source_type for context label creation.")
+
+    label = _clean_text(payload.label)
+    if label is None:
+        raise ValueError("label is required.")
+
+    normalized = normalize_context_label(label)
+    existing = db.scalars(
+        select(AssetContextLabel)
+        .where(AssetContextLabel.asset_sha256 == asset_sha256)
+        .where(AssetContextLabel.context_type == context_type)
+        .where(AssetContextLabel.label_normalized == normalized)
+        .where(AssetContextLabel.status == "active")
+        .limit(1)
+    ).first()
+
+    already_present = existing is not None
+    context_label = existing
+    if context_label is None:
+        context_label = AssetContextLabel(
+            asset_sha256=asset_sha256,
+            label=label,
+            label_normalized=normalized,
+            context_type=context_type,
+            source_type=source_type,
+            source_observation_id=None,
+            status="active",
+            confidence=payload.confidence,
+        )
+        db.add(context_label)
+        db.commit()
+        db.refresh(context_label)
+
+    summary = _to_summary(context_label, asset_by_sha={asset.sha256: asset})
+    return AssetContextLabelCreateResponse(
+        context_label=summary,
+        already_present=already_present,
+    )
 
 
 def list_active_landmark_context_summaries(

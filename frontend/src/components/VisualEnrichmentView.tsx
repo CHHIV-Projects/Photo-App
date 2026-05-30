@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   acceptObservationAsContext,
+  createAssetContextLabel,
   getAssetContextLabelSummaries,
   getCollections,
   getAssetContextLabels,
@@ -36,6 +37,13 @@ interface VisualEnrichmentViewProps {
 const STATUS_OPTIONS = ["pending", "accepted", "rejected", "ignored"] as const;
 
 type ObservationStatusFilter = (typeof STATUS_OPTIONS)[number];
+
+type ReviewSuggestion = {
+  key: string;
+  label: string;
+  sourceType: "google_vision" | "google_vision_web";
+  confidence: number | null;
+};
 
 function shortSha(value: string | null | undefined): string {
   if (!value) return "unknown";
@@ -77,6 +85,16 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
   const [showAdvancedDiagnostics, setShowAdvancedDiagnostics] = useState(false);
   const [showDeveloperControls, setShowDeveloperControls] = useState(false);
   const [landmarkSummaryByAsset, setLandmarkSummaryByAsset] = useState<Record<string, { labels: string[]; count: number }>>({});
+  const [assetRunBySha, setAssetRunBySha] = useState<Record<string, VisualEnrichmentRunResponse["asset_results"][number]>>({});
+  const [selectedSuggestionByAsset, setSelectedSuggestionByAsset] = useState<Record<string, string>>({});
+  const [manualLabelByAsset, setManualLabelByAsset] = useState<Record<string, string>>({});
+  const [ignoredAssets, setIgnoredAssets] = useState<Set<string>>(new Set());
+  const [rejectedAssets, setRejectedAssets] = useState<Set<string>>(new Set());
+  const [runningMoreContextByAsset, setRunningMoreContextByAsset] = useState<Record<string, boolean>>({});
+  const [showMoreContextByAsset, setShowMoreContextByAsset] = useState<Record<string, boolean>>({});
+  const [moreContextOptionsByAsset, setMoreContextOptionsByAsset] = useState<
+    Record<string, { landmark: boolean; web: boolean; label: boolean; object: boolean }>
+  >({});
 
   const loadObservations = async (nextStatus: ObservationStatusFilter) => {
     setIsLoading(true);
@@ -119,6 +137,58 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
 
   const upsertObservation = (updated: PlaceObservationSummary) => {
     setObservations((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+  };
+
+  const mergeRunAssets = (result: VisualEnrichmentRunResponse) => {
+    setAssetRunBySha((prev) => {
+      const next = { ...prev };
+      for (const item of result.asset_results) {
+        next[item.asset_sha256] = item;
+      }
+      return next;
+    });
+  };
+
+  const getReviewSuggestions = (assetSha256: string): ReviewSuggestion[] => {
+    const runAsset = assetRunBySha[assetSha256];
+    if (!runAsset) {
+      return [];
+    }
+    const items: ReviewSuggestion[] = [];
+    for (const landmark of runAsset.landmarks) {
+      if (!landmark.description) {
+        continue;
+      }
+      items.push({
+        key: `landmark:${landmark.description}`,
+        label: `Landmark: ${landmark.description}`,
+        sourceType: "google_vision",
+        confidence: landmark.score,
+      });
+    }
+    for (const entity of runAsset.web_entities) {
+      if (!entity.description) {
+        continue;
+      }
+      items.push({
+        key: `web:${entity.description}`,
+        label: `Web Entity: ${entity.description}`,
+        sourceType: "google_vision_web",
+        confidence: entity.score,
+      });
+    }
+    for (const guess of runAsset.best_guess_labels) {
+      if (!guess) {
+        continue;
+      }
+      items.push({
+        key: `best_guess:${guess}`,
+        label: `Best Guess: ${guess}`,
+        sourceType: "google_vision_web",
+        confidence: null,
+      });
+    }
+    return items;
   };
 
   const removeObservation = (observationId: number) => {
@@ -305,30 +375,33 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
   };
 
   const handleRunCandidates = async () => {
-    const assetSha256s = candidateSource === "selected"
+    const useSelectedAssets = selectedWorkingSetAssets.length > 0 || candidateSource === "selected";
+    const assetSha256s = useSelectedAssets
       ? selectedWorkingSetAssets.map((item) => item.asset_sha256)
       : Array.from(previewSelection);
 
-    if (candidateSource === "collection" && !candidatePreview) {
+    if (!useSelectedAssets && !candidatePreview) {
       setErrorMessage("Preview candidates before running.");
       return;
     }
 
     if (assetSha256s.length === 0) {
-      setErrorMessage(candidateSource === "selected" ? "No selected assets available to run." : "Select at least one candidate to run.");
+      setErrorMessage(useSelectedAssets ? "No selected assets available to run." : "Select at least one candidate to run.");
       return;
     }
 
-    if (!runFeatureLandmark && !runFeatureWeb && !runFeatureLabel && !runFeatureObject) {
+    if (!useSelectedAssets && !runFeatureLandmark && !runFeatureWeb && !runFeatureLabel && !runFeatureObject) {
       setErrorMessage("Enable at least one detection feature before running.");
       return;
     }
 
     if (runLiveMode) {
       const confirmed = window.confirm(
-        runFeatureWeb
-          ? "Live mode will call Google Vision for selected assets. Web Detection may return web/entity matches and broader image-context clues. Continue with live run?"
-          : "Live mode will call Google Vision for selected assets. Continue with live run?",
+        useSelectedAssets
+          ? "Live mode will run landmark detection for selected assets. Continue with live run?"
+          : (runFeatureWeb
+              ? "Live mode will call Google Vision for selected assets. Web Detection may return web/entity matches and broader image-context clues. Continue with live run?"
+              : "Live mode will call Google Vision for selected assets. Continue with live run?"),
       );
       if (!confirmed) {
         return;
@@ -343,18 +416,177 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
         asset_sha256s: assetSha256s,
         live: runLiveMode,
         mock_provider: runLiveMode ? false : runUseMockProvider,
-        feature_landmark: runFeatureLandmark,
-        feature_web: runFeatureWeb,
-        feature_label: runFeatureLabel,
-        feature_object: runFeatureObject,
+        feature_landmark: useSelectedAssets ? true : runFeatureLandmark,
+        feature_web: useSelectedAssets ? false : runFeatureWeb,
+        feature_label: useSelectedAssets ? false : runFeatureLabel,
+        feature_object: useSelectedAssets ? false : runFeatureObject,
       });
       setRunResult(result);
+      mergeRunAssets(result);
       await loadObservations(statusFilter);
     } catch (err) {
       setRunResult(null);
       setErrorMessage(err instanceof Error ? err.message : "Failed to run visual enrichment candidates");
     } finally {
       setIsRunningCandidates(false);
+    }
+  };
+
+  const ensureMoreContextOptions = (assetSha256: string) => {
+    setMoreContextOptionsByAsset((prev) => {
+      if (prev[assetSha256]) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [assetSha256]: {
+          landmark: false,
+          web: true,
+          label: true,
+          object: true,
+        },
+      };
+    });
+  };
+
+  const handleRunMoreContext = async (assetSha256: string) => {
+    const options = moreContextOptionsByAsset[assetSha256] ?? {
+      landmark: false,
+      web: true,
+      label: true,
+      object: true,
+    };
+    if (!options.landmark && !options.web && !options.label && !options.object) {
+      setErrorMessage("Select at least one feature before running more context.");
+      return;
+    }
+
+    if (runLiveMode) {
+      const confirmed = window.confirm("Live mode will run additional context features for this asset. Continue?");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setRunningMoreContextByAsset((prev) => ({ ...prev, [assetSha256]: true }));
+    setErrorMessage("");
+    try {
+      const result = await runVisualEnrichmentGoogleVision({
+        asset_sha256s: [assetSha256],
+        live: runLiveMode,
+        mock_provider: runLiveMode ? false : runUseMockProvider,
+        feature_landmark: options.landmark,
+        feature_web: options.web,
+        feature_label: options.label,
+        feature_object: options.object,
+      });
+      mergeRunAssets(result);
+      await loadObservations(statusFilter);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to run more context for asset");
+    } finally {
+      setRunningMoreContextByAsset((prev) => ({ ...prev, [assetSha256]: false }));
+    }
+  };
+
+  const handleAcceptSelectedSuggestion = async (assetSha256: string) => {
+    const selectedKey = selectedSuggestionByAsset[assetSha256];
+    if (!selectedKey) {
+      setErrorMessage("Select one context suggestion before accepting.");
+      return;
+    }
+    const suggestion = getReviewSuggestions(assetSha256).find((item) => item.key === selectedKey);
+    if (!suggestion) {
+      setErrorMessage("Selected suggestion is no longer available.");
+      return;
+    }
+
+    setUpdatingObservationId(-1);
+    setErrorMessage("");
+    try {
+      const response = await createAssetContextLabel({
+        asset_sha256: assetSha256,
+        label: suggestion.label.replace(/^Landmark: |^Web Entity: |^Best Guess: /, ""),
+        context_type: "landmark",
+        source_type: suggestion.sourceType,
+        confidence: suggestion.confidence,
+      });
+      setLandmarkSummaryByAsset((prev) => {
+        const existing = prev[assetSha256];
+        const labels = existing?.labels ?? [];
+        if (labels.includes(response.context_label.label)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [assetSha256]: {
+            labels: [response.context_label.label, ...labels],
+            count: (existing?.count ?? 0) + 1,
+          },
+        };
+      });
+      setRejectedAssets((prev) => {
+        const next = new Set(prev);
+        next.delete(assetSha256);
+        return next;
+      });
+      setIgnoredAssets((prev) => {
+        const next = new Set(prev);
+        next.delete(assetSha256);
+        return next;
+      });
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to accept selected context suggestion");
+    } finally {
+      setUpdatingObservationId(null);
+    }
+  };
+
+  const handleAcceptManualEntry = async (assetSha256: string) => {
+    const manualLabel = (manualLabelByAsset[assetSha256] ?? "").trim();
+    if (!manualLabel) {
+      setErrorMessage("Enter a manual context label before accepting.");
+      return;
+    }
+
+    setUpdatingObservationId(-1);
+    setErrorMessage("");
+    try {
+      const response = await createAssetContextLabel({
+        asset_sha256: assetSha256,
+        label: manualLabel,
+        context_type: "landmark",
+        source_type: "user",
+        confidence: null,
+      });
+      setLandmarkSummaryByAsset((prev) => {
+        const existing = prev[assetSha256];
+        const labels = existing?.labels ?? [];
+        if (labels.includes(response.context_label.label)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [assetSha256]: {
+            labels: [response.context_label.label, ...labels],
+            count: (existing?.count ?? 0) + 1,
+          },
+        };
+      });
+      setRejectedAssets((prev) => {
+        const next = new Set(prev);
+        next.delete(assetSha256);
+        return next;
+      });
+      setIgnoredAssets((prev) => {
+        const next = new Set(prev);
+        next.delete(assetSha256);
+        return next;
+      });
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to accept manual context label");
+    } finally {
+      setUpdatingObservationId(null);
     }
   };
 
@@ -373,6 +605,7 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
   useEffect(() => {
     if (selectedWorkingSetAssets.length > 0) {
       setCandidateSource("selected");
+      setShowCollectionSource(false);
     } else if (candidateSource === "selected") {
       setCandidateSource("collection");
     }
@@ -411,6 +644,8 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     return `${count} ${count === 1 ? "candidate" : "candidates"}`;
   }, [observations]);
 
+  const hasSelectedWorkingSet = selectedWorkingSetAssets.length > 0;
+
   const runAssetCount = candidateSource === "selected"
     ? selectedWorkingSetAssets.length
     : previewSelection.size;
@@ -427,7 +662,13 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     if ((landmarkSummaryByAsset[assetSha]?.count ?? 0) > 0) {
       return "Accepted context";
     }
-    const runAssetResult = runResult?.asset_results.find((item) => item.asset_sha256 === assetSha);
+    if (rejectedAssets.has(assetSha)) {
+      return "Reviewed / rejected";
+    }
+    if (ignoredAssets.has(assetSha)) {
+      return "Reviewed / ignored";
+    }
+    const runAssetResult = assetRunBySha[assetSha] ?? runResult?.asset_results.find((item) => item.asset_sha256 === assetSha);
     if (!runAssetResult) {
       return "Not run";
     }
@@ -445,6 +686,7 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
 
   return (
     <div className={styles.container}>
+      {!hasSelectedWorkingSet && (
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
@@ -637,8 +879,9 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
           })}
         </div>
       </section>
+      )}
 
-      {propagationPreview && (
+      {!hasSelectedWorkingSet && propagationPreview && (
         <section className={styles.section}>
           <h3 className={styles.sectionTitle}>Propagate Context Label</h3>
           <p className={styles.sectionSubtitle}>
@@ -715,39 +958,31 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>Candidate Selection</h3>
         <p className={styles.sectionSubtitle}>
-          Photo Review selected assets are primary when present. Collection pool remains available as a secondary source.
+          Photo Review selected assets are the primary review workflow. Collection pool is available as a secondary source.
         </p>
+        {errorMessage && <p className={styles.error}>{errorMessage}</p>}
+        {propagationResult && (
+          <p className={styles.success}>
+            Added: {propagationResult.added_count} | Already present: {propagationResult.already_present_count} |
+            Skipped: {propagationResult.skipped_count} | Failed: {propagationResult.failed_count}
+          </p>
+        )}
 
-        <div className={styles.sourceSwitchRow}>
-          <button
-            type="button"
-            className={candidateSource === "selected" ? styles.primaryButton : styles.secondaryButton}
-            disabled={selectedWorkingSetAssets.length === 0}
-            onClick={() => setCandidateSource("selected")}
-          >
-            Selected Assets from Photo Review ({selectedWorkingSetAssets.length})
-          </button>
-          <button
-            type="button"
-            className={candidateSource === "collection" ? styles.primaryButton : styles.secondaryButton}
-            onClick={() => {
-              setCandidateSource("collection");
-              setShowCollectionSource(true);
-            }}
-          >
-            Collection Candidate Pool
-          </button>
-          {selectedWorkingSetAssets.length > 0 ? (
-            <button type="button" className={styles.secondaryButton} onClick={onClearWorkingSet}>
-              Clear Selected Working Set
-            </button>
-          ) : null}
-        </div>
-
-        {candidateSource === "selected" && (
+        {hasSelectedWorkingSet && (
           <>
             <div className={styles.previewSummary}>
               <span className={styles.badge}>Working set: {selectedWorkingSetAssets.length}</span>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={isRunningCandidates || selectedWorkingSetAssets.length === 0}
+                onClick={() => { void handleRunCandidates(); }}
+              >
+                {isRunningCandidates ? "Running..." : `Run Landmark Detection (${selectedWorkingSetAssets.length})`}
+              </button>
+              <button type="button" className={styles.secondaryButton} onClick={onClearWorkingSet}>
+                Clear Selected Working Set
+              </button>
             </div>
             <div className={styles.workingSetList}>
               {selectedWorkingSetAssets.map((asset) => {
@@ -755,7 +990,7 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                 const landmarkSummary = formatLandmarkSummary(asset.asset_sha256);
                 return (
                   <article key={asset.asset_sha256} className={styles.workingSetCard}>
-                    <div className={styles.targetThumbShell}>
+                    <div className={styles.workingSetThumbShell}>
                       {previewUrl ? (
                         <img src={previewUrl} alt={asset.filename} className={styles.thumbnail} />
                       ) : (
@@ -772,13 +1007,6 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                       <div className={styles.metaLine}>{getSelectedAssetStatus(asset.asset_sha256)}</div>
                       {landmarkSummary ? <div className={styles.metaLine}>{landmarkSummary}</div> : null}
                     </div>
-                    <button
-                      type="button"
-                      className={styles.secondaryButton}
-                      onClick={() => onOpenPhoto(asset.asset_sha256)}
-                    >
-                      Open
-                    </button>
                   </article>
                 );
               })}
@@ -786,23 +1014,9 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
           </>
         )}
 
-        {candidateSource === "collection" && (
+        {(!hasSelectedWorkingSet || showCollectionSource) && (
           <>
-            {selectedWorkingSetAssets.length > 0 && !showCollectionSource ? (
-              <div className={styles.previewSummary}>
-                <span className={styles.badge}>Collection source is secondary while selected assets are active.</span>
-                <button
-                  type="button"
-                  className={styles.secondaryButton}
-                  onClick={() => setShowCollectionSource(true)}
-                >
-                  Show Collection Source
-                </button>
-              </div>
-            ) : null}
-
-            {(selectedWorkingSetAssets.length === 0 || showCollectionSource) ? (
-              <>
+            <>
                 <div className={styles.selectionControls}>
           <label className={styles.filterLabel}>
             Collection
@@ -913,21 +1127,53 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                 </div>
               </>
                 )}
-              </>
-            ) : null}
+            </>
           </>
         )}
 
+        {hasSelectedWorkingSet && !showCollectionSource ? (
+          <div className={styles.previewSummary}>
+            <span className={styles.badge}>Collection candidate pool is collapsed while selected assets are active.</span>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={() => {
+                setShowCollectionSource(true);
+                setCandidateSource("collection");
+              }}
+            >
+              Show Collection Candidate Pool
+            </button>
+          </div>
+        ) : null}
+
+        {hasSelectedWorkingSet && showCollectionSource ? (
+          <div className={styles.previewSummary}>
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              onClick={() => {
+                setShowCollectionSource(false);
+                setCandidateSource("selected");
+              }}
+            >
+              Hide Collection Candidate Pool
+            </button>
+          </div>
+        ) : null}
+
         <div className={styles.runControls}>
           <span className={styles.badge}>Mode: {runLiveMode ? "Live" : "Dry-run"}</span>
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            disabled={isRunningCandidates}
-            onClick={() => setShowAdvancedDiagnostics((prev) => !prev)}
-          >
-            {showAdvancedDiagnostics ? "Hide Diagnostics" : "Diagnostics"}
-          </button>
+          {!hasSelectedWorkingSet && (
+            <button
+              type="button"
+              className={styles.secondaryButton}
+              disabled={isRunningCandidates}
+              onClick={() => setShowAdvancedDiagnostics((prev) => !prev)}
+            >
+              {showAdvancedDiagnostics ? "Hide Diagnostics" : "Diagnostics"}
+            </button>
+          )}
           <button
             type="button"
             className={styles.secondaryButton}
@@ -937,14 +1183,16 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
             {showDeveloperControls ? "Hide Developer" : "Developer Options"}
           </button>
 
-          <button
-            type="button"
-            className={styles.primaryButton}
-            disabled={isRunningCandidates || runAssetCount === 0}
-            onClick={() => { void handleRunCandidates(); }}
-          >
-            {isRunningCandidates ? "Running..." : `Run Selected (${runAssetCount})`}
-          </button>
+          {!hasSelectedWorkingSet && (
+            <button
+              type="button"
+              className={styles.primaryButton}
+              disabled={isRunningCandidates || runAssetCount === 0}
+              onClick={() => { void handleRunCandidates(); }}
+            >
+              {isRunningCandidates ? "Running..." : `Run Selected (${runAssetCount})`}
+            </button>
+          )}
         </div>
 
         {showAdvancedDiagnostics && (
@@ -1014,6 +1262,213 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
               />
               Use mock provider in dry-run
             </label>
+          </div>
+        )}
+
+        {hasSelectedWorkingSet && (
+          <div className={styles.assetReviewList}>
+            {selectedWorkingSetAssets.map((asset) => {
+              const previewUrl = resolveApiUrl(asset.display_url ?? asset.image_url ?? null);
+              const assetStatus = getSelectedAssetStatus(asset.asset_sha256);
+              const suggestions = getReviewSuggestions(asset.asset_sha256);
+              const selectedSuggestion = selectedSuggestionByAsset[asset.asset_sha256] ?? "";
+              const moreContext = moreContextOptionsByAsset[asset.asset_sha256] ?? {
+                landmark: false,
+                web: true,
+                label: true,
+                object: true,
+              };
+              const isRunningMoreContext = runningMoreContextByAsset[asset.asset_sha256] ?? false;
+
+              return (
+                <article key={asset.asset_sha256} className={styles.assetReviewCard}>
+                  <div className={styles.assetReviewPreview}>
+                    {previewUrl ? (
+                      <img src={previewUrl} alt={asset.filename} className={styles.assetReviewImage} />
+                    ) : (
+                      <div className={styles.assetReviewPlaceholder}>N/A</div>
+                    )}
+                  </div>
+                  <div className={styles.assetReviewBody}>
+                    <div className={styles.assetName}>{asset.filename}</div>
+                    <div className={styles.metaLine}>
+                      {shortSha(asset.asset_sha256)}
+                      {asset.is_canonical ? " | canonical" : " | duplicate"}
+                      {asset.duplicate_group_id ? ` | group #${asset.duplicate_group_id}` : ""}
+                    </div>
+                    <div className={styles.metaLine}>Status: {assetStatus}</div>
+                    {formatLandmarkSummary(asset.asset_sha256) ? (
+                      <div className={styles.metaLine}>{formatLandmarkSummary(asset.asset_sha256)}</div>
+                    ) : null}
+
+                    <div className={styles.suggestionBlock}>
+                      <div className={styles.suggestionTitle}>Detected Suggestions (select one)</div>
+                      {suggestions.length === 0 ? (
+                        <div className={styles.metaLine}>No suggestions yet. Run landmark or more context first.</div>
+                      ) : (
+                        <div className={styles.suggestionList}>
+                          {suggestions.map((item) => (
+                            <label key={item.key} className={styles.suggestionRow}>
+                              <input
+                                type="radio"
+                                name={`suggestion-${asset.asset_sha256}`}
+                                checked={selectedSuggestion === item.key}
+                                onChange={() => {
+                                  setSelectedSuggestionByAsset((prev) => ({
+                                    ...prev,
+                                    [asset.asset_sha256]: item.key,
+                                  }));
+                                }}
+                              />
+                              <span>{item.label}</span>
+                              {item.confidence !== null ? <span className={styles.metaLine}>({item.confidence})</span> : null}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className={styles.manualEntryRow}>
+                      <label className={styles.labelInputLabel} htmlFor={`manual-label-${asset.asset_sha256}`}>Manual Context Label</label>
+                      <input
+                        id={`manual-label-${asset.asset_sha256}`}
+                        className={styles.labelInput}
+                        value={manualLabelByAsset[asset.asset_sha256] ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setManualLabelByAsset((prev) => ({ ...prev, [asset.asset_sha256]: value }));
+                        }}
+                        placeholder="Type landmark/context label"
+                      />
+                    </div>
+
+                    <div className={styles.actionRow}>
+                      <button
+                        type="button"
+                        className={styles.primaryButton}
+                        disabled={updatingObservationId === -1 || !selectedSuggestion}
+                        onClick={() => { void handleAcceptSelectedSuggestion(asset.asset_sha256); }}
+                      >
+                        Accept Selected as Context
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        disabled={updatingObservationId === -1}
+                        onClick={() => { void handleAcceptManualEntry(asset.asset_sha256); }}
+                      >
+                        Accept Manual Entry
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.dangerButton}
+                        onClick={() => {
+                          setRejectedAssets((prev) => new Set(prev).add(asset.asset_sha256));
+                          setIgnoredAssets((prev) => {
+                            const next = new Set(prev);
+                            next.delete(asset.asset_sha256);
+                            return next;
+                          });
+                        }}
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        onClick={() => {
+                          setIgnoredAssets((prev) => new Set(prev).add(asset.asset_sha256));
+                          setRejectedAssets((prev) => {
+                            const next = new Set(prev);
+                            next.delete(asset.asset_sha256);
+                            return next;
+                          });
+                        }}
+                      >
+                        Ignore
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        onClick={() => {
+                          setShowMoreContextByAsset((prev) => ({
+                            ...prev,
+                            [asset.asset_sha256]: !prev[asset.asset_sha256],
+                          }));
+                          ensureMoreContextOptions(asset.asset_sha256);
+                        }}
+                      >
+                        {showMoreContextByAsset[asset.asset_sha256] ? "Hide More Context" : "Run More Context"}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
+                        onClick={() => onOpenPhoto(asset.asset_sha256)}
+                      >
+                        Open Asset
+                      </button>
+                    </div>
+
+                    {showMoreContextByAsset[asset.asset_sha256] ? (
+                      <div className={styles.advancedPanel}>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={moreContext.landmark}
+                            onChange={(event) => setMoreContextOptionsByAsset((prev) => ({
+                              ...prev,
+                              [asset.asset_sha256]: { ...moreContext, landmark: event.target.checked },
+                            }))}
+                          />
+                          Landmark
+                        </label>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={moreContext.web}
+                            onChange={(event) => setMoreContextOptionsByAsset((prev) => ({
+                              ...prev,
+                              [asset.asset_sha256]: { ...moreContext, web: event.target.checked },
+                            }))}
+                          />
+                          Web
+                        </label>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={moreContext.label}
+                            onChange={(event) => setMoreContextOptionsByAsset((prev) => ({
+                              ...prev,
+                              [asset.asset_sha256]: { ...moreContext, label: event.target.checked },
+                            }))}
+                          />
+                          Label
+                        </label>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={moreContext.object}
+                            onChange={(event) => setMoreContextOptionsByAsset((prev) => ({
+                              ...prev,
+                              [asset.asset_sha256]: { ...moreContext, object: event.target.checked },
+                            }))}
+                          />
+                          Object
+                        </label>
+                        <button
+                          type="button"
+                          className={styles.primaryButton}
+                          disabled={isRunningMoreContext}
+                          onClick={() => { void handleRunMoreContext(asset.asset_sha256); }}
+                        >
+                          {isRunningMoreContext ? "Running..." : "Run More Context"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
 

@@ -74,6 +74,8 @@ import type {
   GlobalPlaceObservationPatchRequest,
   AcceptObservationAsContextRequest,
   AcceptObservationAsContextResponse,
+  AssetContextLabelCreateRequest,
+  AssetContextLabelCreateResponse,
   AssetContextLabelSummaryBatchResponse,
   AssetContextLabelSummary,
   ContextLabelPropagationPreviewResponse,
@@ -751,6 +753,15 @@ export function acceptObservationAsContext(
   payload: AcceptObservationAsContextRequest,
 ): Promise<AcceptObservationAsContextResponse> {
   return apiRequest<AcceptObservationAsContextResponse>(`/api/place-observations/${observationId}/accept-as-context`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createAssetContextLabel(
+  payload: AssetContextLabelCreateRequest,
+): Promise<AssetContextLabelCreateResponse> {
+  return apiRequest<AssetContextLabelCreateResponse>("/api/asset-context-labels", {
     method: "POST",
     body: JSON.stringify(payload),
   });

@@ -550,3 +550,205 @@ Potential scope:
 ```
 separate workflow for assets without geolocation metadatause visual/web/context clues as possible location candidatesrequire explicit user confirmation before applying location data
 ```
+# Answers to Coder Questions — Milestone 12.60.9
+
+## 1. Handoff behavior
+
+`Send to Visual Enrichment` should immediately switch tabs and open Visual Enrichment in selected-assets mode.
+
+Preferred behavior:
+
+```text
+Photo Review
+→ select assets
+→ click Send to Visual Enrichment
+→ app switches to Visual Enrichment
+→ selected assets appear as the active working set
+
+Do not make the user click Visual Enrichment manually after sending.
+
+Reason:
+
+The user intent is immediate workflow continuation.
+2. Working set persistence
+
+Yes. The handed-off working set should persist during the current UI session until explicitly cleared or replaced.
+
+Preferred behavior:
+
+Selected asset working set remains available when user leaves and returns to Visual Enrichment.
+User can clear the working set.
+Sending a new selection from Photo Review replaces the prior working set.
+
+No need to persist across browser refresh or backend session in 12.60.9.
+
+Minimum:
+
+page-level frontend state only
+3. Selected-assets run behavior
+
+In selected-assets mode, Run Selected should execute all handed-off assets by default.
+
+No second checkbox selection layer is needed for the main flow.
+
+Preferred:
+
+Selected assets from Photo Review = active run set
+Run Selected = runs all assets in that working set
+
+If coder wants optional per-asset deselect, put it behind an advanced or secondary control. Do not make that the primary flow.
+
+Reason:
+
+The user already selected the assets in Photo Review.
+Asking the user to select them again adds friction.
+4. Photo Review card status text
+
+Yes. Use this format when active landmark context exists:
+
+Landmark: Midgley Bridge
+
+If multiple active landmark labels exist:
+
+Landmark: Midgley Bridge +1
+
+or if space is tight:
+
+Landmarks: 2
+
+Preferred:
+
+Landmark: first label +N
+
+If no active landmark context exists, do not show anything by default.
+
+Reason:
+
+Photo Review should stay clean and only show landmark status when useful.
+Detailed diagnostics belong in Visual Enrichment.
+5. Backend extension for landmark summaries
+
+Yes. Add a small backend extension now.
+
+Preferred:
+
+batch active landmark context summary by asset_sha256 list
+
+Reason:
+
+Photo Review card rendering should not use N+1 frontend calls.
+This status will become important across the UI, so a small batch endpoint or payload extension is worth it.
+
+Acceptable implementation options:
+
+Option A:
+  POST /api/asset-context-labels/summary
+  body: { asset_sha256s: [...] }
+
+Option B:
+  Extend existing Photo Review asset payload with active_landmark_context summary
+
+Preferred for 12.60.9:
+
+Use a small batch summary endpoint unless extending Photo Review payload is clearly cleaner.
+
+Response shape can be simple:
+
+{
+  "items": [
+    {
+      "asset_sha256": "...",
+      "landmark_labels": ["Midgley Bridge", "New York Stock Exchange"],
+      "count": 2
+    }
+  ]
+}
+
+Only active context_type=landmark labels are needed.
+
+6. Send button visibility
+
+Show the Send to Visual Enrichment action in a visible, predictable place.
+
+Preferred:
+
+Visible always in Photo Review toolbar/action area.
+Disabled when no assets are selected.
+Show hint: Select one or more assets first.
+
+If layout is tight, it may appear in the batch toolbar once selection exists, but there should also be an easy zero-selection entry point for Select All.
+
+Minimum:
+
+User can discover the workflow without already knowing hidden selection behavior.
+7. Collection source visibility in Visual Enrichment
+
+Yes. When a Photo Review working set is active, keep Collection source visible but collapsed or secondary.
+
+Preferred structure:
+
+Candidate Source
+
+Active:
+  Selected assets from Photo Review
+
+Other source:
+  Collection candidate pool
+  collapsed / secondary
+
+Do not remove the collection workflow from 12.60.7.
+
+Reason:
+
+Photo Review selected assets should be primary, but collection-based candidate selection remains useful.
+8. Dry-run / mock controls
+
+Move dry-run and mock controls behind an explicit Developer or Advanced toggle.
+
+Preferred:
+
+Normal visible workflow:
+  Live run with confirmation
+
+Advanced / Developer:
+  Dry-run
+  Mock provider
+
+Do not remove dry-run/mock entirely.
+
+Reason:
+
+Dry-run/mock is useful for development but clutters normal user workflow.
+
+Keep live safety confirmation.
+
+Implementation Direction Confirmation
+
+Proceed with coder’s recommended path:
+
+- Frontend page-level handoff state.
+- Pass selected asset working set into Visual Enrichment.
+- Add selected-assets candidate source mode.
+- Keep collection source as secondary/collapsed when selected assets are active.
+- Reuse existing run endpoint with explicit asset_sha256 list.
+- Add small backend batch endpoint or payload extension for active landmark context summaries.
+- Photo Review cards show simple accepted landmark/context status.
+- Add zero-selection Select All entry point.
+- Add Send to Visual Enrichment action.
+- Hide dry-run/mock under Advanced/Developer.
+Safety boundaries
+
+Preserve existing safety rules:
+
+- No automatic Vision run on handoff.
+- No Place writes.
+- No asset.place_id writes.
+- No automatic context-label creation from provider results.
+- No propagation unless existing explicit propagation workflow is used.
+Key product clarification
+
+Photo Review is the main place to find assets.
+
+Visual Enrichment is the workbench for enrichment.
+
+The user may select assets after filtering/searching, or may simply be browsing Photo Review and choose one or two assets ad hoc.

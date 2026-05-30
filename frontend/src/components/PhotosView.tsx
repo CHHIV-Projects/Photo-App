@@ -127,6 +127,7 @@ export function PhotosView({
   const [displayRotationDegrees, setDisplayRotationDegrees] = useState<0 | 90 | 180 | 270>(0);
   const [isUpdatingRotation, setIsUpdatingRotation] = useState(false);
   const [rotationErrorMessage, setRotationErrorMessage] = useState<string | null>(null);
+  const [presentationErrorMessage, setPresentationErrorMessage] = useState<string | null>(null);
   const [presentationStartIndex, setPresentationStartIndex] = useState<number | null>(null);
   const faceRowRefs = useRef<Map<number, HTMLLIElement>>(new Map());
   const imageViewportRef = useRef<HTMLDivElement | null>(null);
@@ -195,6 +196,7 @@ export function PhotosView({
     setShowAllExifObservations(false);
     setNaturalDims(null);
     setImageLoadError(false);
+    setPresentationErrorMessage(null);
   }, [selectedPhotoSha256]);
 
   // Auto-scroll the face row into view when selection changes.
@@ -695,13 +697,20 @@ export function PhotosView({
 
   function openPresentationMode() {
     if (!selectedPhotoSha256) {
+      setPresentationErrorMessage("Select a photo first.");
       return;
     }
 
     const currentIndex = photos.findIndex((photo) => photo.asset_sha256 === selectedPhotoSha256);
     if (currentIndex >= 0) {
+      setPresentationErrorMessage(null);
       setPresentationStartIndex(currentIndex);
+      return;
     }
+
+    setPresentationErrorMessage(
+      "Presentation Mode only opens for photos that are present in the current Photos results list."
+    );
   }
 
   async function closePresentationMode() {
@@ -1052,6 +1061,7 @@ export function PhotosView({
                     <span className={styles.rotationValue}>Current: {displayRotationDegrees}°</span>
                   </div>
                   {rotationErrorMessage ? <p className={styles.errorInline}>{rotationErrorMessage}</p> : null}
+                  {presentationErrorMessage ? <p className={styles.errorInline}>{presentationErrorMessage}</p> : null}
                   {imageLoadError ? (
                     <div className={styles.imagePlaceholder}>Image unavailable</div>
                   ) : (

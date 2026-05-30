@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.schemas.context_labels import (
+    AssetContextLabelCreateRequest,
+    AssetContextLabelCreateResponse,
     AssetContextLabelSummaryBatchRequest,
     AssetContextLabelSummaryBatchResponse,
     AssetContextLabelListResponse,
@@ -15,6 +17,7 @@ from app.schemas.context_labels import (
     ContextLabelPropagationResponse,
 )
 from app.services.context_labels.service import (
+    create_asset_context_label,
     get_context_label_propagation_preview,
     list_active_landmark_context_summaries,
     list_asset_context_labels,
@@ -22,6 +25,20 @@ from app.services.context_labels.service import (
 )
 
 router = APIRouter(prefix="/api/asset-context-labels", tags=["asset-context-labels"])
+
+
+@router.post("", response_model=AssetContextLabelCreateResponse)
+def create_asset_context_label_endpoint(
+    payload: AssetContextLabelCreateRequest,
+    db: Session = Depends(get_db_session),
+) -> AssetContextLabelCreateResponse:
+    """Create one active context label for an asset (manual or provider-assisted)."""
+    try:
+        return create_asset_context_label(db, payload=payload)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "does not exist" in message else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
 
 @router.post("/summary", response_model=AssetContextLabelSummaryBatchResponse)

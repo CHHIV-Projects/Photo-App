@@ -95,6 +95,56 @@ class AssetContextLabelsApiTests(unittest.TestCase):
         self.assertEqual(body["count"], 1)
         self.assertEqual(body["items"][0]["asset_sha256"], "abc123")
 
+    def test_create_asset_context_label_returns_context(self) -> None:
+        expected = {
+            "context_label": {
+                "id": 42,
+                "asset_sha256": "abc123",
+                "asset_filename": "IMG_4819.JPG",
+                "label": "Cathedral Rock",
+                "label_normalized": "cathedral rock",
+                "context_type": "landmark",
+                "source_type": "user",
+                "source_observation_id": None,
+                "status": "active",
+                "confidence": None,
+                "created_at_utc": "2026-05-27T12:00:00Z",
+            },
+            "already_present": False,
+        }
+        with patch("app.api.asset_context_labels.create_asset_context_label", return_value=expected):
+            response = self.client.post(
+                "/api/asset-context-labels",
+                json={
+                    "asset_sha256": "abc123",
+                    "label": "Cathedral Rock",
+                    "context_type": "landmark",
+                    "source_type": "user",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["context_label"]["label"], "Cathedral Rock")
+        self.assertFalse(body["already_present"])
+
+    def test_create_asset_context_label_missing_asset_maps_to_404(self) -> None:
+        with patch(
+            "app.api.asset_context_labels.create_asset_context_label",
+            side_effect=ValueError("Asset does not exist."),
+        ):
+            response = self.client.post(
+                "/api/asset-context-labels",
+                json={
+                    "asset_sha256": "missing",
+                    "label": "Cathedral Rock",
+                    "context_type": "landmark",
+                    "source_type": "user",
+                },
+            )
+
+        self.assertEqual(response.status_code, 404)
+
     def test_get_propagation_preview_returns_targets(self) -> None:
         expected = {
             "source_label": {

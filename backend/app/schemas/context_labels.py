@@ -55,6 +55,19 @@ class AcceptObservationAsContextResponse(BaseModel):
     already_present: bool
 
 
+class AssetContextLabelCreateRequest(BaseModel):
+    asset_sha256: str
+    label: str
+    context_type: str = "landmark"
+    source_type: str = "user"
+    confidence: float | None = None
+
+
+class AssetContextLabelCreateResponse(BaseModel):
+    context_label: AssetContextLabelSummary
+    already_present: bool
+
+
 class ContextLabelPropagationTargetSummary(BaseModel):
     asset_sha256: str
     asset_filename: str
