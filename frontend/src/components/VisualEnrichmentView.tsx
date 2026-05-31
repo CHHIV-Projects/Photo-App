@@ -53,6 +53,69 @@ type QueueWorkItem = {
   canonicalUnavailable: boolean;
 };
 
+type AcceptedContextSourceKind =
+  | "none"
+  | "manual"
+  | "landmark"
+  | "web_entity"
+  | "best_guess"
+  | "web"
+  | "label"
+  | "object"
+  | "context";
+
+function mapAcceptedContextSourceLabel(source: AcceptedContextSourceKind): string {
+  switch (source) {
+    case "manual":
+      return "Accepted Manual Entry";
+    case "landmark":
+      return "Accepted Context — Landmark";
+    case "web_entity":
+      return "Accepted Context — Web Entity";
+    case "best_guess":
+      return "Accepted Context — Best Guess";
+    case "web":
+      return "Accepted Context — Web";
+    case "label":
+      return "Accepted Context — Label";
+    case "object":
+      return "Accepted Context — Object";
+    case "context":
+      return "Accepted Context";
+    default:
+      return "No context accepted";
+  }
+}
+
+function deriveAcceptedSourceFromSuggestion(suggestion: ReviewSuggestion): AcceptedContextSourceKind {
+  if (suggestion.label.startsWith("Landmark:")) {
+    return "landmark";
+  }
+  if (suggestion.label.startsWith("Web Entity:")) {
+    return "web_entity";
+  }
+  if (suggestion.label.startsWith("Best Guess:")) {
+    return "best_guess";
+  }
+  if (suggestion.sourceType === "google_vision_web") {
+    return "web";
+  }
+  return "context";
+}
+
+function deriveAcceptedSourceFromPersistedLabel(label: AssetContextLabelSummary): AcceptedContextSourceKind {
+  if (label.source_type === "user") {
+    return "manual";
+  }
+  if (label.source_type === "google_vision_web") {
+    return "web";
+  }
+  if (label.source_type === "google_vision") {
+    return "landmark";
+  }
+  return "context";
+}
+
 function shortSha(value: string | null | undefined): string {
   if (!value) return "unknown";
   return value.slice(0, 12);
@@ -91,7 +154,7 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
   const [sessionScannedAssets, setSessionScannedAssets] = useState<Set<string>>(new Set());
   const [acceptedManualAssets, setAcceptedManualAssets] = useState<Set<string>>(new Set());
   const [acceptedContextAssets, setAcceptedContextAssets] = useState<Set<string>>(new Set());
-  const [persistedManualAcceptedByAsset, setPersistedManualAcceptedByAsset] = useState<Record<string, boolean>>({});
+  const [acceptedContextSourceByAsset, setAcceptedContextSourceByAsset] = useState<Record<string, AcceptedContextSourceKind>>({});
   const [hidePreviouslyRejected, setHidePreviouslyRejected] = useState(false);
   const [queueCardFilter, setQueueCardFilter] = useState<"all" | "with_suggestions" | "without_suggestions">("all");
   const [suggestionReviewFilter, setSuggestionReviewFilter] = useState<"all" | "pending" | "reviewed">("all");
@@ -251,7 +314,7 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     const assetSha256s = queueAssetShas;
 
     if (assetSha256s.length === 0) {
-      setErrorMessage("No unresolved unscanned queue cards available. Use Force Rescan for previously scanned assets.");
+      setErrorMessage("No unresolved unscanned queue cards available. Use Run More Context with Landmark checked for rescans.");
       return;
     }
 
@@ -543,6 +606,10 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
         next.delete(assetSha256);
         return next;
       });
+      setAcceptedContextSourceByAsset((prev) => ({
+        ...prev,
+        [assetSha256]: deriveAcceptedSourceFromSuggestion(suggestion),
+      }));
       await maybePropagateAcceptedLabel(assetSha256, response.context_label.id);
       dismissQueueCard(assetSha256);
     } catch (err) {
@@ -599,6 +666,7 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
         next.delete(assetSha256);
         return next;
       });
+      setAcceptedContextSourceByAsset((prev) => ({ ...prev, [assetSha256]: "manual" }));
       await maybePropagateAcceptedLabel(assetSha256, response.context_label.id);
       dismissQueueCard(assetSha256);
     } catch (err) {
@@ -687,7 +755,7 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     }
     let isCancelled = false;
 
-    async function loadPersistedManualAcceptance(): Promise<void> {
+    async function loadPersistedAcceptedContextSource(): Promise<void> {
       try {
         const results = await Promise.all(shas.map(async (sha) => {
           const response = await getAssetContextLabels({
@@ -697,25 +765,29 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
             limit: 200,
             offset: 0,
           });
-          const hasManual = response.items.some((item) => item.source_type === "user");
-          return [sha, hasManual] as const;
+          const sorted = [...response.items].sort((left, right) =>
+            right.created_at_utc.localeCompare(left.created_at_utc),
+          );
+          const latest = sorted[0];
+          const source = latest ? deriveAcceptedSourceFromPersistedLabel(latest) : "none";
+          return [sha, source] as const;
         }));
 
         if (isCancelled) {
           return;
         }
 
-        const next: Record<string, boolean> = {};
-        for (const [sha, hasManual] of results) {
-          next[sha] = hasManual;
+        const next: Record<string, AcceptedContextSourceKind> = {};
+        for (const [sha, source] of results) {
+          next[sha] = source;
         }
-        setPersistedManualAcceptedByAsset((prev) => ({ ...prev, ...next }));
+        setAcceptedContextSourceByAsset((prev) => ({ ...prev, ...next }));
       } catch {
-        // Keep queue usable if persisted manual-status lookup fails.
+        // Keep queue usable if accepted-context-source lookup fails.
       }
     }
 
-    void loadPersistedManualAcceptance();
+    void loadPersistedAcceptedContextSource();
     return () => {
       isCancelled = true;
     };
@@ -799,33 +871,18 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     return `Landmark: ${summary.labels[0]}${summary.count > 1 ? ` +${summary.count - 1}` : ""}`;
   };
 
-  const getSelectedAssetStatus = (assetSha: string): string => {
-    if (acceptedManualAssets.has(assetSha) || persistedManualAcceptedByAsset[assetSha]) {
-      return "Accepted Manual Entry";
+  const getSelectedAssetContextStatus = (assetSha: string): string => {
+    const acceptedSource = acceptedContextSourceByAsset[assetSha];
+    if (acceptedSource && acceptedSource !== "none") {
+      return mapAcceptedContextSourceLabel(acceptedSource);
+    }
+    if (acceptedManualAssets.has(assetSha)) {
+      return mapAcceptedContextSourceLabel("manual");
     }
     if (acceptedContextAssets.has(assetSha) || (landmarkSummaryByAsset[assetSha]?.count ?? 0) > 0) {
-      return "Accepted Context";
+      return mapAcceptedContextSourceLabel("context");
     }
-    if (rejectedAssets.has(assetSha)) {
-      return "Rejected suggestions";
-    }
-    if (ignoredAssets.has(assetSha)) {
-      return "Previously scanned";
-    }
-    const runAssetResult = assetRunBySha[assetSha] ?? runResult?.asset_results.find((item) => item.asset_sha256 === assetSha);
-    if (!runAssetResult) {
-      return isPreviouslyScannedAsset(assetSha) ? "Previously scanned (not run this session)" : "Not run";
-    }
-    if (runAssetResult.status === "failed") {
-      return "Previously scanned";
-    }
-    if (runAssetResult.landmarks.length > 0 || runAssetResult.web_entities.length > 0 || runAssetResult.labels.length > 0 || runAssetResult.objects.length > 0) {
-      return runAssetResult.no_landmark ? "No landmark found" : "Suggestions available";
-    }
-    if (runAssetResult.no_landmark) {
-      return "No landmark found";
-    }
-    return "Not run";
+    return mapAcceptedContextSourceLabel("none");
   };
 
   const filteredQueueItems = useMemo(() => activeQueueItems.filter((queueItem) => {
@@ -1107,7 +1164,8 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
             {filteredQueueItems.map((queueItem) => {
               const asset = queueItem.representative;
               const previewUrl = resolveApiUrl(asset.display_url ?? asset.image_url ?? null);
-              const assetStatus = getSelectedAssetStatus(asset.asset_sha256);
+              const contextStatus = getSelectedAssetContextStatus(asset.asset_sha256);
+              const scanStatus = isPreviouslyScannedAsset(asset.asset_sha256) ? "Previously scanned" : "Not previously scanned";
               const suggestions = getReviewSuggestions(asset.asset_sha256);
               const selectedSuggestion = selectedSuggestionByAsset[asset.asset_sha256] ?? "";
               const moreContext = moreContextOptionsByAsset[asset.asset_sha256] ?? {
@@ -1138,8 +1196,8 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                     </div>
                     {queueItem.selectedCount > 1 ? <div className={styles.metaLine}>{queueItem.selectedCount} selected assets collapsed to this card.</div> : null}
                     {queueItem.canonicalUnavailable ? <div className={styles.metaLine}>Canonical representative unavailable; using selected asset.</div> : null}
-                    <div className={styles.metaLine}>Status: {assetStatus}</div>
-                    {isPreviouslyScannedAsset(asset.asset_sha256) ? <div className={styles.metaLine}>Previously scanned</div> : null}
+                    <div className={styles.metaLine}>Context: {contextStatus}</div>
+                    <div className={styles.metaLine}>Scan: {scanStatus}</div>
                     {formatLandmarkSummary(asset.asset_sha256) ? (
                       <div className={styles.metaLine}>{formatLandmarkSummary(asset.asset_sha256)}</div>
                     ) : null}
@@ -1188,16 +1246,27 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                     </div>
 
                     <div className={styles.manualEntryRow}>
-                      <label className={styles.labelInputLabel} htmlFor={`manual-label-${asset.asset_sha256}`}>Context Label</label>
+                      <label className={styles.labelInputLabel} htmlFor={`accepted-label-${asset.asset_sha256}`}>Context Label</label>
                       <input
-                        id={`manual-label-${asset.asset_sha256}`}
+                        id={`accepted-label-${asset.asset_sha256}`}
                         className={styles.labelInput}
-                        value={manualLabelByAsset[asset.asset_sha256] ?? (landmarkSummaryByAsset[asset.asset_sha256]?.labels?.[0] ?? "")}
+                        value={landmarkSummaryByAsset[asset.asset_sha256]?.labels?.[0] ?? ""}
+                        readOnly
+                        placeholder="No context accepted"
+                      />
+                    </div>
+
+                    <div className={styles.manualEntryRow}>
+                      <label className={styles.labelInputLabel} htmlFor={`manual-entry-${asset.asset_sha256}`}>Manual Context Entry</label>
+                      <input
+                        id={`manual-entry-${asset.asset_sha256}`}
+                        className={styles.labelInput}
+                        value={manualLabelByAsset[asset.asset_sha256] ?? ""}
                         onChange={(event) => {
                           const value = event.target.value;
                           setManualLabelByAsset((prev) => ({ ...prev, [asset.asset_sha256]: value }));
                         }}
-                        placeholder="Type landmark/context label"
+                        placeholder="Type manual context label"
                       />
                     </div>
 
@@ -1210,16 +1279,6 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                       >
                         Accept Selected as Context
                       </button>
-                      {!hasPreviousScan ? (
-                        <button
-                          type="button"
-                          className={styles.secondaryButton}
-                          disabled={isRunningMoreContext}
-                          onClick={() => { void handleRunLandmarkForCard(asset.asset_sha256); }}
-                        >
-                          Run Landmark Detection
-                        </button>
-                      ) : null}
                       <button
                         type="button"
                         className={styles.secondaryButton}
@@ -1242,16 +1301,6 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                       >
                         Ignore Asset
                       </button>
-                      {hasPreviousScan ? (
-                        <button
-                          type="button"
-                          className={styles.secondaryButton}
-                          disabled={isRunningMoreContext}
-                          onClick={() => { void handleForceRescan(asset.asset_sha256); }}
-                        >
-                          Force Rescan
-                        </button>
-                      ) : null}
                       <button
                         type="button"
                         className={styles.secondaryButton}
@@ -1289,8 +1338,8 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                     {showDetailsByAsset[asset.asset_sha256] ? (
                       <pre className={styles.detailsBox}>{JSON.stringify({
                         asset_sha256: asset.asset_sha256,
-                        status: assetStatus,
-                        previously_scanned: hasPreviousScan,
+                        context_status: contextStatus,
+                        scan_status: scanStatus,
                         selected_count_collapsed: queueItem.selectedCount,
                         suggestions: suggestions.map((item) => ({
                           key: item.key,
