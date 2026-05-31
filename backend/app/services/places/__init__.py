@@ -777,6 +777,7 @@ def patch_place_observation(
 def list_global_place_observations(
     db: Session,
     *,
+    asset_sha256: str | None,
     source_type: str | None,
     observation_type: str | None,
     status: str | None,
@@ -798,7 +799,11 @@ def list_global_place_observations(
     if normalized_status is not None and normalized_status not in VALID_PLACE_OBSERVATION_STATUSES:
         raise ValueError("Invalid status for place observation.")
 
+    normalized_asset_sha256 = _clean_text(asset_sha256)
+
     statement = select(PlaceObservation)
+    if normalized_asset_sha256 is not None:
+        statement = statement.where(PlaceObservation.asset_sha256 == normalized_asset_sha256)
     if normalized_source_type is not None:
         statement = statement.where(PlaceObservation.source_type == normalized_source_type)
     if normalized_observation_type is not None:

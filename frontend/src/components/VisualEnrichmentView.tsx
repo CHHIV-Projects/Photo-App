@@ -3,26 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  acceptObservationAsContext,
   createAssetContextLabel,
-  getAssetContextLabelSummaries,
-  getCollections,
   getAssetContextLabels,
+  getAssetContextLabelSummaries,
   getContextLabelPropagationPreview,
   getGlobalPlaceObservations,
   patchGlobalPlaceObservation,
-  previewVisualEnrichmentCandidates,
   propagateContextLabel,
   resolveApiUrl,
   runVisualEnrichmentGoogleVision,
 } from "@/lib/api";
 import type {
   AssetContextLabelSummary,
-  CollectionSummary,
   ContextLabelPropagationPreviewResponse,
   ContextLabelPropagationResponse,
-  PlaceObservationSummary,
-  VisualEnrichmentCandidatePreviewResponse,
   VisualEnrichmentRunResponse,
   VisualEnrichmentWorkingSetAsset,
 } from "@/types/ui-api";
@@ -34,15 +28,29 @@ interface VisualEnrichmentViewProps {
   onClearWorkingSet: () => void;
 }
 
-const STATUS_OPTIONS = ["pending", "accepted", "rejected", "ignored"] as const;
-
-type ObservationStatusFilter = (typeof STATUS_OPTIONS)[number];
-
 type ReviewSuggestion = {
   key: string;
   label: string;
   sourceType: "google_vision" | "google_vision_web";
   confidence: number | null;
+};
+
+type ObservationLandmarkSuggestion = {
+  label: string;
+  confidence: number | null;
+};
+
+type AssetObservationReviewState = {
+  hasPending: boolean;
+  hasAccepted: boolean;
+  hasRejected: boolean;
+  hasIgnored: boolean;
+};
+
+type QueueWorkItem = {
+  representative: VisualEnrichmentWorkingSetAsset;
+  selectedCount: number;
+  canonicalUnavailable: boolean;
 };
 
 function shortSha(value: string | null | undefined): string {
@@ -51,38 +59,17 @@ function shortSha(value: string | null | undefined): string {
 }
 
 export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAssets, onClearWorkingSet }: VisualEnrichmentViewProps) {
-  const [statusFilter, setStatusFilter] = useState<ObservationStatusFilter>("pending");
-  const [observations, setObservations] = useState<PlaceObservationSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [updatingObservationId, setUpdatingObservationId] = useState<number | null>(null);
-  const [expandedObservationIds, setExpandedObservationIds] = useState<Set<number>>(new Set());
-  const [contextLabelsByAsset, setContextLabelsByAsset] = useState<Record<string, AssetContextLabelSummary[]>>({});
-  const [labelDraftByObservation, setLabelDraftByObservation] = useState<Record<number, string>>({});
   const [propagationPreview, setPropagationPreview] = useState<ContextLabelPropagationPreviewResponse | null>(null);
   const [selectedPropagationTargets, setSelectedPropagationTargets] = useState<Set<string>>(new Set());
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isPropagating, setIsPropagating] = useState(false);
   const [propagationResult, setPropagationResult] = useState<ContextLabelPropagationResponse | null>(null);
-  const [collections, setCollections] = useState<CollectionSummary[]>([]);
-  const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
-  const [canonicalOnly, setCanonicalOnly] = useState(true);
-  const [excludeExistingObservations, setExcludeExistingObservations] = useState(true);
-  const [excludeExistingContextLabels, setExcludeExistingContextLabels] = useState(true);
-  const [candidatePreview, setCandidatePreview] = useState<VisualEnrichmentCandidatePreviewResponse | null>(null);
-  const [previewSelection, setPreviewSelection] = useState<Set<string>>(new Set());
-  const [candidateSource, setCandidateSource] = useState<"selected" | "collection">("collection");
-  const [showCollectionSource, setShowCollectionSource] = useState(false);
-  const [isCandidatePreviewLoading, setIsCandidatePreviewLoading] = useState(false);
   const [isRunningCandidates, setIsRunningCandidates] = useState(false);
   const [runResult, setRunResult] = useState<VisualEnrichmentRunResponse | null>(null);
   const [runLiveMode, setRunLiveMode] = useState(true);
   const [runUseMockProvider, setRunUseMockProvider] = useState(false);
-  const [runFeatureLandmark, setRunFeatureLandmark] = useState(true);
-  const [runFeatureWeb, setRunFeatureWeb] = useState(false);
-  const [runFeatureLabel, setRunFeatureLabel] = useState(false);
-  const [runFeatureObject, setRunFeatureObject] = useState(false);
-  const [showAdvancedDiagnostics, setShowAdvancedDiagnostics] = useState(false);
   const [showDeveloperControls, setShowDeveloperControls] = useState(false);
   const [landmarkSummaryByAsset, setLandmarkSummaryByAsset] = useState<Record<string, { labels: string[]; count: number }>>({});
   const [assetRunBySha, setAssetRunBySha] = useState<Record<string, VisualEnrichmentRunResponse["asset_results"][number]>>({});
@@ -92,52 +79,22 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
   const [rejectedAssets, setRejectedAssets] = useState<Set<string>>(new Set());
   const [runningMoreContextByAsset, setRunningMoreContextByAsset] = useState<Record<string, boolean>>({});
   const [showMoreContextByAsset, setShowMoreContextByAsset] = useState<Record<string, boolean>>({});
+  const [showDetailsByAsset, setShowDetailsByAsset] = useState<Record<string, boolean>>({});
   const [moreContextOptionsByAsset, setMoreContextOptionsByAsset] = useState<
     Record<string, { landmark: boolean; web: boolean; label: boolean; object: boolean }>
   >({});
-
-  const loadObservations = async (nextStatus: ObservationStatusFilter) => {
-    setIsLoading(true);
-    setErrorMessage("");
-    try {
-      const response = await getGlobalPlaceObservations({
-        sourceType: "google_vision",
-        observationType: "landmark",
-        status: nextStatus,
-        limit: 200,
-        offset: 0,
-      });
-      setObservations(response.items);
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to load landmark/context candidates");
-      setObservations([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const loadContextLabels = async () => {
-    try {
-      const response = await getAssetContextLabels({
-        contextType: "landmark",
-        status: "active",
-        limit: 500,
-        offset: 0,
-      });
-      const grouped: Record<string, AssetContextLabelSummary[]> = {};
-      for (const item of response.items) {
-        grouped[item.asset_sha256] = grouped[item.asset_sha256] ?? [];
-        grouped[item.asset_sha256].push(item);
-      }
-      setContextLabelsByAsset(grouped);
-    } catch {
-      // Keep candidate loading resilient if context-label list fetch fails.
-    }
-  };
-
-  const upsertObservation = (updated: PlaceObservationSummary) => {
-    setObservations((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-  };
+  const [applyToDuplicateGroupByAsset, setApplyToDuplicateGroupByAsset] = useState<Record<string, boolean>>({});
+  const [dismissedQueueAssets, setDismissedQueueAssets] = useState<Set<string>>(new Set());
+  const [previouslyScannedByAsset, setPreviouslyScannedByAsset] = useState<Record<string, boolean>>({});
+  const [observationReviewStateByAsset, setObservationReviewStateByAsset] = useState<Record<string, AssetObservationReviewState>>({});
+  const [landmarkObservationSuggestionsByAsset, setLandmarkObservationSuggestionsByAsset] = useState<Record<string, ObservationLandmarkSuggestion[]>>({});
+  const [sessionScannedAssets, setSessionScannedAssets] = useState<Set<string>>(new Set());
+  const [acceptedManualAssets, setAcceptedManualAssets] = useState<Set<string>>(new Set());
+  const [acceptedContextAssets, setAcceptedContextAssets] = useState<Set<string>>(new Set());
+  const [persistedManualAcceptedByAsset, setPersistedManualAcceptedByAsset] = useState<Record<string, boolean>>({});
+  const [hidePreviouslyRejected, setHidePreviouslyRejected] = useState(false);
+  const [queueCardFilter, setQueueCardFilter] = useState<"all" | "with_suggestions" | "without_suggestions">("all");
+  const [suggestionReviewFilter, setSuggestionReviewFilter] = useState<"all" | "pending" | "reviewed">("all");
 
   const mergeRunAssets = (result: VisualEnrichmentRunResponse) => {
     setAssetRunBySha((prev) => {
@@ -150,17 +107,38 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
   };
 
   const getReviewSuggestions = (assetSha256: string): ReviewSuggestion[] => {
+    const seen = new Set<string>();
+    const items: ReviewSuggestion[] = [];
+    const observationSuggestions = landmarkObservationSuggestionsByAsset[assetSha256] ?? [];
+    for (const observationSuggestion of observationSuggestions) {
+      const normalized = observationSuggestion.label.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      items.push({
+        key: `observation_landmark:${normalized}`,
+        label: `Landmark: ${observationSuggestion.label}`,
+        sourceType: "google_vision",
+        confidence: observationSuggestion.confidence,
+      });
+    }
+
     const runAsset = assetRunBySha[assetSha256];
     if (!runAsset) {
-      return [];
+      return items;
     }
-    const items: ReviewSuggestion[] = [];
     for (const landmark of runAsset.landmarks) {
       if (!landmark.description) {
         continue;
       }
+      const normalized = landmark.description.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
       items.push({
-        key: `landmark:${landmark.description}`,
+        key: `landmark:${normalized}`,
         label: `Landmark: ${landmark.description}`,
         sourceType: "google_vision",
         confidence: landmark.score,
@@ -191,77 +169,6 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     return items;
   };
 
-  const removeObservation = (observationId: number) => {
-    setObservations((prev) => prev.filter((item) => item.id !== observationId));
-  };
-
-  const handleStatusUpdate = async (
-    observationId: number,
-    status: "accepted" | "rejected" | "ignored",
-  ) => {
-    setUpdatingObservationId(observationId);
-    setErrorMessage("");
-    try {
-      const updated = await patchGlobalPlaceObservation(observationId, { status });
-      if (statusFilter === "pending" && updated.status !== "pending") {
-        removeObservation(observationId);
-      } else {
-        upsertObservation(updated);
-      }
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to update candidate status");
-    } finally {
-      setUpdatingObservationId(null);
-    }
-  };
-
-  const handleAcceptAsContext = async (observation: PlaceObservationSummary) => {
-    setUpdatingObservationId(observation.id);
-    setErrorMessage("");
-    try {
-      const draft = labelDraftByObservation[observation.id]?.trim();
-      const response = await acceptObservationAsContext(observation.id, {
-        label: draft || undefined,
-      });
-      if (statusFilter === "pending" && response.observation_status !== "pending") {
-        removeObservation(observation.id);
-      } else {
-        upsertObservation({
-          ...observation,
-          status: response.observation_status,
-        });
-      }
-
-      setContextLabelsByAsset((prev) => {
-        const existingForAsset = prev[response.context_label.asset_sha256] ?? [];
-        const alreadyThere = existingForAsset.some((item) => item.id === response.context_label.id);
-        return {
-          ...prev,
-          [response.context_label.asset_sha256]: alreadyThere
-            ? existingForAsset
-            : [response.context_label, ...existingForAsset],
-        };
-      });
-      setLandmarkSummaryByAsset((prev) => {
-        const existing = prev[response.context_label.asset_sha256];
-        const existingLabels = existing?.labels ?? [];
-        if (existingLabels.includes(response.context_label.label)) {
-          return prev;
-        }
-        return {
-          ...prev,
-          [response.context_label.asset_sha256]: {
-            labels: [response.context_label.label, ...existingLabels],
-            count: (existing?.count ?? 0) + 1,
-          },
-        };
-      });
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to accept candidate as context");
-    } finally {
-      setUpdatingObservationId(null);
-    }
-  };
 
   const openPropagationPreview = async (label: AssetContextLabelSummary) => {
     setIsPreviewLoading(true);
@@ -310,7 +217,6 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
         target_asset_sha256s: targetList,
       });
       setPropagationResult(result);
-      await loadContextLabels();
       setPropagationPreview(null);
       setSelectedPropagationTargets(new Set());
     } catch (err) {
@@ -320,89 +226,37 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     }
   };
 
-  const loadCollections = async () => {
-    try {
-      const response = await getCollections();
-      setCollections(response.items);
-      if (response.items.length > 0) {
-        setSelectedCollectionId((prev) => prev ?? response.items[0].collection_id);
-      }
-    } catch {
-      // Keep remaining visual enrichment workflows available if collection list fails.
+  const isPreviouslyScannedAsset = (assetSha256: string): boolean => {
+    if (sessionScannedAssets.has(assetSha256)) {
+      return true;
     }
-  };
-
-  const handlePreviewCandidates = async () => {
-    if (!selectedCollectionId) {
-      setErrorMessage("Choose a collection before previewing candidates.");
-      return;
+    if (previouslyScannedByAsset[assetSha256]) {
+      return true;
     }
-
-    setIsCandidatePreviewLoading(true);
-    setErrorMessage("");
-    setRunResult(null);
-
-    try {
-      const preview = await previewVisualEnrichmentCandidates({
-        pool_type: "collection",
-        pool_id: selectedCollectionId,
-        canonical_only: canonicalOnly,
-        exclude_existing_observations: excludeExistingObservations,
-        exclude_existing_context_labels: excludeExistingContextLabels,
-        limit: 50,
-      });
-      setCandidatePreview(preview);
-      setPreviewSelection(new Set(preview.assets.map((item) => item.asset_sha256)));
-    } catch (err) {
-      setCandidatePreview(null);
-      setPreviewSelection(new Set());
-      setErrorMessage(err instanceof Error ? err.message : "Failed to preview candidates");
-    } finally {
-      setIsCandidatePreviewLoading(false);
+    if ((landmarkSummaryByAsset[assetSha256]?.count ?? 0) > 0) {
+      return true;
     }
-  };
-
-  const togglePreviewCandidate = (assetSha256: string) => {
-    setPreviewSelection((prev) => {
-      const next = new Set(prev);
-      if (next.has(assetSha256)) {
-        next.delete(assetSha256);
-      } else {
-        next.add(assetSha256);
-      }
-      return next;
-    });
+    if (assetRunBySha[assetSha256] !== undefined) {
+      return true;
+    }
+    return false;
   };
 
   const handleRunCandidates = async () => {
-    const useSelectedAssets = selectedWorkingSetAssets.length > 0 || candidateSource === "selected";
-    const assetSha256s = useSelectedAssets
-      ? selectedWorkingSetAssets.map((item) => item.asset_sha256)
-      : Array.from(previewSelection);
-
-    if (!useSelectedAssets && !candidatePreview) {
-      setErrorMessage("Preview candidates before running.");
-      return;
-    }
+    const queueAssetShas = activeQueueItems
+      .map((item) => item.representative.asset_sha256)
+      .filter((sha) => (landmarkSummaryByAsset[sha]?.count ?? 0) === 0)
+      .filter((sha) => !ignoredAssets.has(sha) && !rejectedAssets.has(sha))
+      .filter((sha) => !isPreviouslyScannedAsset(sha));
+    const assetSha256s = queueAssetShas;
 
     if (assetSha256s.length === 0) {
-      setErrorMessage(useSelectedAssets ? "No selected assets available to run." : "Select at least one candidate to run.");
-      return;
-    }
-
-    if (!useSelectedAssets && !runFeatureLandmark && !runFeatureWeb && !runFeatureLabel && !runFeatureObject) {
-      setErrorMessage("Enable at least one detection feature before running.");
+      setErrorMessage("No unresolved unscanned queue cards available. Use Force Rescan for previously scanned assets.");
       return;
     }
 
     if (runLiveMode) {
-      const confirmed = window.confirm(
-        useSelectedAssets
-          ? "Live mode will run landmark detection for selected assets. Continue with live run?"
-          : (runFeatureWeb
-              ? "Live mode will call Google Vision for selected assets. Web Detection may return web/entity matches and broader image-context clues. Continue with live run?"
-              : "Live mode will call Google Vision for selected assets. Continue with live run?"),
-      );
+      const confirmed = window.confirm("Live mode will run landmark detection for selected assets. Continue with live run?");
       if (!confirmed) {
         return;
       }
@@ -416,20 +270,39 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
         asset_sha256s: assetSha256s,
         live: runLiveMode,
         mock_provider: runLiveMode ? false : runUseMockProvider,
-        feature_landmark: useSelectedAssets ? true : runFeatureLandmark,
-        feature_web: useSelectedAssets ? false : runFeatureWeb,
-        feature_label: useSelectedAssets ? false : runFeatureLabel,
-        feature_object: useSelectedAssets ? false : runFeatureObject,
+        feature_landmark: true,
+        feature_web: false,
+        feature_label: false,
+        feature_object: false,
       });
       setRunResult(result);
       mergeRunAssets(result);
-      await loadObservations(statusFilter);
+      setSessionScannedAssets((prev) => {
+        const next = new Set(prev);
+        for (const sha of assetSha256s) {
+          next.add(sha);
+        }
+        return next;
+      });
     } catch (err) {
       setRunResult(null);
       setErrorMessage(err instanceof Error ? err.message : "Failed to run visual enrichment candidates");
     } finally {
       setIsRunningCandidates(false);
     }
+  };
+
+  const dismissQueueCard = (assetSha256: string) => {
+    setDismissedQueueAssets((prev) => {
+      const next = new Set(prev);
+      next.add(assetSha256);
+      return next;
+    });
+  };
+
+  const handleClearQueue = () => {
+    setDismissedQueueAssets(new Set(normalizedQueue.map((item) => item.representative.asset_sha256)));
+    onClearWorkingSet();
   };
 
   const ensureMoreContextOptions = (assetSha256: string) => {
@@ -481,11 +354,140 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
         feature_object: options.object,
       });
       mergeRunAssets(result);
-      await loadObservations(statusFilter);
+      if (options.landmark) {
+        setSessionScannedAssets((prev) => new Set(prev).add(assetSha256));
+      }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to run more context for asset");
     } finally {
       setRunningMoreContextByAsset((prev) => ({ ...prev, [assetSha256]: false }));
+    }
+  };
+
+  const handleRunLandmarkForCard = async (assetSha256: string) => {
+    if (runLiveMode) {
+      const confirmed = window.confirm("Live mode will run landmark detection for this asset. Continue?");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setRunningMoreContextByAsset((prev) => ({ ...prev, [assetSha256]: true }));
+    setErrorMessage("");
+    try {
+      const result = await runVisualEnrichmentGoogleVision({
+        asset_sha256s: [assetSha256],
+        live: runLiveMode,
+        mock_provider: runLiveMode ? false : runUseMockProvider,
+        feature_landmark: true,
+        feature_web: false,
+        feature_label: false,
+        feature_object: false,
+      });
+      mergeRunAssets(result);
+      setSessionScannedAssets((prev) => new Set(prev).add(assetSha256));
+      setPreviouslyScannedByAsset((prev) => ({ ...prev, [assetSha256]: true }));
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to run landmark detection for asset");
+    } finally {
+      setRunningMoreContextByAsset((prev) => ({ ...prev, [assetSha256]: false }));
+    }
+  };
+
+  const handleForceRescan = async (assetSha256: string) => {
+    if (runLiveMode) {
+      const confirmed = window.confirm("Force Rescan will rerun landmark detection for this asset. Continue?");
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setRunningMoreContextByAsset((prev) => ({ ...prev, [assetSha256]: true }));
+    setErrorMessage("");
+    try {
+      const result = await runVisualEnrichmentGoogleVision({
+        asset_sha256s: [assetSha256],
+        live: runLiveMode,
+        mock_provider: runLiveMode ? false : runUseMockProvider,
+        feature_landmark: true,
+        feature_web: false,
+        feature_label: false,
+        feature_object: false,
+      });
+      mergeRunAssets(result);
+      setSessionScannedAssets((prev) => new Set(prev).add(assetSha256));
+      setPreviouslyScannedByAsset((prev) => ({ ...prev, [assetSha256]: true }));
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to force rescan asset");
+    } finally {
+      setRunningMoreContextByAsset((prev) => ({ ...prev, [assetSha256]: false }));
+    }
+  };
+
+  const handleRejectOrIgnoreCard = async (assetSha256: string, status: "rejected" | "ignored") => {
+    setUpdatingObservationId(-1);
+    setErrorMessage("");
+    try {
+      const response = await getGlobalPlaceObservations({
+        assetSha256: assetSha256,
+        sourceType: "google_vision",
+        observationType: "landmark",
+        limit: 200,
+        offset: 0,
+      });
+      const pendingItems = response.items.filter((item) => item.status === "pending");
+      if (pendingItems.length > 0) {
+        await Promise.all(pendingItems.map((item) => patchGlobalPlaceObservation(item.id, { status })));
+      }
+
+      if (status === "rejected") {
+        setRejectedAssets((prev) => new Set(prev).add(assetSha256));
+        setIgnoredAssets((prev) => {
+          const next = new Set(prev);
+          next.delete(assetSha256);
+          return next;
+        });
+      } else {
+        setIgnoredAssets((prev) => new Set(prev).add(assetSha256));
+        setRejectedAssets((prev) => {
+          const next = new Set(prev);
+          next.delete(assetSha256);
+          return next;
+        });
+      }
+
+      setSessionScannedAssets((prev) => new Set(prev).add(assetSha256));
+      setPreviouslyScannedByAsset((prev) => ({ ...prev, [assetSha256]: true }));
+
+      dismissQueueCard(assetSha256);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : `Failed to mark card ${status}`);
+    } finally {
+      setUpdatingObservationId(null);
+    }
+  };
+
+  const maybePropagateAcceptedLabel = async (assetSha256: string, labelId: number) => {
+    const shouldApply = applyToDuplicateGroupByAsset[assetSha256] ?? true;
+    if (!shouldApply) {
+      return;
+    }
+
+    try {
+      const preview = await getContextLabelPropagationPreview(labelId);
+      if (preview.targets.length === 0) {
+        return;
+      }
+      const targetShas = preview.targets
+        .filter((item) => item.selectable && !item.already_has_label)
+        .map((item) => item.asset_sha256);
+      if (targetShas.length === 0) {
+        return;
+      }
+      const result = await propagateContextLabel(labelId, { target_asset_sha256s: targetShas });
+      setPropagationResult(result);
+    } catch {
+      setErrorMessage("Context accepted, but duplicate-group propagation partially failed.");
     }
   };
 
@@ -535,6 +537,14 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
         next.delete(assetSha256);
         return next;
       });
+      setAcceptedContextAssets((prev) => new Set(prev).add(assetSha256));
+      setAcceptedManualAssets((prev) => {
+        const next = new Set(prev);
+        next.delete(assetSha256);
+        return next;
+      });
+      await maybePropagateAcceptedLabel(assetSha256, response.context_label.id);
+      dismissQueueCard(assetSha256);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to accept selected context suggestion");
     } finally {
@@ -583,6 +593,14 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
         next.delete(assetSha256);
         return next;
       });
+      setAcceptedManualAssets((prev) => new Set(prev).add(assetSha256));
+      setAcceptedContextAssets((prev) => {
+        const next = new Set(prev);
+        next.delete(assetSha256);
+        return next;
+      });
+      await maybePropagateAcceptedLabel(assetSha256, response.context_label.id);
+      dismissQueueCard(assetSha256);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to accept manual context label");
     } finally {
@@ -590,29 +608,52 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     }
   };
 
-  useEffect(() => {
-    void loadObservations(statusFilter);
-  }, [statusFilter]);
-
-  useEffect(() => {
-    void loadContextLabels();
-  }, []);
-
-  useEffect(() => {
-    void loadCollections();
-  }, []);
+  const workingSetSignature = useMemo(
+    () => selectedWorkingSetAssets.map((asset) => asset.asset_sha256).join("|"),
+    [selectedWorkingSetAssets],
+  );
 
   useEffect(() => {
     if (selectedWorkingSetAssets.length > 0) {
-      setCandidateSource("selected");
-      setShowCollectionSource(false);
-    } else if (candidateSource === "selected") {
-      setCandidateSource("collection");
+      setDismissedQueueAssets(new Set());
     }
-  }, [selectedWorkingSetAssets, candidateSource]);
+  }, [workingSetSignature, selectedWorkingSetAssets.length]);
+
+  const normalizedQueue = useMemo<QueueWorkItem[]>(() => {
+    const singletonItems: QueueWorkItem[] = [];
+    const groupedByDuplicate: Record<number, VisualEnrichmentWorkingSetAsset[]> = {};
+    for (const asset of selectedWorkingSetAssets) {
+      if (asset.duplicate_group_id === null) {
+        singletonItems.push({
+          representative: asset,
+          selectedCount: 1,
+          canonicalUnavailable: false,
+        });
+        continue;
+      }
+      groupedByDuplicate[asset.duplicate_group_id] = groupedByDuplicate[asset.duplicate_group_id] ?? [];
+      groupedByDuplicate[asset.duplicate_group_id].push(asset);
+    }
+
+    const groupedItems = Object.values(groupedByDuplicate).map((group) => {
+      const canonical = group.find((item) => item.is_canonical);
+      return {
+        representative: canonical ?? group[0],
+        selectedCount: group.length,
+        canonicalUnavailable: canonical === undefined,
+      };
+    });
+
+    return [...singletonItems, ...groupedItems];
+  }, [selectedWorkingSetAssets]);
+
+  const activeQueueItems = useMemo(
+    () => normalizedQueue.filter((item) => !dismissedQueueAssets.has(item.representative.asset_sha256)),
+    [normalizedQueue, dismissedQueueAssets],
+  );
 
   useEffect(() => {
-    const shas = selectedWorkingSetAssets.map((item) => item.asset_sha256);
+    const shas = normalizedQueue.map((item) => item.representative.asset_sha256);
     if (shas.length === 0) {
       return;
     }
@@ -637,18 +678,118 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     return () => {
       isCancelled = true;
     };
-  }, [selectedWorkingSetAssets]);
+  }, [normalizedQueue]);
 
-  const candidateCountLabel = useMemo(() => {
-    const count = observations.length;
-    return `${count} ${count === 1 ? "candidate" : "candidates"}`;
-  }, [observations]);
+  useEffect(() => {
+    const shas = normalizedQueue.map((item) => item.representative.asset_sha256);
+    if (shas.length === 0) {
+      return;
+    }
+    let isCancelled = false;
 
-  const hasSelectedWorkingSet = selectedWorkingSetAssets.length > 0;
+    async function loadPersistedManualAcceptance(): Promise<void> {
+      try {
+        const results = await Promise.all(shas.map(async (sha) => {
+          const response = await getAssetContextLabels({
+            assetSha256: sha,
+            contextType: "landmark",
+            status: "active",
+            limit: 200,
+            offset: 0,
+          });
+          const hasManual = response.items.some((item) => item.source_type === "user");
+          return [sha, hasManual] as const;
+        }));
 
-  const runAssetCount = candidateSource === "selected"
-    ? selectedWorkingSetAssets.length
-    : previewSelection.size;
+        if (isCancelled) {
+          return;
+        }
+
+        const next: Record<string, boolean> = {};
+        for (const [sha, hasManual] of results) {
+          next[sha] = hasManual;
+        }
+        setPersistedManualAcceptedByAsset((prev) => ({ ...prev, ...next }));
+      } catch {
+        // Keep queue usable if persisted manual-status lookup fails.
+      }
+    }
+
+    void loadPersistedManualAcceptance();
+    return () => {
+      isCancelled = true;
+    };
+  }, [normalizedQueue]);
+
+  useEffect(() => {
+    const shas = normalizedQueue.map((item) => item.representative.asset_sha256);
+    if (shas.length === 0) {
+      return;
+    }
+    let isCancelled = false;
+
+    async function loadPreviouslyScanned(): Promise<void> {
+      try {
+        const results = await Promise.all(shas.map(async (sha) => {
+          const response = await getGlobalPlaceObservations({
+            assetSha256: sha,
+            sourceType: "google_vision",
+            observationType: "landmark",
+            limit: 200,
+            offset: 0,
+          });
+          const hasPending = response.items.some((item) => item.status === "pending");
+          const hasAccepted = response.items.some((item) => item.status === "accepted");
+          const hasRejected = response.items.some((item) => item.status === "rejected");
+          const hasIgnored = response.items.some((item) => item.status === "ignored");
+          const pendingSuggestions = response.items
+            .filter((item) => item.status === "pending")
+            .map((item) => ({
+              label: (item.raw_label ?? "").trim(),
+              confidence: item.confidence,
+            }))
+            .filter((item) => item.label.length > 0);
+          return [sha, {
+            scanned: response.count > 0,
+            hasPending,
+            hasAccepted,
+            hasRejected,
+            hasIgnored,
+            pendingSuggestions,
+          }] as const;
+        }));
+
+        if (isCancelled) {
+          return;
+        }
+        const next: Record<string, boolean> = {};
+        const nextReviewState: Record<string, AssetObservationReviewState> = {};
+        const nextLandmarkSuggestions: Record<string, ObservationLandmarkSuggestion[]> = {};
+        for (const [sha, state] of results) {
+          next[sha] = state.scanned;
+          nextReviewState[sha] = {
+            hasPending: state.hasPending,
+            hasAccepted: state.hasAccepted,
+            hasRejected: state.hasRejected,
+            hasIgnored: state.hasIgnored,
+          };
+          nextLandmarkSuggestions[sha] = state.pendingSuggestions;
+        }
+        setPreviouslyScannedByAsset((prev) => ({ ...prev, ...next }));
+        setObservationReviewStateByAsset((prev) => ({ ...prev, ...nextReviewState }));
+        setLandmarkObservationSuggestionsByAsset((prev) => ({ ...prev, ...nextLandmarkSuggestions }));
+      } catch {
+        // Keep queue usable even if scanned-status lookup fails.
+      }
+    }
+
+    void loadPreviouslyScanned();
+    return () => {
+      isCancelled = true;
+    };
+  }, [normalizedQueue]);
+
+  const hasSelectedWorkingSet = normalizedQueue.length > 0;
 
   const formatLandmarkSummary = (assetSha: string): string | null => {
     const summary = landmarkSummaryByAsset[assetSha];
@@ -659,21 +800,24 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
   };
 
   const getSelectedAssetStatus = (assetSha: string): string => {
-    if ((landmarkSummaryByAsset[assetSha]?.count ?? 0) > 0) {
-      return "Accepted context";
+    if (acceptedManualAssets.has(assetSha) || persistedManualAcceptedByAsset[assetSha]) {
+      return "Accepted Manual Entry";
+    }
+    if (acceptedContextAssets.has(assetSha) || (landmarkSummaryByAsset[assetSha]?.count ?? 0) > 0) {
+      return "Accepted Context";
     }
     if (rejectedAssets.has(assetSha)) {
-      return "Reviewed / rejected";
+      return "Rejected suggestions";
     }
     if (ignoredAssets.has(assetSha)) {
-      return "Reviewed / ignored";
+      return "Previously scanned";
     }
     const runAssetResult = assetRunBySha[assetSha] ?? runResult?.asset_results.find((item) => item.asset_sha256 === assetSha);
     if (!runAssetResult) {
-      return "Not run";
+      return isPreviouslyScannedAsset(assetSha) ? "Previously scanned (not run this session)" : "Not run";
     }
     if (runAssetResult.status === "failed") {
-      return "Reviewed / ignored";
+      return "Previously scanned";
     }
     if (runAssetResult.landmarks.length > 0 || runAssetResult.web_entities.length > 0 || runAssetResult.labels.length > 0 || runAssetResult.objects.length > 0) {
       return runAssetResult.no_landmark ? "No landmark found" : "Suggestions available";
@@ -684,202 +828,45 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
     return "Not run";
   };
 
+  const filteredQueueItems = useMemo(() => activeQueueItems.filter((queueItem) => {
+    const assetSha = queueItem.representative.asset_sha256;
+    const runAsset = assetRunBySha[assetSha] ?? runResult?.asset_results.find((item) => item.asset_sha256 === assetSha);
+    const hasLandmarkFromRun = (runAsset?.landmarks.length ?? 0) > 0;
+    const hasPendingLandmarkSuggestions = (landmarkObservationSuggestionsByAsset[assetSha]?.length ?? 0) > 0;
+    const hasLandmarkSuggestions = hasLandmarkFromRun || hasPendingLandmarkSuggestions;
+    const hasAcceptedContext = (landmarkSummaryByAsset[assetSha]?.count ?? 0) > 0 || acceptedContextAssets.has(assetSha) || acceptedManualAssets.has(assetSha);
+    const reviewState = observationReviewStateByAsset[assetSha] ?? {
+      hasPending: false,
+      hasAccepted: false,
+      hasRejected: false,
+      hasIgnored: false,
+    };
+    const hasRejectedState = rejectedAssets.has(assetSha) || reviewState.hasRejected;
+    const hasReviewedState = hasAcceptedContext || hasRejectedState || reviewState.hasAccepted;
+    const hasPendingState = !hasReviewedState;
+
+    if (hidePreviouslyRejected && hasRejectedState) {
+      return false;
+    }
+
+    if (queueCardFilter === "with_suggestions" && !hasLandmarkSuggestions) {
+      return false;
+    }
+    if (queueCardFilter === "without_suggestions" && hasLandmarkSuggestions) {
+      return false;
+    }
+
+    if (suggestionReviewFilter === "all") {
+      return true;
+    }
+    if (suggestionReviewFilter === "pending") {
+      return hasPendingState;
+    }
+    return hasReviewedState;
+  }), [activeQueueItems, assetRunBySha, runResult, landmarkObservationSuggestionsByAsset, landmarkSummaryByAsset, acceptedContextAssets, acceptedManualAssets, rejectedAssets, observationReviewStateByAsset, queueCardFilter, suggestionReviewFilter, hidePreviouslyRejected]);
+
   return (
     <div className={styles.container}>
-      {!hasSelectedWorkingSet && (
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <h2 className={styles.sectionTitle}>Landmark / Context Candidates</h2>
-            <p className={styles.sectionSubtitle}>
-              Review Google Vision landmark/context candidates without changing Place assignment.
-            </p>
-          </div>
-          <div className={styles.headerControls}>
-            <label className={styles.filterLabel}>
-              Status
-              <select
-                className={styles.filterSelect}
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value as ObservationStatusFilter)}
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            </label>
-            <span className={styles.countBadge}>{candidateCountLabel}</span>
-          </div>
-        </div>
-
-        {isLoading && <p className={styles.loading}>Loading candidates...</p>}
-        {errorMessage && <p className={styles.error}>{errorMessage}</p>}
-        {propagationResult && (
-          <p className={styles.success}>
-            Added: {propagationResult.added_count} | Already present: {propagationResult.already_present_count} |
-            Skipped: {propagationResult.skipped_count} | Failed: {propagationResult.failed_count}
-          </p>
-        )}
-        {!isLoading && observations.length === 0 && (
-          <p className={styles.empty}>No Google Vision landmark/context candidates in this status.</p>
-        )}
-
-        <div className={styles.candidateList}>
-          {observations.map((observation) => {
-            const isExpanded = expandedObservationIds.has(observation.id);
-            const assetSha = observation.asset?.asset_sha256 ?? observation.asset_sha256;
-            const displayName = observation.asset?.filename?.trim() || shortSha(assetSha);
-            const previewUrl = resolveApiUrl(observation.asset?.display_url ?? observation.asset?.image_url ?? null);
-            const candidateLabel = observation.raw_label
-              || observation.formatted_address
-              || [observation.city, observation.state, observation.country].filter(Boolean).join(", ")
-              || "(No suggested context label)";
-            const existingContextLabels = assetSha ? (contextLabelsByAsset[assetSha] ?? []) : [];
-            const labelDraft = labelDraftByObservation[observation.id] ?? candidateLabel;
-
-            return (
-              <article key={observation.id} className={styles.candidateCard}>
-                <div className={styles.assetMetaRow}>
-                  <div className={styles.thumbnailShell}>
-                    {previewUrl ? (
-                      <img src={previewUrl} alt={displayName} className={styles.thumbnail} />
-                    ) : (
-                      <div className={styles.thumbnailPlaceholder}>N/A</div>
-                    )}
-                  </div>
-                  <div className={styles.assetTextCol}>
-                    <div className={styles.assetName}>{displayName}</div>
-                    <div className={styles.badgeRow}>
-                      <span className={styles.badge}>source: {observation.source_type}</span>
-                      <span className={styles.badge}>status: {observation.status}</span>
-                      <span className={styles.badge}>confidence: {observation.confidence ?? "n/a"}</span>
-                      {observation.linked_place && (
-                        <span className={styles.badge}>linked place: {observation.linked_place.display_label}</span>
-                      )}
-                    </div>
-                    {observation.created_at_utc && (
-                      <div className={styles.metaLine}>Created: {new Date(observation.created_at_utc).toLocaleString()}</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className={styles.candidateLabel}>Suggested context: {candidateLabel}</div>
-
-                <div className={styles.labelInputRow}>
-                  <label className={styles.labelInputLabel} htmlFor={`context-label-${observation.id}`}>
-                    Context label
-                  </label>
-                  <input
-                    id={`context-label-${observation.id}`}
-                    className={styles.labelInput}
-                    value={labelDraft}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setLabelDraftByObservation((prev) => ({
-                        ...prev,
-                        [observation.id]: value,
-                      }));
-                    }}
-                    disabled={updatingObservationId === observation.id}
-                  />
-                </div>
-
-                {existingContextLabels.length > 0 && (
-                  <div className={styles.existingContextRow}>
-                    <span className={styles.existingContextLabel}>Existing context:</span>
-                    <div className={styles.existingContextBadges}>
-                      {existingContextLabels.map((item) => (
-                        <div key={item.id} className={styles.contextChip}>
-                          <span className={styles.badge}>
-                            {item.context_type}: {item.label}
-                          </span>
-                          {item.context_type === "landmark" && item.status === "active" && item.duplicate_group_id ? (
-                            <button
-                              type="button"
-                              className={styles.inlineActionButton}
-                              disabled={isPreviewLoading || isPropagating}
-                              onClick={() => { void openPropagationPreview(item); }}
-                            >
-                              Propagate to Duplicate Group
-                            </button>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className={styles.actionRow}>
-                  <button
-                    type="button"
-                    className={styles.primaryButton}
-                    disabled={updatingObservationId === observation.id}
-                    onClick={() => { void handleAcceptAsContext(observation); }}
-                  >
-                    Accept as Context
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.dangerButton}
-                    disabled={updatingObservationId === observation.id}
-                    onClick={() => { void handleStatusUpdate(observation.id, "rejected"); }}
-                  >
-                    Reject
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.secondaryButton}
-                    disabled={updatingObservationId === observation.id}
-                    onClick={() => { void handleStatusUpdate(observation.id, "ignored"); }}
-                  >
-                    Ignore
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.secondaryButton}
-                    onClick={() => {
-                      setExpandedObservationIds((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(observation.id)) {
-                          next.delete(observation.id);
-                        } else {
-                          next.add(observation.id);
-                        }
-                        return next;
-                      });
-                    }}
-                  >
-                    {isExpanded ? "Hide Details" : "Details"}
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.secondaryButton}
-                    disabled={!assetSha}
-                    onClick={() => {
-                      if (assetSha) {
-                        onOpenPhoto(assetSha);
-                      }
-                    }}
-                  >
-                    Open Asset
-                  </button>
-                </div>
-
-                {isExpanded && (
-                  <pre className={styles.detailsBox}>{JSON.stringify({
-                    observation_id: observation.id,
-                    observation_type: observation.observation_type,
-                    latitude: observation.latitude,
-                    longitude: observation.longitude,
-                    raw_response_json: observation.raw_response_json,
-                  }, null, 2)}</pre>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      </section>
-      )}
 
       {!hasSelectedWorkingSet && propagationPreview && (
         <section className={styles.section}>
@@ -956,9 +943,11 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
       )}
 
       <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Candidate Selection</h3>
+        <h3 className={styles.sectionTitle}>Visual Enrichment Work Queue</h3>
         <p className={styles.sectionSubtitle}>
-          Photo Review selected assets are the primary review workflow. Collection pool is available as a secondary source.
+          {hasSelectedWorkingSet
+            ? "Selected photos are normalized into one active queue card per work item."
+            : "No active selected queue."}
         </p>
         {errorMessage && <p className={styles.error}>{errorMessage}</p>}
         {propagationResult && (
@@ -967,274 +956,122 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
             Skipped: {propagationResult.skipped_count} | Failed: {propagationResult.failed_count}
           </p>
         )}
+        {runResult && (
+          <p className={styles.success}>
+            Mode: {runResult.mode} | Requested: {runResult.requested_count} | Processed: {runResult.processed_count} |
+            Created pending observations: {runResult.observations_created_count} | No landmark: {runResult.no_landmark_count} |
+            Failed: {runResult.failed_count}
+          </p>
+        )}
 
         {hasSelectedWorkingSet && (
           <>
             <div className={styles.previewSummary}>
-              <span className={styles.badge}>Working set: {selectedWorkingSetAssets.length}</span>
+              <span className={styles.badge}>Active cards: {activeQueueItems.length}</span>
+              {normalizedQueue.length < selectedWorkingSetAssets.length ? (
+                <span className={styles.badge}>Collapsed {selectedWorkingSetAssets.length} selected assets to {normalizedQueue.length} queue items</span>
+              ) : null}
               <button
                 type="button"
                 className={styles.primaryButton}
-                disabled={isRunningCandidates || selectedWorkingSetAssets.length === 0}
+                disabled={isRunningCandidates || activeQueueItems.length === 0}
                 onClick={() => { void handleRunCandidates(); }}
               >
-                {isRunningCandidates ? "Running..." : `Run Landmark Detection (${selectedWorkingSetAssets.length})`}
+                {isRunningCandidates ? "Running..." : "Run Landmark Detection"}
               </button>
-              <button type="button" className={styles.secondaryButton} onClick={onClearWorkingSet}>
-                Clear Selected Working Set
+              <button type="button" className={styles.secondaryButton} onClick={handleClearQueue}>
+                Clear Queue
               </button>
             </div>
-            <div className={styles.workingSetList}>
-              {selectedWorkingSetAssets.map((asset) => {
-                const previewUrl = resolveApiUrl(asset.display_url ?? asset.image_url ?? null);
-                const landmarkSummary = formatLandmarkSummary(asset.asset_sha256);
-                return (
-                  <article key={asset.asset_sha256} className={styles.workingSetCard}>
-                    <div className={styles.workingSetThumbShell}>
-                      {previewUrl ? (
-                        <img src={previewUrl} alt={asset.filename} className={styles.thumbnail} />
-                      ) : (
-                        <div className={styles.thumbnailPlaceholder}>N/A</div>
-                      )}
-                    </div>
-                    <div className={styles.targetText}>
-                      <div className={styles.assetName}>{asset.filename}</div>
-                      <div className={styles.metaLine}>
-                        {shortSha(asset.asset_sha256)}
-                        {asset.is_canonical ? " | canonical" : " | duplicate"}
-                        {asset.duplicate_group_id ? ` | group #${asset.duplicate_group_id}` : ""}
-                      </div>
-                      <div className={styles.metaLine}>{getSelectedAssetStatus(asset.asset_sha256)}</div>
-                      {landmarkSummary ? <div className={styles.metaLine}>{landmarkSummary}</div> : null}
-                    </div>
-                  </article>
-                );
-              })}
+            <div className={styles.previewSummary}>
+              <span className={styles.badge}>Show:</span>
+              <button
+                type="button"
+                className={queueCardFilter === "all" ? styles.toggleButtonActive : styles.toggleButtonInactive}
+                onClick={() => setQueueCardFilter("all")}
+                aria-pressed={queueCardFilter === "all"}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                className={queueCardFilter === "with_suggestions" ? styles.toggleButtonActive : styles.toggleButtonInactive}
+                onClick={() => setQueueCardFilter("with_suggestions")}
+                aria-pressed={queueCardFilter === "with_suggestions"}
+              >
+                With landmark suggestions
+              </button>
+              <button
+                type="button"
+                className={queueCardFilter === "without_suggestions" ? styles.toggleButtonActive : styles.toggleButtonInactive}
+                onClick={() => setQueueCardFilter("without_suggestions")}
+                aria-pressed={queueCardFilter === "without_suggestions"}
+              >
+                Without landmark suggestions
+              </button>
+              <button
+                type="button"
+                className={hidePreviouslyRejected ? styles.toggleButtonActive : styles.toggleButtonInactive}
+                onClick={() => setHidePreviouslyRejected((prev) => !prev)}
+                aria-pressed={hidePreviouslyRejected}
+              >
+                {hidePreviouslyRejected ? "Show Previously Rejected" : "Hide Previously Rejected"}
+              </button>
             </div>
+            {queueCardFilter !== "all" ? (
+              <div className={styles.previewSummary}>
+                <span className={styles.badge}>Suggestion state:</span>
+                <button
+                  type="button"
+                  className={suggestionReviewFilter === "all" ? styles.toggleButtonActive : styles.toggleButtonInactive}
+                  onClick={() => setSuggestionReviewFilter("all")}
+                  aria-pressed={suggestionReviewFilter === "all"}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className={suggestionReviewFilter === "pending" ? styles.toggleButtonActive : styles.toggleButtonInactive}
+                  onClick={() => setSuggestionReviewFilter("pending")}
+                  aria-pressed={suggestionReviewFilter === "pending"}
+                >
+                  Not reviewed (pending)
+                </button>
+                <button
+                  type="button"
+                  className={suggestionReviewFilter === "reviewed" ? styles.toggleButtonActive : styles.toggleButtonInactive}
+                  onClick={() => setSuggestionReviewFilter("reviewed")}
+                  aria-pressed={suggestionReviewFilter === "reviewed"}
+                >
+                  Reviewed
+                </button>
+              </div>
+            ) : null}
+            {activeQueueItems.length === 0 ? (
+              <p className={styles.empty}>No active Visual Enrichment work items. Select photos in Photo Review and send them here to begin.</p>
+            ) : filteredQueueItems.length === 0 ? (
+              <p className={styles.empty}>No cards match current filter.</p>
+            ) : null}
           </>
         )}
 
-        {(!hasSelectedWorkingSet || showCollectionSource) && (
-          <>
-            <>
-                <div className={styles.selectionControls}>
-          <label className={styles.filterLabel}>
-            Collection
-            <select
-              className={styles.filterSelect}
-              value={selectedCollectionId ?? ""}
-              onChange={(event) => setSelectedCollectionId(Number(event.target.value) || null)}
-            >
-              {collections.length === 0 && <option value="">No collections</option>}
-              {collections.map((item) => (
-                <option key={item.collection_id} value={item.collection_id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!hasSelectedWorkingSet ? (
+            <p className={styles.empty}>No active Visual Enrichment work items. Select photos in Photo Review and send them here to begin.</p>
+          ) : null}
 
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={canonicalOnly}
-              onChange={(event) => setCanonicalOnly(event.target.checked)}
-            />
-            Canonical only
-          </label>
-
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={excludeExistingObservations}
-              onChange={(event) => setExcludeExistingObservations(event.target.checked)}
-            />
-            Exclude previously reviewed landmark observations (pending/accepted/ignored/rejected)
-          </label>
-
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={excludeExistingContextLabels}
-              onChange={(event) => setExcludeExistingContextLabels(event.target.checked)}
-            />
-            Exclude existing landmark context labels
-          </label>
-
-          <button
-            type="button"
-            className={styles.primaryButton}
-            disabled={isCandidatePreviewLoading || !selectedCollectionId}
-            onClick={() => { void handlePreviewCandidates(); }}
-          >
-            {isCandidatePreviewLoading ? "Previewing..." : "Preview Candidates"}
-          </button>
-                </div>
-
-                {candidatePreview && (
-              <>
-                <div className={styles.previewSummary}>
-                  <span className={styles.badge}>Candidates: {candidatePreview.candidate_count}</span>
-                  <span className={styles.badge}>Excluded observations: {candidatePreview.excluded_existing_observations_count}</span>
-                  <span className={styles.badge}>Excluded context labels: {candidatePreview.excluded_existing_context_labels_count}</span>
-                  <span className={styles.badge}>Run count: {candidatePreview.run_count}</span>
-                  <span className={styles.badge}>Showing: {candidatePreview.showing_count}</span>
-                </div>
-
-                <div className={styles.previewTable}>
-                  {candidatePreview.assets.map((asset) => {
-                    const checked = previewSelection.has(asset.asset_sha256);
-                    const previewUrl = resolveApiUrl(asset.display_url ?? asset.image_url ?? null);
-                    return (
-                      <label key={asset.asset_sha256} className={styles.targetRow}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={isRunningCandidates}
-                          onChange={() => togglePreviewCandidate(asset.asset_sha256)}
-                        />
-                        <div className={styles.targetThumbShell}>
-                          {previewUrl ? (
-                            <img src={previewUrl} alt={asset.filename} className={styles.thumbnail} />
-                          ) : (
-                            <div className={styles.thumbnailPlaceholder}>N/A</div>
-                          )}
-                        </div>
-                        <div className={styles.targetText}>
-                          <div className={styles.assetName}>{asset.filename}</div>
-                          <div className={styles.metaLine}>
-                            {shortSha(asset.asset_sha256)}
-                            {asset.is_canonical ? " | canonical" : " | duplicate"}
-                            {asset.duplicate_group_id ? ` | group #${asset.duplicate_group_id}` : ""}
-                            {asset.has_landmark_observation ? " | has observation" : ""}
-                            {asset.has_landmark_context_label ? " | has context label" : ""}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          className={styles.secondaryButton}
-                          disabled={isRunningCandidates}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            onOpenPhoto(asset.asset_sha256);
-                          }}
-                        >
-                          Open
-                        </button>
-                      </label>
-                    );
-                  })}
-                </div>
-              </>
-                )}
-            </>
-          </>
-        )}
-
-        {hasSelectedWorkingSet && !showCollectionSource ? (
-          <div className={styles.previewSummary}>
-            <span className={styles.badge}>Collection candidate pool is collapsed while selected assets are active.</span>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              onClick={() => {
-                setShowCollectionSource(true);
-                setCandidateSource("collection");
-              }}
-            >
-              Show Collection Candidate Pool
-            </button>
-          </div>
-        ) : null}
-
-        {hasSelectedWorkingSet && showCollectionSource ? (
-          <div className={styles.previewSummary}>
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              onClick={() => {
-                setShowCollectionSource(false);
-                setCandidateSource("selected");
-              }}
-            >
-              Hide Collection Candidate Pool
-            </button>
-          </div>
-        ) : null}
-
-        <div className={styles.runControls}>
-          <span className={styles.badge}>Mode: {runLiveMode ? "Live" : "Dry-run"}</span>
-          {!hasSelectedWorkingSet && (
-            <button
-              type="button"
-              className={styles.secondaryButton}
-              disabled={isRunningCandidates}
-              onClick={() => setShowAdvancedDiagnostics((prev) => !prev)}
-            >
-              {showAdvancedDiagnostics ? "Hide Diagnostics" : "Diagnostics"}
-            </button>
-          )}
-          <button
-            type="button"
-            className={styles.secondaryButton}
-            disabled={isRunningCandidates}
-            onClick={() => setShowDeveloperControls((prev) => !prev)}
-          >
-            {showDeveloperControls ? "Hide Developer" : "Developer Options"}
-          </button>
-
-          {!hasSelectedWorkingSet && (
-            <button
-              type="button"
-              className={styles.primaryButton}
-              disabled={isRunningCandidates || runAssetCount === 0}
-              onClick={() => { void handleRunCandidates(); }}
-            >
-              {isRunningCandidates ? "Running..." : `Run Selected (${runAssetCount})`}
-            </button>
-          )}
-        </div>
-
-        {showAdvancedDiagnostics && (
-          <div className={styles.advancedPanel}>
-            <label className={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={runFeatureLandmark}
-                onChange={(event) => setRunFeatureLandmark(event.target.checked)}
+          {hasSelectedWorkingSet ? (
+            <div className={styles.runControls}>
+              <span className={styles.badge}>Mode: {runLiveMode ? "Live" : "Dry-run"}</span>
+              <button
+                type="button"
+                className={styles.secondaryButton}
                 disabled={isRunningCandidates}
-              />
-              Landmark Detection
-            </label>
-            <label className={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={runFeatureWeb}
-                onChange={(event) => setRunFeatureWeb(event.target.checked)}
-                disabled={isRunningCandidates}
-              />
-              Web Detection
-            </label>
-            <label className={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={runFeatureLabel}
-                onChange={(event) => setRunFeatureLabel(event.target.checked)}
-                disabled={isRunningCandidates}
-              />
-              Label Diagnostics
-            </label>
-            <label className={styles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={runFeatureObject}
-                onChange={(event) => setRunFeatureObject(event.target.checked)}
-                disabled={isRunningCandidates}
-              />
-              Object Diagnostics
-            </label>
-          </div>
-        )}
+                onClick={() => setShowDeveloperControls((prev) => !prev)}
+              >
+                {showDeveloperControls ? "Hide Developer" : "Developer Options"}
+              </button>
+            </div>
+          ) : null}
 
         {showDeveloperControls && (
           <div className={styles.advancedPanel}>
@@ -1267,7 +1104,8 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
 
         {hasSelectedWorkingSet && (
           <div className={styles.assetReviewList}>
-            {selectedWorkingSetAssets.map((asset) => {
+            {filteredQueueItems.map((queueItem) => {
+              const asset = queueItem.representative;
               const previewUrl = resolveApiUrl(asset.display_url ?? asset.image_url ?? null);
               const assetStatus = getSelectedAssetStatus(asset.asset_sha256);
               const suggestions = getReviewSuggestions(asset.asset_sha256);
@@ -1279,6 +1117,8 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                 object: true,
               };
               const isRunningMoreContext = runningMoreContextByAsset[asset.asset_sha256] ?? false;
+              const hasPreviousScan = previouslyScannedByAsset[asset.asset_sha256] ?? false;
+              const hasEligibleDuplicateTargets = Boolean(asset.duplicate_group_id) && queueItem.selectedCount > 1;
 
               return (
                 <article key={asset.asset_sha256} className={styles.assetReviewCard}>
@@ -1296,9 +1136,28 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                       {asset.is_canonical ? " | canonical" : " | duplicate"}
                       {asset.duplicate_group_id ? ` | group #${asset.duplicate_group_id}` : ""}
                     </div>
+                    {queueItem.selectedCount > 1 ? <div className={styles.metaLine}>{queueItem.selectedCount} selected assets collapsed to this card.</div> : null}
+                    {queueItem.canonicalUnavailable ? <div className={styles.metaLine}>Canonical representative unavailable; using selected asset.</div> : null}
                     <div className={styles.metaLine}>Status: {assetStatus}</div>
+                    {isPreviouslyScannedAsset(asset.asset_sha256) ? <div className={styles.metaLine}>Previously scanned</div> : null}
                     {formatLandmarkSummary(asset.asset_sha256) ? (
                       <div className={styles.metaLine}>{formatLandmarkSummary(asset.asset_sha256)}</div>
+                    ) : null}
+
+                    {hasEligibleDuplicateTargets ? (
+                      <label className={styles.checkboxLabel}>
+                        <input
+                          type="checkbox"
+                          checked={applyToDuplicateGroupByAsset[asset.asset_sha256] ?? true}
+                          onChange={(event) => {
+                            setApplyToDuplicateGroupByAsset((prev) => ({
+                              ...prev,
+                              [asset.asset_sha256]: event.target.checked,
+                            }));
+                          }}
+                        />
+                        Apply to duplicate group
+                      </label>
                     ) : null}
 
                     <div className={styles.suggestionBlock}>
@@ -1329,11 +1188,11 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                     </div>
 
                     <div className={styles.manualEntryRow}>
-                      <label className={styles.labelInputLabel} htmlFor={`manual-label-${asset.asset_sha256}`}>Manual Context Label</label>
+                      <label className={styles.labelInputLabel} htmlFor={`manual-label-${asset.asset_sha256}`}>Context Label</label>
                       <input
                         id={`manual-label-${asset.asset_sha256}`}
                         className={styles.labelInput}
-                        value={manualLabelByAsset[asset.asset_sha256] ?? ""}
+                        value={manualLabelByAsset[asset.asset_sha256] ?? (landmarkSummaryByAsset[asset.asset_sha256]?.labels?.[0] ?? "")}
                         onChange={(event) => {
                           const value = event.target.value;
                           setManualLabelByAsset((prev) => ({ ...prev, [asset.asset_sha256]: value }));
@@ -1351,6 +1210,16 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                       >
                         Accept Selected as Context
                       </button>
+                      {!hasPreviousScan ? (
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          disabled={isRunningMoreContext}
+                          onClick={() => { void handleRunLandmarkForCard(asset.asset_sha256); }}
+                        >
+                          Run Landmark Detection
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className={styles.secondaryButton}
@@ -1362,31 +1231,27 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                       <button
                         type="button"
                         className={styles.dangerButton}
-                        onClick={() => {
-                          setRejectedAssets((prev) => new Set(prev).add(asset.asset_sha256));
-                          setIgnoredAssets((prev) => {
-                            const next = new Set(prev);
-                            next.delete(asset.asset_sha256);
-                            return next;
-                          });
-                        }}
+                        onClick={() => { void handleRejectOrIgnoreCard(asset.asset_sha256, "rejected"); }}
                       >
-                        Reject
+                        Reject Suggestions
                       </button>
                       <button
                         type="button"
                         className={styles.secondaryButton}
-                        onClick={() => {
-                          setIgnoredAssets((prev) => new Set(prev).add(asset.asset_sha256));
-                          setRejectedAssets((prev) => {
-                            const next = new Set(prev);
-                            next.delete(asset.asset_sha256);
-                            return next;
-                          });
-                        }}
+                        onClick={() => { void handleRejectOrIgnoreCard(asset.asset_sha256, "ignored"); }}
                       >
-                        Ignore
+                        Ignore Asset
                       </button>
+                      {hasPreviousScan ? (
+                        <button
+                          type="button"
+                          className={styles.secondaryButton}
+                          disabled={isRunningMoreContext}
+                          onClick={() => { void handleForceRescan(asset.asset_sha256); }}
+                        >
+                          Force Rescan
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className={styles.secondaryButton}
@@ -1403,11 +1268,38 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
                       <button
                         type="button"
                         className={styles.secondaryButton}
+                        onClick={() => {
+                          setShowDetailsByAsset((prev) => ({
+                            ...prev,
+                            [asset.asset_sha256]: !prev[asset.asset_sha256],
+                          }));
+                        }}
+                      >
+                        {showDetailsByAsset[asset.asset_sha256] ? "Hide Details" : "Details"}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.secondaryButton}
                         onClick={() => onOpenPhoto(asset.asset_sha256)}
                       >
                         Open Asset
                       </button>
                     </div>
+
+                    {showDetailsByAsset[asset.asset_sha256] ? (
+                      <pre className={styles.detailsBox}>{JSON.stringify({
+                        asset_sha256: asset.asset_sha256,
+                        status: assetStatus,
+                        previously_scanned: hasPreviousScan,
+                        selected_count_collapsed: queueItem.selectedCount,
+                        suggestions: suggestions.map((item) => ({
+                          key: item.key,
+                          label: item.label,
+                          confidence: item.confidence,
+                        })),
+                        latest_run: assetRunBySha[asset.asset_sha256] ?? null,
+                      }, null, 2)}</pre>
+                    ) : null}
 
                     {showMoreContextByAsset[asset.asset_sha256] ? (
                       <div className={styles.advancedPanel}>
@@ -1472,91 +1364,8 @@ export default function VisualEnrichmentView({ onOpenPhoto, selectedWorkingSetAs
           </div>
         )}
 
-        {runResult && (
-          <>
-            <p className={styles.success}>
-              Mode: {runResult.mode} | Requested: {runResult.requested_count} | Processed: {runResult.processed_count} |
-              Created pending observations: {runResult.observations_created_count} | No landmark: {runResult.no_landmark_count} |
-              Failed: {runResult.failed_count}
-            </p>
-            <div className={styles.resultsPanel}>
-              {runResult.asset_results.map((assetResult) => (
-                <article key={assetResult.asset_sha256} className={styles.resultCard}>
-                  <div className={styles.assetName}>{assetResult.filename}</div>
-                  <div className={styles.metaLine}>
-                    {shortSha(assetResult.asset_sha256)} | status: {assetResult.status}
-                    {assetResult.no_landmark ? " | no landmark" : ""}
-                    {assetResult.error ? ` | error: ${assetResult.error}` : ""}
-                  </div>
-                  <div className={styles.resultGrid}>
-                    <div>
-                      <strong>Landmarks:</strong>{" "}
-                      {assetResult.landmarks.length > 0
-                        ? assetResult.landmarks.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
-                        : "none"}
-                    </div>
-                    {runResult.features_requested.includes("web") && (
-                      <div>
-                        <strong>Web Entities:</strong>{" "}
-                        {assetResult.web_entities.length > 0
-                          ? assetResult.web_entities.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
-                          : "none"}
-                      </div>
-                    )}
-                    {runResult.features_requested.includes("web") && (
-                      <div>
-                        <strong>Best Guess:</strong>{" "}
-                        {assetResult.best_guess_labels.length > 0 ? assetResult.best_guess_labels.join("; ") : "none"}
-                      </div>
-                    )}
-                    {runResult.features_requested.includes("label") && (
-                      <div>
-                        <strong>Labels:</strong>{" "}
-                        {assetResult.labels.length > 0
-                          ? assetResult.labels.map((item) => `${item.description} (${item.score ?? "n/a"})`).join("; ")
-                          : "none"}
-                      </div>
-                    )}
-                    {runResult.features_requested.includes("object") && (
-                      <div>
-                        <strong>Objects:</strong>{" "}
-                        {assetResult.objects.length > 0
-                          ? assetResult.objects.map((item) => `${item.name} (${item.score ?? "n/a"})`).join("; ")
-                          : "none"}
-                      </div>
-                    )}
-                  </div>
-                  <div className={styles.metaLine}>Created observations: {assetResult.created_observations}</div>
-                </article>
-              ))}
-            </div>
-          </>
-        )}
       </section>
 
-      <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Run History / Reports</h3>
-        <p className={styles.placeholderText}>
-          Google Vision test harness reports are written under storage/logs/google_vision_reports/.
-          A future milestone will surface run history here.
-        </p>
-      </section>
-
-      <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Future Labels / Objects</h3>
-        <p className={styles.placeholderText}>
-          Label and object candidates are currently report-only. A future milestone will review whether they become
-          tags/context labels.
-        </p>
-      </section>
-
-      <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>Future No-GPS Location Candidates</h3>
-        <p className={styles.placeholderText}>
-          Assets without GPS will use a separate, more cautious inference workflow. No location data is applied
-          automatically.
-        </p>
-      </section>
     </div>
   );
 }

@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/place-observations", tags=["place-observations"]
 
 @router.get("", response_model=PlaceObservationListResponse)
 def get_place_observations_endpoint(
+    asset_sha256: str | None = Query(default=None),
     source_type: str | None = Query(default=None),
     observation_type: str | None = Query(default=None),
     status: str | None = Query(default=None),
@@ -39,6 +40,7 @@ def get_place_observations_endpoint(
     try:
         return list_global_place_observations(
             db,
+            asset_sha256=asset_sha256,
             source_type=source_type,
             observation_type=observation_type,
             status=status,

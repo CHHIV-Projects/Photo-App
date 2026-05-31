@@ -664,6 +664,7 @@ export function patchPlaceObservation(
 }
 
 export interface GlobalPlaceObservationQueryOptions {
+  assetSha256?: string;
   sourceType?: string;
   observationType?: string;
   status?: "pending" | "accepted" | "rejected" | "ignored" | "superseded";
@@ -675,6 +676,9 @@ export function getGlobalPlaceObservations(
   options: GlobalPlaceObservationQueryOptions = {},
 ): Promise<ListResponse<PlaceObservationSummary>> {
   const params = new URLSearchParams();
+  if (options.assetSha256) {
+    params.set("asset_sha256", options.assetSha256);
+  }
   if (options.sourceType) {
     params.set("source_type", options.sourceType);
   }
