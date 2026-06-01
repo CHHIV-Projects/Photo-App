@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createSourceProfile,
   createSourceProfileStagingFolder,
+  getIcloudAcquisitionStatus,
   getSourceProfileDetail,
   getSourceIntakeReportDetail,
   getSourceIntakeReports,
@@ -18,6 +19,7 @@ import {
 import type {
   SourceAcquisitionMethod,
   SourceCloudProvider,
+  IcloudAcquisitionRunStatus,
   SourceProfileCreateRequest,
   SourceProfileDetail,
   SourceProfileMetadataUpdateRequest,
@@ -46,6 +48,10 @@ type BannerState = {
   kind: "success" | "error";
   message: string;
 } | null;
+
+type IcloudReadinessState = "ready" | "warning" | "not_ready" | "unknown";
+type IcloudAuthState = "action_required" | "unknown";
+type IcloudSourceRegistrationState = "matched" | "mismatch" | "unknown";
 
 type EditorFormState = {
   sourceLabel: string;
@@ -98,6 +104,8 @@ const ACQUISITION_METHOD_OPTIONS: Array<{ value: SourceAcquisitionMethod; label:
   { value: "none", label: "none" },
 ];
 
+const AUTH_REQUIRED_CODES = new Set(["AUTH_REQUIRED", "SESSION_EXPIRED"]);
+
 function initialFormState(): EditorFormState {
   return {
     sourceLabel: "",
@@ -118,6 +126,102 @@ function computeManagedStagingPreview(sourceLabel: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "") || "unnamed-source";
   return `storage/exports/icloud/${slug}`;
+}
+
+function sanitizeSourceLabelForAcquisition(sourceLabel: string | null | undefined): string {
+  const raw = (sourceLabel ?? "").trim().toLowerCase();
+  const sanitized = raw
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/[_-]{2,}/g, "_")
+    .replace(/^[_\-\s]+|[_\-\s]+$/g, "");
+  return sanitized || "unnamed_source";
+}
+
+function computeExpectedAcquisitionPath(sourceLabel: string): string {
+  const sanitized = sanitizeSourceLabelForAcquisition(sourceLabel);
+  return `storage/exports/icloud/${sanitized}`;
+}
+
+function normalizePathForCompare(path: string | null | undefined): string {
+  return (path ?? "").trim().replaceAll("\\", "/").replace(/\/+/g, "/").toLowerCase();
+}
+
+function pathsAppearEquivalent(pathA: string | null | undefined, pathB: string | null | undefined): boolean {
+  const a = normalizePathForCompare(pathA);
+  const b = normalizePathForCompare(pathB);
+  if (!a || !b) {
+    return false;
+  }
+  return a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+}
+
+function isUnderApprovedIcloudRoot(pathValue: string | null | undefined): boolean {
+  const normalized = normalizePathForCompare(pathValue);
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith("storage/exports/icloud/")) {
+    return true;
+  }
+  return normalized.includes("/storage/exports/icloud/") || normalized.endsWith("/storage/exports/icloud");
+}
+
+function doesAcquisitionStatusClearlyMatchProfile(
+  profile: SourceProfileDetail,
+  latestStatus: IcloudAcquisitionRunStatus | null,
+  expectedAcquisitionPath: string,
+): boolean {
+  if (!latestStatus) {
+    return false;
+  }
+
+  const sourceTypeMatches = normalizeIdentityValue(latestStatus.source_type) === "cloud_export";
+  if (!sourceTypeMatches) {
+    return false;
+  }
+
+  const labelMatches = normalizeIdentityValue(latestStatus.source_label) === normalizeIdentityValue(profile.source_label);
+  if (!labelMatches) {
+    return false;
+  }
+
+  const statusPath = latestStatus.staging_path ?? latestStatus.source_root_path;
+  if (!statusPath) {
+    return false;
+  }
+
+  return (
+    pathsAppearEquivalent(statusPath, expectedAcquisitionPath)
+    || pathsAppearEquivalent(statusPath, profile.managed_staging_path)
+    || pathsAppearEquivalent(statusPath, profile.source_root_path)
+  );
+}
+
+function toIcloudReadinessLabel(value: IcloudReadinessState): string {
+  if (value === "ready") {
+    return "Ready";
+  }
+  if (value === "warning") {
+    return "Warning";
+  }
+  if (value === "not_ready") {
+    return "Not Ready";
+  }
+  return "Unknown";
+}
+
+function toAuthStatusLabel(value: IcloudAuthState): string {
+  return value === "action_required" ? "Action Required" : "Unknown";
+}
+
+function toRegistrationStatusLabel(value: IcloudSourceRegistrationState): string {
+  if (value === "matched") {
+    return "Matched";
+  }
+  if (value === "mismatch") {
+    return "Mismatch";
+  }
+  return "Unknown";
 }
 
 function toDisplayDate(value: string | null): string {
@@ -270,6 +374,8 @@ export default function IngestionView() {
   const [pathCheckResult, setPathCheckResult] = useState<SourceProfilePathCheckResponse | null>(null);
   const [stagingCreateResult, setStagingCreateResult] = useState<SourceProfileStagingFolderCreateResponse | null>(null);
   const [isCreatingStagingFolder, setIsCreatingStagingFolder] = useState(false);
+  const [latestIcloudAcquisitionStatus, setLatestIcloudAcquisitionStatus] = useState<IcloudAcquisitionRunStatus | null>(null);
+  const [isLoadingIcloudAcquisitionStatus, setIsLoadingIcloudAcquisitionStatus] = useState(false);
   const [sourceIntakeStatus, setSourceIntakeStatus] = useState<SourceIntakeStatusSnapshot | null>(null);
   const [sourceIntakeReports, setSourceIntakeReports] = useState<SourceIntakeReportSummary[]>([]);
   const [isRunActionLoading, setIsRunActionLoading] = useState(false);
@@ -466,6 +572,18 @@ export default function IngestionView() {
     }
   }, []);
 
+  const loadLatestIcloudAcquisitionStatus = useCallback(async () => {
+    setIsLoadingIcloudAcquisitionStatus(true);
+    try {
+      const response = await getIcloudAcquisitionStatus();
+      setLatestIcloudAcquisitionStatus(response.current);
+    } catch {
+      setLatestIcloudAcquisitionStatus(null);
+    } finally {
+      setIsLoadingIcloudAcquisitionStatus(false);
+    }
+  }, []);
+
   const openCreateDrawer = useCallback(() => {
     setIsDetailsOpen(false);
     setEditorMode("create");
@@ -503,7 +621,12 @@ export default function IngestionView() {
     setPathCheckResult(null);
     setStagingCreateResult(null);
     void loadDetail(profile.source_id);
-  }, [loadDetail]);
+    if (isIcloudProfile(profile)) {
+      void loadLatestIcloudAcquisitionStatus();
+    } else {
+      setLatestIcloudAcquisitionStatus(null);
+    }
+  }, [loadDetail, loadLatestIcloudAcquisitionStatus]);
 
   const closeEditor = useCallback(() => {
     setIsEditorOpen(false);
@@ -518,6 +641,7 @@ export default function IngestionView() {
     setDetailBanner(null);
     setPathCheckResult(null);
     setStagingCreateResult(null);
+    setLatestIcloudAcquisitionStatus(null);
   }, []);
 
   const handleVerifyPath = useCallback(async () => {
@@ -657,6 +781,183 @@ export default function IngestionView() {
 
   const detailPathLabel = detailProfile && isIcloudProfile(detailProfile) ? "Staging status" : "Path status";
   const detailVerifyButtonLabel = detailProfile && isIcloudProfile(detailProfile) ? "Verify Staging" : "Verify Path";
+
+  const isDetailIcloudProfile = detailProfile ? isIcloudProfile(detailProfile) : false;
+
+  const expectedAcquisitionPath = useMemo(() => {
+    if (!detailProfile || !isDetailIcloudProfile) {
+      return null;
+    }
+    return computeExpectedAcquisitionPath(detailProfile.source_label);
+  }, [detailProfile, isDetailIcloudProfile]);
+
+  const pathAlignmentStatus = useMemo(() => {
+    if (!detailProfile || !isDetailIcloudProfile || !expectedAcquisitionPath) {
+      return "unknown";
+    }
+    if (!detailProfile.managed_staging_path) {
+      return "unknown";
+    }
+    return pathsAppearEquivalent(detailProfile.managed_staging_path, expectedAcquisitionPath)
+      ? "ok"
+      : "mismatch";
+  }, [detailProfile, expectedAcquisitionPath, isDetailIcloudProfile]);
+
+  const approvedRootStatus = useMemo(() => {
+    if (!detailProfile || !isDetailIcloudProfile) {
+      return "unknown";
+    }
+    if (!detailProfile.managed_staging_path) {
+      return "unknown";
+    }
+    return isUnderApprovedIcloudRoot(detailProfile.managed_staging_path) ? "ok" : "blocked";
+  }, [detailProfile, isDetailIcloudProfile]);
+
+  const stagingFolderStatus = useMemo(() => {
+    if (!detailProfile || !isDetailIcloudProfile) {
+      return "not_checked";
+    }
+    if (approvedRootStatus === "blocked") {
+      return "unsafe";
+    }
+    if (!pathCheckResult || pathCheckResult.path_kind !== "managed_staging_path") {
+      return "not_checked";
+    }
+    if (pathCheckResult.exists && pathCheckResult.is_directory) {
+      return "exists";
+    }
+    return "missing";
+  }, [approvedRootStatus, detailProfile, isDetailIcloudProfile, pathCheckResult]);
+
+  const matchedLatestIcloudStatus = useMemo(() => {
+    if (!detailProfile || !isDetailIcloudProfile || !expectedAcquisitionPath) {
+      return null;
+    }
+    return doesAcquisitionStatusClearlyMatchProfile(
+      detailProfile,
+      latestIcloudAcquisitionStatus,
+      expectedAcquisitionPath,
+    )
+      ? latestIcloudAcquisitionStatus
+      : null;
+  }, [detailProfile, expectedAcquisitionPath, isDetailIcloudProfile, latestIcloudAcquisitionStatus]);
+
+  const sourceRegistrationStatus = useMemo<IcloudSourceRegistrationState>(() => {
+    if (!detailProfile || !isDetailIcloudProfile || !expectedAcquisitionPath) {
+      return "unknown";
+    }
+    if (pathAlignmentStatus === "mismatch") {
+      return "mismatch";
+    }
+    if (matchedLatestIcloudStatus?.source_registration_status === "registered") {
+      return "matched";
+    }
+    if (matchedLatestIcloudStatus?.source_registration_status === "missing") {
+      return "mismatch";
+    }
+    return "unknown";
+  }, [detailProfile, expectedAcquisitionPath, isDetailIcloudProfile, matchedLatestIcloudStatus, pathAlignmentStatus]);
+
+  const authStatus = useMemo<IcloudAuthState>(() => {
+    if (matchedLatestIcloudStatus?.error_code && AUTH_REQUIRED_CODES.has(matchedLatestIcloudStatus.error_code)) {
+      return "action_required";
+    }
+    return "unknown";
+  }, [matchedLatestIcloudStatus]);
+
+  const icloudReadiness = useMemo<IcloudReadinessState>(() => {
+    if (!detailProfile || !isDetailIcloudProfile) {
+      return "unknown";
+    }
+
+    if (detailProfile.profile_status !== "active") {
+      return "not_ready";
+    }
+
+    if (approvedRootStatus === "blocked") {
+      return "not_ready";
+    }
+
+    if (pathAlignmentStatus === "mismatch") {
+      return "not_ready";
+    }
+
+    if (sourceRegistrationStatus === "mismatch") {
+      return "not_ready";
+    }
+
+    if (authStatus === "action_required") {
+      return "not_ready";
+    }
+
+    if (
+      sourceRegistrationStatus === "unknown"
+      || authStatus === "unknown"
+      || stagingFolderStatus !== "exists"
+    ) {
+      return "warning";
+    }
+
+    return "ready";
+  }, [
+    approvedRootStatus,
+    authStatus,
+    detailProfile,
+    isDetailIcloudProfile,
+    pathAlignmentStatus,
+    sourceRegistrationStatus,
+    stagingFolderStatus,
+  ]);
+
+  const readinessBadgeClassName = useMemo(() => {
+    if (icloudReadiness === "ready") {
+      return styles.readinessBadgeReady;
+    }
+    if (icloudReadiness === "warning") {
+      return styles.readinessBadgeWarning;
+    }
+    if (icloudReadiness === "not_ready") {
+      return styles.readinessBadgeNotReady;
+    }
+    return styles.readinessBadgeUnknown;
+  }, [icloudReadiness]);
+
+  const recommendedIcloudAction = useMemo(() => {
+    if (!detailProfile || !isDetailIcloudProfile) {
+      return null;
+    }
+    if (detailProfile.profile_status !== "active") {
+      return "Profile is not active. Mark it active before using it for iCloud workflow.";
+    }
+    if (approvedRootStatus === "blocked") {
+      return "Managed staging path is outside the approved iCloud exports root. Resolve path alignment before iCloud acquisition.";
+    }
+    if (pathAlignmentStatus === "mismatch") {
+      return "Resolve path alignment before running iCloud acquisition.";
+    }
+    if (authStatus === "action_required") {
+      return "Authentication required. Re-authenticate icloudpd outside Photo Organizer, then retry.";
+    }
+    if (stagingFolderStatus === "missing") {
+      return "Verify or create the staging folder before acquisition.";
+    }
+    if (sourceRegistrationStatus === "unknown") {
+      return "Run diagnostics or use Admin iCloud tools to confirm readiness.";
+    }
+    if (icloudReadiness === "ready") {
+      return "Profile appears ready for a future iCloud acquisition step.";
+    }
+    return "Use Admin iCloud tools for acquisition until the Ingestion workflow is implemented.";
+  }, [
+    approvedRootStatus,
+    authStatus,
+    detailProfile,
+    icloudReadiness,
+    isDetailIcloudProfile,
+    pathAlignmentStatus,
+    sourceRegistrationStatus,
+    stagingFolderStatus,
+  ]);
 
   const activeRunReport = useMemo(() => {
     if (!sourceIntakeStatus) {
@@ -1723,7 +2024,7 @@ export default function IngestionView() {
                   <h4 className={styles.detailHeading}>Paths and Staging</h4>
                   <div className={styles.detailGrid}>
                     <div className={styles.detailCard}>
-                      <span className={styles.detailLabel}>Source Root Path</span>
+                      <span className={styles.detailLabel}>Source Root Path / Compatibility Identity Path</span>
                       <span>{detailProfile.source_root_path ?? "-"}</span>
                       {detailProfile.source_root_path_relative && (
                         <span className={styles.detailMeta}>Preview path: {detailProfile.source_root_path_relative}</span>
@@ -1774,6 +2075,110 @@ export default function IngestionView() {
                     )}
                   </div>
                 </section>
+
+                {isDetailIcloudProfile && (
+                  <section className={styles.detailSection}>
+                    <h4 className={styles.detailHeading}>iCloud Readiness</h4>
+                    <div className={styles.detailGrid}>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Readiness</span>
+                        <span className={`${styles.readinessBadge} ${readinessBadgeClassName}`}>
+                          {toIcloudReadinessLabel(icloudReadiness)}
+                        </span>
+                        <span className={styles.detailMeta}>
+                          iCloud acquisition is still run from Admin until the Ingestion iCloud workflow is implemented.
+                        </span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Managed Staging Path</span>
+                        <span>{detailProfile.managed_staging_path ?? "-"}</span>
+                        <span className={styles.detailMeta}>
+                          Approved root: {approvedRootStatus === "ok" ? "OK" : approvedRootStatus === "blocked" ? "Blocked" : "Unknown"}
+                        </span>
+                        <span className={styles.detailMeta}>
+                          Staging folder: {
+                            stagingFolderStatus === "exists"
+                              ? "Exists"
+                              : stagingFolderStatus === "missing"
+                                ? "Missing"
+                                : stagingFolderStatus === "unsafe"
+                                  ? "Unsafe"
+                                  : "Not checked"
+                          }
+                        </span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Expected Acquisition Path</span>
+                        <span>{expectedAcquisitionPath ?? "-"}</span>
+                        <span className={styles.detailMeta}>
+                          Path alignment: {
+                            pathAlignmentStatus === "ok"
+                              ? "OK"
+                              : pathAlignmentStatus === "mismatch"
+                                ? "Mismatch"
+                                : "Unknown"
+                          }
+                        </span>
+                        {pathAlignmentStatus === "mismatch" && (
+                          <p className={styles.inlineWarning}>
+                            Managed staging path differs from the current iCloud acquisition path. Acquisition may fail or use a different folder until this is aligned.
+                          </p>
+                        )}
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Source Registration</span>
+                        <span>{toRegistrationStatusLabel(sourceRegistrationStatus)}</span>
+                        {sourceRegistrationStatus === "mismatch" ? (
+                          <span className={styles.detailMeta}>
+                            Current acquisition expects the source root path to match the acquisition staging path. This profile may need path alignment before acquisition can run from Ingestion.
+                          </span>
+                        ) : (
+                          <span className={styles.detailMeta}>
+                            Current acquisition requires source label/type/path alignment. Exact launch validation will occur when acquisition is implemented.
+                          </span>
+                        )}
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>iCloud Authentication</span>
+                        <span>{toAuthStatusLabel(authStatus)}</span>
+                        {authStatus === "action_required" && (
+                          <p className={styles.inlineWarning}>
+                            Authentication required. Re-authenticate icloudpd outside Photo Organizer, then retry.
+                          </p>
+                        )}
+                        <span className={styles.detailMeta}>
+                          Photo Organizer does not store your Apple password or 2FA code. iCloud authentication is handled outside the app by icloudpd.
+                        </span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Last Acquisition Status</span>
+                        {isLoadingIcloudAcquisitionStatus ? (
+                          <span>Loading...</span>
+                        ) : matchedLatestIcloudStatus ? (
+                          <>
+                            <span>{toStatusLabel(matchedLatestIcloudStatus.status)}</span>
+                            <span className={styles.detailMeta}>Started: {toDisplayDate(matchedLatestIcloudStatus.started_at)}</span>
+                            <span className={styles.detailMeta}>Finished: {toDisplayDate(matchedLatestIcloudStatus.completed_at)}</span>
+                            <span className={styles.detailMeta}>Downloaded: {matchedLatestIcloudStatus.downloaded_count}</span>
+                            <span className={styles.detailMeta}>Skipped: {matchedLatestIcloudStatus.skipped_existing_count}</span>
+                            <span className={styles.detailMeta}>Failed: {matchedLatestIcloudStatus.failed_count}</span>
+                            <span className={styles.detailMeta}>Error Code: {matchedLatestIcloudStatus.error_code ?? "-"}</span>
+                            <span className={styles.detailMeta}>Report: {matchedLatestIcloudStatus.report_path ?? "-"}</span>
+                          </>
+                        ) : (
+                          <span>No matching recent acquisition status found.</span>
+                        )}
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Recommended Next Action</span>
+                        <span>{recommendedIcloudAction ?? "Run diagnostics or use Admin iCloud tools to confirm readiness."}</span>
+                        <span className={styles.detailMeta}>
+                          Use Admin iCloud tools for acquisition until the Ingestion iCloud workflow is implemented.
+                        </span>
+                      </div>
+                    </div>
+                  </section>
+                )}
 
                 <section className={styles.detailSection}>
                   <h4 className={styles.detailHeading}>References</h4>

@@ -650,3 +650,36 @@
   display: grid;
   gap: 8px;
 }
+
+.readinessBadge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 700;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+}
+
+.readinessBadgeReady {
+  border: 1px solid #b7dcc2;
+  background: #eefaf1;
+  color: #1d6a36;
+}
+
+.readinessBadgeWarning {
+  border: 1px solid #f0d7a2;
+  background: #fff8e8;
+  color: #7a5a00;
+}
+
+.readinessBadgeNotReady {
+  border: 1px solid #e7bcc3;
+  background: #fff2f4;
+  color: #8f2333;
+}
+
+.readinessBadgeUnknown {
+  border: 1px solid #c8d4df;
+  background: #f4f7fa;
+  color: #516274;
+}
