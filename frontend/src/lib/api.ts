@@ -10,6 +10,9 @@ import type {
   AdminPlaceGeocodingActionResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse,
+  SourceProfileStatus,
+  SourceProfilesResponse,
+  SourceProfileSummary,
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
   SourceIntakeSourcesResponse,
@@ -857,6 +860,37 @@ export function stopHeicPreviewGeneration(): Promise<AdminHeicPreviewActionRespo
 
 export function getSourceIntakeSources(): Promise<SourceIntakeSourcesResponse> {
   return apiRequest<SourceIntakeSourcesResponse>("/api/admin/source-intake/sources");
+}
+
+export function getSourceProfiles(options: {
+  status?: SourceProfileStatus | "all";
+  includeUsername?: boolean;
+} = {}): Promise<SourceProfilesResponse> {
+  const params = new URLSearchParams();
+  params.set("status", options.status ?? "active");
+  if (options.includeUsername !== undefined) {
+    params.set("include_username", String(options.includeUsername));
+  }
+  return apiRequest<SourceProfilesResponse>(`/api/admin/source-profiles?${params.toString()}`);
+}
+
+export function updateSourceProfileStatus(
+  sourceId: number,
+  profileStatus: SourceProfileStatus,
+  options: { includeUsername?: boolean } = {},
+): Promise<SourceProfileSummary> {
+  const params = new URLSearchParams();
+  if (options.includeUsername !== undefined) {
+    params.set("include_username", String(options.includeUsername));
+  }
+  const query = params.toString();
+  const path = query
+    ? `/api/admin/source-profiles/${sourceId}?${query}`
+    : `/api/admin/source-profiles/${sourceId}`;
+  return apiRequest<SourceProfileSummary>(path, {
+    method: "PATCH",
+    body: JSON.stringify({ profile_status: profileStatus }),
+  });
 }
 
 // ── iCloud Acquisition ────────────────────────────────────────────────────────

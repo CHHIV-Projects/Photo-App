@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ClusterDetail } from "@/components/ClusterDetail";
 import { ClusterList } from "@/components/ClusterList";
 import { EventsView } from "@/components/EventsView";
+import IngestionView from "@/components/IngestionView";
 import AdminView from "@/components/AdminView";
 import { AlbumsView } from "@/components/AlbumsView";
 import { CollectionsView } from "@/components/CollectionsView";
@@ -58,7 +59,7 @@ import type {
   VisualEnrichmentWorkingSetAsset,
 } from "@/types/ui-api";
 
-type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "source-review" | "albums" | "collections" | "timeline" | "events" | "places" | "visual-enrichment" | "duplicate-groups" | "duplicate-suggestions" | "admin";
+type ViewMode = "review" | "photo-review" | "people" | "unassigned" | "photos" | "source-review" | "albums" | "collections" | "timeline" | "events" | "places" | "visual-enrichment" | "duplicate-groups" | "duplicate-suggestions" | "ingestion" | "admin";
 type ClusterFilterMode = "all" | "assigned" | "unassigned" | "ignored";
 
 function compareClustersForMergeTarget(a: ClusterSummary, b: ClusterSummary): number {
@@ -1085,6 +1086,13 @@ export default function HomePage() {
             </button>
             <button
               type="button"
+              className={`${styles.viewButton} ${viewMode === "ingestion" ? styles.viewButtonActive : ""}`.trim()}
+              onClick={() => setViewMode("ingestion")}
+            >
+              Ingestion
+            </button>
+            <button
+              type="button"
               className={`${styles.viewButton} ${viewMode === "admin" ? styles.viewButtonActive : ""}`.trim()}
               onClick={() => setViewMode("admin")}
             >
@@ -1229,6 +1237,8 @@ export default function HomePage() {
           <DuplicateGroupsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} focusGroupId={focusedDuplicateGroupId} />
         ) : viewMode === "duplicate-suggestions" ? (
           <DuplicateSuggestionsView onOpenPhoto={handleOpenPhotoFromDuplicateGroups} />
+        ) : viewMode === "ingestion" ? (
+          <IngestionView />
         ) : viewMode === "admin" ? (
           <AdminView />
         ) : (

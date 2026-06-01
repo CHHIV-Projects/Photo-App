@@ -794,3 +794,176 @@ list Source Profiles
 create/edit source profiles
 no unified Run Intake yet
 ```
+
+
+
+# Answers to Coder Questions — Milestone 12.61.1
+
+## 1. Option A direction
+
+Yes. Use **Option A: extend `ingestion_sources` directly** unless a blocker appears.
+
+Reason:
+
+```text
+ingestion_sources is already the durable registry object.
+A compatibility-first extension is lower risk than introducing a parallel source_profiles table now.
+
+Do not create a separate profile table in 12.61.1 unless coder finds a strong technical blocker.
+
+2. profile_status enforcement
+
+Use a plain string column with app-level allowed values for now.
+
+Allowed values:
+
+active
+inactive
+archived
+test
+deprecated
+
+Do not add DB-level enum/constraint enforcement in 12.61.1.
+
+Reason:
+
+This project is using idempotent schema evolution, and we want low-risk additive compatibility.
+App-level validation is sufficient for this foundation slice.
+3. Existing row backfill
+
+Confirmed.
+
+For existing rows:
+
+profile_status = active
+cloud_provider = null
+acquisition_method = null
+managed_staging_path = null
+
+unless coder finds a case that is deterministic and safe.
+
+Do not over-infer.
+
+4. iCloud cloud_export deterministic backfill
+
+For 12.61.1, keep this conservative.
+
+Preferred:
+
+Do not automatically backfill cloud_provider/acquisition_method for existing rows unless 100% deterministic.
+
+If a cloud_export row clearly and safely points under:
+
+storage/exports/icloud
+
+then deterministic backfill is acceptable, but not required.
+
+My preference:
+
+Leave nullable for existing rows.
+Document that iCloud profile enrichment/backfill will be handled in a later milestone.
+
+Reason:
+
+There are many test sources and repeated labels. We should avoid accidentally treating old test rows as production iCloud profiles.
+5. managed_staging_path persistence
+
+Persist managed_staging_path only for cloud-related rows/profiles.
+
+Do not populate it for local folders or external drives.
+
+For non-cloud rows:
+
+managed_staging_path = null
+
+Reason:
+
+Local/external sources already have source_root_path.
+managed_staging_path is specifically for system-managed acquisition staging.
+6. API strategy
+
+Add a new read-only source profile endpoint in parallel, while preserving the existing known-sources/source-intake APIs.
+
+Preferred:
+
+GET /api/admin/source-profiles
+
+or project-consistent equivalent.
+
+Also acceptable:
+
+extend existing source-intake sources payload with additive profile fields
+
+But do not break existing API consumers.
+
+My preference:
+
+Add a parallel read-only source-profiles endpoint/wrapper for 12.61.1.
+
+Reason:
+
+It lets us build the future Ingestion tab without destabilizing the current Admin Source Intake UI.
+7. account_username_masked
+
+Yes. If account_username_masked is added, keep raw account_username unchanged in existing admin responses for backward compatibility.
+
+For any new source-profile response, prefer:
+
+account_username_masked
+
+and include raw account_username only if existing UI/API contracts already require it.
+
+Do not remove or rename existing account_username.
+
+Do not add password/credential fields.
+
+8. source_type taxonomy
+
+Yes. Keep source_type runtime-stable in 12.61.1.
+
+Do not introduce operational source_type=cloud yet.
+
+Current runtime types remain:
+
+local_folder
+external_drive
+cloud_export
+scan_batch
+other
+
+Treat cloud as a future Source Profile/UI abstraction.
+
+For now:
+
+iCloud still operates through cloud_export.
+
+Reason:
+
+Current coercion/validation paths do not safely support cloud yet, and iCloud acquisition depends on cloud_export behavior.
+Implementation Direction Confirmation
+
+Proceed with the safest path:
+
+- Extend ingestion_sources additively.
+- Add profile_status with default active.
+- Add nullable cloud_provider, acquisition_method, managed_staging_path.
+- Preserve current source_type behavior.
+- Preserve current uniqueness rules.
+- Preserve source intake launch behavior.
+- Preserve iCloud acquisition launch/matching behavior.
+- Preserve cleanup gates.
+- Preserve provenance and Source Review behavior.
+- Add read-only profile API/wrapper if low-risk.
+- Add tests for schema, defaults, API compatibility, and existing flow compatibility.
+Hard boundaries
+
+Do not:
+
+- delete sources
+- archive existing rows automatically
+- change source uniqueness rules
+- change source intake execution
+- change iCloud acquisition execution
+- change staging cleanup behavior
+- introduce source_type=cloud as runtime type
+- add password, 2FA, cookie, token, or session fields

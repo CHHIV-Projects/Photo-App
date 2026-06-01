@@ -1221,6 +1221,37 @@ export interface SourceIntakeSourcesResponse {
   sources: SourceIntakeSourceSummary[];
 }
 
+export type SourceProfileStatus =
+  | "active"
+  | "inactive"
+  | "archived"
+  | "test"
+  | "deprecated";
+
+export interface SourceProfileSummary {
+  source_id: number;
+  source_label: string;
+  source_type: string;
+  source_root_path: string | null;
+  profile_status: SourceProfileStatus;
+  cloud_provider: string | null;
+  acquisition_method: string | null;
+  managed_staging_path: string | null;
+  account_username_masked: string | null;
+  account_username: string | null;
+  first_seen_at: string | null;
+  last_run_at: string | null;
+  provenance_count: number | null;
+  ingestion_runs_count: number | null;
+  source_intake_runs_count: number | null;
+  icloud_acquisition_runs_count: number | null;
+}
+
+export interface SourceProfilesResponse {
+  generated_at: string;
+  profiles: SourceProfileSummary[];
+}
+
 // ── iCloud Acquisition (Milestone 12.42/12.43) ──────────────────────────────
 
 export interface IcloudAcquisitionRunStatus {

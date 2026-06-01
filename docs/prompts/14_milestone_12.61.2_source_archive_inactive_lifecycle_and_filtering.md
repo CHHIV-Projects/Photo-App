@@ -606,3 +606,174 @@ show provenance/run reference counts
 identify unreferenced source candidates
 no deletion yet
 ```
+
+# Answers to Coder Questions — Milestone 12.61.2
+
+## 1. Backend-only or backend plus minimal Admin UI?
+
+Do **backend-first** for 12.61.2.
+
+A small Admin UI is acceptable only if it is isolated and does not touch existing Source Intake behavior.
+
+Preferred 12.61.2 scope:
+
+```text
+- backend lifecycle update endpoint
+- tests
+- documentation
+- no change to existing intake dropdowns or intake execution
+
+Reason:
+
+We need lifecycle/status capability before UI cleanup, but we should not risk confusing or breaking existing intake workflows.
+
+If coder adds UI, keep it separate as a Source Profiles section and do not alter current Source Intake panels.
+
+2. PATCH scope
+
+Yes. Keep PATCH strict and narrow.
+
+For 12.61.2:
+
+Only profile_status is editable.
+
+Do not allow editing:
+
+source_label
+source_type
+source_root_path
+cloud_provider
+acquisition_method
+managed_staging_path
+account_username
+
+Those can come later.
+
+3. Status transition policy
+
+Allow any valid status to any other valid status for now.
+
+Allowed statuses:
+
+active
+inactive
+archived
+test
+deprecated
+
+No transition restrictions in 12.61.2.
+
+Reason:
+
+This is an admin lifecycle label, not a destructive operation.
+We need flexibility while cleaning up development/test source clutter.
+4. Referenced source warning / confirmation
+
+Backend should not block status changes for referenced sources.
+
+Preferred:
+
+Allow status update.
+Return warning/reference metadata if available.
+
+Do not enforce confirmation in backend yet.
+
+If UI is added, UI can show a warning before marking a referenced source as archived/test/deprecated.
+
+Reason:
+
+Archiving/test/deprecated status is safe because it does not delete provenance or mutate source history.
+5. Bulk status update
+
+Defer bulk status update.
+
+For 12.61.2, implement single-source status update only.
+
+Reason:
+
+Bulk update is useful, but it should wait until we have a clearer Admin UI and reference-count visibility.
+6. Reference counts
+
+Include reference counts now only if cheap and low-risk.
+
+Preferred:
+
+If cheap:
+  include provenance/source-intake/run reference counts in source-profiles response.
+
+If not cheap:
+  defer and document.
+
+Do not make reference counts block the lifecycle endpoint.
+
+Minimum acceptable 12.61.2:
+
+status update works
+status filtering works
+no deletion
+no provenance mutation
+7. Existing Source Intake dropdowns / Known Sources
+
+Keep existing Source Intake dropdowns and Known Sources behavior unchanged for 12.61.2.
+
+Do not hide archived/test/deprecated sources from current Source Intake UI yet.
+
+Reason:
+
+Current iCloud handoff and intake prep depend on existing source-intake matching by label/path.
+Changing that now could break or confuse established workflows.
+
+Filtering should be introduced through the new source-profiles API first.
+
+8. Non-active filtering scope
+
+Yes. For 12.61.2, non-active filtering applies only to the source-profiles endpoint.
+
+Do not apply it to existing source-intake endpoints yet.
+
+Preferred:
+
+GET /api/admin/source-profiles?status=active
+GET /api/admin/source-profiles?status=all
+
+Existing source-intake endpoints remain fully unchanged.
+
+Implementation Direction Confirmation
+
+Proceed with the lowest-risk backend-first implementation:
+
+- Add PATCH /api/admin/source-profiles/{source_id}
+- Allow updating profile_status only
+- Validate status values
+- Return 400 for invalid status
+- Return 404 for missing source
+- Return updated profile summary
+- Preserve existing source-intake routes
+- Preserve existing iCloud acquisition behavior
+- Preserve existing Known Sources behavior
+- Add tests for update success, invalid status, missing source, and list filters
+- Add documentation and closeout response
+Hard boundaries
+
+Do not:
+
+- delete source rows
+- hide sources from existing Source Intake dropdowns
+- change source intake execution
+- change iCloud acquisition matching/execution
+- change staging cleanup
+- change provenance
+- add bulk update
+- add source edit fields beyond profile_status
+If UI is added
+
+Only add isolated UI if very low-risk:
+
+Source Profiles section
+Status filter
+Single-source status update action
+No intake behavior changes
+No delete button
+No cleanup button
+
+Backend-only is fully acceptable for 12.61.2.
