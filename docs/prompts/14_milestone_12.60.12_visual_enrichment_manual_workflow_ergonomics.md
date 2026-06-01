@@ -783,3 +783,121 @@ separate workflow for assets without geolocation metadata
 use visual/web/context clues as possible location candidates
 require explicit user confirmation before applying location data
 ```
+
+
+
+
+# Final Answers to Coder Questions — Milestone 12.60.12
+
+## 1. Force Rescan
+
+Agreed.
+
+Remove `Force Rescan` from the normal visible card UI.
+
+Use one per-asset control:
+
+```text
+Run More Context
+
+Inside Run More Context, allow feature selection:
+
+Landmark
+Web
+Label
+Object
+
+So a landmark rescan becomes:
+
+Run More Context → Landmark checked
+
+If needed for safety/regression, Force Rescan may temporarily remain hidden under Developer/Advanced, but the preferred normal UI is no separate Force Rescan button.
+
+2. Context and Scan lines
+
+Use two separate lines:
+
+Context: No context accepted
+
+or:
+
+Context: Accepted Context — Landmark
+Context: Accepted Context — Web
+Context: Accepted Context — Best Guess
+Context: Accepted Manual Entry
+
+Then separately:
+
+Scan: Previously scanned
+
+or:
+
+Scan: Not previously scanned
+
+Keep scan status simple. Do not use the scan line for detailed states like suggestions/no landmark/reviewed unless needed elsewhere in the card.
+
+The key distinction is:
+
+Context = accepted/manual context state
+Scan = whether Google Vision has previously been run
+3. Web Entity vs Best Guess after acceptance
+
+Agreed.
+
+If current-session metadata can distinguish the accepted source, show:
+
+Accepted Context — Web Entity
+Accepted Context — Best Guess
+
+If persisted data only reliably supports source_type=google_vision_web, fallback to:
+
+Accepted Context — Web
+
+Do not add new schema in 12.60.12 just to distinguish Web Entity vs Best Guess unless it is trivial and low-risk.
+
+4. Context Label box behavior
+
+Agreed.
+
+The Context Label box should behave as follows:
+
+Empty before acceptance
+Populated after Accept Selected as Context
+Populated after Accept Manual Entry
+
+Detected suggestions should not prepopulate the Context Label box simply because they exist.
+
+The box contains the accepted value, not the proposed value.
+
+5. Queue filters
+
+Agreed.
+
+Keep the 12.60.11 filter behavior stable.
+
+For 12.60.12, make wording updates only unless coder finds a clear bug.
+
+No major filter logic changes in this ergonomics pass.
+
+Implementation Direction
+
+Proceed with 12.60.12 as a low-risk ergonomics pass:
+
+- preserve the unified selected-assets work queue
+- preserve card removal after decisions
+- preserve Clear Queue behavior
+- preserve apply-to-duplicate-group behavior
+- keep Accept Selected as Context and Accept Manual Entry separate
+- clarify Context vs Scan display
+- make Context Label box the accepted value only
+- replace normal Force Rescan with Run More Context feature selection
+- avoid schema changes unless absolutely necessary
+
+Safety boundaries remain unchanged:
+
+No Place creation
+No Place linking
+No asset.place_id changes
+No automatic context-label creation without user action
+No silent propagation
+No duplicate/canonical mutation
