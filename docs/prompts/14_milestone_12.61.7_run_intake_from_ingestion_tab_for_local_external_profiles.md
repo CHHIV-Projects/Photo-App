@@ -823,10 +823,6 @@ auth/session status display
 no implementation yet
 ```
 
-
-
-
-
 # Answers to Coder Questions — Milestone 12.61.7
 
 ## 1. Non-runnable profiles
@@ -948,7 +944,7 @@ Proceed with coder’s proposed defaults:
   - 1s status polling while active
   - 3s source/report refresh while active
   - final refresh on terminal state
-Keep hard boundaries
+    Keep hard boundaries
 
 Do not:
 
@@ -958,9 +954,6 @@ Do not:
 - change backend Source Intake semantics
 - add unsupported options like dry-run, scan-only, or file-type filters
 - change existing Admin Source Intake behavior
-
-
-
 
 # Final Lock-ins — Milestone 12.61.7
 

@@ -544,3 +544,91 @@ cleanup timing
 combined acquisition/intake summary
 no implementation yet
 ```
+
+
+
+# Answers to Coder Questions — Milestone 12.61.9
+
+## 1. Edit-mode payload
+
+Yes. For 12.61.9, restrict the normal Manage/edit-mode payload to:
+
+```text
+profile_status only
+
+Even though the backend metadata endpoint supports broader fields, the normal Ingestion UI should not use those broader fields.
+
+Reason:
+
+Normal Manage is lifecycle/status management.
+Source identity and metadata should not appear freely editable after creation.
+
+Backend can retain broader support for now, but the normal UI should not expose it.
+
+2. Cloud metadata display in normal Manage
+
+Show cloud metadata as read-only text rows, not hidden.
+
+For cloud_export profiles, display read-only:
+
+Cloud Provider
+Acquisition Method
+Account Username
+Managed Staging Path
+
+Reason:
+
+The operator should be able to see what the profile represents,
+but should not casually edit these fields in normal Manage.
+
+If future advanced correction is needed, we can create a separate Advanced/Admin-only metadata repair workflow.
+
+3. Create flow
+
+Confirmed.
+
+Create flow remains unchanged.
+
+Create mode should still allow entering the fields needed to create a Source Profile:
+
+source label
+source type
+root path where applicable
+cloud/iCloud metadata where applicable
+profile status
+
+Only normal Manage/edit mode becomes status-only.
+
+Reason:
+
+Creation defines the source identity.
+Management after creation should primarily classify lifecycle status.
+Implementation Direction Confirmation
+
+Proceed with coder’s proposed frontend-only implementation:
+
+- In edit/manage mode, render Profile Status as the only editable field.
+- Render Source Label, Source Type, Source Root Path, and cloud metadata as read-only display rows.
+- Change edit submit payload to send only profile_status.
+- Keep create mode as-is.
+- Rename/adjust drawer wording to status-first:
+  Manage Source Profile Status
+- Remove Advanced Options toggle from Run Intake confirmation.
+- Always show Total Limit and Batch Size directly in the confirmation dialog.
+- Preserve defaults:
+  Total Limit = blank/null/unlimited
+  Batch Size = 500
+- Preserve existing validation and payload mapping.
+- Add stronger read-only styling so locked fields no longer look editable.
+Hard boundaries
+
+Do not:
+
+- change backend Source Intake behavior
+- change run payload contract
+- store limit/batch on Source Profile
+- enable source_type editing after creation
+- enable source_root_path editing after creation
+- expose broad metadata editing in normal Manage
+- rewrite provenance
+- remove profile_status editing

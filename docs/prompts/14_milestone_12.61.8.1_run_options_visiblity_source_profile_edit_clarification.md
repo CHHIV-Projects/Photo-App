@@ -622,3 +622,113 @@ cleanup timing
 combined acquisition/intake summary
 no implementation yet
 ```
+
+
+
+
+
+# Answers to Coder Questions — Milestone 12.61.8.1
+
+## 1. Row action label
+
+Use:
+
+```text
+Manage
+
+not:
+
+Manage Profile
+
+Reason:
+
+Manage is shorter for the table row and avoids making the row too dense.
+
+Inside the drawer, use clearer wording:
+
+Manage Source Profile
+
+or:
+
+Manage Source Profile Status and Metadata
+
+The important point is that the row button should no longer simply say Edit, because that implies ordinary source identity editing.
+
+2. Run options visibility
+
+Keep Advanced collapsed by default, but add the required visible summary line above the toggle.
+
+Preferred layout:
+
+Run Intake Options
+Options: Total Limit = unlimited, Batch Size = 500
+
+[Show Advanced Options]
+
+When values change:
+
+Options: Total Limit = 50, Batch Size = 25
+
+Reason:
+
+The operator should always know whether the run is unlimited and what batch size will be used, but the form should not become cluttered.
+
+Inside Advanced, show the actual fields:
+
+Total Limit
+[________]
+
+Batch Size
+[500]
+
+With helper text:
+
+Total Limit controls the maximum number of eligible unknown files selected for this run. Leave blank for no total limit.
+
+Batch Size controls how many files are staged/processed per ingestion batch. Default: 500.
+
+These options apply only to this run. They are not saved to the Source Profile.
+3. Non-retroactive provenance language placement
+
+Put the full non-retroactive note in the Manage drawer.
+
+Also add a shorter note on the main Ingestion page if it fits without clutter.
+
+Preferred:
+
+Main Ingestion page note
+Source Profile status changes are non-destructive and do not rewrite prior provenance.
+Manage drawer note
+Source Profile changes are not retroactive. They do not rewrite prior provenance records, prior source paths, prior intake reports, or prior asset history. If a profile is wrong, archive/deprecate/test it and create a corrected profile.
+
+Reason:
+
+The drawer is where the user is most likely to need the full warning, but a short page-level note reinforces the rule.
+Implementation Direction Confirmation
+
+Proceed with the recommended frontend-only slice:
+
+- Keep Advanced collapsed by default.
+- Add visible run option summary line before the Advanced toggle.
+- Keep defaults:
+  - Total Limit = blank/null/unlimited
+  - Batch Size = 500
+- Add helper text explaining Total Limit, Batch Size, and per-run-only behavior.
+- Add inline validation:
+  - Total Limit blank or positive integer
+  - Batch Size positive integer
+- Rename row action from Edit to Manage.
+- Update drawer wording to lifecycle/status-first language.
+- Add non-retroactive provenance note.
+- Do not change backend/API behavior.
+Hard boundaries
+
+Do not:
+
+- change Source Intake execution behavior
+- change backend run payload contract
+- store limit/batch size on Source Profile
+- add unsupported run options
+- remove profile_status editing
+- enable source_type or source_root_path editing
+- rewrite provenance
