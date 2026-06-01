@@ -73,12 +73,78 @@ class AdminSourceProfilesApiTests(unittest.TestCase):
         self.assertEqual(called_kwargs["status"], "all")
         self.assertTrue(called_kwargs["include_username"])
 
+    def test_get_source_profiles_supports_non_active_filter(self) -> None:
+        with patch("app.api.admin.list_source_profiles", return_value=[]) as mocked_service:
+            response = self.client.get("/api/admin/source-profiles?status=inactive")
+
+        self.assertEqual(response.status_code, 200)
+        mocked_service.assert_called_once()
+        _, called_kwargs = mocked_service.call_args
+        self.assertEqual(called_kwargs["status"], "inactive")
+        self.assertFalse(called_kwargs["include_username"])
+
     def test_get_source_profiles_invalid_filter_returns_400(self) -> None:
         with patch("app.api.admin.list_source_profiles", side_effect=ValueError("Invalid status filter")):
             response = self.client.get("/api/admin/source-profiles?status=bogus")
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"detail": "Invalid status filter"})
+
+    def test_patch_source_profile_status_updates_source(self) -> None:
+        updated = SourceProfileSummary(
+            source_id=7,
+            source_label="Archive Candidate",
+            source_type="local_folder",
+            source_root_path="/data/archive_candidate",
+            profile_status="archived",
+            cloud_provider=None,
+            acquisition_method=None,
+            managed_staging_path=None,
+            account_username_masked=None,
+            account_username=None,
+            first_seen_at=datetime.now(timezone.utc),
+            last_run_at=None,
+            provenance_count=10,
+            ingestion_runs_count=3,
+            source_intake_runs_count=2,
+            icloud_acquisition_runs_count=0,
+        )
+
+        with patch("app.api.admin.update_source_profile_status", return_value=updated) as mocked_service:
+            response = self.client.patch(
+                "/api/admin/source-profiles/7?include_username=true",
+                json={"profile_status": "archived"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["source_id"], 7)
+        self.assertEqual(payload["profile_status"], "archived")
+        mocked_service.assert_called_once()
+        _, called_kwargs = mocked_service.call_args
+        self.assertEqual(called_kwargs["source_id"], 7)
+        self.assertEqual(called_kwargs["profile_status"], "archived")
+        self.assertTrue(called_kwargs["include_username"])
+
+    def test_patch_source_profile_status_invalid_value_returns_400(self) -> None:
+        with patch("app.api.admin.update_source_profile_status", side_effect=ValueError("Invalid status filter")):
+            response = self.client.patch(
+                "/api/admin/source-profiles/7",
+                json={"profile_status": "bogus"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "Invalid status filter"})
+
+    def test_patch_source_profile_status_missing_source_returns_404(self) -> None:
+        with patch("app.api.admin.update_source_profile_status", side_effect=LookupError("missing")):
+            response = self.client.patch(
+                "/api/admin/source-profiles/99999",
+                json={"profile_status": "inactive"},
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Source profile not found."})
 
 
 if __name__ == "__main__":

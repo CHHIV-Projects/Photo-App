@@ -10,8 +10,11 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
+from app.models.provenance import Provenance
+from app.models.source_intake_run import SourceIntakeRun
 from app.schemas.admin import (
     SourceProfileSummary,
     SourceIntakeReportCounts,
@@ -38,6 +41,106 @@ def _mask_account_username(value: str | None) -> str | None:
     if len(cleaned) <= 2:
         return "***"
     return f"{cleaned[:1]}***{cleaned[-1:]}"
+
+
+def _normalize_profile_status(value: str | None) -> str:
+    normalized_status = (value or "active").strip().lower()
+    if normalized_status == "all" or normalized_status not in ALLOWED_PROFILE_STATUS:
+        raise ValueError(
+            "Invalid status filter. Allowed values: active, inactive, archived, test, deprecated."
+        )
+    return normalized_status
+
+
+def _build_profile_reference_maps(
+    db_session: Session,
+    sources: list[IngestionSource],
+) -> tuple[dict[int, int], dict[int, int], dict[int, int], dict[int, int]]:
+    source_ids = [source.id for source in sources]
+    if not source_ids:
+        return {}, {}, {}, {}
+
+    provenance_counts = {
+        row.ingestion_source_id: row.count
+        for row in db_session.execute(
+            select(
+                Provenance.ingestion_source_id,
+                func.count(Provenance.id).label("count"),
+            )
+            .where(Provenance.ingestion_source_id.in_(source_ids))
+            .group_by(Provenance.ingestion_source_id)
+        ).all()
+    }
+    ingestion_runs_counts = {
+        row.ingestion_source_id: row.count
+        for row in db_session.execute(
+            select(
+                IngestionRun.ingestion_source_id,
+                func.count(IngestionRun.id).label("count"),
+            )
+            .where(IngestionRun.ingestion_source_id.in_(source_ids))
+            .group_by(IngestionRun.ingestion_source_id)
+        ).all()
+    }
+    source_intake_runs_counts = {
+        row.ingestion_source_id: row.count
+        for row in db_session.execute(
+            select(
+                SourceIntakeRun.ingestion_source_id,
+                func.count(SourceIntakeRun.id).label("count"),
+            )
+            .where(SourceIntakeRun.ingestion_source_id.in_(source_ids))
+            .group_by(SourceIntakeRun.ingestion_source_id)
+        ).all()
+    }
+
+    # iCloud runs do not currently carry ingestion_source_id; match via source identity fields.
+    icloud_runs_counts: dict[int, int] = {}
+    for source in sources:
+        icloud_runs_counts[source.id] = db_session.scalar(
+            select(func.count(IcloudAcquisitionRun.id)).where(
+                IcloudAcquisitionRun.source_label == source.source_label,
+                IcloudAcquisitionRun.source_type == source.source_type,
+                IcloudAcquisitionRun.source_root_path == source.source_root_path,
+            )
+        ) or 0
+
+    return (
+        provenance_counts,
+        ingestion_runs_counts,
+        source_intake_runs_counts,
+        icloud_runs_counts,
+    )
+
+
+def _to_source_profile_summary(
+    source: IngestionSource,
+    *,
+    include_username: bool,
+    last_run_at: datetime | None,
+    provenance_count: int | None,
+    ingestion_runs_count: int | None,
+    source_intake_runs_count: int | None,
+    icloud_acquisition_runs_count: int | None,
+) -> SourceProfileSummary:
+    return SourceProfileSummary(
+        source_id=source.id,
+        source_label=source.source_label,
+        source_type=source.source_type,
+        source_root_path=source.source_root_path,
+        profile_status=source.profile_status,
+        cloud_provider=source.cloud_provider,
+        acquisition_method=source.acquisition_method,
+        managed_staging_path=source.managed_staging_path,
+        account_username_masked=_mask_account_username(source.account_username),
+        account_username=source.account_username if include_username else None,
+        first_seen_at=source.created_at,
+        last_run_at=last_run_at,
+        provenance_count=provenance_count,
+        ingestion_runs_count=ingestion_runs_count,
+        source_intake_runs_count=source_intake_runs_count,
+        icloud_acquisition_runs_count=icloud_acquisition_runs_count,
+    )
 
 
 def _report_directory() -> Path:
@@ -232,23 +335,24 @@ def list_source_profiles(
         row.ingestion_source_id: row.latest_run_at
         for row in latest_runs
     }
+    (
+        provenance_counts,
+        ingestion_runs_counts,
+        source_intake_runs_counts,
+        icloud_runs_counts,
+    ) = _build_profile_reference_maps(db_session, sources)
 
     results: list[SourceProfileSummary] = []
     for source in sources:
         results.append(
-            SourceProfileSummary(
-                source_id=source.id,
-                source_label=source.source_label,
-                source_type=source.source_type,
-                source_root_path=source.source_root_path,
-                profile_status=source.profile_status,
-                cloud_provider=source.cloud_provider,
-                acquisition_method=source.acquisition_method,
-                managed_staging_path=source.managed_staging_path,
-                account_username_masked=_mask_account_username(source.account_username),
-                account_username=source.account_username if include_username else None,
-                first_seen_at=source.created_at,
+            _to_source_profile_summary(
+                source,
+                include_username=include_username,
                 last_run_at=latest_run_by_source.get(source.id),
+                provenance_count=provenance_counts.get(source.id, 0),
+                ingestion_runs_count=ingestion_runs_counts.get(source.id, 0),
+                source_intake_runs_count=source_intake_runs_counts.get(source.id, 0),
+                icloud_acquisition_runs_count=icloud_runs_counts.get(source.id, 0),
             )
         )
 
@@ -259,6 +363,47 @@ def list_source_profiles(
         )
     )
     return results
+
+
+def update_source_profile_status(
+    db_session: Session,
+    *,
+    source_id: int,
+    profile_status: str,
+    include_username: bool = False,
+) -> SourceProfileSummary:
+    """Update one source profile lifecycle status and return the updated summary."""
+    ensure_ingestion_context_schema(db_session)
+    normalized_status = _normalize_profile_status(profile_status)
+
+    source = db_session.get(IngestionSource, source_id)
+    if source is None:
+        raise LookupError(f"Source profile {source_id} not found.")
+
+    source.profile_status = normalized_status
+    db_session.add(source)
+    db_session.commit()
+    db_session.refresh(source)
+
+    latest_run_at = db_session.scalar(
+        select(func.max(IngestionRun.created_at)).where(IngestionRun.ingestion_source_id == source.id)
+    )
+    (
+        provenance_counts,
+        ingestion_runs_counts,
+        source_intake_runs_counts,
+        icloud_runs_counts,
+    ) = _build_profile_reference_maps(db_session, [source])
+
+    return _to_source_profile_summary(
+        source,
+        include_username=include_username,
+        last_run_at=latest_run_at,
+        provenance_count=provenance_counts.get(source.id, 0),
+        ingestion_runs_count=ingestion_runs_counts.get(source.id, 0),
+        source_intake_runs_count=source_intake_runs_counts.get(source.id, 0),
+        icloud_acquisition_runs_count=icloud_runs_counts.get(source.id, 0),
+    )
 
 
 def get_report_detail(report_filename: str) -> SourceIntakeReportDetail | None:

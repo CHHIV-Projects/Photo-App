@@ -35,6 +35,8 @@ from app.schemas.admin import (
     SourceIntakeRunResponse,
     SourceIntakeStatusSchema,
     SourceIntakeStopResponse,
+    SourceProfileStatusUpdateRequest,
+    SourceProfileSummary,
     SourceProfilesResponse,
     IcloudAcquisitionRunRequest,
     IcloudAcquisitionRunResponse,
@@ -56,6 +58,7 @@ from app.services.admin import (
     list_sources_with_latest_info,
     request_source_intake_stop,
     start_source_intake,
+    update_source_profile_status,
 )
 from app.services.ingestion.ingestion_context_service import normalize_source_label
 from app.services.admin.source_intake_execution_service import (
@@ -656,6 +659,33 @@ def get_source_profiles(
         generated_at=datetime.now(timezone.utc),
         profiles=profiles,
     )
+
+
+@router.patch("/source-profiles/{source_id}", response_model=SourceProfileSummary)
+def patch_source_profile_status(
+    source_id: int,
+    body: SourceProfileStatusUpdateRequest,
+    include_username: bool = False,
+    db: Session = Depends(get_db_session),
+) -> SourceProfileSummary | JSONResponse:
+    """Update only source profile lifecycle status for one source."""
+    try:
+        return update_source_profile_status(
+            db,
+            source_id=source_id,
+            profile_status=body.profile_status,
+            include_username=include_username,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
 
 
 @router.get("/source-intake/reports", response_model=SourceIntakeReportsResponse)

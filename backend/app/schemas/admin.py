@@ -289,6 +289,10 @@ class SourceProfileSummary(BaseModel):
     account_username: str | None = None
     first_seen_at: datetime | None = None
     last_run_at: datetime | None = None
+    provenance_count: int | None = None
+    ingestion_runs_count: int | None = None
+    source_intake_runs_count: int | None = None
+    icloud_acquisition_runs_count: int | None = None
 
 
 class SourceProfilesResponse(BaseModel):
@@ -296,6 +300,12 @@ class SourceProfilesResponse(BaseModel):
 
     generated_at: datetime
     profiles: list[SourceProfileSummary]
+
+
+class SourceProfileStatusUpdateRequest(BaseModel):
+    """Narrow lifecycle update payload for one source profile."""
+
+    profile_status: str
 
 
 class SourceIntakeReportSummary(BaseModel):
