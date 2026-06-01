@@ -13,14 +13,31 @@ from sqlalchemy.orm import Session
 from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
 from app.schemas.admin import (
+    SourceProfileSummary,
     SourceIntakeReportCounts,
     SourceIntakeReportDetail,
     SourceIntakeReportSummary,
     SourceIntakeSourceSummary,
 )
+from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
 
 # Only filenames matching this pattern are served by the detail endpoint.
 _SAFE_REPORT_FILENAME_RE = re.compile(r"^source_intake_[\w\-]+\.json$")
+ALLOWED_PROFILE_STATUS = {"active", "inactive", "archived", "test", "deprecated", "all"}
+
+
+def _mask_account_username(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if "@" in cleaned:
+        local_part, domain = cleaned.split("@", 1)
+        return f"{local_part[:1]}***@{domain}"
+    if len(cleaned) <= 2:
+        return "***"
+    return f"{cleaned[:1]}***{cleaned[-1:]}"
 
 
 def _report_directory() -> Path:
@@ -115,6 +132,8 @@ def list_sources_with_latest_info(db_session: Session) -> list[SourceIntakeSourc
     Return known ingestion sources from DB, enriched with latest run timestamp
     and latest report counts where available.
     """
+    ensure_ingestion_context_schema(db_session)
+
     # Query all sources
     sources = db_session.scalars(
         select(IngestionSource).order_by(IngestionSource.created_at.asc())
@@ -169,6 +188,70 @@ def list_sources_with_latest_info(db_session: Session) -> list[SourceIntakeSourc
         )
 
     # Sort most-recently-active first; sources with no runs go last.
+    results.sort(
+        key=lambda s: (
+            s.last_run_at is None,
+            -(s.last_run_at.timestamp() if s.last_run_at is not None else 0),
+        )
+    )
+    return results
+
+
+def list_source_profiles(
+    db_session: Session,
+    *,
+    status: str = "active",
+    include_username: bool = False,
+) -> list[SourceProfileSummary]:
+    """Return source profile summaries from ingestion_sources with status filtering."""
+    ensure_ingestion_context_schema(db_session)
+
+    normalized_status = (status or "active").strip().lower()
+    if normalized_status not in ALLOWED_PROFILE_STATUS:
+        raise ValueError(
+            "Invalid status filter. Allowed values: active, inactive, archived, test, deprecated, all."
+        )
+
+    sources_stmt = select(IngestionSource).order_by(IngestionSource.created_at.asc())
+    if normalized_status != "all":
+        sources_stmt = sources_stmt.where(IngestionSource.profile_status == normalized_status)
+    sources = db_session.scalars(sources_stmt).all()
+    if not sources:
+        return []
+
+    source_ids = [s.id for s in sources]
+    latest_runs = db_session.execute(
+        select(
+            IngestionRun.ingestion_source_id,
+            func.max(IngestionRun.created_at).label("latest_run_at"),
+        )
+        .where(IngestionRun.ingestion_source_id.in_(source_ids))
+        .group_by(IngestionRun.ingestion_source_id)
+    ).all()
+    latest_run_by_source: dict[int, datetime] = {
+        row.ingestion_source_id: row.latest_run_at
+        for row in latest_runs
+    }
+
+    results: list[SourceProfileSummary] = []
+    for source in sources:
+        results.append(
+            SourceProfileSummary(
+                source_id=source.id,
+                source_label=source.source_label,
+                source_type=source.source_type,
+                source_root_path=source.source_root_path,
+                profile_status=source.profile_status,
+                cloud_provider=source.cloud_provider,
+                acquisition_method=source.acquisition_method,
+                managed_staging_path=source.managed_staging_path,
+                account_username_masked=_mask_account_username(source.account_username),
+                account_username=source.account_username if include_username else None,
+                first_seen_at=source.created_at,
+                last_run_at=latest_run_by_source.get(source.id),
+            )
+        )
+
     results.sort(
         key=lambda s: (
             s.last_run_at is None,

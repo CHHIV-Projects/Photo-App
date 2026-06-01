@@ -45,6 +45,11 @@ def _create_ingestion_sources_table(db_session: Session) -> None:
                 source_type VARCHAR(64) NOT NULL DEFAULT 'local_folder',
                 source_root_path VARCHAR(2048) NULL,
                 source_root_path_normalized VARCHAR(2048) NOT NULL DEFAULT '',
+                profile_status VARCHAR(32) NOT NULL DEFAULT 'active',
+                cloud_provider VARCHAR(64) NULL,
+                acquisition_method VARCHAR(64) NULL,
+                managed_staging_path VARCHAR(2048) NULL,
+                account_username VARCHAR(255) NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 CONSTRAINT uq_ingestion_sources_lookup
                     UNIQUE (source_label_normalized, source_type, source_root_path_normalized)
@@ -98,6 +103,26 @@ def ensure_ingestion_context_schema(db_session: Session) -> IngestionContextSche
     if "ingestion_runs" not in existing_tables:
         _create_ingestion_runs_table(db_session)
         added_tables.append("ingestion_runs")
+
+    inspector = inspect(bind)
+    ingestion_source_columns = {column["name"] for column in inspector.get_columns("ingestion_sources")}
+    ingestion_source_column_ddls = {
+        "profile_status": "ALTER TABLE ingestion_sources ADD COLUMN profile_status VARCHAR(32) NULL",
+        "cloud_provider": "ALTER TABLE ingestion_sources ADD COLUMN cloud_provider VARCHAR(64) NULL",
+        "acquisition_method": "ALTER TABLE ingestion_sources ADD COLUMN acquisition_method VARCHAR(64) NULL",
+        "managed_staging_path": "ALTER TABLE ingestion_sources ADD COLUMN managed_staging_path VARCHAR(2048) NULL",
+        "account_username": "ALTER TABLE ingestion_sources ADD COLUMN account_username VARCHAR(255) NULL",
+    }
+    for column_name, ddl in ingestion_source_column_ddls.items():
+        if column_name in ingestion_source_columns:
+            continue
+        db_session.execute(text(ddl))
+        added_columns.append(f"ingestion_sources.{column_name}")
+
+    # Backfill and enforce default profile status for compatibility-safe lifecycle support.
+    db_session.execute(text("UPDATE ingestion_sources SET profile_status = 'active' WHERE profile_status IS NULL"))
+    db_session.execute(text("ALTER TABLE ingestion_sources ALTER COLUMN profile_status SET NOT NULL"))
+    db_session.execute(text("ALTER TABLE ingestion_sources ALTER COLUMN profile_status SET DEFAULT 'active'"))
 
     inspector = inspect(bind)
     provenance_columns = {column["name"] for column in inspector.get_columns("provenance")}

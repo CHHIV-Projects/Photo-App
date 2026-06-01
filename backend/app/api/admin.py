@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,6 +35,7 @@ from app.schemas.admin import (
     SourceIntakeRunResponse,
     SourceIntakeStatusSchema,
     SourceIntakeStopResponse,
+    SourceProfilesResponse,
     IcloudAcquisitionRunRequest,
     IcloudAcquisitionRunResponse,
     IcloudAcquisitionRunStatus,
@@ -49,6 +50,7 @@ from app.services.admin import (
     build_admin_summary,
     create_or_get_ingestion_source,
     get_report_detail,
+    list_source_profiles,
     get_source_intake_status,
     list_recent_reports,
     list_sources_with_latest_info,
@@ -626,6 +628,33 @@ def get_source_intake_sources(db: Session = Depends(get_db_session)) -> SourceIn
     return SourceIntakeSourcesResponse(
         generated_at=datetime.now(timezone.utc),
         sources=sources,
+    )
+
+
+@router.get("/source-profiles", response_model=SourceProfilesResponse)
+def get_source_profiles(
+    profile_status: str = Query(default="active", alias="status"),
+    include_username: bool = False,
+    db: Session = Depends(get_db_session),
+) -> SourceProfilesResponse | JSONResponse:
+    """Return source profiles for compatibility-first ingestion UI evolution."""
+    from datetime import datetime, timezone
+
+    try:
+        profiles = list_source_profiles(
+            db,
+            status=profile_status,
+            include_username=include_username,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+
+    return SourceProfilesResponse(
+        generated_at=datetime.now(timezone.utc),
+        profiles=profiles,
     )
 
 

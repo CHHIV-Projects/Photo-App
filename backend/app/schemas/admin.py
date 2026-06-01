@@ -274,6 +274,30 @@ class SourceIntakeSourcesResponse(BaseModel):
     sources: list[SourceIntakeSourceSummary]
 
 
+class SourceProfileSummary(BaseModel):
+    """Read-only source profile view over ingestion sources."""
+
+    source_id: int
+    source_label: str
+    source_type: str
+    source_root_path: str | None = None
+    profile_status: str
+    cloud_provider: str | None = None
+    acquisition_method: str | None = None
+    managed_staging_path: str | None = None
+    account_username_masked: str | None = None
+    account_username: str | None = None
+    first_seen_at: datetime | None = None
+    last_run_at: datetime | None = None
+
+
+class SourceProfilesResponse(BaseModel):
+    """List of source profiles for future ingestion UI compatibility."""
+
+    generated_at: datetime
+    profiles: list[SourceProfileSummary]
+
+
 class SourceIntakeReportSummary(BaseModel):
     """Summary of one source intake session report."""
 

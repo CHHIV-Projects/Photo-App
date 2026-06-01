@@ -3,6 +3,7 @@
 from app.services.admin.summary import build_admin_summary
 from app.services.admin.source_intake_service import (
     get_report_detail,
+    list_source_profiles,
     list_recent_reports,
     list_sources_with_latest_info,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "build_admin_summary",
     "create_or_get_ingestion_source",
     "get_report_detail",
+    "list_source_profiles",
     "get_source_intake_status",
     "list_recent_reports",
     "list_sources_with_latest_info",
