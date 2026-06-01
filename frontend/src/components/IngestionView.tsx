@@ -234,6 +234,18 @@ function mapRunStartError(error: unknown): { message: string; raw: string | null
   };
 }
 
+function calculateExactDuplicateCount(
+  selectedForSession: number | null | undefined,
+  processedNewUnique: number | null | undefined,
+  failedOrRejected: number | null | undefined,
+): number | null {
+  if (selectedForSession == null || processedNewUnique == null || failedOrRejected == null) {
+    return null;
+  }
+
+  return Math.max(0, selectedForSession - processedNewUnique - failedOrRejected);
+}
+
 export default function IngestionView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [profiles, setProfiles] = useState<SourceProfileSummary[]>([]);
@@ -706,6 +718,26 @@ export default function IngestionView() {
     return sourceIntakeReports.find((report) => report.report_filename === selectedReportFilename) ?? null;
   }, [selectedReportFilename, sourceIntakeReports]);
 
+  const terminalExactDuplicates = useMemo(() => {
+    if (!sourceIntakeStatus) {
+      return null;
+    }
+
+    return calculateExactDuplicateCount(
+      sourceIntakeStatus.selected,
+      sourceIntakeStatus.processed_new_unique,
+      sourceIntakeStatus.failed_or_rejected,
+    );
+  }, [sourceIntakeStatus]);
+
+  const reportSummaryExactDuplicates = useMemo(() => {
+    return calculateExactDuplicateCount(
+      selectedReportSummary?.counts?.selected_for_session,
+      selectedReportSummary?.counts?.processed_new_unique,
+      selectedReportSummary?.counts?.failed_or_rejected,
+    );
+  }, [selectedReportSummary]);
+
   const selectedReportPath = useMemo(() => {
     if (!selectedReportFilename) {
       return null;
@@ -1021,6 +1053,9 @@ export default function IngestionView() {
             {activeRunReport?.counts?.failed_or_rejected != null && (
               <span><strong>Failed/Rejected:</strong> {activeRunReport.counts.failed_or_rejected}</span>
             )}
+            {terminalExactDuplicates != null && (
+              <span><strong>Exact Duplicates (Vault):</strong> {terminalExactDuplicates}</span>
+            )}
             {activeRunReport?.counts?.deferred_unready_count != null && (
               <span><strong>Deferred/Unready:</strong> {activeRunReport.counts.deferred_unready_count}</span>
             )}
@@ -1086,6 +1121,7 @@ export default function IngestionView() {
                 <span><strong>Staged to Drop Zone:</strong> {selectedReportSummary?.counts?.staged_to_dropzone ?? "-"}</span>
                 <span><strong>Processed New Unique:</strong> {selectedReportSummary?.counts?.processed_new_unique ?? "-"}</span>
                 <span><strong>Failed/Rejected:</strong> {selectedReportSummary?.counts?.failed_or_rejected ?? "-"}</span>
+                <span><strong>Exact Duplicates (Vault):</strong> {reportSummaryExactDuplicates ?? "-"}</span>
                 <span><strong>Deferred/Unready:</strong> {selectedReportSummary?.counts?.deferred_unready_count ?? "-"}</span>
                 <span><strong>Remaining Unknown Eligible:</strong> {selectedReportSummary?.counts?.remaining_unknown_eligible ?? "-"}</span>
                 <span><strong>Source Complete:</strong> {selectedReportSummary?.source_complete == null ? "-" : selectedReportSummary.source_complete ? "Yes" : "No"}</span>
