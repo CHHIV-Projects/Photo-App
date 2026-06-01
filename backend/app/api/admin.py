@@ -37,7 +37,10 @@ from app.schemas.admin import (
     SourceIntakeStopResponse,
     SourceProfileCreateRequest,
     SourceProfileCreateResponse,
+    SourceProfileDetail,
+    SourceProfilePathCheckResponse,
     SourceProfileMetadataUpdateRequest,
+    SourceProfileStagingFolderCreateResponse,
     SourceProfileStatusUpdateRequest,
     SourceProfileSummary,
     SourceProfilesResponse,
@@ -54,7 +57,9 @@ from app.schemas.admin import (
 from app.services.admin import (
     build_admin_summary,
     create_source_profile,
+    create_source_profile_staging_folder,
     create_or_get_ingestion_source,
+    get_source_profile_detail,
     get_report_detail,
     list_source_profiles,
     get_source_intake_status,
@@ -64,6 +69,7 @@ from app.services.admin import (
     start_source_intake,
     update_source_profile_metadata,
     update_source_profile_status,
+    verify_source_profile_path,
 )
 from app.services.ingestion.ingestion_context_service import normalize_source_label
 from app.services.admin.source_intake_execution_service import (
@@ -693,6 +699,26 @@ def patch_source_profile_status(
         )
 
 
+@router.get("/source-profiles/{source_id}", response_model=SourceProfileDetail)
+def get_source_profile(
+    source_id: int,
+    include_username: bool = False,
+    db: Session = Depends(get_db_session),
+) -> SourceProfileDetail | JSONResponse:
+    """Return one source profile detail view for operational diagnostics."""
+    try:
+        return get_source_profile_detail(
+            db,
+            source_id=source_id,
+            include_username=include_username,
+        )
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
+
+
 @router.post("/source-profiles", response_model=SourceProfileCreateResponse)
 def post_source_profile(
     body: SourceProfileCreateRequest,
@@ -727,6 +753,52 @@ def patch_source_profile_metadata(
             source_id=source_id,
             payload=body,
             include_username=include_username,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
+
+
+@router.post("/source-profiles/{source_id}/verify-path", response_model=SourceProfilePathCheckResponse)
+def post_source_profile_verify_path(
+    source_id: int,
+    db: Session = Depends(get_db_session),
+) -> SourceProfilePathCheckResponse | JSONResponse:
+    """Verify the current effective path for one source profile."""
+    try:
+        return verify_source_profile_path(
+            db,
+            source_id=source_id,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
+
+
+@router.post("/source-profiles/{source_id}/create-staging-folder", response_model=SourceProfileStagingFolderCreateResponse)
+def post_source_profile_create_staging_folder(
+    source_id: int,
+    db: Session = Depends(get_db_session),
+) -> SourceProfileStagingFolderCreateResponse | JSONResponse:
+    """Create the approved iCloud managed staging folder for one source profile."""
+    try:
+        return create_source_profile_staging_folder(
+            db,
+            source_id=source_id,
         )
     except ValueError as exc:
         return JSONResponse(

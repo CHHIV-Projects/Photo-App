@@ -16,8 +16,11 @@ from app.models.ingestion_source import IngestionSource
 from app.models.provenance import Provenance
 from app.models.source_intake_run import SourceIntakeRun
 from app.schemas.admin import (
+    SourceProfileDetail,
     SourceProfileCreateRequest,
     SourceProfileCreateResponse,
+    SourceProfilePathCheckResponse,
+    SourceProfileStagingFolderCreateResponse,
     SourceProfileMetadataUpdateRequest,
     SourceProfileSummary,
     SourceIntakeReportCounts,
@@ -37,6 +40,8 @@ _SAFE_REPORT_FILENAME_RE = re.compile(r"^source_intake_[\w\-]+\.json$")
 ALLOWED_PROFILE_STATUS = {"active", "inactive", "archived", "test", "deprecated", "all"}
 ALLOWED_CLOUD_PROVIDERS = {"icloud", "onedrive", "google_photos", "dropbox", "other"}
 ALLOWED_ACQUISITION_METHODS = {"icloudpd", "folder_scan", "manual_export", "none"}
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+_APPROVED_ICLOUD_EXPORTS_ROOT = (_PROJECT_ROOT / "storage" / "exports" / "icloud").resolve()
 
 
 def _mask_account_username(value: str | None) -> str | None:
@@ -97,8 +102,18 @@ def _to_absolute_path(path_value: str) -> str:
     raw = Path(path_value).expanduser()
     if raw.is_absolute():
         return str(raw.resolve())
-    backend_root = Path(__file__).resolve().parents[3]
-    return str((backend_root.parent / raw).resolve())
+    return str((_PROJECT_ROOT / raw).resolve())
+
+
+def _to_project_relative_path(path_value: str | None) -> str | None:
+    if not path_value:
+        return None
+    try:
+        resolved = Path(path_value).resolve()
+        relative = resolved.relative_to(_PROJECT_ROOT)
+    except (ValueError, OSError):
+        return None
+    return relative.as_posix()
 
 
 def _slugify_source_label(value: str) -> str:
@@ -110,9 +125,8 @@ def _slugify_source_label(value: str) -> str:
 
 
 def _compute_managed_staging_path(source_label: str, cloud_provider: str) -> str:
-    backend_root = Path(__file__).resolve().parents[3]
     staging_path = (
-        backend_root.parent
+        _PROJECT_ROOT
         / "storage"
         / "exports"
         / cloud_provider
@@ -236,6 +250,153 @@ def _build_single_source_profile_summary(
         ingestion_runs_count=ingestion_runs_counts.get(source.id, 0),
         source_intake_runs_count=source_intake_runs_counts.get(source.id, 0),
         icloud_acquisition_runs_count=icloud_runs_counts.get(source.id, 0),
+    )
+
+
+def _is_referenced_summary(summary: SourceProfileSummary) -> bool:
+    return any(
+        (count or 0) > 0
+        for count in (
+            summary.provenance_count,
+            summary.ingestion_runs_count,
+            summary.source_intake_runs_count,
+            summary.icloud_acquisition_runs_count,
+        )
+    )
+
+
+def _resolve_effective_path(source: IngestionSource) -> tuple[str | None, str]:
+    if source.source_type == "cloud_export" and source.cloud_provider == "icloud" and source.managed_staging_path:
+        return source.managed_staging_path, "managed_staging_path"
+    if source.source_root_path:
+        return source.source_root_path, "source_root_path"
+    if source.managed_staging_path:
+        return source.managed_staging_path, "managed_staging_path"
+    return None, "none"
+
+
+def _build_profile_warnings(source: IngestionSource, summary: SourceProfileSummary) -> list[str]:
+    warnings: list[str] = []
+    if _is_referenced_summary(summary):
+        warnings.append("This source profile has historical references. Edits should preserve provenance meaning.")
+    if source.managed_staging_path and source.source_root_path and source.managed_staging_path != source.source_root_path:
+        warnings.append(
+            "Managed staging path differs from source root path. Existing source identity remains based on source root path."
+        )
+    return warnings
+
+
+def _build_source_profile_detail(
+    db_session: Session,
+    source: IngestionSource,
+    *,
+    include_username: bool,
+) -> SourceProfileDetail:
+    summary = _build_single_source_profile_summary(
+        db_session,
+        source,
+        include_username=include_username,
+    )
+    effective_path, effective_path_kind = _resolve_effective_path(source)
+    warnings = _build_profile_warnings(source, summary)
+    return SourceProfileDetail(
+        **summary.model_dump(),
+        normalized_label=source.source_label_normalized,
+        effective_path=effective_path,
+        effective_path_kind=effective_path_kind,
+        source_root_path_relative=_to_project_relative_path(source.source_root_path),
+        managed_staging_path_relative=_to_project_relative_path(source.managed_staging_path),
+        effective_path_relative=_to_project_relative_path(effective_path),
+        is_referenced=_is_referenced_summary(summary),
+        has_path_divergence=bool(
+            source.managed_staging_path
+            and source.source_root_path
+            and source.managed_staging_path != source.source_root_path
+        ),
+        warnings=warnings,
+    )
+
+
+def get_source_profile_detail(
+    db_session: Session,
+    *,
+    source_id: int,
+    include_username: bool = False,
+) -> SourceProfileDetail:
+    ensure_ingestion_context_schema(db_session)
+    source = db_session.get(IngestionSource, source_id)
+    if source is None:
+        raise LookupError("Source profile not found.")
+    return _build_source_profile_detail(
+        db_session,
+        source,
+        include_username=include_username,
+    )
+
+
+def verify_source_profile_path(
+    db_session: Session,
+    *,
+    source_id: int,
+) -> SourceProfilePathCheckResponse:
+    ensure_ingestion_context_schema(db_session)
+    source = db_session.get(IngestionSource, source_id)
+    if source is None:
+        raise LookupError("Source profile not found.")
+
+    path_value, path_kind = _resolve_effective_path(source)
+    if path_kind == "none" or not path_value:
+        raise ValueError("No path is configured for this source profile.")
+
+    path_obj = Path(path_value)
+    exists = path_obj.exists()
+    return SourceProfilePathCheckResponse(
+        source_id=source.id,
+        path=path_value,
+        path_relative=_to_project_relative_path(path_value),
+        path_kind=path_kind,
+        exists=exists,
+        is_directory=path_obj.is_dir() if exists else False,
+        checked_at=datetime.now(timezone.utc),
+    )
+
+
+def create_source_profile_staging_folder(
+    db_session: Session,
+    *,
+    source_id: int,
+) -> SourceProfileStagingFolderCreateResponse:
+    ensure_ingestion_context_schema(db_session)
+    source = db_session.get(IngestionSource, source_id)
+    if source is None:
+        raise LookupError("Source profile not found.")
+
+    if source.source_type != "cloud_export" or source.cloud_provider != "icloud":
+        raise ValueError("Create Staging Folder is only supported for iCloud source profiles.")
+    if not source.managed_staging_path:
+        raise ValueError("managed_staging_path is not configured for this source profile.")
+
+    target_path = Path(source.managed_staging_path).resolve()
+    try:
+        target_path.relative_to(_APPROVED_ICLOUD_EXPORTS_ROOT)
+    except ValueError as exc:
+        raise ValueError("managed_staging_path is outside the approved iCloud exports root.") from exc
+
+    if target_path.exists() and not target_path.is_dir():
+        raise ValueError("managed_staging_path exists but is not a directory.")
+
+    created = False
+    if not target_path.exists():
+        target_path.mkdir(parents=True, exist_ok=True)
+        created = True
+
+    return SourceProfileStagingFolderCreateResponse(
+        source_id=source.id,
+        path=str(target_path),
+        path_relative=_to_project_relative_path(str(target_path)),
+        created=created,
+        exists=target_path.exists(),
+        checked_at=datetime.now(timezone.utc),
     )
 
 
@@ -605,12 +766,25 @@ def update_source_profile_metadata(
     if payload.account_username is not None:
         source.account_username = payload.account_username.strip() or None
 
+    resolved_cloud_provider = source.cloud_provider
     if payload.acquisition_method is not None:
         source.acquisition_method = _normalize_acquisition_method(payload.acquisition_method)
+
+    if payload.cloud_provider is not None:
+        resolved_cloud_provider = _normalize_cloud_provider(payload.cloud_provider)
+        source.cloud_provider = resolved_cloud_provider
 
     if payload.managed_staging_path is not None:
         if source.source_type != "cloud_export":
             raise ValueError("managed_staging_path can only be edited for cloud_export source profiles.")
+        if resolved_cloud_provider == "icloud":
+            current_summary = _build_single_source_profile_summary(
+                db_session,
+                source,
+                include_username=include_username,
+            )
+            if _is_referenced_summary(current_summary):
+                raise ValueError("managed_staging_path cannot be edited for referenced iCloud source profiles.")
         cleaned_path = payload.managed_staging_path.strip()
         source.managed_staging_path = _to_absolute_path(cleaned_path) if cleaned_path else None
 

@@ -12,9 +12,12 @@ import type {
   AdminSummaryResponse,
   SourceProfileCreateRequest,
   SourceProfileCreateResponse,
+  SourceProfileDetail,
   SourceProfileMetadataUpdateRequest,
+  SourceProfilePathCheckResponse,
   SourceProfileStatus,
   SourceProfilesResponse,
+  SourceProfileStagingFolderCreateResponse,
   SourceProfileSummary,
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
@@ -896,6 +899,21 @@ export function updateSourceProfileStatus(
   });
 }
 
+export function getSourceProfileDetail(
+  sourceId: number,
+  options: { includeUsername?: boolean } = {},
+): Promise<SourceProfileDetail> {
+  const params = new URLSearchParams();
+  if (options.includeUsername !== undefined) {
+    params.set("include_username", String(options.includeUsername));
+  }
+  const query = params.toString();
+  const path = query
+    ? `/api/admin/source-profiles/${sourceId}?${query}`
+    : `/api/admin/source-profiles/${sourceId}`;
+  return apiRequest<SourceProfileDetail>(path);
+}
+
 export function createSourceProfile(
   payload: SourceProfileCreateRequest,
   options: { includeUsername?: boolean } = {},
@@ -931,6 +949,23 @@ export function updateSourceProfileMetadata(
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+}
+
+export function verifySourceProfilePath(sourceId: number): Promise<SourceProfilePathCheckResponse> {
+  return apiRequest<SourceProfilePathCheckResponse>(`/api/admin/source-profiles/${sourceId}/verify-path`, {
+    method: "POST",
+  });
+}
+
+export function createSourceProfileStagingFolder(
+  sourceId: number,
+): Promise<SourceProfileStagingFolderCreateResponse> {
+  return apiRequest<SourceProfileStagingFolderCreateResponse>(
+    `/api/admin/source-profiles/${sourceId}/create-staging-folder`,
+    {
+      method: "POST",
+    },
+  );
 }
 
 // ── iCloud Acquisition ────────────────────────────────────────────────────────

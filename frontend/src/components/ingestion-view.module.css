@@ -146,6 +146,41 @@
   text-transform: uppercase;
 }
 
+.referenceBadge,
+.unreferencedBadge,
+.okBadge,
+.pendingBadge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 700;
+  font-size: 0.74rem;
+}
+
+.referenceBadge {
+  border: 1px solid #d5c28f;
+  background: #fff6dc;
+  color: #7a5a00;
+}
+
+.unreferencedBadge,
+.pendingBadge {
+  border: 1px solid #c8d4df;
+  background: #f4f7fa;
+  color: #516274;
+}
+
+.okBadge {
+  border: 1px solid #b7dcc2;
+  background: #eefaf1;
+  color: #1d6a36;
+}
+
+.labelCell {
+  display: grid;
+  gap: 6px;
+}
+
 .rowActions {
   display: flex;
   gap: 6px;
@@ -265,4 +300,77 @@
   justify-content: flex-end;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.helperText {
+  margin: 0;
+  color: #516274;
+  font-size: 0.88rem;
+}
+
+.inlineWarning {
+  margin: 0;
+  border: 1px solid #f0d7a2;
+  background: #fff8e8;
+  color: #7a5a00;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
+.pathPreviewBlock {
+  display: grid;
+  gap: 6px;
+}
+
+.pathPreviewLine {
+  margin: 0;
+  color: #314152;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.detailSection {
+  display: grid;
+  gap: 10px;
+}
+
+.detailHeading {
+  margin: 0;
+  color: #103d60;
+  font-size: 1rem;
+}
+
+.detailGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.detailCard {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #d7e1ea;
+  border-radius: 12px;
+  background: #f9fbfd;
+  padding: 12px;
+  color: #1d2b39;
+}
+
+.detailLabel {
+  color: #516274;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.detailMeta {
+  color: #617486;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.warningList {
+  display: grid;
+  gap: 8px;
 }

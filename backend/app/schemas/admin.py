@@ -295,6 +295,43 @@ class SourceProfileSummary(BaseModel):
     icloud_acquisition_runs_count: int | None = None
 
 
+class SourceProfileDetail(SourceProfileSummary):
+    """Expanded source profile detail view for operational diagnostics."""
+
+    normalized_label: str
+    effective_path: str | None = None
+    effective_path_kind: Literal["source_root_path", "managed_staging_path", "none"] = "none"
+    source_root_path_relative: str | None = None
+    managed_staging_path_relative: str | None = None
+    effective_path_relative: str | None = None
+    is_referenced: bool = False
+    has_path_divergence: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SourceProfilePathCheckResponse(BaseModel):
+    """Ephemeral path verification response for one source profile."""
+
+    source_id: int
+    path: str | None = None
+    path_relative: str | None = None
+    path_kind: Literal["source_root_path", "managed_staging_path"]
+    exists: bool
+    is_directory: bool
+    checked_at: datetime
+
+
+class SourceProfileStagingFolderCreateResponse(BaseModel):
+    """Result of explicitly creating an approved iCloud staging folder."""
+
+    source_id: int
+    path: str
+    path_relative: str | None = None
+    created: bool
+    exists: bool
+    checked_at: datetime
+
+
 class SourceProfilesResponse(BaseModel):
     """List of source profiles for future ingestion UI compatibility."""
 

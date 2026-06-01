@@ -1267,6 +1267,37 @@ export interface SourceProfileSummary {
   icloud_acquisition_runs_count: number | null;
 }
 
+export interface SourceProfileDetail extends SourceProfileSummary {
+  normalized_label: string;
+  effective_path: string | null;
+  effective_path_kind: "source_root_path" | "managed_staging_path" | "none";
+  source_root_path_relative: string | null;
+  managed_staging_path_relative: string | null;
+  effective_path_relative: string | null;
+  is_referenced: boolean;
+  has_path_divergence: boolean;
+  warnings: string[];
+}
+
+export interface SourceProfilePathCheckResponse {
+  source_id: number;
+  path: string | null;
+  path_relative: string | null;
+  path_kind: "source_root_path" | "managed_staging_path";
+  exists: boolean;
+  is_directory: boolean;
+  checked_at: string;
+}
+
+export interface SourceProfileStagingFolderCreateResponse {
+  source_id: number;
+  path: string;
+  path_relative: string | null;
+  created: boolean;
+  exists: boolean;
+  checked_at: string;
+}
+
 export interface SourceProfilesResponse {
   generated_at: string;
   profiles: SourceProfileSummary[];
