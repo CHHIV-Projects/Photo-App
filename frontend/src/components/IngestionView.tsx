@@ -6,6 +6,7 @@ import {
   createSourceProfile,
   createSourceProfileStagingFolder,
   getSourceProfileDetail,
+  getSourceIntakeReportDetail,
   getSourceIntakeReports,
   getSourceIntakeRunStatus,
   getSourceProfiles,
@@ -21,6 +22,7 @@ import type {
   SourceProfileDetail,
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
+  SourceIntakeReportDetail,
   SourceIntakeReportSummary,
   SourceProfileStagingFolderCreateResponse,
   SourceProfileStatus,
@@ -268,6 +270,11 @@ export default function IngestionView() {
   const [isAdvancedRunOptionsOpen, setIsAdvancedRunOptionsOpen] = useState(false);
   const [runLimitInput, setRunLimitInput] = useState("");
   const [runBatchSizeInput, setRunBatchSizeInput] = useState("500");
+  const [dismissedTerminalRunKey, setDismissedTerminalRunKey] = useState<string | null>(null);
+  const [selectedReportFilename, setSelectedReportFilename] = useState<string | null>(null);
+  const [selectedReportDetail, setSelectedReportDetail] = useState<SourceIntakeReportDetail | null>(null);
+  const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
+  const [reportDetailError, setReportDetailError] = useState<string | null>(null);
 
   const loadProfiles = useCallback(async (options: LoadProfilesOptions = {}) => {
     const { refreshOnly = false, clearRowErrors = false, resetBanner = true } = options;
@@ -345,6 +352,12 @@ export default function IngestionView() {
   const isSourceIntakeActive = sourceIntakeStatus
     ? ["running", "stop_requested"].includes(sourceIntakeStatus.status)
     : false;
+
+  useEffect(() => {
+    if (isSourceIntakeActive) {
+      setDismissedTerminalRunKey(null);
+    }
+  }, [isSourceIntakeActive]);
 
   useEffect(() => {
     if (!isSourceIntakeActive) {
@@ -647,6 +660,97 @@ export default function IngestionView() {
     ? ["completed", "failed", "stopped"].includes(sourceIntakeStatus.status)
     : false;
 
+  const currentTerminalRunKey = useMemo(() => terminalSummaryKey(sourceIntakeStatus), [sourceIntakeStatus]);
+  const showTerminalSummary = Boolean(
+    sourceIntakeStatus
+    && isTerminalRun
+    && currentTerminalRunKey
+    && currentTerminalRunKey !== dismissedTerminalRunKey,
+  );
+
+  const terminalReportFilename =
+    extractReportFilename(sourceIntakeStatus?.report_path ?? null)
+    || activeRunReport?.report_filename
+    || null;
+
+  const latestReportBySourceId = useMemo(() => {
+    const bySource = new Map<number, SourceIntakeReportSummary>();
+    for (const report of sourceIntakeReports) {
+      if (report.ingestion_source_id == null || bySource.has(report.ingestion_source_id)) {
+        continue;
+      }
+      bySource.set(report.ingestion_source_id, report);
+    }
+    return bySource;
+  }, [sourceIntakeReports]);
+
+  const recentReportsBySourceId = useMemo(() => {
+    const bySource = new Map<number, SourceIntakeReportSummary[]>();
+    for (const report of sourceIntakeReports) {
+      if (report.ingestion_source_id == null) {
+        continue;
+      }
+      const list = bySource.get(report.ingestion_source_id) ?? [];
+      if (list.length < 5) {
+        list.push(report);
+      }
+      bySource.set(report.ingestion_source_id, list);
+    }
+    return bySource;
+  }, [sourceIntakeReports]);
+
+  const selectedReportSummary = useMemo(() => {
+    if (!selectedReportFilename) {
+      return null;
+    }
+    return sourceIntakeReports.find((report) => report.report_filename === selectedReportFilename) ?? null;
+  }, [selectedReportFilename, sourceIntakeReports]);
+
+  const selectedReportPath = useMemo(() => {
+    if (!selectedReportFilename) {
+      return null;
+    }
+
+    const rawPath = selectedReportDetail?.raw?.report_path;
+    if (sourceIntakeStatus?.report_path && extractReportFilename(sourceIntakeStatus.report_path) === selectedReportFilename) {
+      return sourceIntakeStatus.report_path;
+    }
+
+    return buildReportReferencePath(selectedReportFilename, rawPath);
+  }, [selectedReportDetail, selectedReportFilename, sourceIntakeStatus?.report_path]);
+
+  const loadReportDetail = useCallback(async (reportFilename: string) => {
+    setIsReportDetailLoading(true);
+    setReportDetailError(null);
+    setSelectedReportDetail(null);
+    try {
+      const detail = await getSourceIntakeReportDetail(reportFilename);
+      setSelectedReportDetail(detail);
+    } catch (error) {
+      setReportDetailError(error instanceof Error ? error.message : "Failed to load report detail.");
+    } finally {
+      setIsReportDetailLoading(false);
+    }
+  }, []);
+
+  const handleToggleReportSummary = useCallback((reportFilename: string) => {
+    if (selectedReportFilename === reportFilename) {
+      setSelectedReportFilename(null);
+      setSelectedReportDetail(null);
+      setReportDetailError(null);
+      return;
+    }
+    setSelectedReportFilename(reportFilename);
+    void loadReportDetail(reportFilename);
+  }, [loadReportDetail, selectedReportFilename]);
+
+  const handleRefreshReportSummary = useCallback(() => {
+    if (!selectedReportFilename) {
+      return;
+    }
+    void loadReportDetail(selectedReportFilename);
+  }, [loadReportDetail, selectedReportFilename]);
+
   const closeRunConfirmation = useCallback(() => {
     setIsRunConfirmOpen(false);
     setRunCandidateProfile(null);
@@ -733,6 +837,7 @@ export default function IngestionView() {
       });
 
       setSourceIntakeStatus(response.current);
+      setDismissedTerminalRunKey(null);
       setBanner({ kind: "success", message: `Source Intake started for ${runCandidateProfile.source_label}.` });
       closeRunConfirmation();
       await loadSourceIntakeReports();
@@ -818,7 +923,7 @@ export default function IngestionView() {
       )}
 
       <p className={styles.note}>
-        Source profiles define where files come from. Running intake from this tab will be added later.
+        Source profiles define where files come from. Run Intake from this tab supports active local and external profiles.
       </p>
       <p className={styles.note}>
         Lifecycle status does not delete files, sources, or provenance. Archived, test, and deprecated sources are retained for history and remain visible through the status filter.
@@ -851,50 +956,151 @@ export default function IngestionView() {
           </div>
           <p className={styles.helperText}>Only one Source Intake run can run at a time.</p>
           <div className={styles.runMetrics}>
-            <span><strong>Status:</strong> {sourceIntakeStatus.status}</span>
+            <span>
+              <strong>Status:</strong>{" "}
+              <span className={`${styles.runStatusBadge} ${statusClassName(sourceIntakeStatus.status)}`}>
+                {toStatusLabel(sourceIntakeStatus.status)}
+              </span>
+            </span>
             {sourceIntakeStatus.source_label && (
               <span><strong>Source:</strong> {sourceIntakeStatus.source_label} ({sourceIntakeStatus.source_type})</span>
             )}
             {sourceIntakeStatus.started_at && <span><strong>Started:</strong> {toDisplayDate(sourceIntakeStatus.started_at)}</span>}
+            {sourceIntakeStatus.stop_requested && <span><strong>Stop Requested:</strong> Yes</span>}
             <span><strong>Scanned:</strong> {sourceIntakeStatus.files_scanned}</span>
-            <span><strong>Selected:</strong> {sourceIntakeStatus.selected}</span>
-            <span><strong>Staged:</strong> {sourceIntakeStatus.staged}</span>
+            <span><strong>Eligible Unknown:</strong> {sourceIntakeStatus.selected + sourceIntakeStatus.remaining_unknown}</span>
+            <span><strong>Selected for Session:</strong> {sourceIntakeStatus.selected}</span>
+            <span><strong>Staged to Drop Zone:</strong> {sourceIntakeStatus.staged}</span>
             <span><strong>Processed New:</strong> {sourceIntakeStatus.processed_new_unique}</span>
           </div>
         </section>
       )}
 
-      {sourceIntakeStatus && isTerminalRun && (
+      {sourceIntakeStatus && showTerminalSummary && (
         <section className={styles.runPanel}>
           <div className={styles.runPanelHeader}>
             <h3 className={styles.runPanelTitle}>Last Source Intake Summary</h3>
+            <div className={styles.rowActions}>
+              {terminalReportFilename && (
+                <button
+                  type="button"
+                  className={styles.updateButton}
+                  onClick={() => handleToggleReportSummary(terminalReportFilename)}
+                >
+                  {selectedReportFilename === terminalReportFilename ? "Hide Report Summary" : "View Report Summary"}
+                </button>
+              )}
+              <button
+                type="button"
+                className={styles.button}
+                onClick={() => setDismissedTerminalRunKey(currentTerminalRunKey)}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
           <div className={styles.runMetrics}>
-            <span><strong>Status:</strong> {sourceIntakeStatus.status}</span>
+            <span>
+              <strong>Final Status:</strong>{" "}
+              <span className={`${styles.runStatusBadge} ${statusClassName(sourceIntakeStatus.status)}`}>
+                {toStatusLabel(sourceIntakeStatus.status)}
+              </span>
+            </span>
             {sourceIntakeStatus.source_label && (
               <span><strong>Source:</strong> {sourceIntakeStatus.source_label} ({sourceIntakeStatus.source_type})</span>
             )}
+            <span><strong>Started:</strong> {toDisplayDate(sourceIntakeStatus.started_at)}</span>
+            <span><strong>Finished:</strong> {toDisplayDate(sourceIntakeStatus.finished_at)}</span>
             <span><strong>Scanned:</strong> {sourceIntakeStatus.files_scanned}</span>
             <span><strong>Skipped Known:</strong> {sourceIntakeStatus.skipped_known}</span>
-            <span><strong>Selected:</strong> {sourceIntakeStatus.selected}</span>
-            <span><strong>Staged:</strong> {sourceIntakeStatus.staged}</span>
+            <span><strong>Eligible Unknown:</strong> {sourceIntakeStatus.selected + sourceIntakeStatus.remaining_unknown}</span>
+            <span><strong>Selected for Session:</strong> {sourceIntakeStatus.selected}</span>
+            <span><strong>Staged to Drop Zone:</strong> {sourceIntakeStatus.staged}</span>
             <span><strong>Processed New:</strong> {sourceIntakeStatus.processed_new_unique}</span>
-            <span><strong>Remaining:</strong> {sourceIntakeStatus.remaining_unknown}</span>
+            <span><strong>Remaining Unknown Eligible:</strong> {sourceIntakeStatus.remaining_unknown}</span>
             {activeRunReport?.counts?.failed_or_rejected != null && (
               <span><strong>Failed/Rejected:</strong> {activeRunReport.counts.failed_or_rejected}</span>
             )}
             {activeRunReport?.counts?.deferred_unready_count != null && (
-              <span><strong>Deferred Unready:</strong> {activeRunReport.counts.deferred_unready_count}</span>
+              <span><strong>Deferred/Unready:</strong> {activeRunReport.counts.deferred_unready_count}</span>
             )}
             {activeRunReport?.source_complete != null && (
               <span><strong>Source Complete:</strong> {activeRunReport.source_complete ? "Yes" : "No"}</span>
             )}
-            {(extractReportFilename(sourceIntakeStatus.report_path) || activeRunReport?.report_filename) && (
+            {terminalReportFilename && (
               <span>
-                <strong>Report:</strong> {extractReportFilename(sourceIntakeStatus.report_path) || activeRunReport?.report_filename}
+                <strong>Report:</strong> {terminalReportFilename}
               </span>
             )}
+            {sourceIntakeStatus.report_path && <span><strong>Path:</strong> {sourceIntakeStatus.report_path}</span>}
           </div>
+        </section>
+      )}
+
+      {selectedReportFilename && (
+        <section className={styles.runPanel}>
+          <div className={styles.runPanelHeader}>
+            <h3 className={styles.runPanelTitle}>Report Summary</h3>
+            <div className={styles.rowActions}>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={() => void handleRefreshReportSummary()}
+                disabled={isReportDetailLoading}
+              >
+                {isReportDetailLoading ? "Refreshing..." : "Refresh Report"}
+              </button>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={() => {
+                  setSelectedReportFilename(null);
+                  setSelectedReportDetail(null);
+                  setReportDetailError(null);
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+
+          {reportDetailError ? (
+            <p className={styles.bannerError}>{reportDetailError}</p>
+          ) : isReportDetailLoading ? (
+            <p className={styles.helperText}>Loading report summary...</p>
+          ) : (
+            <>
+              <div className={styles.runMetrics}>
+                <span><strong>Report Filename:</strong> {selectedReportFilename}</span>
+                <span><strong>Report Path:</strong> {selectedReportPath ?? "-"}</span>
+                <span><strong>Source Label:</strong> {selectedReportSummary?.source_label ?? "-"}</span>
+                <span><strong>Source ID:</strong> {selectedReportSummary?.ingestion_source_id ?? "-"}</span>
+                <span><strong>Generated:</strong> {toDisplayDate(selectedReportSummary?.generated_at_utc ?? null)}</span>
+                <span><strong>Ingestion Run ID:</strong> {selectedReportSummary?.ingestion_run_id ?? "-"}</span>
+                <span><strong>Source Intake Limit:</strong> {selectedReportSummary?.ingest_source_limit ?? "none"}</span>
+                <span><strong>Ingest Batch Size:</strong> {selectedReportSummary?.ingest_batch_size ?? "-"}</span>
+                <span><strong>Scanned:</strong> {selectedReportSummary?.counts?.total_files_scanned ?? "-"}</span>
+                <span><strong>Skipped Known:</strong> {selectedReportSummary?.counts?.skipped_already_known ?? "-"}</span>
+                <span><strong>Eligible Unknown:</strong> {selectedReportSummary?.counts?.eligible_unknown_files ?? "-"}</span>
+                <span><strong>Selected for Session:</strong> {selectedReportSummary?.counts?.selected_for_session ?? "-"}</span>
+                <span><strong>Staged to Drop Zone:</strong> {selectedReportSummary?.counts?.staged_to_dropzone ?? "-"}</span>
+                <span><strong>Processed New Unique:</strong> {selectedReportSummary?.counts?.processed_new_unique ?? "-"}</span>
+                <span><strong>Failed/Rejected:</strong> {selectedReportSummary?.counts?.failed_or_rejected ?? "-"}</span>
+                <span><strong>Deferred/Unready:</strong> {selectedReportSummary?.counts?.deferred_unready_count ?? "-"}</span>
+                <span><strong>Remaining Unknown Eligible:</strong> {selectedReportSummary?.counts?.remaining_unknown_eligible ?? "-"}</span>
+                <span><strong>Source Complete:</strong> {selectedReportSummary?.source_complete == null ? "-" : selectedReportSummary.source_complete ? "Yes" : "No"}</span>
+              </div>
+
+              <p className={styles.placeholder}>Full Source Intake report details remain available in Admin.</p>
+
+              {selectedReportDetail && (
+                <details className={styles.errorDetails}>
+                  <summary>Show raw report details</summary>
+                  <pre className={styles.errorDetailsText}>{JSON.stringify(selectedReportDetail.raw, null, 2)}</pre>
+                </details>
+              )}
+            </>
+          )}
         </section>
       )}
 
@@ -951,7 +1157,25 @@ export default function IngestionView() {
                     <td className={styles.pathCell}>{profile.managed_staging_path ?? "-"}</td>
                     <td>{profile.account_username_masked ?? "-"}</td>
                     <td>{toDisplayDate(profile.first_seen_at)}</td>
-                    <td>{toDisplayDate(profile.last_run_at)}</td>
+                    <td>
+                      {(() => {
+                        const latestReport = latestReportBySourceId.get(profile.source_id);
+                        if (!latestReport) {
+                          return (
+                            <span className={styles.lastRunSummary}>
+                              {(profile.source_intake_runs_count ?? 0) > 0
+                                ? "No recent run found in available report history."
+                                : "Last run: no run found"}
+                            </span>
+                          );
+                        }
+                        return (
+                          <span className={styles.lastRunSummary}>
+                            {buildLastRunSummaryText(latestReport, profile, sourceIntakeStatus)}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td>
                       <div className={styles.counts}>
                         <span>Provenance: {profile.provenance_count ?? 0}</span>
@@ -1455,6 +1679,37 @@ export default function IngestionView() {
                 </section>
 
                 <section className={styles.detailSection}>
+                  <h4 className={styles.detailHeading}>Recent Source Intake Runs</h4>
+                  {(() => {
+                    const sourceReports = recentReportsBySourceId.get(detailProfile.source_id) ?? [];
+                    if (sourceReports.length === 0) {
+                      return <p className={styles.helperText}>No recent run found in available report history.</p>;
+                    }
+
+                    return (
+                      <div className={styles.warningList}>
+                        {sourceReports.map((report) => (
+                          <div key={report.report_filename} className={styles.detailCard}>
+                            <span className={styles.detailMeta}>{toDisplayDate(report.generated_at_utc)}</span>
+                            <span>{buildLastRunSummaryText(report, detailProfile, sourceIntakeStatus)}</span>
+                            <span className={styles.detailMeta}>Report: {report.report_filename}</span>
+                            <div className={styles.rowActions}>
+                              <button
+                                type="button"
+                                className={styles.updateButton}
+                                onClick={() => handleToggleReportSummary(report.report_filename)}
+                              >
+                                {selectedReportFilename === report.report_filename ? "Hide Report Summary" : "View Report Summary"}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </section>
+
+                <section className={styles.detailSection}>
                   <h4 className={styles.detailHeading}>Warnings</h4>
                   {detailProfile.warnings.length === 0 ? (
                     <p className={styles.helperText}>No additional operational warnings for this profile.</p>
@@ -1476,4 +1731,92 @@ export default function IngestionView() {
       )}
     </section>
   );
+}
+
+function normalizeIdentityValue(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function normalizePathForMatch(value: string | null | undefined): string {
+  return (value ?? "").trim().replaceAll("\\", "/").toLowerCase();
+}
+
+function doesStatusMatchProfile(profile: SourceProfileSummary, status: SourceIntakeStatusSnapshot | null): boolean {
+  if (!status) {
+    return false;
+  }
+
+  const sameType = normalizeIdentityValue(status.source_type) === normalizeIdentityValue(profile.source_type);
+  const sameLabel = normalizeIdentityValue(status.source_label) === normalizeIdentityValue(profile.source_label);
+  const samePath = normalizePathForMatch(status.source_root_path) === normalizePathForMatch(profile.source_root_path);
+
+  return sameType && sameLabel && samePath;
+}
+
+function toStatusLabel(status: string): string {
+  return status
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function statusClassName(status: string): string {
+  const normalized = status.toLowerCase();
+  if (normalized === "running") {
+    return styles.runStatusRunning;
+  }
+  if (normalized === "stop_requested") {
+    return styles.runStatusStopRequested;
+  }
+  if (normalized === "completed") {
+    return styles.runStatusCompleted;
+  }
+  if (normalized === "failed") {
+    return styles.runStatusFailed;
+  }
+  if (normalized === "stopped") {
+    return styles.runStatusStopped;
+  }
+  return styles.runStatusNeutral;
+}
+
+function terminalSummaryKey(status: SourceIntakeStatusSnapshot | null): string | null {
+  if (!status) {
+    return null;
+  }
+  return [
+    status.run_id ?? "none",
+    status.status,
+    status.started_at ?? "",
+    status.finished_at ?? "",
+  ].join("|");
+}
+
+function buildReportReferencePath(reportFilename: string, rawReportPath: unknown): string {
+  if (typeof rawReportPath === "string" && rawReportPath.trim().length > 0) {
+    return rawReportPath;
+  }
+  return `storage/logs/source_intake_reports/${reportFilename}`;
+}
+
+function buildLastRunSummaryText(
+  report: SourceIntakeReportSummary,
+  profile: SourceProfileSummary,
+  status: SourceIntakeStatusSnapshot | null,
+): string {
+  const timestamp = report.generated_at_utc ? new Date(report.generated_at_utc).toLocaleString() : null;
+  const statusText = doesStatusMatchProfile(profile, status) ? toStatusLabel(status?.status ?? "reported") : "Reported";
+  const processedNew = report.counts?.processed_new_unique ?? 0;
+  const failedOrRejected = report.counts?.failed_or_rejected ?? 0;
+  const deferred = report.counts?.deferred_unready_count ?? 0;
+  const failedTotal = failedOrRejected + deferred;
+  const completion = report.source_complete == null
+    ? "source state unknown"
+    : (report.source_complete ? "source complete" : "source incomplete");
+
+  if (timestamp) {
+    return `Last run: ${timestamp} - ${statusText.toLowerCase()} - ${processedNew} new / ${failedTotal} failed - ${completion}`;
+  }
+
+  return `Last run: ${statusText.toLowerCase()} - ${processedNew} new / ${failedTotal} failed - ${completion}`;
 }

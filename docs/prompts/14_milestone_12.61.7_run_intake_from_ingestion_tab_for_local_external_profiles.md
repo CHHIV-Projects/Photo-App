@@ -822,3 +822,177 @@ managed staging validation
 auth/session status display
 no implementation yet
 ```
+
+
+
+
+
+# Answers to Coder Questions — Milestone 12.61.7
+
+## 1. Non-runnable profiles
+
+Use disabled Run Intake buttons with inline reason text.
+
+Preferred behavior:
+
+```text
+Show Run Intake button where the action conceptually belongs.
+Disable it when not eligible.
+Show short reason near the button or in the row.
+
+Examples:
+
+Inactive profile — only active profiles can run intake.
+Run Intake is available for local/external profiles only.
+iCloud/cloud workflows will be added later.
+
+Reason:
+
+Hidden buttons can make the user wonder whether something is broken.
+Disabled buttons with reasons teach the new workflow.
+2. Button placement
+
+Place Run Intake directly in each table row.
+
+Reason:
+
+Run Intake is becoming the main operator action for local/external profiles.
+It should be visible without opening Details.
+
+Details drawer can still show more explanation, path status, and reference details.
+
+Use disabled state + confirmation dialog to reduce accidental-click risk.
+
+3. Request Stop
+
+Include Request Stop in 12.61.7.
+
+Reason:
+
+If the user starts a run from Ingestion, they should be able to request stop from Ingestion.
+
+Use wording:
+
+Request Stop
+
+Do not label it Kill or Cancel, because backend behavior is graceful stop-requested.
+
+4. Compact summary placement
+
+Use a top global panel for active/completed run summary.
+
+Preferred:
+
+Top global active-run banner while running.
+Top compact run summary after terminal state.
+
+Do not put the primary run status only inside a row or Details drawer because Source Intake is globally single-active-run.
+
+The row can optionally show lightweight “last run” info later, but the first implementation should use a global panel.
+
+5. Report reference
+
+Show the report path/reference string and textual guidance to Admin for full details.
+
+Preferred:
+
+Report: source_intake_<run_id>.json
+Full Source Intake report details remain available in Admin.
+
+Do not build deep linking or a full report drawer in 12.61.7 unless it is trivial and risk-free.
+
+6. Auto-verify failure behavior
+
+Use banner + row-level error state.
+
+Preferred behavior:
+
+User clicks Run Intake
+UI auto-verifies path
+If path fails:
+  show top error banner
+  show row-level error/status near the profile
+  do not open confirmation dialog
+
+No modal needed for failure. Modal/dialog should be reserved for successful preflight confirmation.
+
+7. Drop Zone non-empty handling
+
+Use a dedicated Ingestion-specific message plus raw backend details in a collapsible/details area if available.
+
+User-facing message:
+
+Cannot start Source Intake because the Drop Zone is not empty.
+Resolve or clear the current Drop Zone state before starting a new intake.
+
+Then optionally:
+
+Details
+  <raw backend error>
+
+Reason:
+
+Drop Zone conflicts are operationally important and should be understandable, but raw backend details can still help troubleshooting.
+Implementation Direction Confirmation
+
+Proceed with coder’s proposed defaults:
+
+- disabled-not-hidden non-runnable Run Intake buttons
+- row-level Run Intake button
+- include Request Stop
+- global active-run banner
+- top compact summary panel
+- path verification only on click, not per-row bulk verification
+- status polling on Ingestion mount
+- reuse Admin polling cadence:
+  - 1s status polling while active
+  - 3s source/report refresh while active
+  - final refresh on terminal state
+Keep hard boundaries
+
+Do not:
+
+- add iCloud/cloud_export orchestration
+- add cleanup
+- add source deletion
+- change backend Source Intake semantics
+- add unsupported options like dry-run, scan-only, or file-type filters
+- change existing Admin Source Intake behavior
+
+
+
+
+# Final Lock-ins — Milestone 12.61.7
+
+## 1. Row-level error lifetime
+
+Row-level run errors should persist until the next run attempt on that row, or until the user manually refreshes/reloads the profile list.
+
+Preferred behavior:
+
+```text
+Error occurs on Row A
+→ row shows error
+→ error remains visible while user can read it
+→ clicking Run Intake again on Row A clears/replaces it
+→ Refresh also clears/reloads row state
+
+Do not clear row-level errors automatically on background polling/refresh if that makes the message disappear too quickly.
+
+2. Advanced options defaults
+
+Confirmed.
+
+Defaults:
+
+ingest_batch_size = 500
+source_intake_limit = blank/null
+
+Advanced section behavior:
+
+Advanced collapsed by default
+If user does not open Advanced:
+  send batch size 500
+  send source_intake_limit as null/blank per existing API convention
+
+Do not invent other options.

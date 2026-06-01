@@ -164,6 +164,51 @@
   font-size: 0.98rem;
 }
 
+.runStatusBadge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.runStatusRunning {
+  border: 1px solid #9fc7ee;
+  background: #e8f3ff;
+  color: #0f4d7d;
+}
+
+.runStatusStopRequested {
+  border: 1px solid #f0d7a2;
+  background: #fff8e8;
+  color: #7a5a00;
+}
+
+.runStatusCompleted {
+  border: 1px solid #b7dcc2;
+  background: #eefaf1;
+  color: #1d6a36;
+}
+
+.runStatusFailed {
+  border: 1px solid #e7bcc3;
+  background: #fff2f4;
+  color: #8f2333;
+}
+
+.runStatusStopped {
+  border: 1px solid #c8d4df;
+  background: #f4f7fa;
+  color: #425466;
+}
+
+.runStatusNeutral {
+  border: 1px solid #c8d4df;
+  background: #f4f7fa;
+  color: #516274;
+}
+
 .runMetrics {
   display: grid;
   gap: 4px;
@@ -219,6 +264,22 @@
   padding: 8px 10px;
   border-bottom: 1px solid #edf2f7;
   vertical-align: top;
+}
+
+.table th:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  background: #f8fbff;
+  border-left: 1px solid #d7e1ea;
+}
+
+.table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: #ffffff;
+  border-left: 1px solid #edf2f7;
 }
 
 .table tr:last-child td {
@@ -279,8 +340,21 @@
 }
 
 .labelCell {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
+  max-width: 11rem;
+}
+
+.labelCell > span:first-child {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.labelCell .referenceBadge,
+.labelCell .unreferencedBadge {
+  white-space: nowrap;
 }
 
 .rowActions {
@@ -299,6 +373,15 @@
   color: #8f2333;
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.lastRunSummary {
+  display: block;
+  color: #314152;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  max-width: 12rem;
+  overflow-wrap: anywhere;
 }
 
 .updateButton {
