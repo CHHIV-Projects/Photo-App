@@ -56,6 +56,57 @@
   cursor: not-allowed;
 }
 
+.runButton {
+  border: 1px solid #5f8eb8;
+  border-radius: 8px;
+  background: #dbeaf8;
+  color: #0f436a;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.runButton:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.stopButton {
+  border: 1px solid #d08f9c;
+  border-radius: 8px;
+  background: #fff0f3;
+  color: #8f2333;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.stopButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.linkButton {
+  justify-self: start;
+  border: none;
+  background: transparent;
+  color: #1f4e75;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.linkButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .bannerSuccess {
   border: 1px solid #b7dcc2;
   background: #eefaf1;
@@ -87,6 +138,57 @@
 .placeholder {
   margin: 0;
   color: #617486;
+  font-size: 0.82rem;
+}
+
+.runPanel {
+  border: 1px solid #cfdce8;
+  border-radius: 12px;
+  background: #f7fbff;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.runPanelHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.runPanelTitle {
+  margin: 0;
+  color: #103d60;
+  font-size: 0.98rem;
+}
+
+.runMetrics {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  color: #314152;
+  font-size: 0.84rem;
+}
+
+.errorDetails {
+  border: 1px solid #e7bcc3;
+  border-radius: 10px;
+  background: #fff7f8;
+  padding: 10px 12px;
+}
+
+.errorDetails summary {
+  cursor: pointer;
+  color: #8f2333;
+  font-weight: 700;
+}
+
+.errorDetailsText {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  color: #6c2430;
   font-size: 0.82rem;
 }
 
@@ -185,6 +287,18 @@
   display: flex;
   gap: 6px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.disabledReason {
+  color: #617486;
+  font-size: 0.76rem;
+}
+
+.rowError {
+  color: #8f2333;
+  font-size: 0.76rem;
+  font-weight: 700;
 }
 
 .updateButton {

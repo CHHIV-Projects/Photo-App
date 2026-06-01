@@ -919,9 +919,6 @@ link iCloud acquisition to source profile metadata more explicitly
 no unified acquisition + intake yet
 ```
 
-
-
-
 # Answers to Coder Questions — Milestone 12.61.4
 
 ## 1. API shape preference
@@ -1164,7 +1161,7 @@ Proceed with coder’s recommended low-risk design:
 - Return existing profile with already_exists=true on duplicate identity if feasible.
 - Add create/edit UI in Ingestion tab via drawer/modal.
 - No Run Intake, no source deletion, no cleanup controls.
-Hard boundaries
+  Hard boundaries
 
 Do not:
 

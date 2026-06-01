@@ -6,7 +6,11 @@ import {
   createSourceProfile,
   createSourceProfileStagingFolder,
   getSourceProfileDetail,
+  getSourceIntakeReports,
+  getSourceIntakeRunStatus,
   getSourceProfiles,
+  startSourceIntake,
+  stopSourceIntake,
   updateSourceProfileMetadata,
   verifySourceProfilePath,
 } from "@/lib/api";
@@ -17,16 +21,24 @@ import type {
   SourceProfileDetail,
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
+  SourceIntakeReportSummary,
   SourceProfileStagingFolderCreateResponse,
   SourceProfileStatus,
   SourceProfileSummary,
   SourceProfileType,
+  SourceIntakeStatusSnapshot,
 } from "@/types/ui-api";
 
 import styles from "./ingestion-view.module.css";
 
 type StatusFilter = SourceProfileStatus | "all";
 type EditorMode = "create" | "edit";
+
+type LoadProfilesOptions = {
+  refreshOnly?: boolean;
+  clearRowErrors?: boolean;
+  resetBanner?: boolean;
+};
 
 type BannerState = {
   kind: "success" | "error";
@@ -158,6 +170,68 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function isLocalOrExternalSource(sourceType: SourceProfileType): boolean {
+  return sourceType === "local_folder" || sourceType === "external_drive";
+}
+
+function getRunDisabledReason(profile: SourceProfileSummary): string | null {
+  if (!isLocalOrExternalSource(profile.source_type)) {
+    if (profile.source_type === "cloud_export") {
+      return "iCloud/cloud workflows will be added later.";
+    }
+    return "Run Intake from Ingestion is available for local and external profiles only in this milestone.";
+  }
+
+  if (profile.profile_status !== "active") {
+    return "Only active profiles can run intake from this tab.";
+  }
+
+  return null;
+}
+
+function extractReportFilename(reportPath: string | null): string | null {
+  if (!reportPath) {
+    return null;
+  }
+  const pieces = reportPath.split(/[\\/]/).filter(Boolean);
+  return pieces.length > 0 ? pieces[pieces.length - 1] : null;
+}
+
+function mapRunStartError(error: unknown): { message: string; raw: string | null } {
+  const raw = error instanceof Error ? error.message : "";
+  const normalized = raw.toLowerCase();
+
+  if (normalized.includes("already active")) {
+    return {
+      message: "Another Source Intake run is already active. Wait for it to finish or request stop.",
+      raw,
+    };
+  }
+  if (normalized.includes("no root path configured")) {
+    return {
+      message: "This Source Profile does not have a valid source path.",
+      raw,
+    };
+  }
+  if (normalized.includes("does not exist") || normalized.includes("not a directory")) {
+    return {
+      message: "The source path is missing or is not a directory.",
+      raw,
+    };
+  }
+  if (normalized.includes("drop zone is not empty")) {
+    return {
+      message: "Cannot start Source Intake because the Drop Zone is not empty. Resolve or clear the current Drop Zone state before starting a new intake.",
+      raw,
+    };
+  }
+
+  return {
+    message: "Source Intake could not be started. See details below.",
+    raw: raw || null,
+  };
+}
+
 export default function IngestionView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [profiles, setProfiles] = useState<SourceProfileSummary[]>([]);
@@ -182,15 +256,36 @@ export default function IngestionView() {
   const [pathCheckResult, setPathCheckResult] = useState<SourceProfilePathCheckResponse | null>(null);
   const [stagingCreateResult, setStagingCreateResult] = useState<SourceProfileStagingFolderCreateResponse | null>(null);
   const [isCreatingStagingFolder, setIsCreatingStagingFolder] = useState(false);
+  const [sourceIntakeStatus, setSourceIntakeStatus] = useState<SourceIntakeStatusSnapshot | null>(null);
+  const [sourceIntakeReports, setSourceIntakeReports] = useState<SourceIntakeReportSummary[]>([]);
+  const [isRunActionLoading, setIsRunActionLoading] = useState(false);
+  const [runPreflightSourceId, setRunPreflightSourceId] = useState<number | null>(null);
+  const [rowRunErrors, setRowRunErrors] = useState<Record<number, string>>({});
+  const [runErrorDetails, setRunErrorDetails] = useState<string | null>(null);
+  const [isRunConfirmOpen, setIsRunConfirmOpen] = useState(false);
+  const [runCandidateProfile, setRunCandidateProfile] = useState<SourceProfileSummary | null>(null);
+  const [runCandidatePathCheck, setRunCandidatePathCheck] = useState<SourceProfilePathCheckResponse | null>(null);
+  const [isAdvancedRunOptionsOpen, setIsAdvancedRunOptionsOpen] = useState(false);
+  const [runLimitInput, setRunLimitInput] = useState("");
+  const [runBatchSizeInput, setRunBatchSizeInput] = useState("500");
 
-  const loadProfiles = useCallback(async (refreshOnly = false) => {
+  const loadProfiles = useCallback(async (options: LoadProfilesOptions = {}) => {
+    const { refreshOnly = false, clearRowErrors = false, resetBanner = true } = options;
+
     if (refreshOnly) {
       setIsRefreshing(true);
     } else {
       setIsLoading(true);
     }
 
-    setBanner(null);
+    if (resetBanner) {
+      setBanner(null);
+    }
+    if (clearRowErrors) {
+      setRowRunErrors({});
+      setRunErrorDetails(null);
+    }
+
     try {
       let response;
       try {
@@ -205,10 +300,12 @@ export default function IngestionView() {
       setProfiles(response.profiles);
     } catch (error) {
       setProfiles([]);
-      setBanner({
-        kind: "error",
-        message: error instanceof Error ? error.message : "Failed to load source profiles.",
-      });
+      if (resetBanner) {
+        setBanner({
+          kind: "error",
+          message: error instanceof Error ? error.message : "Failed to load source profiles.",
+        });
+      }
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -216,8 +313,67 @@ export default function IngestionView() {
   }, [statusFilter]);
 
   useEffect(() => {
-    void loadProfiles();
+    void loadProfiles({ clearRowErrors: true });
   }, [loadProfiles]);
+
+  const loadSourceIntakeStatus = useCallback(async () => {
+    try {
+      const response = await getSourceIntakeRunStatus();
+      setSourceIntakeStatus(response);
+    } catch (error) {
+      setBanner({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Failed to load source intake status.",
+      });
+    }
+  }, []);
+
+  const loadSourceIntakeReports = useCallback(async () => {
+    try {
+      const response = await getSourceIntakeReports();
+      setSourceIntakeReports(response.reports);
+    } catch {
+      // Keep run/report polling resilient and avoid replacing current table state on intermittent report errors.
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSourceIntakeStatus();
+    void loadSourceIntakeReports();
+  }, [loadSourceIntakeReports, loadSourceIntakeStatus]);
+
+  const isSourceIntakeActive = sourceIntakeStatus
+    ? ["running", "stop_requested"].includes(sourceIntakeStatus.status)
+    : false;
+
+  useEffect(() => {
+    if (!isSourceIntakeActive) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadSourceIntakeStatus();
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isSourceIntakeActive, loadSourceIntakeStatus]);
+
+  useEffect(() => {
+    if (!isSourceIntakeActive) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadProfiles({ refreshOnly: true, resetBanner: false });
+      void loadSourceIntakeReports();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [isSourceIntakeActive, loadProfiles, loadSourceIntakeReports]);
+
+  useEffect(() => {
+    if (!sourceIntakeStatus || !["completed", "failed", "stopped"].includes(sourceIntakeStatus.status)) {
+      return;
+    }
+    void loadProfiles({ refreshOnly: true, resetBanner: false });
+    void loadSourceIntakeReports();
+  }, [sourceIntakeStatus?.run_id, sourceIntakeStatus?.status, loadProfiles, loadSourceIntakeReports]);
 
   const countsSummary = useMemo(() => {
     const counts: Record<SourceProfileStatus, number> = {
@@ -352,7 +508,7 @@ export default function IngestionView() {
       });
       const refreshedPath = await verifySourceProfilePath(detailSourceId);
       setPathCheckResult(refreshedPath);
-      await loadProfiles(true);
+      await loadProfiles({ refreshOnly: true });
       await loadDetail(detailSourceId);
     } catch (error) {
       setDetailBanner({
@@ -404,7 +560,7 @@ export default function IngestionView() {
         };
 
         const response = await createSourceProfile(payload);
-        await loadProfiles(true);
+        await loadProfiles({ refreshOnly: true });
         closeEditor();
         setBanner({
           kind: "success",
@@ -432,7 +588,7 @@ export default function IngestionView() {
       };
 
       const updated = await updateSourceProfileMetadata(editingProfile.source_id, payload);
-      await loadProfiles(true);
+      await loadProfiles({ refreshOnly: true });
       closeEditor();
       if (statusFilter !== "all" && updated.profile_status !== statusFilter) {
         setBanner({
@@ -463,6 +619,158 @@ export default function IngestionView() {
 
   const detailPathLabel = detailProfile && isIcloudProfile(detailProfile) ? "Staging status" : "Path status";
   const detailVerifyButtonLabel = detailProfile && isIcloudProfile(detailProfile) ? "Verify Staging" : "Verify Path";
+
+  const activeRunReport = useMemo(() => {
+    if (!sourceIntakeStatus) {
+      return null;
+    }
+
+    const reportFilenameFromStatus = extractReportFilename(sourceIntakeStatus.report_path);
+    if (reportFilenameFromStatus) {
+      const byName = sourceIntakeReports.find((report) => report.report_filename === reportFilenameFromStatus);
+      if (byName) {
+        return byName;
+      }
+    }
+
+    if (sourceIntakeStatus.ingestion_run_id != null) {
+      const byRun = sourceIntakeReports.find((report) => report.ingestion_run_id === sourceIntakeStatus.ingestion_run_id);
+      if (byRun) {
+        return byRun;
+      }
+    }
+
+    return sourceIntakeReports.length > 0 ? sourceIntakeReports[0] : null;
+  }, [sourceIntakeReports, sourceIntakeStatus]);
+
+  const isTerminalRun = sourceIntakeStatus
+    ? ["completed", "failed", "stopped"].includes(sourceIntakeStatus.status)
+    : false;
+
+  const closeRunConfirmation = useCallback(() => {
+    setIsRunConfirmOpen(false);
+    setRunCandidateProfile(null);
+    setRunCandidatePathCheck(null);
+    setIsAdvancedRunOptionsOpen(false);
+    setRunLimitInput("");
+    setRunBatchSizeInput("500");
+  }, []);
+
+  const setRowRunError = useCallback((sourceId: number, message: string) => {
+    setRowRunErrors((prev) => ({ ...prev, [sourceId]: message }));
+  }, []);
+
+  const clearRowRunError = useCallback((sourceId: number) => {
+    setRowRunErrors((prev) => {
+      const next = { ...prev };
+      delete next[sourceId];
+      return next;
+    });
+  }, []);
+
+  const handleRunIntakeClick = useCallback(async (profile: SourceProfileSummary) => {
+    clearRowRunError(profile.source_id);
+    setRunErrorDetails(null);
+    setBanner(null);
+
+    const disabledReason = getRunDisabledReason(profile);
+    if (disabledReason) {
+      setRowRunError(profile.source_id, disabledReason);
+      return;
+    }
+
+    if (isSourceIntakeActive) {
+      const message = "Another Source Intake run is already active. Wait for it to finish or request stop.";
+      setRowRunError(profile.source_id, message);
+      setBanner({ kind: "error", message });
+      return;
+    }
+
+    setRunPreflightSourceId(profile.source_id);
+    try {
+      const pathCheck = await verifySourceProfilePath(profile.source_id);
+      if (!pathCheck.exists || !pathCheck.is_directory) {
+        const message = "Cannot run intake. Source path does not exist or is not a directory.";
+        setRowRunError(profile.source_id, message);
+        setBanner({ kind: "error", message });
+        return;
+      }
+
+      setRunCandidateProfile(profile);
+      setRunCandidatePathCheck(pathCheck);
+      setRunLimitInput("");
+      setRunBatchSizeInput("500");
+      setIsAdvancedRunOptionsOpen(false);
+      setIsRunConfirmOpen(true);
+    } catch (error) {
+      const mapped = mapRunStartError(error);
+      setRowRunError(profile.source_id, mapped.message);
+      setBanner({ kind: "error", message: mapped.message });
+      setRunErrorDetails(mapped.raw);
+    } finally {
+      setRunPreflightSourceId(null);
+    }
+  }, [clearRowRunError, isSourceIntakeActive, setRowRunError]);
+
+  const handleConfirmRunIntake = useCallback(async () => {
+    if (!runCandidateProfile) {
+      return;
+    }
+
+    setIsRunActionLoading(true);
+    clearRowRunError(runCandidateProfile.source_id);
+    setRunErrorDetails(null);
+    setBanner(null);
+
+    const parsedLimit = Number(runLimitInput);
+    const parsedBatchSize = Number(runBatchSizeInput);
+
+    try {
+      const response = await startSourceIntake({
+        ingestion_source_id: runCandidateProfile.source_id,
+        source_intake_limit: Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : null,
+        ingest_batch_size: Number.isFinite(parsedBatchSize) && parsedBatchSize > 0 ? parsedBatchSize : 500,
+      });
+
+      setSourceIntakeStatus(response.current);
+      setBanner({ kind: "success", message: `Source Intake started for ${runCandidateProfile.source_label}.` });
+      closeRunConfirmation();
+      await loadSourceIntakeReports();
+      await loadProfiles({ refreshOnly: true, resetBanner: false });
+    } catch (error) {
+      const mapped = mapRunStartError(error);
+      setRowRunError(runCandidateProfile.source_id, mapped.message);
+      setBanner({ kind: "error", message: mapped.message });
+      setRunErrorDetails(mapped.raw);
+    } finally {
+      setIsRunActionLoading(false);
+    }
+  }, [
+    clearRowRunError,
+    closeRunConfirmation,
+    loadProfiles,
+    loadSourceIntakeReports,
+    runBatchSizeInput,
+    runCandidateProfile,
+    runLimitInput,
+    setRowRunError,
+  ]);
+
+  const handleRequestStop = useCallback(async () => {
+    setIsRunActionLoading(true);
+    setBanner(null);
+    try {
+      const response = await stopSourceIntake();
+      setSourceIntakeStatus(response.current);
+      setBanner({ kind: "success", message: "Stop requested. Current batch will finish before exit." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to request stop.";
+      setBanner({ kind: "error", message });
+      setRunErrorDetails(message);
+    } finally {
+      setIsRunActionLoading(false);
+    }
+  }, []);
 
   return (
     <section className={styles.root}>
@@ -495,7 +803,7 @@ export default function IngestionView() {
           <button
             type="button"
             className={styles.button}
-            onClick={() => void loadProfiles(true)}
+            onClick={() => void loadProfiles({ refreshOnly: true, clearRowErrors: true })}
             disabled={isLoading || isRefreshing}
           >
             {isRefreshing ? "Refreshing..." : "Refresh"}
@@ -521,12 +829,81 @@ export default function IngestionView() {
       <p className={styles.note}>
         iCloud authentication is handled by icloudpd outside Photo Organizer. Do not enter Apple ID passwords here.
       </p>
-      <p className={styles.placeholder}>
-        Run Intake from this tab will be added in a later milestone. Existing Source Intake tools remain in Admin.
-      </p>
+      <p className={styles.placeholder}>Full Source Intake reports remain available in Admin.</p>
       <p className={styles.subtitle}>
         Active shown: {countsSummary.active} | Archived/Test/Deprecated shown: {countsSummary.nonActive}
       </p>
+
+      {sourceIntakeStatus && isSourceIntakeActive && (
+        <section className={styles.runPanel}>
+          <div className={styles.runPanelHeader}>
+            <h3 className={styles.runPanelTitle}>Source Intake is currently running</h3>
+            <button
+              type="button"
+              className={styles.stopButton}
+              onClick={() => void handleRequestStop()}
+              disabled={isRunActionLoading || sourceIntakeStatus.status === "stop_requested"}
+            >
+              {sourceIntakeStatus.status === "stop_requested"
+                ? "Stop Requested"
+                : (isRunActionLoading ? "Requesting..." : "Request Stop")}
+            </button>
+          </div>
+          <p className={styles.helperText}>Only one Source Intake run can run at a time.</p>
+          <div className={styles.runMetrics}>
+            <span><strong>Status:</strong> {sourceIntakeStatus.status}</span>
+            {sourceIntakeStatus.source_label && (
+              <span><strong>Source:</strong> {sourceIntakeStatus.source_label} ({sourceIntakeStatus.source_type})</span>
+            )}
+            {sourceIntakeStatus.started_at && <span><strong>Started:</strong> {toDisplayDate(sourceIntakeStatus.started_at)}</span>}
+            <span><strong>Scanned:</strong> {sourceIntakeStatus.files_scanned}</span>
+            <span><strong>Selected:</strong> {sourceIntakeStatus.selected}</span>
+            <span><strong>Staged:</strong> {sourceIntakeStatus.staged}</span>
+            <span><strong>Processed New:</strong> {sourceIntakeStatus.processed_new_unique}</span>
+          </div>
+        </section>
+      )}
+
+      {sourceIntakeStatus && isTerminalRun && (
+        <section className={styles.runPanel}>
+          <div className={styles.runPanelHeader}>
+            <h3 className={styles.runPanelTitle}>Last Source Intake Summary</h3>
+          </div>
+          <div className={styles.runMetrics}>
+            <span><strong>Status:</strong> {sourceIntakeStatus.status}</span>
+            {sourceIntakeStatus.source_label && (
+              <span><strong>Source:</strong> {sourceIntakeStatus.source_label} ({sourceIntakeStatus.source_type})</span>
+            )}
+            <span><strong>Scanned:</strong> {sourceIntakeStatus.files_scanned}</span>
+            <span><strong>Skipped Known:</strong> {sourceIntakeStatus.skipped_known}</span>
+            <span><strong>Selected:</strong> {sourceIntakeStatus.selected}</span>
+            <span><strong>Staged:</strong> {sourceIntakeStatus.staged}</span>
+            <span><strong>Processed New:</strong> {sourceIntakeStatus.processed_new_unique}</span>
+            <span><strong>Remaining:</strong> {sourceIntakeStatus.remaining_unknown}</span>
+            {activeRunReport?.counts?.failed_or_rejected != null && (
+              <span><strong>Failed/Rejected:</strong> {activeRunReport.counts.failed_or_rejected}</span>
+            )}
+            {activeRunReport?.counts?.deferred_unready_count != null && (
+              <span><strong>Deferred Unready:</strong> {activeRunReport.counts.deferred_unready_count}</span>
+            )}
+            {activeRunReport?.source_complete != null && (
+              <span><strong>Source Complete:</strong> {activeRunReport.source_complete ? "Yes" : "No"}</span>
+            )}
+            {(extractReportFilename(sourceIntakeStatus.report_path) || activeRunReport?.report_filename) && (
+              <span>
+                <strong>Report:</strong> {extractReportFilename(sourceIntakeStatus.report_path) || activeRunReport?.report_filename}
+              </span>
+            )}
+          </div>
+        </section>
+      )}
+
+      {runErrorDetails && (
+        <details className={styles.errorDetails}>
+          <summary>Details</summary>
+          <pre className={styles.errorDetailsText}>{runErrorDetails}</pre>
+        </details>
+      )}
 
       {isLoading ? (
         <p className={styles.empty}>Loading source profiles...</p>
@@ -585,6 +962,30 @@ export default function IngestionView() {
                     </td>
                     <td>
                       <div className={styles.rowActions}>
+                        {(() => {
+                          const disabledReason = getRunDisabledReason(profile);
+                          const isDisabledForActiveRun = isSourceIntakeActive && disabledReason == null;
+                          const effectiveReason = isDisabledForActiveRun
+                            ? "Another Source Intake run is already active."
+                            : disabledReason;
+                          const rowRunError = rowRunErrors[profile.source_id];
+                          const isChecking = runPreflightSourceId === profile.source_id;
+
+                          return (
+                            <>
+                              <button
+                                type="button"
+                                className={styles.runButton}
+                                onClick={() => void handleRunIntakeClick(profile)}
+                                disabled={Boolean(effectiveReason) || isChecking || isRunActionLoading}
+                              >
+                                {isChecking ? "Checking..." : "Run Intake"}
+                              </button>
+                              {effectiveReason && <span className={styles.disabledReason}>{effectiveReason}</span>}
+                              {rowRunError && <span className={styles.rowError}>{rowRunError}</span>}
+                            </>
+                          );
+                        })()}
                         <button type="button" className={styles.updateButton} onClick={() => openDetailsDrawer(profile)}>
                           Details
                         </button>
@@ -806,6 +1207,102 @@ export default function IngestionView() {
                 {isSavingEditor ? "Saving..." : editorMode === "create" ? "Create Profile" : "Save Changes"}
               </button>
               <button type="button" className={styles.button} onClick={closeEditor} disabled={isSavingEditor}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isRunConfirmOpen && runCandidateProfile && runCandidatePathCheck && (
+        <div className={styles.drawerBackdrop} role="dialog" aria-modal="true">
+          <div className={styles.drawerPanel}>
+            <div className={styles.drawerHeader}>
+              <div>
+                <h3 className={styles.drawerTitle}>Confirm Source Intake</h3>
+                <p className={styles.drawerSubtitle}>
+                  Review the source and run options before starting Source Intake.
+                </p>
+              </div>
+              <button type="button" className={styles.closeButton} onClick={closeRunConfirmation} disabled={isRunActionLoading}>
+                Close
+              </button>
+            </div>
+
+            <div className={styles.detailGrid}>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Source Label</span>
+                <span>{runCandidateProfile.source_label}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Source Type</span>
+                <span>{runCandidateProfile.source_type}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Source Path</span>
+                <span>{runCandidatePathCheck.path ?? "-"}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Profile Status</span>
+                <span>{runCandidateProfile.profile_status}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Path Verification Result</span>
+                <span className={styles.okBadge}>{formatPathStatus(runCandidatePathCheck)}</span>
+              </div>
+            </div>
+
+            <p className={styles.note}>
+              This scans the selected source folder and copies eligible files into the Drop Zone for ingestion.
+              It does not delete files from the source folder.
+              Only one Source Intake run can run at a time.
+            </p>
+
+            <button
+              type="button"
+              className={styles.linkButton}
+              onClick={() => setIsAdvancedRunOptionsOpen((prev) => !prev)}
+              disabled={isRunActionLoading}
+            >
+              {isAdvancedRunOptionsOpen ? "Hide Advanced Options" : "Show Advanced Options"}
+            </button>
+
+            {isAdvancedRunOptionsOpen && (
+              <div className={styles.formGrid}>
+                <label className={styles.formLabel}>
+                  Source Intake Limit (optional)
+                  <input
+                    className={styles.formInput}
+                    type="number"
+                    min={1}
+                    value={runLimitInput}
+                    onChange={(event) => setRunLimitInput(event.target.value)}
+                    placeholder="leave blank for no limit"
+                  />
+                </label>
+                <label className={styles.formLabel}>
+                  Ingest Batch Size
+                  <input
+                    className={styles.formInput}
+                    type="number"
+                    min={1}
+                    value={runBatchSizeInput}
+                    onChange={(event) => setRunBatchSizeInput(event.target.value)}
+                  />
+                </label>
+              </div>
+            )}
+
+            <div className={styles.drawerActions}>
+              <button
+                type="button"
+                className={styles.runButton}
+                onClick={() => void handleConfirmRunIntake()}
+                disabled={isRunActionLoading}
+              >
+                {isRunActionLoading ? "Starting..." : "Run Intake"}
+              </button>
+              <button type="button" className={styles.button} onClick={closeRunConfirmation} disabled={isRunActionLoading}>
                 Cancel
               </button>
             </div>
