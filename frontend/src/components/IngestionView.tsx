@@ -282,11 +282,43 @@ export default function IngestionView() {
   const [isAdvancedRunOptionsOpen, setIsAdvancedRunOptionsOpen] = useState(false);
   const [runLimitInput, setRunLimitInput] = useState("");
   const [runBatchSizeInput, setRunBatchSizeInput] = useState("500");
+  const [runOptionsError, setRunOptionsError] = useState<string | null>(null);
   const [dismissedTerminalRunKey, setDismissedTerminalRunKey] = useState<string | null>(null);
   const [selectedReportFilename, setSelectedReportFilename] = useState<string | null>(null);
   const [selectedReportDetail, setSelectedReportDetail] = useState<SourceIntakeReportDetail | null>(null);
   const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
   const [reportDetailError, setReportDetailError] = useState<string | null>(null);
+
+  const normalizedRunLimitInput = useMemo(() => runLimitInput.trim(), [runLimitInput]);
+  const normalizedRunBatchSizeInput = useMemo(() => runBatchSizeInput.trim(), [runBatchSizeInput]);
+
+  const runLimitValidationError = useMemo(() => {
+    if (!normalizedRunLimitInput) {
+      return null;
+    }
+
+    const parsed = Number(normalizedRunLimitInput);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return "Total Limit must be a positive integer or blank for no limit.";
+    }
+
+    return null;
+  }, [normalizedRunLimitInput]);
+
+  const runBatchSizeValidationError = useMemo(() => {
+    const parsed = Number(normalizedRunBatchSizeInput);
+    if (!normalizedRunBatchSizeInput || !Number.isInteger(parsed) || parsed <= 0) {
+      return "Batch Size must be a positive integer.";
+    }
+
+    return null;
+  }, [normalizedRunBatchSizeInput]);
+
+  const runOptionSummaryText = useMemo(() => {
+    const limitSummary = normalizedRunLimitInput || "unlimited";
+    const batchSummary = normalizedRunBatchSizeInput || "500";
+    return `Options: Total Limit = ${limitSummary}, Batch Size = ${batchSummary}`;
+  }, [normalizedRunBatchSizeInput, normalizedRunLimitInput]);
 
   const loadProfiles = useCallback(async (options: LoadProfilesOptions = {}) => {
     const { refreshOnly = false, clearRowErrors = false, resetBanner = true } = options;
@@ -790,6 +822,7 @@ export default function IngestionView() {
     setIsAdvancedRunOptionsOpen(false);
     setRunLimitInput("");
     setRunBatchSizeInput("500");
+    setRunOptionsError(null);
   }, []);
 
   const setRowRunError = useCallback((sourceId: number, message: string) => {
@@ -837,6 +870,7 @@ export default function IngestionView() {
       setRunLimitInput("");
       setRunBatchSizeInput("500");
       setIsAdvancedRunOptionsOpen(false);
+      setRunOptionsError(null);
       setIsRunConfirmOpen(true);
     } catch (error) {
       const mapped = mapRunStartError(error);
@@ -853,19 +887,26 @@ export default function IngestionView() {
       return;
     }
 
+    if (runLimitValidationError || runBatchSizeValidationError) {
+      setIsAdvancedRunOptionsOpen(true);
+      setRunOptionsError("Fix run option values before starting Source Intake.");
+      return;
+    }
+
     setIsRunActionLoading(true);
     clearRowRunError(runCandidateProfile.source_id);
     setRunErrorDetails(null);
+    setRunOptionsError(null);
     setBanner(null);
 
-    const parsedLimit = Number(runLimitInput);
-    const parsedBatchSize = Number(runBatchSizeInput);
+    const parsedLimit = Number(normalizedRunLimitInput);
+    const parsedBatchSize = Number(normalizedRunBatchSizeInput);
 
     try {
       const response = await startSourceIntake({
         ingestion_source_id: runCandidateProfile.source_id,
-        source_intake_limit: Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : null,
-        ingest_batch_size: Number.isFinite(parsedBatchSize) && parsedBatchSize > 0 ? parsedBatchSize : 500,
+        source_intake_limit: normalizedRunLimitInput ? parsedLimit : null,
+        ingest_batch_size: parsedBatchSize,
       });
 
       setSourceIntakeStatus(response.current);
@@ -887,9 +928,11 @@ export default function IngestionView() {
     closeRunConfirmation,
     loadProfiles,
     loadSourceIntakeReports,
-    runBatchSizeInput,
+    normalizedRunBatchSizeInput,
+    normalizedRunLimitInput,
     runCandidateProfile,
-    runLimitInput,
+    runBatchSizeValidationError,
+    runLimitValidationError,
     setRowRunError,
   ]);
 
@@ -959,6 +1002,9 @@ export default function IngestionView() {
       </p>
       <p className={styles.note}>
         Lifecycle status does not delete files, sources, or provenance. Archived, test, and deprecated sources are retained for history and remain visible through the status filter.
+      </p>
+      <p className={styles.note}>
+        Source Profile status changes are non-destructive and do not rewrite prior provenance.
       </p>
       <p className={styles.note}>
         Source labels are not globally unique. Source identity is based on label + type + effective path. For iCloud, managed staging path is the effective operational path when present.
@@ -1250,7 +1296,7 @@ export default function IngestionView() {
                           Details
                         </button>
                         <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(profile)}>
-                          Edit
+                          Manage
                         </button>
                       </div>
                     </td>
@@ -1268,18 +1314,24 @@ export default function IngestionView() {
             <div className={styles.drawerHeader}>
               <div>
                 <h3 className={styles.drawerTitle}>
-                  {editorMode === "create" ? "Create Source Profile" : "Edit Source Profile"}
+                  {editorMode === "create" ? "Create Source Profile" : "Manage Source Profile Status and Metadata"}
                 </h3>
                 <p className={styles.drawerSubtitle}>
                   {editorMode === "create"
                     ? "Create a safe metadata profile without starting ingestion."
-                    : "Edit non-destructive metadata only. Source type and source root path stay locked."}
+                    : "Manage lifecycle status and safe metadata only. Source type and source root path stay locked."}
                 </p>
               </div>
               <button type="button" className={styles.closeButton} onClick={closeEditor} disabled={isSavingEditor}>
                 Close
               </button>
             </div>
+
+            {editorMode === "edit" && (
+              <p className={styles.inlineWarning}>
+                Source Profile changes are not retroactive. They do not rewrite prior provenance records, prior source paths, prior intake reports, or prior asset history. If a profile is wrong, archive/deprecate/test it and create a corrected profile.
+              </p>
+            )}
 
             <div className={styles.formGrid}>
               <label className={styles.formLabel}>
@@ -1518,6 +1570,17 @@ export default function IngestionView() {
               Only one Source Intake run can run at a time.
             </p>
 
+            <section className={styles.runOptionsBlock}>
+              <h4 className={styles.runOptionsTitle}>Run Intake Options</h4>
+              <p className={styles.runOptionsSummary}>{runOptionSummaryText}</p>
+            </section>
+
+            <p className={styles.helperText}>
+              These options apply only to this run. They are not saved to the Source Profile.
+            </p>
+
+            {runOptionsError && <p className={styles.bannerError}>{runOptionsError}</p>}
+
             <button
               type="button"
               className={styles.linkButton}
@@ -1530,7 +1593,7 @@ export default function IngestionView() {
             {isAdvancedRunOptionsOpen && (
               <div className={styles.formGrid}>
                 <label className={styles.formLabel}>
-                  Source Intake Limit (optional)
+                  Total Limit
                   <input
                     className={styles.formInput}
                     type="number"
@@ -1539,9 +1602,13 @@ export default function IngestionView() {
                     onChange={(event) => setRunLimitInput(event.target.value)}
                     placeholder="leave blank for no limit"
                   />
+                  <span className={styles.formHint}>
+                    Total Limit controls the maximum number of eligible unknown files selected for this run. Leave blank for no total limit.
+                  </span>
+                  {runLimitValidationError && <span className={styles.fieldError}>{runLimitValidationError}</span>}
                 </label>
                 <label className={styles.formLabel}>
-                  Ingest Batch Size
+                  Batch Size
                   <input
                     className={styles.formInput}
                     type="number"
@@ -1549,6 +1616,10 @@ export default function IngestionView() {
                     value={runBatchSizeInput}
                     onChange={(event) => setRunBatchSizeInput(event.target.value)}
                   />
+                  <span className={styles.formHint}>
+                    Batch Size controls how many files are staged and processed per ingestion batch. Default: 500.
+                  </span>
+                  {runBatchSizeValidationError && <span className={styles.fieldError}>{runBatchSizeValidationError}</span>}
                 </label>
               </div>
             )}
