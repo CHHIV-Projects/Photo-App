@@ -35,6 +35,9 @@ from app.schemas.admin import (
     SourceIntakeRunResponse,
     SourceIntakeStatusSchema,
     SourceIntakeStopResponse,
+    SourceProfileCreateRequest,
+    SourceProfileCreateResponse,
+    SourceProfileMetadataUpdateRequest,
     SourceProfileStatusUpdateRequest,
     SourceProfileSummary,
     SourceProfilesResponse,
@@ -50,6 +53,7 @@ from app.schemas.admin import (
 )
 from app.services.admin import (
     build_admin_summary,
+    create_source_profile,
     create_or_get_ingestion_source,
     get_report_detail,
     list_source_profiles,
@@ -58,6 +62,7 @@ from app.services.admin import (
     list_sources_with_latest_info,
     request_source_intake_stop,
     start_source_intake,
+    update_source_profile_metadata,
     update_source_profile_status,
 )
 from app.services.ingestion.ingestion_context_service import normalize_source_label
@@ -674,6 +679,53 @@ def patch_source_profile_status(
             db,
             source_id=source_id,
             profile_status=body.profile_status,
+            include_username=include_username,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
+
+
+@router.post("/source-profiles", response_model=SourceProfileCreateResponse)
+def post_source_profile(
+    body: SourceProfileCreateRequest,
+    include_username: bool = False,
+    db: Session = Depends(get_db_session),
+) -> SourceProfileCreateResponse | JSONResponse:
+    """Create or return an existing source profile for Ingestion tab workflows."""
+    try:
+        return create_source_profile(
+            db,
+            payload=body,
+            include_username=include_username,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc)},
+        )
+
+
+@router.patch("/source-profiles/{source_id}/metadata", response_model=SourceProfileSummary)
+def patch_source_profile_metadata(
+    source_id: int,
+    body: SourceProfileMetadataUpdateRequest,
+    include_username: bool = False,
+    db: Session = Depends(get_db_session),
+) -> SourceProfileSummary | JSONResponse:
+    """Update safe, non-destructive source profile metadata fields."""
+    try:
+        return update_source_profile_metadata(
+            db,
+            source_id=source_id,
+            payload=body,
             include_username=include_username,
         )
     except ValueError as exc:

@@ -10,6 +10,9 @@ import type {
   AdminPlaceGeocodingActionResponse,
   AdminPlaceGeocodingStatusResponse,
   AdminSummaryResponse,
+  SourceProfileCreateRequest,
+  SourceProfileCreateResponse,
+  SourceProfileMetadataUpdateRequest,
   SourceProfileStatus,
   SourceProfilesResponse,
   SourceProfileSummary,
@@ -890,6 +893,43 @@ export function updateSourceProfileStatus(
   return apiRequest<SourceProfileSummary>(path, {
     method: "PATCH",
     body: JSON.stringify({ profile_status: profileStatus }),
+  });
+}
+
+export function createSourceProfile(
+  payload: SourceProfileCreateRequest,
+  options: { includeUsername?: boolean } = {},
+): Promise<SourceProfileCreateResponse> {
+  const params = new URLSearchParams();
+  if (options.includeUsername !== undefined) {
+    params.set("include_username", String(options.includeUsername));
+  }
+  const query = params.toString();
+  const path = query
+    ? `/api/admin/source-profiles?${query}`
+    : "/api/admin/source-profiles";
+  return apiRequest<SourceProfileCreateResponse>(path, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateSourceProfileMetadata(
+  sourceId: number,
+  payload: SourceProfileMetadataUpdateRequest,
+  options: { includeUsername?: boolean } = {},
+): Promise<SourceProfileSummary> {
+  const params = new URLSearchParams();
+  if (options.includeUsername !== undefined) {
+    params.set("include_username", String(options.includeUsername));
+  }
+  const query = params.toString();
+  const path = query
+    ? `/api/admin/source-profiles/${sourceId}/metadata?${query}`
+    : `/api/admin/source-profiles/${sourceId}/metadata`;
+  return apiRequest<SourceProfileSummary>(path, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
   });
 }
 

@@ -16,6 +16,9 @@ from app.models.ingestion_source import IngestionSource
 from app.models.provenance import Provenance
 from app.models.source_intake_run import SourceIntakeRun
 from app.schemas.admin import (
+    SourceProfileCreateRequest,
+    SourceProfileCreateResponse,
+    SourceProfileMetadataUpdateRequest,
     SourceProfileSummary,
     SourceIntakeReportCounts,
     SourceIntakeReportDetail,
@@ -23,10 +26,17 @@ from app.schemas.admin import (
     SourceIntakeSourceSummary,
 )
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
+from app.services.ingestion.ingestion_context_service import (
+    KNOWN_SOURCE_TYPES,
+    normalize_source_label,
+    normalize_source_root_path,
+)
 
 # Only filenames matching this pattern are served by the detail endpoint.
 _SAFE_REPORT_FILENAME_RE = re.compile(r"^source_intake_[\w\-]+\.json$")
 ALLOWED_PROFILE_STATUS = {"active", "inactive", "archived", "test", "deprecated", "all"}
+ALLOWED_CLOUD_PROVIDERS = {"icloud", "onedrive", "google_photos", "dropbox", "other"}
+ALLOWED_ACQUISITION_METHODS = {"icloudpd", "folder_scan", "manual_export", "none"}
 
 
 def _mask_account_username(value: str | None) -> str | None:
@@ -50,6 +60,65 @@ def _normalize_profile_status(value: str | None) -> str:
             "Invalid status filter. Allowed values: active, inactive, archived, test, deprecated."
         )
     return normalized_status
+
+
+def _normalize_source_type_strict(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized not in KNOWN_SOURCE_TYPES:
+        raise ValueError(
+            "Invalid source_type. Allowed values: local_folder, external_drive, cloud_export, scan_batch, other."
+        )
+    return normalized
+
+
+def _normalize_cloud_provider(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in ALLOWED_CLOUD_PROVIDERS:
+        raise ValueError("Invalid cloud_provider. Allowed values: icloud, onedrive, google_photos, dropbox, other.")
+    return normalized
+
+
+def _normalize_acquisition_method(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in ALLOWED_ACQUISITION_METHODS:
+        raise ValueError("Invalid acquisition_method. Allowed values: icloudpd, folder_scan, manual_export, none.")
+    return normalized
+
+
+def _to_absolute_path(path_value: str) -> str:
+    raw = Path(path_value).expanduser()
+    if raw.is_absolute():
+        return str(raw.resolve())
+    backend_root = Path(__file__).resolve().parents[3]
+    return str((backend_root.parent / raw).resolve())
+
+
+def _slugify_source_label(value: str) -> str:
+    lowered = value.strip().lower()
+    if not lowered:
+        return "unnamed-source"
+    slug = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
+    return slug or "unnamed-source"
+
+
+def _compute_managed_staging_path(source_label: str, cloud_provider: str) -> str:
+    backend_root = Path(__file__).resolve().parents[3]
+    staging_path = (
+        backend_root.parent
+        / "storage"
+        / "exports"
+        / cloud_provider
+        / _slugify_source_label(source_label)
+    )
+    return str(staging_path.resolve())
 
 
 def _build_profile_reference_maps(
@@ -140,6 +209,33 @@ def _to_source_profile_summary(
         ingestion_runs_count=ingestion_runs_count,
         source_intake_runs_count=source_intake_runs_count,
         icloud_acquisition_runs_count=icloud_acquisition_runs_count,
+    )
+
+
+def _build_single_source_profile_summary(
+    db_session: Session,
+    source: IngestionSource,
+    *,
+    include_username: bool,
+) -> SourceProfileSummary:
+    latest_run_at = db_session.scalar(
+        select(func.max(IngestionRun.created_at)).where(IngestionRun.ingestion_source_id == source.id)
+    )
+    (
+        provenance_counts,
+        ingestion_runs_counts,
+        source_intake_runs_counts,
+        icloud_runs_counts,
+    ) = _build_profile_reference_maps(db_session, [source])
+
+    return _to_source_profile_summary(
+        source,
+        include_username=include_username,
+        last_run_at=latest_run_at,
+        provenance_count=provenance_counts.get(source.id, 0),
+        ingestion_runs_count=ingestion_runs_counts.get(source.id, 0),
+        source_intake_runs_count=source_intake_runs_counts.get(source.id, 0),
+        icloud_acquisition_runs_count=icloud_runs_counts.get(source.id, 0),
     )
 
 
@@ -385,24 +481,148 @@ def update_source_profile_status(
     db_session.commit()
     db_session.refresh(source)
 
-    latest_run_at = db_session.scalar(
-        select(func.max(IngestionRun.created_at)).where(IngestionRun.ingestion_source_id == source.id)
-    )
-    (
-        provenance_counts,
-        ingestion_runs_counts,
-        source_intake_runs_counts,
-        icloud_runs_counts,
-    ) = _build_profile_reference_maps(db_session, [source])
-
-    return _to_source_profile_summary(
+    return _build_single_source_profile_summary(
+        db_session,
         source,
         include_username=include_username,
-        last_run_at=latest_run_at,
-        provenance_count=provenance_counts.get(source.id, 0),
-        ingestion_runs_count=ingestion_runs_counts.get(source.id, 0),
-        source_intake_runs_count=source_intake_runs_counts.get(source.id, 0),
-        icloud_acquisition_runs_count=icloud_runs_counts.get(source.id, 0),
+    )
+
+
+def create_source_profile(
+    db_session: Session,
+    *,
+    payload: SourceProfileCreateRequest,
+    include_username: bool = False,
+) -> SourceProfileCreateResponse:
+    """Create or get a source profile with strict validation for Ingestion UI."""
+    ensure_ingestion_context_schema(db_session)
+
+    resolved_label = (payload.source_label or "").strip()
+    if not resolved_label:
+        raise ValueError("source_label is required.")
+
+    resolved_type = _normalize_source_type_strict(payload.source_type)
+    resolved_status = _normalize_profile_status(payload.profile_status)
+    resolved_cloud_provider = _normalize_cloud_provider(payload.cloud_provider)
+    resolved_acquisition_method = _normalize_acquisition_method(payload.acquisition_method)
+    account_username = (payload.account_username or "").strip() or None
+
+    root_path_input = (payload.source_root_path or "").strip()
+    managed_staging_input = (payload.managed_staging_path or "").strip()
+
+    if resolved_type == "cloud_export" and resolved_cloud_provider == "icloud":
+        if not account_username:
+            raise ValueError("account_username is required for iCloud source profiles.")
+        if resolved_acquisition_method is None:
+            resolved_acquisition_method = "icloudpd"
+        managed_staging_path = managed_staging_input or _compute_managed_staging_path(
+            resolved_label,
+            resolved_cloud_provider,
+        )
+        effective_root_path = managed_staging_path
+    else:
+        managed_staging_path = managed_staging_input or None
+        if resolved_type in {"local_folder", "external_drive", "cloud_export"} and not root_path_input:
+            raise ValueError("source_root_path is required for this source_type.")
+        effective_root_path = root_path_input or managed_staging_path
+
+    if not effective_root_path:
+        raise ValueError("Unable to determine effective source_root_path.")
+
+    normalized_label = normalize_source_label(resolved_label)
+    normalized_root = normalize_source_root_path(effective_root_path)
+
+    existing = db_session.scalar(
+        select(IngestionSource).where(
+            IngestionSource.source_label_normalized == normalized_label,
+            IngestionSource.source_type == resolved_type,
+            IngestionSource.source_root_path_normalized == normalized_root,
+        )
+    )
+    if existing is not None:
+        return SourceProfileCreateResponse(
+            already_exists=True,
+            profile=_build_single_source_profile_summary(
+                db_session,
+                existing,
+                include_username=include_username,
+            ),
+        )
+
+    resolved_root = _to_absolute_path(effective_root_path)
+    source = IngestionSource(
+        source_label=resolved_label,
+        source_label_normalized=normalized_label,
+        source_type=resolved_type,
+        source_root_path=resolved_root,
+        source_root_path_normalized=normalized_root,
+        profile_status=resolved_status,
+        cloud_provider=resolved_cloud_provider,
+        acquisition_method=resolved_acquisition_method,
+        managed_staging_path=_to_absolute_path(managed_staging_path) if managed_staging_path else None,
+        account_username=account_username,
+    )
+    db_session.add(source)
+    db_session.commit()
+    db_session.refresh(source)
+
+    return SourceProfileCreateResponse(
+        already_exists=False,
+        profile=_build_single_source_profile_summary(
+            db_session,
+            source,
+            include_username=include_username,
+        ),
+    )
+
+
+def update_source_profile_metadata(
+    db_session: Session,
+    *,
+    source_id: int,
+    payload: SourceProfileMetadataUpdateRequest,
+    include_username: bool = False,
+) -> SourceProfileSummary:
+    """Update safe metadata fields for source profile edit UI."""
+    ensure_ingestion_context_schema(db_session)
+    source = db_session.get(IngestionSource, source_id)
+    if source is None:
+        raise LookupError("Source profile not found.")
+
+    if payload.source_label is not None:
+        new_label = payload.source_label.strip()
+        if not new_label:
+            raise ValueError("source_label cannot be empty.")
+        source.source_label = new_label
+        source.source_label_normalized = normalize_source_label(new_label)
+
+    if payload.profile_status is not None:
+        source.profile_status = _normalize_profile_status(payload.profile_status)
+
+    if payload.cloud_provider is not None:
+        source.cloud_provider = _normalize_cloud_provider(payload.cloud_provider)
+
+    if payload.account_username is not None:
+        source.account_username = payload.account_username.strip() or None
+
+    if payload.acquisition_method is not None:
+        source.acquisition_method = _normalize_acquisition_method(payload.acquisition_method)
+
+    if payload.managed_staging_path is not None:
+        if source.source_type != "cloud_export":
+            raise ValueError("managed_staging_path can only be edited for cloud_export source profiles.")
+        cleaned_path = payload.managed_staging_path.strip()
+        source.managed_staging_path = _to_absolute_path(cleaned_path) if cleaned_path else None
+
+    # Source root path and source type remain locked in 12.61.4.
+    db_session.add(source)
+    db_session.commit()
+    db_session.refresh(source)
+
+    return _build_single_source_profile_summary(
+        db_session,
+        source,
+        include_username=include_username,
     )
 
 

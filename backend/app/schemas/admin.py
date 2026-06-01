@@ -302,6 +302,37 @@ class SourceProfilesResponse(BaseModel):
     profiles: list[SourceProfileSummary]
 
 
+class SourceProfileCreateRequest(BaseModel):
+    """Create payload for strict source profile registration in Ingestion tab."""
+
+    source_label: str
+    source_type: str
+    source_root_path: str | None = None
+    profile_status: str = "active"
+    cloud_provider: str | None = None
+    account_username: str | None = None
+    acquisition_method: str | None = None
+    managed_staging_path: str | None = None
+
+
+class SourceProfileCreateResponse(BaseModel):
+    """Create-or-get response for source profile registration."""
+
+    already_exists: bool
+    profile: SourceProfileSummary
+
+
+class SourceProfileMetadataUpdateRequest(BaseModel):
+    """Safe metadata edits for existing source profiles."""
+
+    source_label: str | None = None
+    profile_status: str | None = None
+    cloud_provider: str | None = None
+    account_username: str | None = None
+    acquisition_method: str | None = None
+    managed_staging_path: str | None = None
+
+
 class SourceProfileStatusUpdateRequest(BaseModel):
     """Narrow lifecycle update payload for one source profile."""
 

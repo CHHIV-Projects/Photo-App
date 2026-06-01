@@ -717,3 +717,107 @@ define how Ingestion tab will launch existing source intake safely
 local/external only first
 no iCloud orchestration yet
 ```
+# Answers to Coder Questions — Milestone 12.61.3
+
+## 1. Normalized fields in frontend types
+
+Keep frontend types aligned to the actual backend response only.
+
+Do **not** add `source_label_normalized` or `source_root_path_normalized` to the backend response just for this milestone unless they are already present or truly needed by the UI.
+
+Preferred:
+
+```text
+12.61.3 UI uses only fields currently returned by SourceProfileSummary.
+
+Reason:
+
+This milestone is UI foundation and lifecycle management, not backend API expansion.
+Avoid adding fields unless the UI needs them.
+
+If normalized fields become useful later for search/sort/debugging, add them in a later API refinement milestone.
+
+2. Integration path
+
+Use a new top-level Ingestion tab now.
+
+Preferred:
+
+Add Ingestion as a top-level tab.
+Create a dedicated IngestionView / SourceProfilesView component.
+Leave Admin unchanged.
+
+Reason:
+
+Ingestion is becoming its own operator workspace.
+A separate tab keeps future source-profile and run-intake workflows clean without disturbing current Admin tools.
+
+Existing Admin Source Intake, Known Sources, iCloud Acquisition, and cleanup controls should remain untouched.
+
+3. Row status update UI
+
+Use a per-row status dropdown plus Update button.
+
+Preferred:
+
+Profile Status: [active v] [Update]
+
+Reason:
+
+A dropdown is explicit and safer for lifecycle changes.
+Quick action buttons could make accidental archiving/test/deprecation too easy.
+
+After update, refresh the list and show a message.
+
+4. Success messaging
+
+Use a top banner/toast style message.
+
+Preferred:
+
+Source profile updated: Chuck iCloud → archived
+
+If the row disappears because the current filter is active, show:
+
+Source profile marked archived. It is now hidden by the Active filter.
+
+Inline row messaging is fine as a supplement, but top-level message is clearer when the row may disappear after refresh.
+
+5. Placeholder future Run Intake text
+
+Include a small disabled future-action line, but keep it visually secondary.
+
+Suggested wording:
+
+Run Intake from this tab will be added in a later milestone. Existing Source Intake tools remain in Admin.
+
+Do not add a working Run Intake button.
+
+Do not make the placeholder visually prominent.
+
+Implementation Direction Confirmation
+
+Proceed with coder’s low-risk recommendation:
+
+- Add new top-level Ingestion tab.
+- Add dedicated component for Source Profiles.
+- Add frontend API functions/types for GET /api/admin/source-profiles.
+- Add frontend API function for PATCH /api/admin/source-profiles/{source_id}.
+- Status filter defaults to active.
+- Display masked username, profile fields, and reference counts.
+- Add per-row status dropdown + Update button.
+- Add Refresh button.
+- Add concise lifecycle safety note.
+- Add top banner/toast success/error message.
+- Leave Admin Source Intake, Known Sources, iCloud Acquisition, and cleanup behavior unchanged.
+Hard boundaries
+
+Do not:
+
+- add Run Intake execution from Ingestion tab
+- change existing Admin source-intake dropdowns
+- change iCloud acquisition behavior
+- add source create/edit/delete
+- add staging cleanup controls
+- expose raw username by default
+- add password/session/token fields

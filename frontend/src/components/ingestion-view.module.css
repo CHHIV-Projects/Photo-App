@@ -177,3 +177,92 @@
   color: #516274;
   background: #f9fbfd;
 }
+
+.drawerBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 20, 35, 0.38);
+  display: grid;
+  place-items: start end;
+  padding: 24px;
+  z-index: 40;
+}
+
+.drawerPanel {
+  width: min(920px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1px solid #d7e1ea;
+  box-shadow: 0 24px 60px rgba(16, 61, 96, 0.22);
+  padding: 18px;
+  display: grid;
+  gap: 16px;
+}
+
+.drawerHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.drawerTitle {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #103d60;
+}
+
+.drawerSubtitle {
+  margin: 4px 0 0;
+  color: #516274;
+  font-size: 0.9rem;
+  max-width: 72ch;
+}
+
+.closeButton {
+  border: 1px solid #c8d4df;
+  background: #f4f7fa;
+  color: #425466;
+  border-radius: 10px;
+  padding: 8px 12px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.formGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+
+.formLabel {
+  display: grid;
+  gap: 6px;
+  color: #314152;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.formInput {
+  border: 1px solid #bfd0df;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1d2b39;
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.formInput:read-only {
+  background: #f7fafc;
+  color: #516274;
+}
+
+.drawerActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}

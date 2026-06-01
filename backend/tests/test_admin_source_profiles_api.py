@@ -146,6 +146,123 @@ class AdminSourceProfilesApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json(), {"detail": "Source profile not found."})
 
+    def test_post_source_profile_create_or_get_response(self) -> None:
+        created_profile = SourceProfileSummary(
+            source_id=101,
+            source_label="Chuck iCloud",
+            source_type="cloud_export",
+            source_root_path="/storage/exports/icloud/chuck-icloud",
+            profile_status="active",
+            cloud_provider="icloud",
+            acquisition_method="icloudpd",
+            managed_staging_path="/storage/exports/icloud/chuck-icloud",
+            account_username_masked="c***@gmail.com",
+            account_username=None,
+            first_seen_at=datetime.now(timezone.utc),
+            last_run_at=None,
+            provenance_count=0,
+            ingestion_runs_count=0,
+            source_intake_runs_count=0,
+            icloud_acquisition_runs_count=0,
+        )
+        with patch(
+            "app.api.admin.create_source_profile",
+            return_value={"already_exists": False, "profile": created_profile},
+        ) as mocked_service:
+            response = self.client.post(
+                "/api/admin/source-profiles",
+                json={
+                    "source_label": "Chuck iCloud",
+                    "source_type": "cloud_export",
+                    "cloud_provider": "icloud",
+                    "account_username": "chhendersoniv@gmail.com",
+                    "acquisition_method": "icloudpd",
+                    "profile_status": "active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["already_exists"])
+        self.assertEqual(payload["profile"]["source_label"], "Chuck iCloud")
+        mocked_service.assert_called_once()
+
+    def test_post_source_profile_invalid_payload_returns_400(self) -> None:
+        with patch("app.api.admin.create_source_profile", side_effect=ValueError("Invalid source_type")):
+            response = self.client.post(
+                "/api/admin/source-profiles",
+                json={
+                    "source_label": "Bad Source",
+                    "source_type": "cloud",
+                    "profile_status": "active",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "Invalid source_type"})
+
+    def test_patch_source_profile_metadata_updates_safe_fields(self) -> None:
+        updated = SourceProfileSummary(
+            source_id=8,
+            source_label="Chuck iCloud Updated",
+            source_type="cloud_export",
+            source_root_path="/storage/exports/icloud/chuck-icloud",
+            profile_status="inactive",
+            cloud_provider="icloud",
+            acquisition_method="icloudpd",
+            managed_staging_path="/storage/exports/icloud/chuck-icloud",
+            account_username_masked="c***@gmail.com",
+            account_username=None,
+            first_seen_at=datetime.now(timezone.utc),
+            last_run_at=None,
+            provenance_count=1,
+            ingestion_runs_count=1,
+            source_intake_runs_count=0,
+            icloud_acquisition_runs_count=0,
+        )
+        with patch("app.api.admin.update_source_profile_metadata", return_value=updated) as mocked_service:
+            response = self.client.patch(
+                "/api/admin/source-profiles/8/metadata",
+                json={
+                    "source_label": "Chuck iCloud Updated",
+                    "profile_status": "inactive",
+                    "cloud_provider": "icloud",
+                    "account_username": "chhendersoniv@gmail.com",
+                    "acquisition_method": "icloudpd",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["source_id"], 8)
+        self.assertEqual(payload["profile_status"], "inactive")
+        mocked_service.assert_called_once()
+
+    def test_patch_source_profile_metadata_invalid_field_returns_400(self) -> None:
+        with patch("app.api.admin.update_source_profile_metadata", side_effect=ValueError("managed_staging_path can only be edited for cloud_export source profiles.")):
+            response = self.client.patch(
+                "/api/admin/source-profiles/8/metadata",
+                json={
+                    "managed_staging_path": "/tmp/example",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {"detail": "managed_staging_path can only be edited for cloud_export source profiles."},
+        )
+
+    def test_patch_source_profile_metadata_missing_source_returns_404(self) -> None:
+        with patch("app.api.admin.update_source_profile_metadata", side_effect=LookupError("missing")):
+            response = self.client.patch(
+                "/api/admin/source-profiles/888/metadata",
+                json={"source_label": "Missing"},
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Source profile not found."})
+
 
 if __name__ == "__main__":
     unittest.main()

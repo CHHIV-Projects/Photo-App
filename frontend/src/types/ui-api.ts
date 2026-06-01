@@ -1228,14 +1228,34 @@ export type SourceProfileStatus =
   | "test"
   | "deprecated";
 
+export type SourceProfileType =
+  | "local_folder"
+  | "external_drive"
+  | "cloud_export"
+  | "scan_batch"
+  | "other";
+
+export type SourceCloudProvider =
+  | "icloud"
+  | "onedrive"
+  | "google_photos"
+  | "dropbox"
+  | "other";
+
+export type SourceAcquisitionMethod =
+  | "icloudpd"
+  | "folder_scan"
+  | "manual_export"
+  | "none";
+
 export interface SourceProfileSummary {
   source_id: number;
   source_label: string;
-  source_type: string;
+  source_type: SourceProfileType;
   source_root_path: string | null;
   profile_status: SourceProfileStatus;
-  cloud_provider: string | null;
-  acquisition_method: string | null;
+  cloud_provider: SourceCloudProvider | null;
+  acquisition_method: SourceAcquisitionMethod | null;
   managed_staging_path: string | null;
   account_username_masked: string | null;
   account_username: string | null;
@@ -1250,6 +1270,31 @@ export interface SourceProfileSummary {
 export interface SourceProfilesResponse {
   generated_at: string;
   profiles: SourceProfileSummary[];
+}
+
+export interface SourceProfileCreateRequest {
+  source_label: string;
+  source_type: SourceProfileType;
+  source_root_path?: string | null;
+  profile_status: SourceProfileStatus;
+  cloud_provider?: SourceCloudProvider | null;
+  account_username?: string | null;
+  acquisition_method?: SourceAcquisitionMethod | null;
+  managed_staging_path?: string | null;
+}
+
+export interface SourceProfileCreateResponse {
+  already_exists: boolean;
+  profile: SourceProfileSummary;
+}
+
+export interface SourceProfileMetadataUpdateRequest {
+  source_label?: string;
+  profile_status?: SourceProfileStatus;
+  cloud_provider?: SourceCloudProvider | null;
+  account_username?: string | null;
+  acquisition_method?: SourceAcquisitionMethod | null;
+  managed_staging_path?: string | null;
 }
 
 // ── iCloud Acquisition (Milestone 12.42/12.43) ──────────────────────────────
