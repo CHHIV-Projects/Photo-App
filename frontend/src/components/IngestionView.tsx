@@ -279,7 +279,6 @@ export default function IngestionView() {
   const [isRunConfirmOpen, setIsRunConfirmOpen] = useState(false);
   const [runCandidateProfile, setRunCandidateProfile] = useState<SourceProfileSummary | null>(null);
   const [runCandidatePathCheck, setRunCandidatePathCheck] = useState<SourceProfilePathCheckResponse | null>(null);
-  const [isAdvancedRunOptionsOpen, setIsAdvancedRunOptionsOpen] = useState(false);
   const [runLimitInput, setRunLimitInput] = useState("");
   const [runBatchSizeInput, setRunBatchSizeInput] = useState("500");
   const [runOptionsError, setRunOptionsError] = useState<string | null>(null);
@@ -313,12 +312,6 @@ export default function IngestionView() {
 
     return null;
   }, [normalizedRunBatchSizeInput]);
-
-  const runOptionSummaryText = useMemo(() => {
-    const limitSummary = normalizedRunLimitInput || "unlimited";
-    const batchSummary = normalizedRunBatchSizeInput || "500";
-    return `Options: Total Limit = ${limitSummary}, Batch Size = ${batchSummary}`;
-  }, [normalizedRunBatchSizeInput, normalizedRunLimitInput]);
 
   const loadProfiles = useCallback(async (options: LoadProfilesOptions = {}) => {
     const { refreshOnly = false, clearRowErrors = false, resetBanner = true } = options;
@@ -459,10 +452,6 @@ export default function IngestionView() {
     return editingProfile ? hasHistoricalReferences(editingProfile) : false;
   }, [editingProfile]);
 
-  const isManagedStagingLocked = useMemo(() => {
-    return editorMode === "edit" && editingProfileIsReferenced && isIcloudProfile(editingProfile);
-  }, [editingProfile, editingProfileIsReferenced, editorMode]);
-
   const loadDetail = useCallback(async (sourceId: number) => {
     setIsLoadingDetails(true);
     setDetailError(null);
@@ -579,14 +568,14 @@ export default function IngestionView() {
 
   const saveEditor = useCallback(async () => {
     setEditorError(null);
-
     const trimmedLabel = editorForm.sourceLabel.trim();
-    if (!trimmedLabel) {
-      setEditorError("Source label is required.");
-      return;
-    }
 
     if (editorMode === "create") {
+      if (!trimmedLabel) {
+        setEditorError("Source label is required.");
+        return;
+      }
+
       if (!isIcloudCloudExport(editorForm) && !editorForm.sourceRootPath.trim()) {
         setEditorError("Source root path is required for this source type.");
         return;
@@ -634,14 +623,7 @@ export default function IngestionView() {
       }
 
       const payload: SourceProfileMetadataUpdateRequest = {
-        source_label: trimmedLabel,
         profile_status: editorForm.profileStatus,
-        cloud_provider: editorForm.sourceType === "cloud_export" ? editorForm.cloudProvider : null,
-        account_username: editorForm.accountUsername.trim() || null,
-        acquisition_method: editorForm.sourceType === "cloud_export" ? editorForm.acquisitionMethod : null,
-        ...(editorForm.sourceType === "cloud_export" && !isManagedStagingLocked
-          ? { managed_staging_path: editorForm.managedStagingPath.trim() || null }
-          : {}),
       };
 
       const updated = await updateSourceProfileMetadata(editingProfile.source_id, payload);
@@ -668,7 +650,6 @@ export default function IngestionView() {
     editorForm,
     editorMode,
     editingProfile,
-    isManagedStagingLocked,
     loadProfiles,
     managedStagingPreview,
     statusFilter,
@@ -819,7 +800,6 @@ export default function IngestionView() {
     setIsRunConfirmOpen(false);
     setRunCandidateProfile(null);
     setRunCandidatePathCheck(null);
-    setIsAdvancedRunOptionsOpen(false);
     setRunLimitInput("");
     setRunBatchSizeInput("500");
     setRunOptionsError(null);
@@ -869,7 +849,6 @@ export default function IngestionView() {
       setRunCandidatePathCheck(pathCheck);
       setRunLimitInput("");
       setRunBatchSizeInput("500");
-      setIsAdvancedRunOptionsOpen(false);
       setRunOptionsError(null);
       setIsRunConfirmOpen(true);
     } catch (error) {
@@ -888,7 +867,6 @@ export default function IngestionView() {
     }
 
     if (runLimitValidationError || runBatchSizeValidationError) {
-      setIsAdvancedRunOptionsOpen(true);
       setRunOptionsError("Fix run option values before starting Source Intake.");
       return;
     }
@@ -1314,12 +1292,12 @@ export default function IngestionView() {
             <div className={styles.drawerHeader}>
               <div>
                 <h3 className={styles.drawerTitle}>
-                  {editorMode === "create" ? "Create Source Profile" : "Manage Source Profile Status and Metadata"}
+                  {editorMode === "create" ? "Create Source Profile" : "Manage Source Profile Status"}
                 </h3>
                 <p className={styles.drawerSubtitle}>
                   {editorMode === "create"
                     ? "Create a safe metadata profile without starting ingestion."
-                    : "Manage lifecycle status and safe metadata only. Source type and source root path stay locked."}
+                    : "Manage lifecycle status while preserving historical source identity."}
                 </p>
               </div>
               <button type="button" className={styles.closeButton} onClick={closeEditor} disabled={isSavingEditor}>
@@ -1328,20 +1306,29 @@ export default function IngestionView() {
             </div>
 
             {editorMode === "edit" && (
-              <p className={styles.inlineWarning}>
-                Source Profile changes are not retroactive. They do not rewrite prior provenance records, prior source paths, prior intake reports, or prior asset history. If a profile is wrong, archive/deprecate/test it and create a corrected profile.
-              </p>
+              <>
+                <p className={styles.helperText}>
+                  Source identity is historical after creation. If this profile is wrong, archive/deprecate/test it and create a corrected Source Profile.
+                </p>
+                <p className={styles.inlineWarning}>
+                  Source Profile changes are not retroactive. They do not rewrite prior provenance records, prior source paths, prior intake reports, or prior asset history.
+                </p>
+              </>
             )}
 
             <div className={styles.formGrid}>
               <label className={styles.formLabel}>
                 Source Label
-                <input
-                  className={styles.formInput}
-                  value={editorForm.sourceLabel}
-                  onChange={(event) => setEditorForm((prev) => ({ ...prev, sourceLabel: event.target.value }))}
-                  placeholder="Chuck PC"
-                />
+                {editorMode === "create" ? (
+                  <input
+                    className={styles.formInput}
+                    value={editorForm.sourceLabel}
+                    onChange={(event) => setEditorForm((prev) => ({ ...prev, sourceLabel: event.target.value }))}
+                    placeholder="Chuck PC"
+                  />
+                ) : (
+                  <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.sourceLabel || "-"} readOnly />
+                )}
               </label>
 
               <label className={styles.formLabel}>
@@ -1367,7 +1354,7 @@ export default function IngestionView() {
                     ))}
                   </select>
                 ) : (
-                  <input className={styles.formInput} value={editorForm.sourceType} readOnly />
+                  <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.sourceType} readOnly />
                 )}
               </label>
 
@@ -1403,7 +1390,7 @@ export default function IngestionView() {
                       placeholder="C:\\Users\\chhen\\Pictures"
                     />
                   ) : (
-                    <input className={styles.formInput} value={editorForm.sourceRootPath || "(locked)"} readOnly />
+                    <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.sourceRootPath || "-"} readOnly />
                   )}
                 </label>
               )}
@@ -1412,65 +1399,80 @@ export default function IngestionView() {
                 <>
                   <label className={styles.formLabel}>
                     Cloud Provider
-                    <select
-                      className={styles.formInput}
-                      value={editorForm.cloudProvider}
-                      onChange={(event) => setEditorForm((prev) => ({
-                        ...prev,
-                        cloudProvider: event.target.value as SourceCloudProvider,
-                      }))}
-                    >
-                      {CLOUD_PROVIDER_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    {editorMode === "create" ? (
+                      <select
+                        className={styles.formInput}
+                        value={editorForm.cloudProvider}
+                        onChange={(event) => setEditorForm((prev) => ({
+                          ...prev,
+                          cloudProvider: event.target.value as SourceCloudProvider,
+                        }))}
+                      >
+                        {CLOUD_PROVIDER_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.cloudProvider || "-"} readOnly />
+                    )}
                   </label>
 
                   <label className={styles.formLabel}>
                     Acquisition Method
-                    <select
-                      className={styles.formInput}
-                      value={editorForm.acquisitionMethod}
-                      onChange={(event) => setEditorForm((prev) => ({
-                        ...prev,
-                        acquisitionMethod: event.target.value as SourceAcquisitionMethod,
-                      }))}
-                    >
-                      {ACQUISITION_METHOD_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    {editorMode === "create" ? (
+                      <select
+                        className={styles.formInput}
+                        value={editorForm.acquisitionMethod}
+                        onChange={(event) => setEditorForm((prev) => ({
+                          ...prev,
+                          acquisitionMethod: event.target.value as SourceAcquisitionMethod,
+                        }))}
+                      >
+                        {ACQUISITION_METHOD_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.acquisitionMethod || "-"} readOnly />
+                    )}
                   </label>
 
                   <label className={styles.formLabel}>
                     Account Username
-                    <input
-                      className={styles.formInput}
-                      value={editorForm.accountUsername}
-                      onChange={(event) => setEditorForm((prev) => ({
-                        ...prev,
-                        accountUsername: event.target.value,
-                      }))}
-                      placeholder="chhendersoniv@gmail.com"
-                    />
+                    {editorMode === "create" ? (
+                      <input
+                        className={styles.formInput}
+                        value={editorForm.accountUsername}
+                        onChange={(event) => setEditorForm((prev) => ({
+                          ...prev,
+                          accountUsername: event.target.value,
+                        }))}
+                        placeholder="chhendersoniv@gmail.com"
+                      />
+                    ) : (
+                      <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.accountUsername || "-"} readOnly />
+                    )}
                   </label>
 
                   <label className={styles.formLabel}>
                     Managed Staging Path
-                    <input
-                      className={styles.formInput}
-                      value={editorForm.managedStagingPath || managedStagingPreview}
-                      onChange={(event) => setEditorForm((prev) => ({
-                        ...prev,
-                        managedStagingPath: event.target.value,
-                      }))}
-                      placeholder={managedStagingPreview}
-                      readOnly={isManagedStagingLocked}
-                    />
+                    {editorMode === "create" ? (
+                      <input
+                        className={styles.formInput}
+                        value={editorForm.managedStagingPath || managedStagingPreview}
+                        onChange={(event) => setEditorForm((prev) => ({
+                          ...prev,
+                          managedStagingPath: event.target.value,
+                        }))}
+                        placeholder={managedStagingPreview}
+                      />
+                    ) : (
+                      <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.managedStagingPath || "-"} readOnly />
+                    )}
                   </label>
                 </>
               )}
@@ -1482,30 +1484,53 @@ export default function IngestionView() {
               </p>
             )}
 
-            {!isIcloudCloudExport(editorForm) ? (
+            {editorMode === "create" && !isIcloudCloudExport(editorForm) ? (
               <p className={styles.helperText}>
                 Root path is the folder that will be scanned in a future intake run. Root path cannot be edited after creation in this milestone.
               </p>
-            ) : (
+            ) : editorMode === "create" ? (
               <div className={styles.pathPreviewBlock}>
                 <p className={styles.helperText}>
-                  Photo Organizer stores only the iCloud account username and managed staging path. Apple ID password and 2FA are handled outside Photo Organizer by icloudpd.
+                <div className={styles.formGrid}>
+                  <label className={styles.formLabel}>
+                    Total Limit
+                    <input
+                      className={styles.formInput}
+                      type="number"
+                      min={1}
+                      value={runLimitInput}
+                      onChange={(event) => setRunLimitInput(event.target.value)}
+                      placeholder="leave blank for no limit"
+                    />
+                    <span className={styles.formHint}>
+                      Leave blank for no limit. Controls the maximum number of eligible unknown files selected for this run.
+                    </span>
+                    {runLimitValidationError && <span className={styles.fieldError}>{runLimitValidationError}</span>}
+                  </label>
+                  <label className={styles.formLabel}>
+                    Batch Size
+                    <input
+                      className={styles.formInput}
+                      type="number"
+                      min={1}
+                      value={runBatchSizeInput}
+                      onChange={(event) => setRunBatchSizeInput(event.target.value)}
+                    />
+                    <span className={styles.formHint}>
+                      Controls how many files are staged and processed per ingestion batch. Default: 500.
+                    </span>
+                    {runBatchSizeValidationError && <span className={styles.fieldError}>{runBatchSizeValidationError}</span>}
+                  </label>
+                </div>
                 </p>
                 <p className={styles.pathPreviewLine}>
                   <strong>Preview path:</strong> {managedStagingPreview}
                 </p>
                 <p className={styles.pathPreviewLine}>
-                  <strong>Resolved path:</strong> {editorMode === "edit" && editingProfile?.managed_staging_path
-                    ? editingProfile.managed_staging_path
-                    : "Stored by the backend on save."}
+                  <strong>Resolved path:</strong> Stored by the backend on save.
                 </p>
-                {isManagedStagingLocked && (
-                  <p className={styles.inlineWarning}>
-                    Managed staging path is locked in the normal UI for referenced iCloud profiles.
-                  </p>
-                )}
               </div>
-            )}
+            ) : null}
 
             {editorError && <p className={styles.bannerError}>{editorError}</p>}
 
@@ -1516,7 +1541,7 @@ export default function IngestionView() {
                 onClick={() => void saveEditor()}
                 disabled={isSavingEditor}
               >
-                {isSavingEditor ? "Saving..." : editorMode === "create" ? "Create Profile" : "Save Changes"}
+                {isSavingEditor ? "Saving..." : editorMode === "create" ? "Create Profile" : "Save Status"}
               </button>
               <button type="button" className={styles.button} onClick={closeEditor} disabled={isSavingEditor}>
                 Cancel
@@ -1572,25 +1597,6 @@ export default function IngestionView() {
 
             <section className={styles.runOptionsBlock}>
               <h4 className={styles.runOptionsTitle}>Run Intake Options</h4>
-              <p className={styles.runOptionsSummary}>{runOptionSummaryText}</p>
-            </section>
-
-            <p className={styles.helperText}>
-              These options apply only to this run. They are not saved to the Source Profile.
-            </p>
-
-            {runOptionsError && <p className={styles.bannerError}>{runOptionsError}</p>}
-
-            <button
-              type="button"
-              className={styles.linkButton}
-              onClick={() => setIsAdvancedRunOptionsOpen((prev) => !prev)}
-              disabled={isRunActionLoading}
-            >
-              {isAdvancedRunOptionsOpen ? "Hide Advanced Options" : "Show Advanced Options"}
-            </button>
-
-            {isAdvancedRunOptionsOpen && (
               <div className={styles.formGrid}>
                 <label className={styles.formLabel}>
                   Total Limit
@@ -1603,7 +1609,7 @@ export default function IngestionView() {
                     placeholder="leave blank for no limit"
                   />
                   <span className={styles.formHint}>
-                    Total Limit controls the maximum number of eligible unknown files selected for this run. Leave blank for no total limit.
+                    Leave blank for no limit. Controls the maximum number of eligible unknown files selected for this run.
                   </span>
                   {runLimitValidationError && <span className={styles.fieldError}>{runLimitValidationError}</span>}
                 </label>
@@ -1617,12 +1623,18 @@ export default function IngestionView() {
                     onChange={(event) => setRunBatchSizeInput(event.target.value)}
                   />
                   <span className={styles.formHint}>
-                    Batch Size controls how many files are staged and processed per ingestion batch. Default: 500.
+                    Controls how many files are staged and processed per ingestion batch. Default: 500.
                   </span>
                   {runBatchSizeValidationError && <span className={styles.fieldError}>{runBatchSizeValidationError}</span>}
                 </label>
               </div>
-            )}
+            </section>
+
+            <p className={styles.helperText}>
+              These options apply only to this run. They are not saved to the Source Profile.
+            </p>
+
+            {runOptionsError && <p className={styles.bannerError}>{runOptionsError}</p>}
 
             <div className={styles.drawerActions}>
               <button

@@ -492,6 +492,12 @@
   color: #516274;
 }
 
+.readOnlyInput {
+  border-style: dashed;
+  background: #f3f7fb;
+  color: #314152;
+}
+
 .formHint {
   margin: 0;
   color: #516274;
@@ -526,6 +532,43 @@
   margin: 0;
   color: #314152;
   font-size: 0.85rem;
+}
+
+.readOnlyBlock {
+  border: 1px solid #d7e1ea;
+  border-radius: 10px;
+  background: #f9fbfd;
+  padding: 10px 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.readOnlyGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.readOnlyField {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #dde6ef;
+  border-radius: 10px;
+  background: #f3f7fb;
+  padding: 10px;
+}
+
+.readOnlyLabel {
+  color: #516274;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.readOnlyValue {
+  color: #1d2b39;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
 }
 
 .drawerActions {
