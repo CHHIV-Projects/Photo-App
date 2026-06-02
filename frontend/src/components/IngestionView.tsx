@@ -5,18 +5,23 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createSourceProfile,
   createSourceProfileStagingFolder,
+  getIcloudAcquisitionStatus,
+  IcloudAcquisitionStartError,
   getSourceProfileIcloudReadiness,
   getSourceProfileDetail,
   getSourceIntakeReportDetail,
   getSourceIntakeReports,
   getSourceIntakeRunStatus,
   getSourceProfiles,
+  runIcloudAcquisitionWithDetails,
   startSourceIntake,
+  stopIcloudAcquisition,
   stopSourceIntake,
   updateSourceProfileMetadata,
   verifySourceProfilePath,
 } from "@/lib/api";
 import type {
+  IcloudAcquisitionRunStatus,
   SourceAcquisitionMethod,
   SourceCloudProvider,
   IcloudSourceReadiness,
@@ -52,6 +57,8 @@ type BannerState = {
 type IcloudReadinessState = "ready" | "warning" | "not_ready" | "unknown";
 type IcloudAuthState = "action_required" | "unknown";
 type IcloudSourceRegistrationState = "matched" | "mismatch" | "unknown";
+type IcloudAcquisitionUiState = "idle" | "loading_details" | "confirm_open" | "starting" | "running" | "stop_requested" | "terminal";
+type IcloudAcquisitionMode = "standard" | "list_first_non_repeat";
 
 type EditorFormState = {
   sourceLabel: string;
@@ -103,6 +110,25 @@ const ACQUISITION_METHOD_OPTIONS: Array<{ value: SourceAcquisitionMethod; label:
   { value: "manual_export", label: "manual_export" },
   { value: "none", label: "none" },
 ];
+
+const ICLOUD_ACQUISITION_POLL_MS = 3000;
+const ICLOUD_ACQUISITION_ACTIVE_STATUSES = new Set(["running", "stop_requested"]);
+const ICLOUD_ACQUISITION_TERMINAL_STATUSES = new Set(["completed", "completed_with_warnings", "failed", "stopped"]);
+const ICLOUD_ACQUISITION_HARD_BLOCKING_CODES = new Set([
+  "AUTH_REQUIRED",
+  "SESSION_EXPIRED",
+  "PATH_MISMATCH",
+  "SOURCE_ROOT_MISMATCH",
+  "SOURCE_REGISTRATION_MISMATCH",
+  "APPROVED_ROOT_BLOCKED",
+  "ACCOUNT_USERNAME_MISSING",
+  "INGESTION_OPERATION_ACTIVE",
+]);
+const ICLOUD_ACQUISITION_BENIGN_WARNING_CODES = new Set([
+  "AUTH_UNKNOWN",
+  "NO_RECENT_ACQUISITION",
+  "STAGING_FOLDER_MISSING",
+]);
 
 function initialFormState(): EditorFormState {
   return {
@@ -268,6 +294,107 @@ function mapRunStartError(error: unknown): { message: string; raw: string | null
   };
 }
 
+function toIcloudAcquisitionModeLabel(mode: IcloudAcquisitionMode): string {
+  if (mode === "list_first_non_repeat") {
+    return "List first / non-repeat";
+  }
+  return "Standard";
+}
+
+function toIcloudAcquisitionStateLabel(value: IcloudAcquisitionUiState): string {
+  if (value === "loading_details") {
+    return "Loading acquisition details...";
+  }
+  if (value === "confirm_open") {
+    return "Ready to confirm";
+  }
+  if (value === "starting") {
+    return "Starting acquisition...";
+  }
+  if (value === "running") {
+    return "Acquisition running";
+  }
+  if (value === "stop_requested") {
+    return "Stop requested";
+  }
+  if (value === "terminal") {
+    return "Last run summary";
+  }
+  return "Idle";
+}
+
+function getIcloudAcquisitionTerminalKey(status: IcloudAcquisitionRunStatus | null): string | null {
+  if (!status || !ICLOUD_ACQUISITION_TERMINAL_STATUSES.has(status.status)) {
+    return null;
+  }
+  return [
+    status.run_id ?? "none",
+    status.status,
+    status.started_at ?? "",
+    status.completed_at ?? "",
+  ].join("|");
+}
+
+function isIcloudAcquisitionGuardrailBlocked(snapshot: IcloudSourceReadiness | null): boolean {
+  if (!snapshot) {
+    return true;
+  }
+  const conflicts = snapshot.operation_conflicts;
+  return conflicts.icloud_acquisition_active || conflicts.source_intake_active || conflicts.icloud_cleanup_active;
+}
+
+function getIcloudAcquireDisabledReason(snapshot: IcloudSourceReadiness | null): string | null {
+  if (!snapshot) {
+    return "Readiness snapshot unavailable. Refresh readiness before acquiring.";
+  }
+
+  if (snapshot.readiness_status === "not_ready") {
+    return "Readiness is not ready. Resolve blocking readiness issues first.";
+  }
+
+  if (snapshot.blocking_reasons.length > 0) {
+    const first = snapshot.blocking_reasons[0];
+    return `${first.code}: ${first.message}`;
+  }
+
+  if (isIcloudAcquisitionGuardrailBlocked(snapshot)) {
+    return "Another ingestion-related operation is active. Wait for it to finish before starting iCloud acquisition.";
+  }
+
+  if (snapshot.auth_status === "action_required") {
+    return "Authentication is required. Re-authenticate icloudpd outside Photo Organizer, then refresh readiness.";
+  }
+
+  if (snapshot.source_registration_status === "mismatch") {
+    return "Source registration is mismatched. Resolve source profile readiness issues before trying again.";
+  }
+
+  if (snapshot.path_alignment_status === "mismatch" || snapshot.source_root_alignment_status === "mismatch") {
+    return "Path alignment is invalid. Resolve source profile readiness issues before trying again.";
+  }
+
+  if (snapshot.approved_root_status === "blocked") {
+    return "Managed staging path is outside approved iCloud root.";
+  }
+
+  if (!snapshot.account_username_masked) {
+    return "Account username is required before acquisition can run.";
+  }
+
+  if (snapshot.readiness_status === "warning") {
+    for (const warning of snapshot.warnings) {
+      if (!ICLOUD_ACQUISITION_BENIGN_WARNING_CODES.has(warning.code)) {
+        return `${warning.code}: ${warning.message}`;
+      }
+      if (warning.code === "STAGING_FOLDER_MISSING" && snapshot.approved_root_status !== "ok") {
+        return "Staging folder warning is not safely actionable until approved root is confirmed.";
+      }
+    }
+  }
+
+  return null;
+}
+
 function calculateExactDuplicateCount(
   selectedForSession: number | null | undefined,
   processedNewUnique: number | null | undefined,
@@ -307,6 +434,19 @@ export default function IngestionView() {
   const [icloudReadinessSnapshot, setIcloudReadinessSnapshot] = useState<IcloudSourceReadiness | null>(null);
   const [isLoadingIcloudReadiness, setIsLoadingIcloudReadiness] = useState(false);
   const [icloudReadinessError, setIcloudReadinessError] = useState<string | null>(null);
+  const [icloudAcquisitionStatus, setIcloudAcquisitionStatus] = useState<IcloudAcquisitionRunStatus | null>(null);
+  const [icloudAcquisitionUiState, setIcloudAcquisitionUiState] = useState<IcloudAcquisitionUiState>("idle");
+  const [isIcloudAcquisitionConfirmOpen, setIsIcloudAcquisitionConfirmOpen] = useState(false);
+  const [isIcloudAcquisitionActionLoading, setIsIcloudAcquisitionActionLoading] = useState(false);
+  const [isLoadingIcloudAcquisitionDetails, setIsLoadingIcloudAcquisitionDetails] = useState(false);
+  const [icloudAcquisitionRecentCountInput, setIcloudAcquisitionRecentCountInput] = useState("25");
+  const [icloudAcquisitionMode, setIcloudAcquisitionMode] = useState<IcloudAcquisitionMode>("standard");
+  const [icloudAcquisitionUsernameForRun, setIcloudAcquisitionUsernameForRun] = useState<string | null>(null);
+  const [icloudAcquisitionError, setIcloudAcquisitionError] = useState<string | null>(null);
+  const [icloudAcquisitionErrorCode, setIcloudAcquisitionErrorCode] = useState<string | null>(null);
+  const [icloudAcquisitionBlockingReasons, setIcloudAcquisitionBlockingReasons] = useState<Array<{ code: string; message: string }>>([]);
+  const [icloudAcquisitionConflictSummary, setIcloudAcquisitionConflictSummary] = useState<string | null>(null);
+  const [dismissedIcloudAcquisitionTerminalKey, setDismissedIcloudAcquisitionTerminalKey] = useState<string | null>(null);
   const [sourceIntakeStatus, setSourceIntakeStatus] = useState<SourceIntakeStatusSnapshot | null>(null);
   const [sourceIntakeReports, setSourceIntakeReports] = useState<SourceIntakeReportSummary[]>([]);
   const [isRunActionLoading, setIsRunActionLoading] = useState(false);
@@ -349,6 +489,59 @@ export default function IngestionView() {
 
     return null;
   }, [normalizedRunBatchSizeInput]);
+
+  const icloudAcquireDisabledReason = useMemo(() => {
+    const detailIsIcloud = detailProfile ? isIcloudProfile(detailProfile) : false;
+    if (!detailProfile || !detailIsIcloud) {
+      return "Acquire from iCloud is available for iCloud source profiles only.";
+    }
+    return getIcloudAcquireDisabledReason(icloudReadinessSnapshot);
+  }, [detailProfile, icloudReadinessSnapshot]);
+
+  const normalizedIcloudAcquisitionRecentCountInput = useMemo(
+    () => icloudAcquisitionRecentCountInput.trim(),
+    [icloudAcquisitionRecentCountInput],
+  );
+
+  const icloudAcquisitionRecentCountValidationError = useMemo(() => {
+    const parsed = Number(normalizedIcloudAcquisitionRecentCountInput);
+    if (!normalizedIcloudAcquisitionRecentCountInput || !Number.isInteger(parsed) || parsed < 1 || parsed > 500) {
+      return "Recent Count must be an integer between 1 and 500.";
+    }
+    return null;
+  }, [normalizedIcloudAcquisitionRecentCountInput]);
+
+  const isIcloudAcquisitionActive = useMemo(
+    () => (icloudAcquisitionStatus ? ICLOUD_ACQUISITION_ACTIVE_STATUSES.has(icloudAcquisitionStatus.status) : false),
+    [icloudAcquisitionStatus],
+  );
+
+  const currentIcloudAcquisitionTerminalKey = useMemo(
+    () => getIcloudAcquisitionTerminalKey(icloudAcquisitionStatus),
+    [icloudAcquisitionStatus],
+  );
+
+  const showIcloudAcquisitionTerminalSummary = useMemo(
+    () => Boolean(currentIcloudAcquisitionTerminalKey && currentIcloudAcquisitionTerminalKey !== dismissedIcloudAcquisitionTerminalKey),
+    [currentIcloudAcquisitionTerminalKey, dismissedIcloudAcquisitionTerminalKey],
+  );
+
+  const loadIcloudAcquisitionStatus = useCallback(async () => {
+    try {
+      const response = await getIcloudAcquisitionStatus();
+      setIcloudAcquisitionStatus(response.current);
+
+      if (response.current.status === "running") {
+        setIcloudAcquisitionUiState("running");
+      } else if (response.current.status === "stop_requested") {
+        setIcloudAcquisitionUiState("stop_requested");
+      } else if (ICLOUD_ACQUISITION_TERMINAL_STATUSES.has(response.current.status)) {
+        setIcloudAcquisitionUiState("terminal");
+      }
+    } catch (error) {
+      setIcloudAcquisitionError(error instanceof Error ? error.message : "Failed to load iCloud acquisition status.");
+    }
+  }, []);
 
   const loadProfiles = useCallback(async (options: LoadProfilesOptions = {}) => {
     const { refreshOnly = false, clearRowErrors = false, resetBanner = true } = options;
@@ -462,6 +655,67 @@ export default function IngestionView() {
     void loadSourceIntakeReports();
   }, [sourceIntakeStatus?.run_id, sourceIntakeStatus?.status, loadProfiles, loadSourceIntakeReports]);
 
+  useEffect(() => {
+    if (!icloudAcquisitionStatus) {
+      return;
+    }
+    if (icloudAcquisitionStatus.status === "running") {
+      setIcloudAcquisitionUiState("running");
+      setDismissedIcloudAcquisitionTerminalKey(null);
+      return;
+    }
+    if (icloudAcquisitionStatus.status === "stop_requested") {
+      setIcloudAcquisitionUiState("stop_requested");
+      setDismissedIcloudAcquisitionTerminalKey(null);
+      return;
+    }
+    if (ICLOUD_ACQUISITION_TERMINAL_STATUSES.has(icloudAcquisitionStatus.status)) {
+      setIcloudAcquisitionUiState("terminal");
+      return;
+    }
+    setIcloudAcquisitionUiState("idle");
+  }, [icloudAcquisitionStatus]);
+
+  useEffect(() => {
+    if (!isDetailsOpen || !detailProfile || !isIcloudProfile(detailProfile) || !isIcloudAcquisitionActive) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadIcloudAcquisitionStatus();
+    }, ICLOUD_ACQUISITION_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [detailProfile, isDetailsOpen, isIcloudAcquisitionActive, loadIcloudAcquisitionStatus]);
+
+  useEffect(() => {
+    if (!detailSourceId || !isDetailsOpen || !detailProfile || !isIcloudProfile(detailProfile) || !icloudAcquisitionStatus) {
+      return;
+    }
+    if (!ICLOUD_ACQUISITION_TERMINAL_STATUSES.has(icloudAcquisitionStatus.status)) {
+      return;
+    }
+    void (async () => {
+      setIsLoadingIcloudReadiness(true);
+      setIcloudReadinessError(null);
+      try {
+        const snapshot = await getSourceProfileIcloudReadiness(detailSourceId);
+        setIcloudReadinessSnapshot(snapshot);
+      } catch (error) {
+        setIcloudReadinessSnapshot(null);
+        setIcloudReadinessError(error instanceof Error ? error.message : "Readiness unavailable.");
+      } finally {
+        setIsLoadingIcloudReadiness(false);
+      }
+    })();
+    void loadIcloudAcquisitionStatus();
+  }, [
+    detailProfile,
+    detailSourceId,
+    icloudAcquisitionStatus?.run_id,
+    icloudAcquisitionStatus?.status,
+    isDetailsOpen,
+    loadIcloudAcquisitionStatus,
+  ]);
+
   const countsSummary = useMemo(() => {
     const counts: Record<SourceProfileStatus, number> = {
       active: 0,
@@ -517,6 +771,136 @@ export default function IngestionView() {
     }
   }, []);
 
+  const closeIcloudAcquisitionConfirmation = useCallback(() => {
+    setIsIcloudAcquisitionConfirmOpen(false);
+    setIcloudAcquisitionUiState((prev) => (prev === "loading_details" ? "idle" : prev));
+    setIcloudAcquisitionErrorCode(null);
+    setIcloudAcquisitionBlockingReasons([]);
+    setIcloudAcquisitionConflictSummary(null);
+  }, []);
+
+  const handleAcquireFromIcloudClick = useCallback(async () => {
+    if (!detailSourceId || !detailProfile || !isIcloudProfile(detailProfile)) {
+      return;
+    }
+
+    if (icloudAcquireDisabledReason) {
+      setIcloudAcquisitionError(icloudAcquireDisabledReason);
+      return;
+    }
+
+    setIsLoadingIcloudAcquisitionDetails(true);
+    setIcloudAcquisitionUiState("loading_details");
+    setIcloudAcquisitionError(null);
+    setIcloudAcquisitionErrorCode(null);
+    setIcloudAcquisitionBlockingReasons([]);
+    setIcloudAcquisitionConflictSummary(null);
+
+    try {
+      const detailWithUsername = await getSourceProfileDetail(detailSourceId, { includeUsername: true });
+      const username = (detailWithUsername.account_username || "").trim();
+      if (!username) {
+        setIcloudAcquisitionError("Account username is required before acquisition can run.");
+        setIcloudAcquisitionUiState("idle");
+        return;
+      }
+
+      setIcloudAcquisitionUsernameForRun(username);
+      setIcloudAcquisitionRecentCountInput("25");
+      setIcloudAcquisitionMode("standard");
+      setIsIcloudAcquisitionConfirmOpen(true);
+      setIcloudAcquisitionUiState("confirm_open");
+    } catch (error) {
+      setIcloudAcquisitionError(error instanceof Error ? error.message : "Failed to load acquisition details.");
+      setIcloudAcquisitionUiState("idle");
+    } finally {
+      setIsLoadingIcloudAcquisitionDetails(false);
+    }
+  }, [detailProfile, detailSourceId, icloudAcquireDisabledReason]);
+
+  const handleConfirmAcquireFromIcloud = useCallback(async () => {
+    if (!detailProfile || !isIcloudProfile(detailProfile) || !icloudAcquisitionUsernameForRun) {
+      return;
+    }
+
+    if (icloudAcquisitionRecentCountValidationError) {
+      setIcloudAcquisitionError(icloudAcquisitionRecentCountValidationError);
+      return;
+    }
+
+    setIsIcloudAcquisitionActionLoading(true);
+    setIcloudAcquisitionUiState("starting");
+    setIcloudAcquisitionError(null);
+    setIcloudAcquisitionErrorCode(null);
+    setIcloudAcquisitionBlockingReasons([]);
+    setIcloudAcquisitionConflictSummary(null);
+
+    try {
+      const response = await runIcloudAcquisitionWithDetails({
+        source_label: detailProfile.source_label,
+        username: icloudAcquisitionUsernameForRun,
+        recent_count: Number(normalizedIcloudAcquisitionRecentCountInput),
+        source_type: "cloud_export",
+        acquisition_mode: icloudAcquisitionMode,
+      });
+
+      setIcloudAcquisitionStatus(response.current);
+      setDismissedIcloudAcquisitionTerminalKey(null);
+      setIcloudAcquisitionUiState(
+        response.current.status === "stop_requested"
+          ? "stop_requested"
+          : ICLOUD_ACQUISITION_ACTIVE_STATUSES.has(response.current.status)
+            ? "running"
+            : ICLOUD_ACQUISITION_TERMINAL_STATUSES.has(response.current.status)
+              ? "terminal"
+              : "idle",
+      );
+      setIsIcloudAcquisitionConfirmOpen(false);
+      setBanner({ kind: "success", message: "iCloud acquisition started." });
+    } catch (error) {
+      if (error instanceof IcloudAcquisitionStartError) {
+        setIcloudAcquisitionError(error.message);
+        setIcloudAcquisitionErrorCode(error.payload?.error_code ?? null);
+        setIcloudAcquisitionBlockingReasons(error.payload?.blocking_reasons ?? []);
+        if (error.payload?.operation_conflicts) {
+          const conflicts = error.payload.operation_conflicts;
+          setIcloudAcquisitionConflictSummary([
+            `Acquisition active: ${conflicts.icloud_acquisition_active ? "Yes" : "No"}`,
+            `Source Intake active: ${conflicts.source_intake_active ? "Yes" : "No"}`,
+            `iCloud cleanup active: ${conflicts.icloud_cleanup_active ? "Yes" : "No"}`,
+          ].join(" | "));
+        }
+      } else {
+        setIcloudAcquisitionError(error instanceof Error ? error.message : "Failed to start iCloud acquisition.");
+      }
+      setIcloudAcquisitionUiState("idle");
+    } finally {
+      setIsIcloudAcquisitionActionLoading(false);
+    }
+  }, [
+    detailProfile,
+    icloudAcquisitionMode,
+    icloudAcquisitionRecentCountValidationError,
+    icloudAcquisitionUsernameForRun,
+    normalizedIcloudAcquisitionRecentCountInput,
+  ]);
+
+  const handleIcloudAcquisitionRequestStop = useCallback(async () => {
+    setIsIcloudAcquisitionActionLoading(true);
+    setIcloudAcquisitionError(null);
+
+    try {
+      const response = await stopIcloudAcquisition();
+      setIcloudAcquisitionStatus(response.current);
+      setIcloudAcquisitionUiState(response.current.status === "stop_requested" ? "stop_requested" : "running");
+      setBanner({ kind: "success", message: "Stop requested for iCloud acquisition." });
+    } catch (error) {
+      setIcloudAcquisitionError(error instanceof Error ? error.message : "Failed to request stop.");
+    } finally {
+      setIsIcloudAcquisitionActionLoading(false);
+    }
+  }, []);
+
   const openCreateDrawer = useCallback(() => {
     setIsDetailsOpen(false);
     setEditorMode("create");
@@ -555,11 +939,19 @@ export default function IngestionView() {
     setStagingCreateResult(null);
     setIcloudReadinessSnapshot(null);
     setIcloudReadinessError(null);
+    setIcloudAcquisitionStatus(null);
+    setIcloudAcquisitionError(null);
+    setIcloudAcquisitionErrorCode(null);
+    setIcloudAcquisitionBlockingReasons([]);
+    setIcloudAcquisitionConflictSummary(null);
+    setIsIcloudAcquisitionConfirmOpen(false);
+    setIcloudAcquisitionUiState("idle");
     void loadDetail(profile.source_id);
     if (isIcloudProfile(profile)) {
       void loadIcloudReadiness(profile.source_id);
+      void loadIcloudAcquisitionStatus();
     }
-  }, [loadDetail, loadIcloudReadiness]);
+  }, [loadDetail, loadIcloudAcquisitionStatus, loadIcloudReadiness]);
 
   const closeEditor = useCallback(() => {
     setIsEditorOpen(false);
@@ -576,6 +968,15 @@ export default function IngestionView() {
     setStagingCreateResult(null);
     setIcloudReadinessSnapshot(null);
     setIcloudReadinessError(null);
+    setIcloudAcquisitionStatus(null);
+    setIcloudAcquisitionUiState("idle");
+    setIcloudAcquisitionError(null);
+    setIcloudAcquisitionErrorCode(null);
+    setIcloudAcquisitionBlockingReasons([]);
+    setIcloudAcquisitionConflictSummary(null);
+    setIsIcloudAcquisitionConfirmOpen(false);
+    setIsLoadingIcloudAcquisitionDetails(false);
+    setIcloudAcquisitionUsernameForRun(null);
   }, []);
 
   const handleVerifyPath = useCallback(async () => {
@@ -1656,37 +2057,7 @@ export default function IngestionView() {
             ) : editorMode === "create" ? (
               <div className={styles.pathPreviewBlock}>
                 <p className={styles.helperText}>
-                <div className={styles.formGrid}>
-                  <label className={styles.formLabel}>
-                    Total Limit
-                    <input
-                      className={styles.formInput}
-                      type="number"
-                      min={1}
-                      value={runLimitInput}
-                      onChange={(event) => setRunLimitInput(event.target.value)}
-                      placeholder="leave blank for no limit"
-                    />
-                    <span className={styles.formHint}>
-                      Leave blank for no limit. Controls the maximum number of eligible unknown files selected for this run.
-                    </span>
-                    {runLimitValidationError && <span className={styles.fieldError}>{runLimitValidationError}</span>}
-                  </label>
-                  <label className={styles.formLabel}>
-                    Batch Size
-                    <input
-                      className={styles.formInput}
-                      type="number"
-                      min={1}
-                      value={runBatchSizeInput}
-                      onChange={(event) => setRunBatchSizeInput(event.target.value)}
-                    />
-                    <span className={styles.formHint}>
-                      Controls how many files are staged and processed per ingestion batch. Default: 500.
-                    </span>
-                    {runBatchSizeValidationError && <span className={styles.fieldError}>{runBatchSizeValidationError}</span>}
-                  </label>
-                </div>
+                  Managed staging path should match the canonical iCloud path for this label.
                 </p>
                 <p className={styles.pathPreviewLine}>
                   <strong>Preview path:</strong> {managedStagingPreview}
@@ -1811,6 +2182,122 @@ export default function IngestionView() {
                 {isRunActionLoading ? "Starting..." : "Run Intake"}
               </button>
               <button type="button" className={styles.button} onClick={closeRunConfirmation} disabled={isRunActionLoading}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isIcloudAcquisitionConfirmOpen && detailProfile && isDetailIcloudProfile && (
+        <div className={styles.drawerBackdrop} role="dialog" aria-modal="true">
+          <div className={styles.drawerPanel}>
+            <div className={styles.drawerHeader}>
+              <div>
+                <h3 className={styles.drawerTitle}>Confirm iCloud Acquisition</h3>
+                <p className={styles.drawerSubtitle}>
+                  Review source profile readiness and acquisition settings before starting.
+                </p>
+              </div>
+              <button
+                type="button"
+                className={styles.closeButton}
+                onClick={closeIcloudAcquisitionConfirmation}
+                disabled={isIcloudAcquisitionActionLoading}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className={styles.detailGrid}>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Source Profile</span>
+                <span>{detailProfile.source_label}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Account Username</span>
+                <span>{detailProfile.account_username_masked ?? "-"}</span>
+                <span className={styles.detailMeta}>Real username is used internally for API payload.</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Managed Staging Path</span>
+                <span>{detailProfile.managed_staging_path ?? "-"}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Expected Acquisition Path</span>
+                <span>{expectedAcquisitionPath ?? "-"}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Readiness Status</span>
+                <span className={`${styles.readinessBadge} ${readinessBadgeClassName}`}>{toIcloudReadinessLabel(icloudReadiness)}</span>
+              </div>
+            </div>
+
+            <section className={styles.runOptionsBlock}>
+              <h4 className={styles.runOptionsTitle}>Acquisition Options</h4>
+              <div className={styles.formGrid}>
+                <label className={styles.formLabel}>
+                  Recent Count
+                  <input
+                    className={styles.formInput}
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={icloudAcquisitionRecentCountInput}
+                    onChange={(event) => setIcloudAcquisitionRecentCountInput(event.target.value)}
+                  />
+                  <span className={styles.formHint}>
+                    Recent Count controls how many recent iCloud items icloudpd considers for acquisition.
+                  </span>
+                  {icloudAcquisitionRecentCountValidationError && (
+                    <span className={styles.fieldError}>{icloudAcquisitionRecentCountValidationError}</span>
+                  )}
+                </label>
+
+                <label className={styles.formLabel}>
+                  Acquisition Mode
+                  <select
+                    className={styles.formInput}
+                    value={icloudAcquisitionMode}
+                    onChange={(event) => setIcloudAcquisitionMode(event.target.value as IcloudAcquisitionMode)}
+                  >
+                    <option value="standard">Standard</option>
+                    <option value="list_first_non_repeat">List first / non-repeat</option>
+                  </select>
+                  <span className={styles.formHint}>
+                    Standard downloads the requested recent items. List-first/non-repeat checks candidate filenames first and may skip download if candidates are already known.
+                  </span>
+                </label>
+              </div>
+            </section>
+
+            <p className={styles.note}>
+              Photo Organizer does not store your Apple password or 2FA code. iCloud authentication is handled outside the app by icloudpd.
+              If authentication is expired, acquisition may fail and the readiness panel will show Action Required.
+            </p>
+
+            <p className={styles.note}>
+              This will download recent iCloud files into the managed staging folder. It will not run Source Intake automatically.
+              It will not delete files from iCloud. It will not clean up staged files.
+            </p>
+
+            {icloudAcquisitionError && <p className={styles.bannerError}>{icloudAcquisitionError}</p>}
+
+            <div className={styles.drawerActions}>
+              <button
+                type="button"
+                className={styles.runButton}
+                onClick={() => void handleConfirmAcquireFromIcloud()}
+                disabled={isIcloudAcquisitionActionLoading}
+              >
+                {isIcloudAcquisitionActionLoading ? "Starting..." : "Acquire from iCloud"}
+              </button>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={closeIcloudAcquisitionConfirmation}
+                disabled={isIcloudAcquisitionActionLoading}
+              >
                 Cancel
               </button>
             </div>
@@ -1966,9 +2453,10 @@ export default function IngestionView() {
                         {icloudReadinessError && (
                           <p className={styles.inlineWarning}>Readiness unavailable: {icloudReadinessError}</p>
                         )}
-                        <span className={styles.detailMeta}>
-                          iCloud acquisition is still run from Admin until the Ingestion iCloud workflow is implemented.
-                        </span>
+                        <span className={styles.detailMeta}>Acquisition flow state: {toIcloudAcquisitionStateLabel(icloudAcquisitionUiState)}</span>
+                        {isLoadingIcloudAcquisitionDetails && (
+                          <span className={styles.detailMeta}>Loading acquisition details...</span>
+                        )}
                       </div>
                       <div className={styles.detailCard}>
                         <span className={styles.detailLabel}>Managed Staging Path</span>
@@ -2037,6 +2525,55 @@ export default function IngestionView() {
                         </span>
                       </div>
                       <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Acquire from iCloud</span>
+                        <span>
+                          {icloudAcquireDisabledReason
+                            ? "Blocked"
+                            : "Ready"}
+                        </span>
+                        <span className={styles.detailMeta}>
+                          Use this to download recent iCloud files into the managed staging folder.
+                        </span>
+                        <span className={styles.detailMeta}>
+                          This does not run Source Intake automatically and does not run cleanup.
+                        </span>
+                        {icloudAcquireDisabledReason && (
+                          <p className={styles.inlineWarning}>{icloudAcquireDisabledReason}</p>
+                        )}
+                        <div className={styles.rowActions}>
+                          <button
+                            type="button"
+                            className={styles.runButton}
+                            onClick={() => void handleAcquireFromIcloudClick()}
+                            disabled={Boolean(icloudAcquireDisabledReason) || isIcloudAcquisitionActionLoading || isLoadingIcloudAcquisitionDetails}
+                          >
+                            {isLoadingIcloudAcquisitionDetails
+                              ? "Loading..."
+                              : "Acquire from iCloud"}
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.button}
+                            onClick={() => void loadIcloudAcquisitionStatus()}
+                            disabled={isIcloudAcquisitionActionLoading}
+                          >
+                            Refresh Acquisition Status
+                          </button>
+                          {isIcloudAcquisitionActive && (
+                            <button
+                              type="button"
+                              className={styles.stopButton}
+                              onClick={() => void handleIcloudAcquisitionRequestStop()}
+                              disabled={isIcloudAcquisitionActionLoading || icloudAcquisitionStatus?.status === "stop_requested"}
+                            >
+                              {icloudAcquisitionStatus?.status === "stop_requested"
+                                ? "Stop Requested"
+                                : (isIcloudAcquisitionActionLoading ? "Requesting..." : "Request Stop")}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className={styles.detailCard}>
                         <span className={styles.detailLabel}>Last Acquisition Status</span>
                         {isLoadingIcloudReadiness ? (
                           <span>Loading...</span>
@@ -2091,11 +2628,78 @@ export default function IngestionView() {
                       <div className={styles.detailCard}>
                         <span className={styles.detailLabel}>Recommended Next Action</span>
                         <span>{recommendedIcloudAction ?? "Run diagnostics or use Admin iCloud tools to confirm readiness."}</span>
-                        <span className={styles.detailMeta}>
-                          Use Admin iCloud tools for acquisition until the Ingestion iCloud workflow is implemented.
-                        </span>
+                        <span className={styles.detailMeta}>Guided Source Intake handoff will be added in milestone 12.62.7.</span>
                       </div>
                     </div>
+
+                    {icloudAcquisitionError && (
+                      <p className={styles.bannerError}>{icloudAcquisitionError}</p>
+                    )}
+                    {icloudAcquisitionErrorCode && (
+                      <p className={styles.helperText}>Error code: {icloudAcquisitionErrorCode}</p>
+                    )}
+                    {icloudAcquisitionBlockingReasons.length > 0 && (
+                      <div className={styles.warningList}>
+                        {icloudAcquisitionBlockingReasons.map((reason) => (
+                          <p key={`${reason.code}:${reason.message}`} className={styles.inlineWarning}>
+                            {reason.code}: {reason.message}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {icloudAcquisitionConflictSummary && (
+                      <p className={styles.helperText}>{icloudAcquisitionConflictSummary}</p>
+                    )}
+
+                    {icloudAcquisitionStatus && (
+                      <section className={styles.runPanel}>
+                        <div className={styles.runPanelHeader}>
+                          <h3 className={styles.runPanelTitle}>iCloud Acquisition Status</h3>
+                          {showIcloudAcquisitionTerminalSummary && currentIcloudAcquisitionTerminalKey && (
+                            <button
+                              type="button"
+                              className={styles.button}
+                              onClick={() => setDismissedIcloudAcquisitionTerminalKey(currentIcloudAcquisitionTerminalKey)}
+                            >
+                              Dismiss
+                            </button>
+                          )}
+                        </div>
+                        <div className={styles.runMetrics}>
+                          <span><strong>Status:</strong> <span className={`${styles.runStatusBadge} ${statusClassName(icloudAcquisitionStatus.status)}`}>{toStatusLabel(icloudAcquisitionStatus.status)}</span></span>
+                          <span><strong>Source:</strong> {icloudAcquisitionStatus.source_label ?? "-"}</span>
+                          <span><strong>Recent Count:</strong> {icloudAcquisitionStatus.recent_count ?? "-"}</span>
+                          <span><strong>Acquisition Mode:</strong> {toIcloudAcquisitionModeLabel((icloudAcquisitionStatus.acquisition_mode ?? "standard") as IcloudAcquisitionMode)}</span>
+                          <span><strong>Started:</strong> {toDisplayDate(icloudAcquisitionStatus.started_at)}</span>
+                          <span><strong>Finished:</strong> {toDisplayDate(icloudAcquisitionStatus.completed_at)}</span>
+                          <span><strong>Downloaded:</strong> {icloudAcquisitionStatus.downloaded_count}</span>
+                          <span><strong>Skipped:</strong> {icloudAcquisitionStatus.skipped_existing_count}</span>
+                          <span><strong>Failed:</strong> {icloudAcquisitionStatus.failed_count}</span>
+                          <span><strong>File inventory count:</strong> {icloudAcquisitionStatus.file_inventory_count ?? "-"}</span>
+                          <span><strong>Error code:</strong> {icloudAcquisitionStatus.error_code ?? "-"}</span>
+                          <span><strong>Error message:</strong> {icloudAcquisitionStatus.error_message ?? "-"}</span>
+                          <span><strong>Report path:</strong> {icloudAcquisitionStatus.report_path ?? "-"}</span>
+                        </div>
+
+                        {(icloudAcquisitionStatus.status === "completed" || icloudAcquisitionStatus.status === "completed_with_warnings") && (
+                          <p className={styles.bannerSuccess}>
+                            Acquisition completed. The next step is Source Intake for staged iCloud files. Guided Source Intake handoff will be added in the next milestone.
+                          </p>
+                        )}
+                        {(icloudAcquisitionStatus.error_code === "AUTH_REQUIRED" || icloudAcquisitionStatus.error_code === "SESSION_EXPIRED") && (
+                          <p className={styles.inlineWarning}>
+                            Authentication is required. Re-authenticate icloudpd outside Photo Organizer, then refresh readiness.
+                          </p>
+                        )}
+                        {(icloudAcquisitionStatus.error_code === "SOURCE_NOT_REGISTERED"
+                          || icloudAcquisitionStatus.error_code === "INVALID_PATH"
+                          || icloudAcquisitionStatus.error_code === "APPROVED_ROOT_BLOCKED") && (
+                          <p className={styles.inlineWarning}>
+                            Resolve Source Profile readiness issues before trying again.
+                          </p>
+                        )}
+                      </section>
+                    )}
                   </section>
                 )}
 

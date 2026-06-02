@@ -14,6 +14,8 @@ import type {
   SourceProfileCreateResponse,
   SourceProfileDetail,
   IcloudSourceReadiness,
+  IcloudReadinessOperationConflicts,
+  IcloudReadinessReason,
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
   SourceProfileStatus,
@@ -41,6 +43,7 @@ import type {
   IcloudStagingCleanupRunResponse,
   IcloudStagingCleanupStatusResponse,
   IcloudAcquisitionStatusResponse,
+  IcloudAcquisitionRunStatus,
   IcloudAcquisitionRunRequest,
   IcloudAcquisitionRunResponse,
   IcloudAcquisitionStopResponse,
@@ -145,6 +148,26 @@ export interface SearchPhotoQueryOptions extends PhotoQueryOptions {
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || "http://127.0.0.1:8001";
+
+export interface IcloudAcquisitionStartErrorPayload {
+  detail?: string;
+  error_code?: string;
+  blocking_reasons?: IcloudReadinessReason[];
+  operation_conflicts?: IcloudReadinessOperationConflicts;
+  current?: IcloudAcquisitionRunStatus;
+}
+
+export class IcloudAcquisitionStartError extends Error {
+  status: number;
+  payload: IcloudAcquisitionStartErrorPayload | null;
+
+  constructor(message: string, status: number, payload: IcloudAcquisitionStartErrorPayload | null) {
+    super(message);
+    this.name = "IcloudAcquisitionStartError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -995,6 +1018,33 @@ export function runIcloudAcquisition(req: IcloudAcquisitionRunRequest): Promise<
     method: "POST",
     body: JSON.stringify(req),
   });
+}
+
+export async function runIcloudAcquisitionWithDetails(
+  req: IcloudAcquisitionRunRequest,
+): Promise<IcloudAcquisitionRunResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/admin/icloud-acquisition/run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    let payload: IcloudAcquisitionStartErrorPayload | null = null;
+    try {
+      payload = (await response.json()) as IcloudAcquisitionStartErrorPayload;
+    } catch {
+      payload = null;
+    }
+
+    const message = payload?.detail || `Request failed with status ${response.status}`;
+    throw new IcloudAcquisitionStartError(message, response.status, payload);
+  }
+
+  return (await response.json()) as IcloudAcquisitionRunResponse;
 }
 
 export function stopIcloudAcquisition(): Promise<IcloudAcquisitionStopResponse> {
