@@ -301,6 +301,7 @@ class SourceProfileDetail(SourceProfileSummary):
     normalized_label: str
     effective_path: str | None = None
     effective_path_kind: Literal["source_root_path", "managed_staging_path", "none"] = "none"
+    expected_acquisition_path: str | None = None
     source_root_path_relative: str | None = None
     managed_staging_path_relative: str | None = None
     effective_path_relative: str | None = None

@@ -26,6 +26,7 @@ from app.services.icloud_acquisition.known_state_service import (
     evaluate_known_state,
     parse_preflight_candidates,
 )
+from app.services.icloud_path_service import resolve_icloud_staging_path, sanitize_icloud_source_label
 from app.services.icloud_acquisition.schema import ensure_icloud_acquisition_schema
 from app.services.ingestion.ingestion_context_service import (
     coerce_source_type,
@@ -246,11 +247,7 @@ def _resolve_backend_relative_path(value: str | None) -> Path | None:
 
 
 def sanitize_source_label(source_label: str | None) -> str:
-    raw = (source_label or "").strip().lower()
-    sanitized = re.sub(r"[^a-z0-9_-]+", "_", raw)
-    sanitized = re.sub(r"[_-]{2,}", "_", sanitized)
-    sanitized = sanitized.strip("_- ")
-    return sanitized or "unnamed_source"
+    return sanitize_icloud_source_label(source_label)
 
 
 def normalize_recent_count(recent_count: int | None) -> int:
@@ -274,8 +271,7 @@ def normalize_acquisition_mode(acquisition_mode: str | None) -> str:
 
 
 def resolve_staging_root(source_label: str) -> Path:
-    sanitized_label = sanitize_source_label(source_label)
-    return (EXPORTS_ROOT / sanitized_label).resolve()
+    return resolve_icloud_staging_path(source_label)
 
 
 def validate_staging_root(staging_root: Path) -> Path:

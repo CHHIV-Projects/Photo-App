@@ -28,6 +28,7 @@ from app.schemas.admin import (
     SourceIntakeReportSummary,
     SourceIntakeSourceSummary,
 )
+from app.services.icloud_path_service import resolve_icloud_staging_path
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
 from app.services.ingestion.ingestion_context_service import (
     KNOWN_SOURCE_TYPES,
@@ -114,25 +115,6 @@ def _to_project_relative_path(path_value: str | None) -> str | None:
     except (ValueError, OSError):
         return None
     return relative.as_posix()
-
-
-def _slugify_source_label(value: str) -> str:
-    lowered = value.strip().lower()
-    if not lowered:
-        return "unnamed-source"
-    slug = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
-    return slug or "unnamed-source"
-
-
-def _compute_managed_staging_path(source_label: str, cloud_provider: str) -> str:
-    staging_path = (
-        _PROJECT_ROOT
-        / "storage"
-        / "exports"
-        / cloud_provider
-        / _slugify_source_label(source_label)
-    )
-    return str(staging_path.resolve())
 
 
 def _build_profile_reference_maps(
@@ -298,12 +280,16 @@ def _build_source_profile_detail(
         include_username=include_username,
     )
     effective_path, effective_path_kind = _resolve_effective_path(source)
+    expected_acquisition_path = None
+    if source.source_type == "cloud_export" and source.cloud_provider == "icloud":
+        expected_acquisition_path = str(resolve_icloud_staging_path(source.source_label))
     warnings = _build_profile_warnings(source, summary)
     return SourceProfileDetail(
         **summary.model_dump(),
         normalized_label=source.source_label_normalized,
         effective_path=effective_path,
         effective_path_kind=effective_path_kind,
+        expected_acquisition_path=expected_acquisition_path,
         source_root_path_relative=_to_project_relative_path(source.source_root_path),
         managed_staging_path_relative=_to_project_relative_path(source.managed_staging_path),
         effective_path_relative=_to_project_relative_path(effective_path),
@@ -676,10 +662,7 @@ def create_source_profile(
             raise ValueError("account_username is required for iCloud source profiles.")
         if resolved_acquisition_method is None:
             resolved_acquisition_method = "icloudpd"
-        managed_staging_path = managed_staging_input or _compute_managed_staging_path(
-            resolved_label,
-            resolved_cloud_provider,
-        )
+        managed_staging_path = managed_staging_input or str(resolve_icloud_staging_path(resolved_label))
         effective_root_path = managed_staging_path
     else:
         managed_staging_path = managed_staging_input or None

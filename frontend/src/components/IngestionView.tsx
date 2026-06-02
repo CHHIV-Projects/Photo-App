@@ -123,23 +123,10 @@ function computeManagedStagingPreview(sourceLabel: string): string {
   const slug = sourceLabel
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "unnamed-source";
-  return `storage/exports/icloud/${slug}`;
-}
-
-function sanitizeSourceLabelForAcquisition(sourceLabel: string | null | undefined): string {
-  const raw = (sourceLabel ?? "").trim().toLowerCase();
-  const sanitized = raw
     .replace(/[^a-z0-9_-]+/g, "_")
     .replace(/[_-]{2,}/g, "_")
-    .replace(/^[_\-\s]+|[_\-\s]+$/g, "");
-  return sanitized || "unnamed_source";
-}
-
-function computeExpectedAcquisitionPath(sourceLabel: string): string {
-  const sanitized = sanitizeSourceLabelForAcquisition(sourceLabel);
-  return `storage/exports/icloud/${sanitized}`;
+    .replace(/^[_\-\s]+|[_\-\s]+$/g, "") || "unnamed_source";
+  return `storage/exports/icloud/${slug}`;
 }
 
 function normalizePathForCompare(path: string | null | undefined): string {
@@ -788,7 +775,7 @@ export default function IngestionView() {
     if (!detailProfile || !isDetailIcloudProfile) {
       return null;
     }
-    return computeExpectedAcquisitionPath(detailProfile.source_label);
+    return detailProfile.expected_acquisition_path;
   }, [detailProfile, isDetailIcloudProfile]);
 
   const pathAlignmentStatus = useMemo(() => {
@@ -2121,7 +2108,7 @@ export default function IngestionView() {
                         </span>
                         {pathAlignmentStatus === "mismatch" && (
                           <p className={styles.inlineWarning}>
-                            Managed staging path differs from the current iCloud acquisition path. Acquisition may fail or use a different folder until this is aligned.
+                            Legacy mismatch: managed staging path differs from the current iCloud acquisition path. Acquisition may fail or use a different folder until this is aligned.
                           </p>
                         )}
                       </div>

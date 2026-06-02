@@ -167,6 +167,7 @@ class AdminSourceProfilesApiTests(unittest.TestCase):
             effective_path="/data/archive_candidate",
             effective_path_relative=None,
             effective_path_kind="source_root_path",
+            expected_acquisition_path=None,
             account_username_masked=None,
             account_username=None,
             first_seen_at=datetime.now(timezone.utc),
@@ -187,6 +188,7 @@ class AdminSourceProfilesApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["source_id"], 7)
         self.assertTrue(payload["is_referenced"])
+        self.assertIsNone(payload["expected_acquisition_path"])
         mocked_service.assert_called_once()
 
     def test_get_source_profile_detail_missing_source_returns_404(self) -> None:

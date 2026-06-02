@@ -1271,6 +1271,7 @@ export interface SourceProfileDetail extends SourceProfileSummary {
   normalized_label: string;
   effective_path: string | null;
   effective_path_kind: "source_root_path" | "managed_staging_path" | "none";
+  expected_acquisition_path: string | null;
   source_root_path_relative: string | null;
   managed_staging_path_relative: string | null;
   effective_path_relative: string | null;

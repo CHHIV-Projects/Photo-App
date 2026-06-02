@@ -772,3 +772,205 @@ plan or implement read-only warnings / alignment policy
 plan cross-operation guardrails between acquisition, intake, and cleanup
 no acquisition execution yet unless explicitly approved
 ```
+
+
+
+
+
+# Answers to Coder Questions — Milestone 12.62.1
+
+## 1. New read-only endpoint vs frontend-only derivation
+
+Start with frontend-only derivation using existing data.
+
+Do **not** add a new backend readiness endpoint in 12.62.1 unless implementation becomes too noisy or unreliable.
+
+Preferred 12.62.1 approach:
+
+```text
+Use existing Source Profile detail data.
+Use existing path/staging verification behavior.
+Use existing latest iCloud acquisition status if available.
+Compute readiness display in the Ingestion UI.
+
+Reason:
+
+This milestone is readiness/status composition, not backend orchestration.
+
+If exact source-registration-match computation becomes too complex in the frontend, defer exact match and show a warning/unknown state rather than adding backend behavior now.
+
+2. Last acquisition status
+
+Use global latest acquisition status only if it clearly matches the profile identity.
+
+Acceptable match criteria:
+
+source_label matches
+source_type matches cloud_export
+staging/acquisition path matches or appears equivalent
+
+If match is not clear, show:
+
+No matching recent acquisition status found.
+
+Do not overstate unrelated global iCloud status as profile-specific.
+
+Strict per-profile retrieval can wait for a later milestone.
+
+3. Auth status
+
+For 12.62.1, do not show Ready.
+
+Use only:
+
+Unknown
+Action Required
+
+Policy:
+
+AUTH_REQUIRED or SESSION_EXPIRED
+  → Action Required
+
+No known auth error
+  → Unknown
+
+Reason:
+
+There is no deterministic session-health endpoint yet.
+Do not imply iCloud auth is ready unless the system can prove it.
+
+Show helper text:
+
+iCloud authentication is handled outside Photo Organizer by icloudpd. Photo Organizer does not store your Apple password or 2FA code.
+4. Readiness badge policy for path mismatch
+
+Path mismatch should be Not Ready.
+
+Specifically, if:
+
+managed_staging_path != expected acquisition path
+
+or acquisition path/source registration expectations do not align, show:
+
+Readiness: Not Ready
+
+Reason:
+
+This mismatch can make the profile look valid but cause acquisition to fail or use a different folder.
+
+This is the biggest risk from 12.62 and should be first-class, not a mild warning.
+
+5. Profile status not active
+
+If profile status is not active, readiness should be:
+
+Not Ready
+
+Reason:
+
+Only active profiles should be considered runnable in the normal Ingestion workflow.
+
+Show message:
+
+Profile is not active. Mark it active before using it for iCloud workflow.
+6. Source registration match
+
+For 12.62.1, prefer best-effort display over exact backend logic.
+
+Show:
+
+Source registration: matched / mismatch / unknown
+
+If exact acquisition launch-match semantics are easy to derive from existing data, use them:
+
+normalized label + source_type + resolved acquisition staging path
+
+But do not add complex backend logic just for this milestone.
+
+If uncertain, show:
+
+Source registration: unknown
+
+with explanation:
+
+Current acquisition requires source label/type/path alignment. Exact launch validation will occur when acquisition is implemented.
+7. Approved Root blocked
+
+Yes. Treat approved-root blocked as hard:
+
+Readiness: Not Ready
+
+Even if verify-path succeeds.
+
+Reason:
+
+An existing path outside the approved iCloud exports root is still unsafe for managed iCloud staging.
+8. Source root path vs compatibility identity path labels
+
+Keep one primary label, with helper text.
+
+Preferred labels:
+
+Source Root Path / Compatibility Identity Path
+Managed Staging Path
+Expected Acquisition Path
+
+Helper text:
+
+The source root path is still used as the compatibility identity path for existing source registration and provenance behavior.
+
+Do not overcomplicate the UI with too many path names unless needed.
+
+9. Readiness panel placement
+
+Put the readiness panel in the Details drawer only.
+
+Also add a small row-level badge if low-risk.
+
+Preferred:
+
+Details drawer:
+  full readiness panel
+
+Table row:
+  small badge only, such as iCloud Readiness: Not Ready / Warning / Unknown
+
+If row-level badge adds layout clutter, defer it. The Details drawer is required; row badge is optional.
+
+10. Admin relationship text
+
+Use static note only for 12.62.1.
+
+Suggested text:
+
+iCloud acquisition is still run from Admin until the Ingestion iCloud workflow is implemented.
+
+Do not add routing/CTA unless there is already a simple and reliable way to switch to Admin without added complexity.
+
+Implementation Direction Confirmation
+
+Proceed with the low-risk scope:
+
+- Add iCloud readiness panel in Source Profile Details drawer.
+- Use frontend composition from existing source profile detail data.
+- Show managed staging path, expected acquisition path, and source root/compatibility identity path.
+- Make path mismatch a Not Ready condition.
+- Make non-active profile status a Not Ready condition.
+- Make approved-root blocked a Not Ready condition.
+- Show auth as Unknown or Action Required only.
+- Use latest acquisition status only if it clearly matches the profile.
+- Do not launch acquisition.
+- Do not run cleanup.
+- Do not collect credentials.
+Hard boundaries
+
+Do not:
+
+- run iCloud acquisition from Ingestion
+- run Source Intake handoff for iCloud
+- run cleanup
+- rewrite managed_staging_path
+- rewrite source_root_path
+- collect password or 2FA
+- store session/cookie/token data
+- change Admin iCloud behavior
