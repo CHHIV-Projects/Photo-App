@@ -10,6 +10,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.schemas.admin import SourceProfileDetail
+from app.schemas.admin import IcloudReadinessOperationConflicts, IcloudReadinessReason
+from app.services.admin.ingestion_operation_guardrail_service import IngestionOperationGuardrailSnapshot
 from app.services.admin.icloud_readiness_service import get_icloud_source_readiness
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -104,11 +106,27 @@ class IcloudReadinessServiceTests(unittest.TestCase):
 
     def test_global_source_intake_conflict_blocks_readiness(self) -> None:
         detail = _detail()
-        active_source_intake = SimpleNamespace(ingestion_source_id=999)
+        guardrail_snapshot = IngestionOperationGuardrailSnapshot(
+            operation_conflicts=IcloudReadinessOperationConflicts(
+                icloud_acquisition_active=False,
+                source_intake_active=True,
+                icloud_cleanup_active=False,
+                source_intake_active_for_this_source=False,
+                icloud_cleanup_active_for_this_source=None,
+            ),
+            active_operation="source_intake",
+            active_source_id=999,
+            blocking_reasons=[
+                IcloudReadinessReason(
+                    code="SOURCE_INTAKE_ACTIVE",
+                    message="A Source Intake run is currently active.",
+                )
+            ],
+        )
 
         with patch("app.services.admin.icloud_readiness_service.get_source_profile_detail", return_value=detail), patch(
-            "app.services.admin.icloud_readiness_service._latest_active_source_intake",
-            return_value=active_source_intake,
+            "app.services.admin.icloud_readiness_service.get_ingestion_operation_guardrail_snapshot",
+            return_value=guardrail_snapshot,
         ):
             snapshot = get_icloud_source_readiness(self.db, source_id=7)
 

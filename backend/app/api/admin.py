@@ -121,6 +121,7 @@ from app.services.admin.icloud_staging_cleanup_execution_service import (
     get_cleanup_status,
     start_cleanup_run,
 )
+from app.services.admin.ingestion_operation_guardrail_service import IngestionOperationGuardrailSnapshot, get_ingestion_operation_guardrail_snapshot
 from app.services.previews.heic_preview_processing_service import (
     HeicPreviewAlreadyRunningError,
     HeicPreviewStatusSnapshot,
@@ -451,6 +452,28 @@ def _to_icloud_cleanup_run_status(snapshot: CleanupRunSnapshot | None) -> Icloud
     )
 
 
+
+def _guardrail_conflict_content(
+    snapshot: IngestionOperationGuardrailSnapshot,
+    *,
+    detail: str,
+    error_code: str = "INGESTION_OPERATION_ACTIVE",
+    current: object | None = None,
+) -> dict[str, object]:
+    content: dict[str, object] = {
+        "detail": detail,
+        "error_code": error_code,
+        "blocking_reasons": [reason.model_dump(mode="json") for reason in snapshot.blocking_reasons],
+        "operation_conflicts": snapshot.operation_conflicts.model_dump(mode="json"),
+    }
+    if current is not None:
+        if hasattr(current, "model_dump"):
+            content["current"] = current.model_dump(mode="json")
+        else:
+            content["current"] = current
+    return content
+
+
 @router.get("/heic-preview/status", response_model=HeicPreviewStatusResponse)
 def get_heic_preview_run_status(db: Session = Depends(get_db_session)) -> HeicPreviewStatusResponse:
     """Return display preview generation status and pending-work count."""
@@ -532,6 +555,17 @@ def get_icloud_acquisition_run_status(db: Session = Depends(get_db_session)) -> 
 @router.post("/icloud-acquisition/run", response_model=IcloudAcquisitionRunResponse)
 def run_icloud_acquisition(body: IcloudAcquisitionRunRequest, db: Session = Depends(get_db_session)) -> IcloudAcquisitionRunResponse | JSONResponse:
     """Launch an icloudpd acquisition background run."""
+    guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db)
+    if guardrail_snapshot.blocked:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=_guardrail_conflict_content(
+                guardrail_snapshot,
+                detail="Another ingestion-related operation is active.",
+                error_code="INGESTION_OPERATION_ACTIVE",
+            ),
+        )
+
     try:
         result = start_icloud_acquisition_background(
             db,
@@ -601,6 +635,26 @@ def run_icloud_staging_cleanup(
     db: Session = Depends(get_db_session),
 ) -> IcloudStagingCleanupRunResponse | JSONResponse:
     """Launch conservative iCloud staging cleanup in background."""
+    guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db, source_id=body.source_id)
+    if guardrail_snapshot.blocked:
+        conflict_error_code = "INGESTION_OPERATION_ACTIVE"
+        conflict_detail = "Another ingestion-related operation is active."
+        if guardrail_snapshot.operation_conflicts.icloud_cleanup_active:
+            conflict_error_code = "CLEANUP_ALREADY_RUNNING"
+            conflict_detail = "A cleanup run is already active."
+        elif guardrail_snapshot.operation_conflicts.source_intake_active_for_this_source is True:
+            conflict_error_code = "SOURCE_INTAKE_ACTIVE"
+            conflict_detail = f"A Source Intake run is active for source {body.source_id}."
+
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=_guardrail_conflict_content(
+                guardrail_snapshot,
+                detail=conflict_detail,
+                error_code=conflict_error_code,
+            ),
+        )
+
     try:
         snapshot = start_cleanup_run(
             db,
@@ -946,6 +1000,19 @@ def launch_source_intake(
     db: Session = Depends(get_db_session),
 ) -> SourceIntakeRunResponse | JSONResponse:
     """Start an admin-launched source intake run."""
+    guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db, source_id=body.ingestion_source_id)
+    if guardrail_snapshot.blocked:
+        current_snapshot = _snapshot_to_schema(get_source_intake_status(db))
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=_guardrail_conflict_content(
+                guardrail_snapshot,
+                detail="Another ingestion-related operation is active.",
+                error_code="INGESTION_OPERATION_ACTIVE",
+                current=current_snapshot,
+            ),
+        )
+
     try:
         snapshot = start_source_intake(
             db,

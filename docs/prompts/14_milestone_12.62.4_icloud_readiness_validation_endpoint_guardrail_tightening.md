@@ -991,7 +991,7 @@ Proceed with coder’s recommended low-risk build order:
 4. Add backend tests for readiness status, reason codes, path validation, auth status, and conflict visibility.
 5. Switch frontend iCloud readiness panel to consume the backend readiness endpoint.
 6. Keep existing Verify/Create staging actions unchanged.
-Required behavior
+   Required behavior
 
 The endpoint should be read-only and authoritative for readiness display:
 
@@ -1002,8 +1002,8 @@ The endpoint should be read-only and authoritative for readiness display:
 - no path repair
 - no source profile mutation
 - no credential/session changes
-Readiness policy summary
-ready:
+  Readiness policy summary
+  ready:
   only when all checks pass and auth is not unknown/action-required
 
 warning:

@@ -7,18 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
-from app.models.icloud_staging_cleanup_run import IcloudStagingCleanupRun
-from app.models.source_intake_run import SourceIntakeRun
 from app.schemas.admin import (
     IcloudReadinessLastAcquisition,
-    IcloudReadinessOperationConflicts,
     IcloudReadinessReason,
     IcloudSourceReadinessResponse,
 )
-from app.services.admin.icloud_staging_cleanup_execution_service import RUNNING_STATUSES as CLEANUP_RUNNING_STATUSES
-from app.services.admin.source_intake_execution_service import RUNNING_STATUSES as SOURCE_INTAKE_RUNNING_STATUSES
+from app.services.admin.ingestion_operation_guardrail_service import get_ingestion_operation_guardrail_snapshot
 from app.services.admin.source_intake_service import get_source_profile_detail
-from app.services.icloud_acquisition.execution_service import RUNNING_STATUSES as ACQUISITION_RUNNING_STATUSES
 from app.services.ingestion.ingestion_context_service import normalize_source_root_path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -71,33 +66,6 @@ def _is_under_approved_root(path_value: str | None) -> bool | None:
         return True
     except (ValueError, OSError):
         return False
-
-
-def _latest_active_acquisition(db_session: Session) -> IcloudAcquisitionRun | None:
-    return db_session.scalar(
-        select(IcloudAcquisitionRun)
-        .where(IcloudAcquisitionRun.status.in_(ACQUISITION_RUNNING_STATUSES))
-        .order_by(IcloudAcquisitionRun.id.desc())
-        .limit(1)
-    )
-
-
-def _latest_active_source_intake(db_session: Session) -> SourceIntakeRun | None:
-    return db_session.scalar(
-        select(SourceIntakeRun)
-        .where(SourceIntakeRun.status.in_(SOURCE_INTAKE_RUNNING_STATUSES))
-        .order_by(SourceIntakeRun.id.desc())
-        .limit(1)
-    )
-
-
-def _latest_active_cleanup(db_session: Session) -> IcloudStagingCleanupRun | None:
-    return db_session.scalar(
-        select(IcloudStagingCleanupRun)
-        .where(IcloudStagingCleanupRun.status.in_(tuple(CLEANUP_RUNNING_STATUSES)))
-        .order_by(IcloudStagingCleanupRun.id.desc())
-        .limit(1)
-    )
 
 
 def _resolve_latest_matching_acquisition(
@@ -298,32 +266,11 @@ def get_icloud_source_readiness(
         auth_status = "unknown"
         add_warning("AUTH_UNKNOWN", _MESSAGES.AUTH_UNKNOWN)
 
-    active_acquisition = _latest_active_acquisition(db_session)
-    active_source_intake = _latest_active_source_intake(db_session)
-    active_cleanup = _latest_active_cleanup(db_session)
+    guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db_session, source_id=source_id)
+    conflicts = guardrail_snapshot.operation_conflicts
 
-    conflicts = IcloudReadinessOperationConflicts(
-        icloud_acquisition_active=active_acquisition is not None,
-        source_intake_active=active_source_intake is not None,
-        icloud_cleanup_active=active_cleanup is not None,
-        source_intake_active_for_this_source=(
-            None
-            if active_source_intake is not None and active_source_intake.ingestion_source_id is None
-            else (active_source_intake is not None and active_source_intake.ingestion_source_id == source_id)
-        ),
-        icloud_cleanup_active_for_this_source=(
-            None
-            if active_cleanup is not None and active_cleanup.ingestion_source_id is None
-            else (active_cleanup is not None and active_cleanup.ingestion_source_id == source_id)
-        ),
-    )
-
-    if conflicts.icloud_acquisition_active:
-        add_block("ICLOUD_ACQUISITION_ACTIVE", _MESSAGES.ICLOUD_ACQUISITION_ACTIVE)
-    if conflicts.source_intake_active:
-        add_block("SOURCE_INTAKE_ACTIVE", _MESSAGES.SOURCE_INTAKE_ACTIVE)
-    if conflicts.icloud_cleanup_active:
-        add_block("ICLOUD_CLEANUP_ACTIVE", _MESSAGES.ICLOUD_CLEANUP_ACTIVE)
+    for guardrail_reason in guardrail_snapshot.blocking_reasons:
+        add_block(guardrail_reason.code, guardrail_reason.message)
 
     core_blocking_codes = {
         "PROFILE_NOT_ACTIVE",

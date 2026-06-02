@@ -13,7 +13,8 @@ from fastapi.testclient import TestClient
 
 from app.api.admin import router as admin_router
 from app.db.session import get_db_session
-from app.schemas.admin import IcloudAcquisitionRunStatus
+from app.schemas.admin import IcloudAcquisitionRunStatus, IcloudReadinessOperationConflicts
+from app.services.admin.ingestion_operation_guardrail_service import IngestionOperationGuardrailSnapshot
 from app.services.icloud_acquisition.execution_service import (
     ACQUISITION_MODE_LIST_FIRST_NON_REPEAT,
     ACQUISITION_MODE_STANDARD,
@@ -44,6 +45,17 @@ def _override_db_session():
 
 class IcloudAcquisitionServiceTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._guardrail_patcher = patch(
+            "app.api.admin.get_ingestion_operation_guardrail_snapshot",
+            return_value=IngestionOperationGuardrailSnapshot(
+                operation_conflicts=IcloudReadinessOperationConflicts(),
+                active_operation=None,
+                active_source_id=None,
+                blocking_reasons=[],
+            ),
+        )
+        self._guardrail_patcher.start()
+
         self.app = FastAPI()
         self.app.include_router(admin_router)
         self.app.dependency_overrides[get_db_session] = _override_db_session
@@ -51,6 +63,7 @@ class IcloudAcquisitionServiceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.app.dependency_overrides.clear()
+        self._guardrail_patcher.stop()
 
     def test_sanitize_source_label_normalizes_text(self) -> None:
         self.assertEqual(sanitize_source_label("Chuck iCloudPD"), "chuck_icloudpd")
