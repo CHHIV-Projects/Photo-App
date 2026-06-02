@@ -44,6 +44,7 @@ from app.schemas.admin import (
     SourceProfileStatusUpdateRequest,
     SourceProfileSummary,
     SourceProfilesResponse,
+    IcloudSourceReadinessResponse,
     IcloudAcquisitionRunRequest,
     IcloudAcquisitionRunResponse,
     IcloudAcquisitionRunStatus,
@@ -70,6 +71,7 @@ from app.services.admin import (
     update_source_profile_metadata,
     update_source_profile_status,
     verify_source_profile_path,
+    get_icloud_source_readiness,
 )
 from app.services.ingestion.ingestion_context_service import normalize_source_label
 from app.services.admin.source_intake_execution_service import (
@@ -708,6 +710,26 @@ def get_source_profile(
     """Return one source profile detail view for operational diagnostics."""
     try:
         return get_source_profile_detail(
+            db,
+            source_id=source_id,
+            include_username=include_username,
+        )
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
+
+
+@router.get("/source-profiles/{source_id}/icloud-readiness", response_model=IcloudSourceReadinessResponse)
+def get_source_profile_icloud_readiness(
+    source_id: int,
+    include_username: bool = False,
+    db: Session = Depends(get_db_session),
+) -> IcloudSourceReadinessResponse | JSONResponse:
+    """Return read-only iCloud readiness snapshot for one source profile."""
+    try:
+        return get_icloud_source_readiness(
             db,
             source_id=source_id,
             include_username=include_username,

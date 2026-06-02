@@ -659,3 +659,77 @@ Do not:
 - add cleanup
 - change provenance
 - add credential/session/password behavior
+
+
+
+# Final Lock-In — Milestone 12.62.3
+
+Yes — add the backend-provided expected acquisition path field now.
+
+## Decision
+
+Expand the backend Source Profile detail/readiness data in this slice to include the canonical expected iCloud acquisition path.
+
+Preferred field name, or project-consistent equivalent:
+
+```text
+expected_acquisition_path
+
+or more explicit:
+
+expected_icloud_acquisition_path
+Why
+
+This milestone is specifically about eliminating path-convention drift.
+
+The frontend should not keep its own independent TypeScript slug/path calculation if the backend can provide the expected acquisition path cleanly.
+
+Preferred model:
+
+Backend:
+  shared canonical helper computes iCloud acquisition/staging path
+
+Source Profile creation:
+  uses helper
+
+Source Profile detail/readiness data:
+  returns helper-computed expected acquisition path
+
+Frontend:
+  displays backend-provided expected acquisition path
+  compares/display readiness from backend-provided fields where available
+Implementation Direction
+
+Proceed with:
+
+- Add shared canonical iCloud staging/acquisition path helper.
+- Use current acquisition resolver behavior as source of truth.
+- Add backend-provided expected acquisition path to Source Profile detail/readiness data.
+- New iCloud profiles set:
+    source_root_path = canonical path
+    managed_staging_path = canonical path
+- Frontend readiness panel consumes backend-provided expected acquisition path.
+- Remove or bypass duplicated frontend slug/path calculation where practical.
+- Existing mismatched profiles remain unchanged.
+- Existing mismatched profiles continue to show Not Ready.
+- Add explicit legacy mismatch wording in Details drawer.
+- Preserve Admin acquisition behavior exactly.
+Acquisition refactor
+
+Refactor acquisition to use the shared helper only if tests prove the output is identical to current behavior.
+
+If there is any risk of changing Admin acquisition output path behavior, leave acquisition code unchanged for 12.62.3 and document that the helper matches the resolver convention for profile creation/readiness.
+
+Hard boundary
+
+Do not:
+
+- auto-repair existing profiles
+- rewrite existing source_root_path
+- rewrite existing managed_staging_path
+- change Admin iCloud behavior
+- launch iCloud acquisition from Ingestion
+- add cleanup
+- change provenance
+
+This remains a new-profiles-only canonicalization milestone, with backend-provided expected path added to prevent future drift.

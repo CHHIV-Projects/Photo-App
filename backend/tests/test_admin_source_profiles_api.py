@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from app.api.admin import router as admin_router
 from app.db.session import get_db_session
 from app.schemas.admin import (
+    IcloudReadinessOperationConflicts,
+    IcloudSourceReadinessResponse,
     SourceProfileDetail,
     SourceProfilePathCheckResponse,
     SourceProfileStagingFolderCreateResponse,
@@ -194,6 +196,50 @@ class AdminSourceProfilesApiTests(unittest.TestCase):
     def test_get_source_profile_detail_missing_source_returns_404(self) -> None:
         with patch("app.api.admin.get_source_profile_detail", side_effect=LookupError("missing")):
             response = self.client.get("/api/admin/source-profiles/99999")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Source profile not found."})
+
+    def test_get_source_profile_icloud_readiness_returns_200(self) -> None:
+        readiness = IcloudSourceReadinessResponse(
+            source_id=7,
+            is_icloud_profile=True,
+            readiness_status="warning",
+            profile_status="active",
+            source_label="Chuck iCloud",
+            source_type="cloud_export",
+            cloud_provider="icloud",
+            account_username_masked="c***@example.com",
+            source_root_path="/storage/exports/icloud/chuck_icloud",
+            managed_staging_path="/storage/exports/icloud/chuck_icloud",
+            expected_acquisition_path="/storage/exports/icloud/chuck_icloud",
+            effective_path="/storage/exports/icloud/chuck_icloud",
+            approved_root_status="ok",
+            staging_folder_status="exists",
+            path_alignment_status="matched",
+            source_root_alignment_status="matched",
+            source_registration_status="matched",
+            auth_status="unknown",
+            last_auth_error_code=None,
+            operation_conflicts=IcloudReadinessOperationConflicts(),
+            last_acquisition=None,
+            blocking_reasons=[],
+            warnings=[],
+            recommended_action="Run diagnostics or use Admin iCloud tools to confirm readiness.",
+        )
+
+        with patch("app.api.admin.get_icloud_source_readiness", return_value=readiness) as mocked_service:
+            response = self.client.get("/api/admin/source-profiles/7/icloud-readiness")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["source_id"], 7)
+        self.assertEqual(payload["readiness_status"], "warning")
+        mocked_service.assert_called_once()
+
+    def test_get_source_profile_icloud_readiness_missing_source_returns_404(self) -> None:
+        with patch("app.api.admin.get_icloud_source_readiness", side_effect=LookupError("missing")):
+            response = self.client.get("/api/admin/source-profiles/99999/icloud-readiness")
 
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json(), {"detail": "Source profile not found."})

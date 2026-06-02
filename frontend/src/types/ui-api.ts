@@ -1280,6 +1280,57 @@ export interface SourceProfileDetail extends SourceProfileSummary {
   warnings: string[];
 }
 
+export interface IcloudReadinessReason {
+  code: string;
+  message: string;
+}
+
+export interface IcloudReadinessOperationConflicts {
+  icloud_acquisition_active: boolean;
+  source_intake_active: boolean;
+  icloud_cleanup_active: boolean;
+  source_intake_active_for_this_source: boolean | null;
+  icloud_cleanup_active_for_this_source: boolean | null;
+}
+
+export interface IcloudReadinessLastAcquisition {
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  downloaded_count: number;
+  skipped_count: number;
+  failed_count: number;
+  error_code: string | null;
+  report_path: string | null;
+}
+
+export interface IcloudSourceReadiness {
+  source_id: number;
+  is_icloud_profile: boolean;
+  readiness_status: "ready" | "warning" | "not_ready" | "unknown";
+  profile_status: string;
+  source_label: string;
+  source_type: string;
+  cloud_provider: string | null;
+  account_username_masked: string | null;
+  source_root_path: string | null;
+  managed_staging_path: string | null;
+  expected_acquisition_path: string | null;
+  effective_path: string | null;
+  approved_root_status: "ok" | "blocked" | "unknown";
+  staging_folder_status: "exists" | "missing" | "unsafe" | "unknown";
+  path_alignment_status: "matched" | "mismatch" | "unknown";
+  source_root_alignment_status: "matched" | "mismatch" | "unknown";
+  source_registration_status: "matched" | "mismatch" | "unknown";
+  auth_status: "unknown" | "action_required";
+  last_auth_error_code: string | null;
+  operation_conflicts: IcloudReadinessOperationConflicts;
+  last_acquisition: IcloudReadinessLastAcquisition | null;
+  blocking_reasons: IcloudReadinessReason[];
+  warnings: IcloudReadinessReason[];
+  recommended_action: string;
+}
+
 export interface SourceProfilePathCheckResponse {
   source_id: number;
   path: string | null;

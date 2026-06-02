@@ -310,6 +310,71 @@ class SourceProfileDetail(SourceProfileSummary):
     warnings: list[str] = Field(default_factory=list)
 
 
+class IcloudReadinessReason(BaseModel):
+    """Machine-readable reason code with operator-facing message."""
+
+    code: str
+    message: str
+
+
+class IcloudReadinessOperationConflicts(BaseModel):
+    """Active operation conflict visibility for iCloud readiness."""
+
+    icloud_acquisition_active: bool = False
+    source_intake_active: bool = False
+    icloud_cleanup_active: bool = False
+    source_intake_active_for_this_source: bool | None = None
+    icloud_cleanup_active_for_this_source: bool | None = None
+
+
+class IcloudReadinessLastAcquisition(BaseModel):
+    """Latest acquisition snapshot matched to the selected source profile."""
+
+    status: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    downloaded_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+    error_code: str | None = None
+    report_path: str | None = None
+
+
+class IcloudSourceReadinessResponse(BaseModel):
+    """Authoritative read-only readiness snapshot for one source profile."""
+
+    source_id: int
+    is_icloud_profile: bool
+    readiness_status: Literal["ready", "warning", "not_ready", "unknown"]
+
+    profile_status: str
+    source_label: str
+    source_type: str
+    cloud_provider: str | None = None
+    account_username_masked: str | None = None
+
+    source_root_path: str | None = None
+    managed_staging_path: str | None = None
+    expected_acquisition_path: str | None = None
+    effective_path: str | None = None
+
+    approved_root_status: Literal["ok", "blocked", "unknown"] = "unknown"
+    staging_folder_status: Literal["exists", "missing", "unsafe", "unknown"] = "unknown"
+    path_alignment_status: Literal["matched", "mismatch", "unknown"] = "unknown"
+    source_root_alignment_status: Literal["matched", "mismatch", "unknown"] = "unknown"
+    source_registration_status: Literal["matched", "mismatch", "unknown"] = "unknown"
+
+    auth_status: Literal["unknown", "action_required"] = "unknown"
+    last_auth_error_code: str | None = None
+
+    operation_conflicts: IcloudReadinessOperationConflicts
+    last_acquisition: IcloudReadinessLastAcquisition | None = None
+
+    blocking_reasons: list[IcloudReadinessReason] = Field(default_factory=list)
+    warnings: list[IcloudReadinessReason] = Field(default_factory=list)
+    recommended_action: str
+
+
 class SourceProfilePathCheckResponse(BaseModel):
     """Ephemeral path verification response for one source profile."""
 

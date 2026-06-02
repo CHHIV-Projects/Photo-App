@@ -1603,3 +1603,13 @@ Improve Photo Review search so filters are context-aware and hierarchical where 
 Deferred but important before production-level usability. Revisit after Source Review / Collections / Albums core workflows stabilize.
 
 ---
+
+EXT-001 — External Drive Identity Should Be Device-Based, Not Drive-Letter-Based
+
+Principle:
+External drive Source Profiles should represent the physical/logical device, not the temporary Windows drive letter.
+
+Future model:
+Source Profile = External 1
+Run path = current mount path + canonical subfolder
+Provenance = source-profile-based, with observed mount/path retained as evidence

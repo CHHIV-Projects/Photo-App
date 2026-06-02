@@ -13,6 +13,7 @@ import type {
   SourceProfileCreateRequest,
   SourceProfileCreateResponse,
   SourceProfileDetail,
+  IcloudSourceReadiness,
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
   SourceProfileStatus,
@@ -912,6 +913,21 @@ export function getSourceProfileDetail(
     ? `/api/admin/source-profiles/${sourceId}?${query}`
     : `/api/admin/source-profiles/${sourceId}`;
   return apiRequest<SourceProfileDetail>(path);
+}
+
+export function getSourceProfileIcloudReadiness(
+  sourceId: number,
+  options: { includeUsername?: boolean } = {},
+): Promise<IcloudSourceReadiness> {
+  const params = new URLSearchParams();
+  if (options.includeUsername !== undefined) {
+    params.set("include_username", String(options.includeUsername));
+  }
+  const query = params.toString();
+  const path = query
+    ? `/api/admin/source-profiles/${sourceId}/icloud-readiness?${query}`
+    : `/api/admin/source-profiles/${sourceId}/icloud-readiness`;
+  return apiRequest<IcloudSourceReadiness>(path);
 }
 
 export function createSourceProfile(
