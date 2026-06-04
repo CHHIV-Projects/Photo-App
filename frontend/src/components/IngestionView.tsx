@@ -59,6 +59,11 @@ type IcloudAuthState = "action_required" | "unknown";
 type IcloudSourceRegistrationState = "matched" | "mismatch" | "unknown";
 type IcloudAcquisitionUiState = "idle" | "loading_details" | "confirm_open" | "starting" | "running" | "stop_requested" | "terminal";
 type IcloudAcquisitionMode = "standard" | "list_first_non_repeat";
+type IcloudSourceIntakeLimitSuggestion = {
+  value: string;
+  label: string;
+  note: string;
+};
 
 type EditorFormState = {
   sourceLabel: string;
@@ -189,9 +194,33 @@ function isIcloudCloudExport(form: EditorFormState): boolean {
 }
 
 function isIcloudProfile(
-  profile: Pick<SourceProfileSummary, "source_type" | "cloud_provider"> | Pick<SourceProfileDetail, "source_type" | "cloud_provider"> | null,
+  profile: Pick<
+    SourceProfileSummary,
+    "source_type" | "cloud_provider" | "acquisition_method" | "source_root_path" | "managed_staging_path"
+  >
+    | Pick<
+      SourceProfileDetail,
+      "source_type" | "cloud_provider" | "acquisition_method" | "source_root_path" | "managed_staging_path"
+    >
+    | null,
 ): boolean {
-  return profile?.source_type === "cloud_export" && profile.cloud_provider === "icloud";
+  if (!profile || profile.source_type !== "cloud_export") {
+    return false;
+  }
+
+  if (profile.cloud_provider === "icloud") {
+    return true;
+  }
+
+  if (profile.acquisition_method === "icloudpd") {
+    return true;
+  }
+
+  const looksLikeLegacyIcloudPath = [profile.managed_staging_path, profile.source_root_path]
+    .filter((value): value is string => Boolean(value))
+    .some((value) => value.replace(/\\/g, "/").toLowerCase().includes("storage/exports/icloud/"));
+
+  return looksLikeLegacyIcloudPath;
 }
 
 function hasHistoricalReferences(
@@ -395,6 +424,71 @@ function getIcloudAcquireDisabledReason(snapshot: IcloudSourceReadiness | null):
   return null;
 }
 
+function getIcloudSourceIntakeDisabledReason(snapshot: IcloudSourceReadiness | null, profile: SourceProfileDetail | null): string | null {
+  if (!snapshot) {
+    return "Readiness snapshot unavailable. Refresh readiness before preparing Source Intake.";
+  }
+
+  if (!profile || !isIcloudProfile(profile)) {
+    return "Source Intake handoff is available for iCloud source profiles only.";
+  }
+
+  if (profile.profile_status !== "active") {
+    return "Only active profiles can run Source Intake from this tab.";
+  }
+
+  if (snapshot.readiness_status === "not_ready") {
+    return "Readiness is not ready. Resolve blocking readiness issues first.";
+  }
+
+  if (snapshot.blocking_reasons.length > 0) {
+    const first = snapshot.blocking_reasons[0];
+    return `${first.code}: ${first.message}`;
+  }
+
+  if (isIcloudAcquisitionGuardrailBlocked(snapshot)) {
+    return "Another ingestion-related operation is active. Wait for it to finish before starting Source Intake.";
+  }
+
+  if (snapshot.path_alignment_status === "mismatch" || snapshot.source_root_alignment_status === "mismatch") {
+    return "Path alignment is invalid. Resolve source profile readiness issues before trying again.";
+  }
+
+  if (snapshot.source_registration_status === "mismatch") {
+    return "Source registration is mismatched. Resolve source profile readiness issues before trying again.";
+  }
+
+  if (snapshot.approved_root_status === "blocked") {
+    return "Managed staging path is outside approved iCloud root.";
+  }
+
+  return null;
+}
+
+function getIcloudSourceIntakeLimitSuggestion(status: IcloudAcquisitionRunStatus | null): IcloudSourceIntakeLimitSuggestion {
+  if (status?.file_inventory_count != null && status.file_inventory_count > 0) {
+    return {
+      value: String(status.file_inventory_count),
+      label: "Suggested from latest acquisition inventory.",
+      note: `Using file_inventory_count from the latest acquisition summary (${status.file_inventory_count}).`,
+    };
+  }
+
+  if (status?.recent_count != null && status.recent_count > 0) {
+    return {
+      value: String(status.recent_count),
+      label: "Suggested from latest acquisition recent count.",
+      note: `Using recent_count from the latest acquisition summary (${status.recent_count}).`,
+    };
+  }
+
+  return {
+    value: "",
+    label: "No acquisition-derived suggestion available.",
+    note: "Staged inventory count is unavailable. Source Intake will scan the staging folder and skip files already known for this source.",
+  };
+}
+
 function calculateExactDuplicateCount(
   selectedForSession: number | null | undefined,
   processedNewUnique: number | null | undefined,
@@ -497,6 +591,14 @@ export default function IngestionView() {
     }
     return getIcloudAcquireDisabledReason(icloudReadinessSnapshot);
   }, [detailProfile, icloudReadinessSnapshot]);
+
+  const icloudSourceIntakeDisabledReason = useMemo(() => {
+    return getIcloudSourceIntakeDisabledReason(icloudReadinessSnapshot, detailProfile);
+  }, [detailProfile, icloudReadinessSnapshot]);
+
+  const icloudSourceIntakeLimitSuggestion = useMemo(() => {
+    return getIcloudSourceIntakeLimitSuggestion(icloudAcquisitionStatus);
+  }, [icloudAcquisitionStatus]);
 
   const normalizedIcloudAcquisitionRecentCountInput = useMemo(
     () => icloudAcquisitionRecentCountInput.trim(),
@@ -1124,6 +1226,7 @@ export default function IngestionView() {
   const detailVerifyButtonLabel = detailProfile && isIcloudProfile(detailProfile) ? "Verify Staging" : "Verify Path";
 
   const isDetailIcloudProfile = detailProfile ? isIcloudProfile(detailProfile) : false;
+  const isGuidedIcloudRunCandidate = runCandidateProfile ? isIcloudProfile(runCandidateProfile) : false;
 
   const expectedAcquisitionPath = useMemo(() => {
     if (!detailProfile || !isDetailIcloudProfile) {
@@ -1426,6 +1529,42 @@ export default function IngestionView() {
       setRunPreflightSourceId(null);
     }
   }, [clearRowRunError, isSourceIntakeActive, setRowRunError]);
+
+  const handlePrepareIcloudSourceIntake = useCallback(async () => {
+    if (!detailProfile || !isDetailIcloudProfile) {
+      return;
+    }
+
+    if (icloudSourceIntakeDisabledReason) {
+      setDetailBanner({ kind: "error", message: icloudSourceIntakeDisabledReason });
+      return;
+    }
+
+    setRunPreflightSourceId(detailProfile.source_id);
+    setDetailBanner(null);
+
+    try {
+      const pathCheck = await verifySourceProfilePath(detailProfile.source_id);
+      if (!pathCheck.exists || !pathCheck.is_directory) {
+        const message = "Cannot run Source Intake. Managed staging path does not exist or is not a directory.";
+        setDetailBanner({ kind: "error", message });
+        return;
+      }
+
+      setRunCandidateProfile(detailProfile);
+      setRunCandidatePathCheck(pathCheck);
+      setRunLimitInput(icloudSourceIntakeLimitSuggestion.value);
+      setRunBatchSizeInput("500");
+      setRunOptionsError(null);
+      setIsRunConfirmOpen(true);
+    } catch (error) {
+      const mapped = mapRunStartError(error);
+      setDetailBanner({ kind: "error", message: mapped.message });
+      setRunErrorDetails(mapped.raw);
+    } finally {
+      setRunPreflightSourceId(null);
+    }
+  }, [detailProfile, icloudSourceIntakeDisabledReason, icloudSourceIntakeLimitSuggestion.value, isDetailIcloudProfile]);
 
   const handleConfirmRunIntake = useCallback(async () => {
     if (!runCandidateProfile) {
@@ -2092,9 +2231,13 @@ export default function IngestionView() {
           <div className={styles.drawerPanel}>
             <div className={styles.drawerHeader}>
               <div>
-                <h3 className={styles.drawerTitle}>Confirm Source Intake</h3>
+                <h3 className={styles.drawerTitle}>
+                  {isGuidedIcloudRunCandidate ? "Confirm Guided iCloud Source Intake" : "Confirm Source Intake"}
+                </h3>
                 <p className={styles.drawerSubtitle}>
-                  Review the source and run options before starting Source Intake.
+                  {isGuidedIcloudRunCandidate
+                    ? "Review the staged iCloud context and run options before starting Source Intake."
+                    : "Review the source and run options before starting Source Intake."}
                 </p>
               </div>
               <button type="button" className={styles.closeButton} onClick={closeRunConfirmation} disabled={isRunActionLoading}>
@@ -2108,11 +2251,11 @@ export default function IngestionView() {
                 <span>{runCandidateProfile.source_label}</span>
               </div>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Source Type</span>
-                <span>{runCandidateProfile.source_type}</span>
+                <span className={styles.detailLabel}>{isGuidedIcloudRunCandidate ? "Source Type / Provider" : "Source Type"}</span>
+                <span>{isGuidedIcloudRunCandidate ? "cloud_export / icloud" : runCandidateProfile.source_type}</span>
               </div>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Source Path</span>
+                <span className={styles.detailLabel}>{isGuidedIcloudRunCandidate ? "Managed Staging Path" : "Source Path"}</span>
                 <span>{runCandidatePathCheck.path ?? "-"}</span>
               </div>
               <div className={styles.detailCard}>
@@ -2123,16 +2266,26 @@ export default function IngestionView() {
                 <span className={styles.detailLabel}>Path Verification Result</span>
                 <span className={styles.okBadge}>{formatPathStatus(runCandidatePathCheck)}</span>
               </div>
+              {isGuidedIcloudRunCandidate && (
+                <div className={styles.detailCard}>
+                  <span className={styles.detailLabel}>iCloud Intake Context</span>
+                  <span>Source Profile ID {runCandidateProfile.source_id} maps to ingestion_source_id.</span>
+                  <span className={styles.detailMeta}>{icloudSourceIntakeLimitSuggestion.label}</span>
+                  <span className={styles.detailMeta}>{icloudSourceIntakeLimitSuggestion.note}</span>
+                </div>
+              )}
             </div>
 
             <p className={styles.note}>
-              This scans the selected source folder and copies eligible files into the Drop Zone for ingestion.
-              It does not delete files from the source folder.
+              {isGuidedIcloudRunCandidate
+                ? "This scans the managed iCloud staging folder and copies eligible files into the Drop Zone for ingestion. It does not delete files from the staging folder, and cleanup will not run automatically."
+                : "This scans the selected source folder and copies eligible files into the Drop Zone for ingestion. It does not delete files from the source folder."}
+              {" "}
               Only one Source Intake run can run at a time.
             </p>
 
             <section className={styles.runOptionsBlock}>
-              <h4 className={styles.runOptionsTitle}>Run Intake Options</h4>
+              <h4 className={styles.runOptionsTitle}>{isGuidedIcloudRunCandidate ? "Guided Source Intake Options" : "Run Intake Options"}</h4>
               <div className={styles.formGrid}>
                 <label className={styles.formLabel}>
                   Total Limit
@@ -2145,8 +2298,13 @@ export default function IngestionView() {
                     placeholder="leave blank for no limit"
                   />
                   <span className={styles.formHint}>
-                    Leave blank for no limit. Controls the maximum number of eligible unknown files selected for this run.
+                    {isGuidedIcloudRunCandidate
+                      ? "Leave blank for no limit. Suggested from the latest acquisition when available; otherwise Source Intake scans the staging folder and skips known files."
+                      : "Leave blank for no limit. Controls the maximum number of eligible unknown files selected for this run."}
                   </span>
+                  {isGuidedIcloudRunCandidate && (
+                    <span className={styles.formHint}>{icloudSourceIntakeLimitSuggestion.note}</span>
+                  )}
                   {runLimitValidationError && <span className={styles.fieldError}>{runLimitValidationError}</span>}
                 </label>
                 <label className={styles.formLabel}>
@@ -2179,7 +2337,7 @@ export default function IngestionView() {
                 onClick={() => void handleConfirmRunIntake()}
                 disabled={isRunActionLoading}
               >
-                {isRunActionLoading ? "Starting..." : "Run Intake"}
+                {isRunActionLoading ? "Starting..." : (isGuidedIcloudRunCandidate ? "Start Guided Source Intake" : "Run Intake")}
               </button>
               <button type="button" className={styles.button} onClick={closeRunConfirmation} disabled={isRunActionLoading}>
                 Cancel
@@ -2628,7 +2786,27 @@ export default function IngestionView() {
                       <div className={styles.detailCard}>
                         <span className={styles.detailLabel}>Recommended Next Action</span>
                         <span>{recommendedIcloudAction ?? "Run diagnostics or use Admin iCloud tools to confirm readiness."}</span>
-                        <span className={styles.detailMeta}>Guided Source Intake handoff will be added in milestone 12.62.7.</span>
+                        <span className={styles.detailMeta}>Guided Source Intake stays manual and runs from this iCloud detail view.</span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Source Intake Handoff</span>
+                        <span>{icloudSourceIntakeLimitSuggestion.label}</span>
+                        <span className={styles.detailMeta}>Source Profile ID {detailProfile.source_id} will be sent as ingestion_source_id.</span>
+                        <span className={styles.detailMeta}>Cleanup will not run automatically.</span>
+                        <span className={styles.detailMeta}>{icloudSourceIntakeLimitSuggestion.note}</span>
+                        <div className={styles.rowActions}>
+                          <button
+                            type="button"
+                            className={styles.runButton}
+                            onClick={() => void handlePrepareIcloudSourceIntake()}
+                            disabled={Boolean(icloudSourceIntakeDisabledReason) || isRunActionLoading || isIcloudAcquisitionActionLoading}
+                          >
+                            Prepare Source Intake
+                          </button>
+                        </div>
+                        {icloudSourceIntakeDisabledReason && (
+                          <span className={styles.detailMeta}>{icloudSourceIntakeDisabledReason}</span>
+                        )}
                       </div>
                     </div>
 
@@ -2683,7 +2861,7 @@ export default function IngestionView() {
 
                         {(icloudAcquisitionStatus.status === "completed" || icloudAcquisitionStatus.status === "completed_with_warnings") && (
                           <p className={styles.bannerSuccess}>
-                            Acquisition completed. The next step is Source Intake for staged iCloud files. Guided Source Intake handoff will be added in the next milestone.
+                            Acquisition completed. The next step is Source Intake for staged iCloud files. Use the Source Intake Handoff section above to continue.
                           </p>
                         )}
                         {(icloudAcquisitionStatus.error_code === "AUTH_REQUIRED" || icloudAcquisitionStatus.error_code === "SESSION_EXPIRED") && (
