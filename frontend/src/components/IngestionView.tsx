@@ -6,6 +6,7 @@ import {
   createSourceProfile,
   createSourceProfileStagingFolder,
   getIcloudAcquisitionStatus,
+  getIcloudStagingCleanupStatus,
   IcloudAcquisitionStartError,
   getSourceProfileIcloudReadiness,
   getSourceProfileDetail,
@@ -14,6 +15,7 @@ import {
   getSourceIntakeRunStatus,
   getSourceProfiles,
   runIcloudAcquisitionWithDetails,
+  runIcloudStagingCleanupDryRun,
   startSourceIntake,
   stopIcloudAcquisition,
   stopSourceIntake,
@@ -36,6 +38,7 @@ import type {
   SourceProfileSummary,
   SourceProfileType,
   SourceIntakeStatusSnapshot,
+  IcloudStagingCleanupRunStatus,
 } from "@/types/ui-api";
 
 import styles from "./ingestion-view.module.css";
@@ -58,6 +61,7 @@ type IcloudReadinessState = "ready" | "warning" | "not_ready" | "unknown";
 type IcloudAuthState = "action_required" | "unknown";
 type IcloudSourceRegistrationState = "matched" | "mismatch" | "unknown";
 type IcloudAcquisitionUiState = "idle" | "loading_details" | "confirm_open" | "starting" | "running" | "stop_requested" | "terminal";
+type IcloudCleanupUiState = "idle" | "loading" | "confirm_open" | "running" | "terminal";
 type IcloudAcquisitionMode = "standard" | "list_first_non_repeat";
 type IcloudSourceIntakeLimitSuggestion = {
   value: string;
@@ -119,6 +123,9 @@ const ACQUISITION_METHOD_OPTIONS: Array<{ value: SourceAcquisitionMethod; label:
 const ICLOUD_ACQUISITION_POLL_MS = 3000;
 const ICLOUD_ACQUISITION_ACTIVE_STATUSES = new Set(["running", "stop_requested"]);
 const ICLOUD_ACQUISITION_TERMINAL_STATUSES = new Set(["completed", "completed_with_warnings", "failed", "stopped"]);
+const ICLOUD_CLEANUP_POLL_MS = 3000;
+const ICLOUD_CLEANUP_ACTIVE_STATUSES = new Set(["running", "stop_requested"]);
+const ICLOUD_CLEANUP_TERMINAL_STATUSES = new Set(["completed", "failed", "stopped"]);
 const SOURCE_INTAKE_ACTIVE_STATUSES = new Set(["running", "stop_requested"]);
 const SOURCE_INTAKE_TERMINAL_STATUSES = new Set(["completed", "failed", "stopped"]);
 const ICLOUD_ACQUISITION_HARD_BLOCKING_CODES = new Set([
@@ -189,6 +196,22 @@ function toRegistrationStatusLabel(value: IcloudSourceRegistrationState): string
 
 function toDisplayDate(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "-";
+}
+
+function cleanupSourceLabel(status: IcloudStagingCleanupRunStatus | null): string {
+  if (!status) {
+    return "-";
+  }
+
+  return status.source_label ?? `Source ID ${status.source_id ?? "-"}`;
+}
+
+function cleanupSourcePath(status: IcloudStagingCleanupRunStatus | null): string {
+  if (!status) {
+    return "-";
+  }
+
+  return status.source_root_path ?? "-";
 }
 
 function isIcloudCloudExport(form: EditorFormState): boolean {
@@ -579,6 +602,12 @@ export default function IngestionView() {
   const [icloudAcquisitionBlockingReasons, setIcloudAcquisitionBlockingReasons] = useState<Array<{ code: string; message: string }>>([]);
   const [icloudAcquisitionConflictSummary, setIcloudAcquisitionConflictSummary] = useState<string | null>(null);
   const [dismissedIcloudAcquisitionTerminalKey, setDismissedIcloudAcquisitionTerminalKey] = useState<string | null>(null);
+  const [icloudCleanupStatus, setIcloudCleanupStatus] = useState<IcloudStagingCleanupRunStatus | null>(null);
+  const [icloudCleanupUiState, setIcloudCleanupUiState] = useState<IcloudCleanupUiState>("idle");
+  const [isIcloudCleanupConfirmOpen, setIsIcloudCleanupConfirmOpen] = useState(false);
+  const [isIcloudCleanupActionLoading, setIsIcloudCleanupActionLoading] = useState(false);
+  const [isLoadingIcloudCleanupStatus, setIsLoadingIcloudCleanupStatus] = useState(false);
+  const [icloudCleanupError, setIcloudCleanupError] = useState<string | null>(null);
   const [sourceIntakeStatus, setSourceIntakeStatus] = useState<SourceIntakeStatusSnapshot | null>(null);
   const [sourceIntakeReports, setSourceIntakeReports] = useState<SourceIntakeReportSummary[]>([]);
   const [isRunActionLoading, setIsRunActionLoading] = useState(false);
@@ -657,6 +686,28 @@ export default function IngestionView() {
     [icloudAcquisitionStatus],
   );
 
+  const cleanupStatusForDetail = useMemo(() => {
+    if (!detailProfile || !isIcloudProfile(detailProfile) || !icloudCleanupStatus) {
+      return null;
+    }
+
+    if (icloudCleanupStatus.status === "idle") {
+      return icloudCleanupStatus;
+    }
+
+    return icloudCleanupStatus.source_id === detailProfile.source_id ? icloudCleanupStatus : null;
+  }, [detailProfile, icloudCleanupStatus]);
+
+  const isIcloudCleanupActive = useMemo(
+    () => (cleanupStatusForDetail ? ICLOUD_CLEANUP_ACTIVE_STATUSES.has(cleanupStatusForDetail.status) : false),
+    [cleanupStatusForDetail],
+  );
+
+  const isIcloudCleanupTerminal = useMemo(
+    () => (cleanupStatusForDetail ? ICLOUD_CLEANUP_TERMINAL_STATUSES.has(cleanupStatusForDetail.status) : false),
+    [cleanupStatusForDetail],
+  );
+
   const currentIcloudAcquisitionTerminalKey = useMemo(
     () => getIcloudAcquisitionTerminalKey(icloudAcquisitionStatus),
     [icloudAcquisitionStatus],
@@ -681,6 +732,19 @@ export default function IngestionView() {
       }
     } catch (error) {
       setIcloudAcquisitionError(error instanceof Error ? error.message : "Failed to load iCloud acquisition status.");
+    }
+  }, []);
+
+  const loadIcloudCleanupStatus = useCallback(async () => {
+    setIsLoadingIcloudCleanupStatus(true);
+    setIcloudCleanupError(null);
+    try {
+      const response = await getIcloudStagingCleanupStatus();
+      setIcloudCleanupStatus(response.current);
+    } catch (error) {
+      setIcloudCleanupError(error instanceof Error ? error.message : "Failed to load iCloud cleanup status.");
+    } finally {
+      setIsLoadingIcloudCleanupStatus(false);
     }
   }, []);
 
@@ -826,6 +890,18 @@ export default function IngestionView() {
     }, ICLOUD_ACQUISITION_POLL_MS);
     return () => window.clearInterval(timer);
   }, [detailProfile, isDetailsOpen, isIcloudAcquisitionActive, loadIcloudAcquisitionStatus]);
+
+  useEffect(() => {
+    if (!isDetailsOpen || !detailProfile || !isIcloudProfile(detailProfile) || !isIcloudCleanupActive) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void loadIcloudCleanupStatus();
+    }, ICLOUD_CLEANUP_POLL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [detailProfile, isDetailsOpen, isIcloudCleanupActive, loadIcloudCleanupStatus]);
 
   useEffect(() => {
     if (!detailSourceId || !isDetailsOpen || !detailProfile || !isIcloudProfile(detailProfile) || !icloudAcquisitionStatus) {
@@ -1118,12 +1194,17 @@ export default function IngestionView() {
     setIcloudAcquisitionConflictSummary(null);
     setIsIcloudAcquisitionConfirmOpen(false);
     setIcloudAcquisitionUiState("idle");
+    setIcloudCleanupStatus(null);
+    setIcloudCleanupUiState("idle");
+    setIsIcloudCleanupConfirmOpen(false);
+    setIcloudCleanupError(null);
     void loadDetail(profile.source_id);
     if (isIcloudProfile(profile)) {
       void loadIcloudReadiness(profile.source_id);
       void loadIcloudAcquisitionStatus();
+      void loadIcloudCleanupStatus();
     }
-  }, [loadDetail, loadIcloudAcquisitionStatus, loadIcloudReadiness]);
+  }, [loadDetail, loadIcloudAcquisitionStatus, loadIcloudCleanupStatus, loadIcloudReadiness]);
 
   const closeEditor = useCallback(() => {
     setIsEditorOpen(false);
@@ -1150,6 +1231,10 @@ export default function IngestionView() {
     setIsIcloudAcquisitionConfirmOpen(false);
     setIsLoadingIcloudAcquisitionDetails(false);
     setIcloudAcquisitionUsernameForRun(null);
+    setIcloudCleanupStatus(null);
+    setIcloudCleanupUiState("idle");
+    setIsIcloudCleanupConfirmOpen(false);
+    setIcloudCleanupError(null);
   }, []);
 
   const handleVerifyPath = useCallback(async () => {
@@ -1555,9 +1640,101 @@ export default function IngestionView() {
     };
   }, [detailProfile, icloudAcquisitionStatus, icloudReadinessSnapshot?.last_acquisition]);
 
+  const acquisitionStatusMatchesDetailProfile = useMemo(() => {
+    if (!detailProfile || !icloudAcquisitionStatus) {
+      return false;
+    }
+
+    return doesIcloudAcquisitionStatusMatchProfile(detailProfile, icloudAcquisitionStatus);
+  }, [detailProfile, icloudAcquisitionStatus]);
+
+  const icloudCleanupDryRunViewModel = useMemo(() => {
+    if (!detailProfile || !isIcloudProfile(detailProfile)) {
+      return null;
+    }
+
+    const hasRecentAcquisition = Boolean(latestAcquisitionForDetail);
+    const hasSourceIntakeEvidence = Boolean(detailSourceIntakeStatus || latestSourceIntakeReportForDetail);
+    const evidenceMessage = !hasRecentAcquisition || !hasSourceIntakeEvidence
+      ? "Evidence is incomplete. The dry run will still inspect the managed staging folder and report what would be eligible, protected, or skipped."
+      : "Ready to review staged cleanup candidates.";
+
+    if (cleanupStatusForDetail && cleanupStatusForDetail.status !== "idle") {
+      if (isIcloudCleanupActive) {
+        return {
+          statusLabel: "Dry run running",
+          badgeClassName: styles.readinessBadgeWarning,
+          helperMessage: `Cleanup dry run is currently running for ${cleanupSourceLabel(cleanupStatusForDetail)}.`,
+          buttonDisabledReason: "A cleanup dry run is already active for this profile.",
+        };
+      }
+
+      if (cleanupStatusForDetail.status === "failed") {
+        return {
+          statusLabel: "Dry run needs attention",
+          badgeClassName: styles.readinessBadgeNotReady,
+          helperMessage: cleanupStatusForDetail.error_message ?? "The most recent cleanup dry run failed.",
+          buttonDisabledReason: null,
+        };
+      }
+
+      if (isIcloudCleanupTerminal) {
+        return {
+          statusLabel: "Dry run complete",
+          badgeClassName: styles.readinessBadgeReady,
+          helperMessage: cleanupStatusForDetail.dry_run
+            ? `Cleanup dry run completed for ${cleanupSourceLabel(cleanupStatusForDetail)}.`
+            : `Cleanup run completed for ${cleanupSourceLabel(cleanupStatusForDetail)}.`,
+          buttonDisabledReason: null,
+        };
+      }
+    }
+
+    if (icloudSourceIntakeDisabledReason) {
+      return {
+        statusLabel: "Blocked",
+        badgeClassName: styles.readinessBadgeNotReady,
+        helperMessage: icloudSourceIntakeDisabledReason,
+        buttonDisabledReason: icloudSourceIntakeDisabledReason,
+      };
+    }
+
+    return {
+      statusLabel: evidenceMessage === "Ready to review staged cleanup candidates." ? "Ready for dry run" : "Ready with warning",
+      badgeClassName: evidenceMessage === "Ready to review staged cleanup candidates." ? styles.readinessBadgeReady : styles.readinessBadgeWarning,
+      helperMessage: evidenceMessage,
+      buttonDisabledReason: null,
+    };
+  }, [cleanupStatusForDetail, detailProfile, detailSourceIntakeStatus, icloudSourceIntakeDisabledReason, isIcloudCleanupActive, isIcloudCleanupTerminal, latestAcquisitionForDetail, latestSourceIntakeReportForDetail]);
+
   const overallIcloudWorkflowSummary = useMemo(() => {
     if (!detailProfile || !isIcloudProfile(detailProfile)) {
       return null;
+    }
+
+    if (cleanupStatusForDetail && cleanupStatusForDetail.status !== "idle") {
+      if (isIcloudCleanupActive) {
+        return {
+          status: "Cleanup dry run running",
+          message: `Cleanup dry run is currently running for ${cleanupSourceLabel(cleanupStatusForDetail)}. No files will be deleted from the Ingestion tab.`,
+        };
+      }
+
+      if (cleanupStatusForDetail.status === "failed") {
+        return {
+          status: "Cleanup dry run needs attention",
+          message: cleanupStatusForDetail.error_message ?? "The most recent cleanup dry run failed. Review the cleanup status section for details.",
+        };
+      }
+
+      if (isIcloudCleanupTerminal) {
+        return {
+          status: "Cleanup dry run complete",
+          message: cleanupStatusForDetail.dry_run
+            ? `Cleanup dry run completed for ${cleanupSourceLabel(cleanupStatusForDetail)}. Review eligible, skipped, and protected counts before any later cleanup milestone.`
+            : `Cleanup run completed for ${cleanupSourceLabel(cleanupStatusForDetail)}. Review the cleanup status section for details.`,
+        };
+      }
     }
 
     const readiness = icloudReadinessSnapshot;
@@ -1671,7 +1848,7 @@ export default function IngestionView() {
       status: "Ready to acquire",
       message: "No recent iCloud acquisition found for this profile.",
     };
-  }, [detailProfile, detailSourceIntakeStatus, icloudReadinessSnapshot, latestAcquisitionForDetail, latestSourceIntakeReportForDetail]);
+  }, [cleanupStatusForDetail, detailProfile, detailSourceIntakeStatus, icloudReadinessSnapshot, isIcloudCleanupActive, isIcloudCleanupTerminal, latestAcquisitionForDetail, latestSourceIntakeReportForDetail]);
 
   const loadReportDetail = useCallback(async (reportFilename: string) => {
     setIsReportDetailLoading(true);
@@ -1714,6 +1891,7 @@ export default function IngestionView() {
       await Promise.all([
         loadIcloudReadiness(detailSourceId),
         loadIcloudAcquisitionStatus(),
+        loadIcloudCleanupStatus(),
         loadSourceIntakeStatus(),
         loadSourceIntakeReports(),
       ]);
@@ -1723,7 +1901,60 @@ export default function IngestionView() {
         message: error instanceof Error ? error.message : "Failed to refresh workflow summary.",
       });
     }
-  }, [detailProfile, detailSourceId, loadIcloudAcquisitionStatus, loadIcloudReadiness, loadSourceIntakeReports, loadSourceIntakeStatus]);
+  }, [detailProfile, detailSourceId, loadIcloudAcquisitionStatus, loadIcloudCleanupStatus, loadIcloudReadiness, loadSourceIntakeReports, loadSourceIntakeStatus]);
+
+  const closeIcloudCleanupConfirmation = useCallback(() => {
+    setIsIcloudCleanupConfirmOpen(false);
+    setIcloudCleanupUiState((prev) => (prev === "running" ? prev : "idle"));
+  }, []);
+
+  const handleOpenIcloudCleanupDryRunConfirmation = useCallback(() => {
+    if (!detailProfile || !isDetailIcloudProfile) {
+      return;
+    }
+
+    setIcloudCleanupError(null);
+
+    if (isIcloudCleanupActive) {
+      setDetailBanner({ kind: "error", message: "A cleanup dry run is already active for this profile." });
+      return;
+    }
+
+    if (icloudSourceIntakeDisabledReason) {
+      setDetailBanner({ kind: "error", message: icloudSourceIntakeDisabledReason });
+      return;
+    }
+
+    setIsIcloudCleanupConfirmOpen(true);
+    setIcloudCleanupUiState("confirm_open");
+  }, [detailProfile, icloudSourceIntakeDisabledReason, isDetailIcloudProfile, isIcloudCleanupActive]);
+
+  const handleConfirmIcloudCleanupDryRun = useCallback(async () => {
+    if (!detailProfile || !isDetailIcloudProfile) {
+      return;
+    }
+
+    setIsIcloudCleanupActionLoading(true);
+    setIcloudCleanupError(null);
+    setDetailBanner(null);
+    setIcloudCleanupUiState("running");
+
+    try {
+      const response = await runIcloudStagingCleanupDryRun(detailProfile.source_id);
+      setIcloudCleanupStatus(response.current);
+      setIcloudCleanupUiState(ICLOUD_CLEANUP_TERMINAL_STATUSES.has(response.current.status) ? "terminal" : "running");
+      setDetailBanner({ kind: "success", message: response.message });
+      closeIcloudCleanupConfirmation();
+      await handleRefreshIcloudWorkflowSummary();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to start iCloud cleanup dry run.";
+      setIcloudCleanupError(message);
+      setDetailBanner({ kind: "error", message });
+      setIcloudCleanupUiState("idle");
+    } finally {
+      setIsIcloudCleanupActionLoading(false);
+    }
+  }, [closeIcloudCleanupConfirmation, detailProfile, handleRefreshIcloudWorkflowSummary, isDetailIcloudProfile]);
 
   const closeRunConfirmation = useCallback(() => {
     setIsRunConfirmOpen(false);
@@ -2723,6 +2954,103 @@ export default function IngestionView() {
         </div>
       )}
 
+      {isIcloudCleanupConfirmOpen && detailProfile && isDetailIcloudProfile && (
+        <div className={styles.modalBackdrop} role="dialog" aria-modal="true">
+          <div className={styles.modalPanel}>
+            <div className={styles.drawerHeader}>
+              <div>
+                <h3 className={styles.drawerTitle}>Confirm iCloud Cleanup Dry Run</h3>
+                <p className={styles.drawerSubtitle}>
+                  Review the source context before starting a dry run. This will not delete any files.
+                </p>
+              </div>
+              <button
+                type="button"
+                className={styles.closeButton}
+                onClick={closeIcloudCleanupConfirmation}
+                disabled={isIcloudCleanupActionLoading}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className={styles.detailGrid}>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Source Profile</span>
+                <span>{detailProfile.source_label}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Managed Staging Path</span>
+                <span>{detailProfile.managed_staging_path ?? "-"}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Dry Run Mode</span>
+                <span className={`${styles.readinessBadge} ${styles.readinessBadgeReady}`}>Enabled</span>
+                <span className={styles.detailMeta}>No file deletion will occur from the Ingestion tab.</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Latest Acquisition Summary</span>
+                {latestAcquisitionForDetail ? (
+                  <>
+                    <span>{toStatusLabel(latestAcquisitionForDetail.status ?? "unknown")}</span>
+                    <span className={styles.detailMeta}>Started: {toDisplayDate(latestAcquisitionForDetail.started_at)}</span>
+                    <span className={styles.detailMeta}>Finished: {toDisplayDate(latestAcquisitionForDetail.finished_at)}</span>
+                    <span className={styles.detailMeta}>Downloaded: {latestAcquisitionForDetail.downloaded_count ?? "-"}</span>
+                    <span className={styles.detailMeta}>Skipped: {latestAcquisitionForDetail.skipped_count ?? "-"}</span>
+                    <span className={styles.detailMeta}>Report: {latestAcquisitionForDetail.report_path ?? "-"}</span>
+                  </>
+                ) : (
+                  <span className={styles.detailMeta}>No cached acquisition summary available for this profile.</span>
+                )}
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Latest Source Intake Summary</span>
+                {detailSourceIntakeStatus ? (
+                  <>
+                    <span>{toStatusLabel(detailSourceIntakeStatus.status)}</span>
+                    <span className={styles.detailMeta}>Started: {toDisplayDate(detailSourceIntakeStatus.started_at)}</span>
+                    <span className={styles.detailMeta}>Finished: {toDisplayDate(detailSourceIntakeStatus.finished_at)}</span>
+                    <span className={styles.detailMeta}>Selected: {detailSourceIntakeStatus.selected}</span>
+                    <span className={styles.detailMeta}>Staged: {detailSourceIntakeStatus.staged}</span>
+                    <span className={styles.detailMeta}>Report: {detailSourceIntakeStatus.report_path ?? "-"}</span>
+                  </>
+                ) : latestSourceIntakeReportForDetail ? (
+                  <>
+                    <span>Reported</span>
+                    <span className={styles.detailMeta}>Generated: {toDisplayDate(latestSourceIntakeReportForDetail.generated_at_utc)}</span>
+                    <span className={styles.detailMeta}>Selected: {latestSourceIntakeReportForDetail.counts?.selected_for_session ?? "-"}</span>
+                    <span className={styles.detailMeta}>Staged: {latestSourceIntakeReportForDetail.counts?.staged_to_dropzone ?? "-"}</span>
+                    <span className={styles.detailMeta}>Report: {latestSourceIntakeReportForDetail.report_filename}</span>
+                  </>
+                ) : (
+                  <span className={styles.detailMeta}>No cached Source Intake summary available for this profile.</span>
+                )}
+              </div>
+            </div>
+
+            {icloudCleanupError && <p className={styles.bannerError}>{icloudCleanupError}</p>}
+
+            <p className={styles.note}>
+              This is a dry run only. It reports eligible, skipped, and protected items for the selected iCloud staging folder and does not delete files.
+            </p>
+
+            <div className={styles.drawerActions}>
+              <button
+                type="button"
+                className={styles.runButton}
+                onClick={() => void handleConfirmIcloudCleanupDryRun()}
+                disabled={Boolean(icloudCleanupDryRunViewModel?.buttonDisabledReason) || isIcloudCleanupActionLoading}
+              >
+                {isIcloudCleanupActionLoading ? "Starting..." : "Run Cleanup Dry Run"}
+              </button>
+              <button type="button" className={styles.button} onClick={closeIcloudCleanupConfirmation} disabled={isIcloudCleanupActionLoading}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isDetailsOpen && (
         <div className={styles.drawerBackdrop} role="dialog" aria-modal="true">
           <div className={styles.drawerPanel}>
@@ -3119,10 +3447,17 @@ export default function IngestionView() {
                           <span><strong>Error message:</strong> {icloudAcquisitionStatus.error_message ?? "-"}</span>
                           <span><strong>Report path:</strong> {icloudAcquisitionStatus.report_path ?? "-"}</span>
                         </div>
+                        {!acquisitionStatusMatchesDetailProfile && (
+                          <p className={styles.helperText}>
+                            This acquisition status belongs to another source profile and is shown here as the latest global iCloud acquisition run.
+                          </p>
+                        )}
 
                         {(icloudAcquisitionStatus.status === "completed" || icloudAcquisitionStatus.status === "completed_with_warnings") && (
                           <p className={styles.bannerSuccess}>
-                            Acquisition completed. The next step is Source Intake for staged iCloud files. Use the Source Intake Handoff section above to continue.
+                            {acquisitionStatusMatchesDetailProfile
+                              ? "Acquisition completed. The next step is Source Intake for staged iCloud files. Use the Source Intake Handoff section above to continue."
+                              : "A global acquisition run completed for a different source profile. Run acquisition or intake for this profile using the controls above when ready."}
                           </p>
                         )}
                         {(icloudAcquisitionStatus.error_code === "AUTH_REQUIRED" || icloudAcquisitionStatus.error_code === "SESSION_EXPIRED") && (
@@ -3169,7 +3504,14 @@ export default function IngestionView() {
                               <span className={styles.detailMeta}>Report: {latestAcquisitionForDetail.report_path ?? "-"}</span>
                             </>
                           ) : (
-                            <span>No recent iCloud acquisition found for this profile.</span>
+                            <>
+                              <span>No recent iCloud acquisition found for this profile.</span>
+                              {icloudAcquisitionStatus && !acquisitionStatusMatchesDetailProfile && (
+                                <span className={styles.detailMeta}>
+                                  Latest global acquisition status is for source {icloudAcquisitionStatus.source_label ?? "-"}.
+                                </span>
+                              )}
+                            </>
                           )}
                         </div>
 
@@ -3230,6 +3572,104 @@ export default function IngestionView() {
                         </div>
                       </div>
                     </section>
+
+                    {icloudCleanupDryRunViewModel && (
+                      <section className={styles.detailSection}>
+                        <h4 className={styles.detailHeading}>iCloud Cleanup Readiness</h4>
+                        <div className={styles.detailGrid}>
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Dry Run Readiness</span>
+                            <span className={`${styles.readinessBadge} ${icloudCleanupDryRunViewModel.badgeClassName}`}>
+                              {icloudCleanupDryRunViewModel.statusLabel}
+                            </span>
+                            <span className={styles.detailMeta}>{icloudCleanupDryRunViewModel.helperMessage}</span>
+                            {isLoadingIcloudCleanupStatus && <span className={styles.detailMeta}>Refreshing cleanup status...</span>}
+                            {icloudCleanupError && <p className={styles.inlineWarning}>Cleanup status unavailable: {icloudCleanupError}</p>}
+                          </div>
+
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Current Cleanup Context</span>
+                            <span>{cleanupSourceLabel(cleanupStatusForDetail)}</span>
+                            <span className={styles.detailMeta}>Managed path: {cleanupSourcePath(cleanupStatusForDetail)}</span>
+                            <span className={styles.detailMeta}>Dry run only: Yes</span>
+                            <span className={styles.detailMeta}>No files are deleted from the Ingestion tab.</span>
+                          </div>
+
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Dry Run Action</span>
+                            <span className={styles.detailMeta}>
+                              This launches a dry run only. It reports eligible, skipped, and protected items without deleting any files.
+                            </span>
+                            {icloudCleanupDryRunViewModel.buttonDisabledReason && (
+                              <p className={styles.inlineWarning}>{icloudCleanupDryRunViewModel.buttonDisabledReason}</p>
+                            )}
+                            <div className={styles.rowActions}>
+                              <button
+                                type="button"
+                                className={styles.runButton}
+                                onClick={() => void handleOpenIcloudCleanupDryRunConfirmation()}
+                                disabled={Boolean(icloudCleanupDryRunViewModel.buttonDisabledReason) || isIcloudCleanupActionLoading || isLoadingIcloudCleanupStatus}
+                              >
+                                Run Cleanup Dry Run
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.button}
+                                onClick={() => void loadIcloudCleanupStatus()}
+                                disabled={isIcloudCleanupActionLoading || isLoadingIcloudCleanupStatus}
+                              >
+                                Refresh Cleanup Status
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {cleanupStatusForDetail && cleanupStatusForDetail.status !== "idle" && (
+                          <section className={styles.runPanel}>
+                            <div className={styles.runPanelHeader}>
+                              <h3 className={styles.runPanelTitle}>Cleanup Dry Run Status</h3>
+                              <span className={`${styles.runStatusBadge} ${statusClassName(cleanupStatusForDetail.status)}`}>
+                                {toStatusLabel(cleanupStatusForDetail.status)}
+                              </span>
+                            </div>
+                            <div className={styles.runMetrics}>
+                              <span><strong>Source:</strong> {cleanupSourceLabel(cleanupStatusForDetail)}</span>
+                              <span><strong>Path:</strong> {cleanupSourcePath(cleanupStatusForDetail)}</span>
+                              <span><strong>Dry Run:</strong> {cleanupStatusForDetail.dry_run ? "Yes" : "No"}</span>
+                              <span><strong>Started:</strong> {toDisplayDate(cleanupStatusForDetail.started_at)}</span>
+                              <span><strong>Finished:</strong> {toDisplayDate(cleanupStatusForDetail.finished_at)}</span>
+                              <span><strong>Eligible:</strong> {cleanupStatusForDetail.eligible_count}</span>
+                              <span><strong>Skipped / Protected:</strong> {cleanupStatusForDetail.skipped_count}</span>
+                              <span><strong>Deleted:</strong> {cleanupStatusForDetail.deleted_count}</span>
+                              <span><strong>Bytes Eligible:</strong> {cleanupStatusForDetail.total_bytes_eligible}</span>
+                              <span><strong>Bytes Deleted:</strong> {cleanupStatusForDetail.total_bytes_deleted}</span>
+                              <span><strong>Report:</strong> {cleanupStatusForDetail.report_path ?? "-"}</span>
+                              {cleanupStatusForDetail.error_message && (
+                                <span><strong>Error:</strong> {cleanupStatusForDetail.error_message}</span>
+                              )}
+                            </div>
+                            {Object.keys(cleanupStatusForDetail.skipped_reasons).length > 0 && (
+                              <div className={styles.detailGrid}>
+                                <div className={styles.detailCard}>
+                                  <span className={styles.detailLabel}>Skipped Reasons</span>
+                                  {Object.entries(cleanupStatusForDetail.skipped_reasons).map(([reason, count]) => (
+                                    <span key={reason} className={styles.detailMeta}>{reason}: {count}</span>
+                                  ))}
+                                </div>
+                                <div className={styles.detailCard}>
+                                  <span className={styles.detailLabel}>Skipped Samples</span>
+                                  {Object.entries(cleanupStatusForDetail.skipped_samples).map(([reason, samples]) => (
+                                    <span key={reason} className={styles.detailMeta}>
+                                      {reason}: {samples.length > 0 ? samples.join(", ") : "-"}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </section>
+                        )}
+                      </section>
+                    )}
                   </section>
                 )}
 
@@ -3330,8 +3770,13 @@ function doesStatusMatchProfile(profile: SourceProfileSummary, status: SourceInt
   return sameType && sameLabel && samePath;
 }
 
-function toStatusLabel(status: string): string {
-  return status
+function toStatusLabel(status: string | null | undefined): string {
+  const normalized = (status ?? "unknown").trim();
+  if (!normalized) {
+    return "Unknown";
+  }
+
+  return normalized
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");

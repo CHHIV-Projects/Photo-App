@@ -1270,3 +1270,7 @@ export function runIcloudStagingCleanup(
     body: JSON.stringify(req)
   });
 }
+
+export function runIcloudStagingCleanupDryRun(sourceId: number): Promise<IcloudStagingCleanupRunResponse> {
+  return runIcloudStagingCleanup({ source_id: sourceId, dry_run: true });
+}
