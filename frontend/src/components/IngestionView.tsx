@@ -119,6 +119,8 @@ const ACQUISITION_METHOD_OPTIONS: Array<{ value: SourceAcquisitionMethod; label:
 const ICLOUD_ACQUISITION_POLL_MS = 3000;
 const ICLOUD_ACQUISITION_ACTIVE_STATUSES = new Set(["running", "stop_requested"]);
 const ICLOUD_ACQUISITION_TERMINAL_STATUSES = new Set(["completed", "completed_with_warnings", "failed", "stopped"]);
+const SOURCE_INTAKE_ACTIVE_STATUSES = new Set(["running", "stop_requested"]);
+const SOURCE_INTAKE_TERMINAL_STATUSES = new Set(["completed", "failed", "stopped"]);
 const ICLOUD_ACQUISITION_HARD_BLOCKING_CODES = new Set([
   "AUTH_REQUIRED",
   "SESSION_EXPIRED",
@@ -489,6 +491,42 @@ function getIcloudSourceIntakeLimitSuggestion(status: IcloudAcquisitionRunStatus
   };
 }
 
+function doesIcloudAcquisitionStatusMatchProfile(
+  profile: Pick<SourceProfileSummary, "source_label" | "source_type" | "source_root_path">,
+  status: IcloudAcquisitionRunStatus | null,
+): boolean {
+  if (!status) {
+    return false;
+  }
+
+  const sameType = normalizeIdentityValue(status.source_type) === normalizeIdentityValue(profile.source_type);
+  const sameLabel = normalizeIdentityValue(status.source_label) === normalizeIdentityValue(profile.source_label);
+  const samePath = normalizePathForMatch(status.source_root_path) === normalizePathForMatch(profile.source_root_path);
+
+  return sameType && sameLabel && samePath;
+}
+
+function getMostRecentReportForSource(
+  reports: SourceIntakeReportSummary[],
+  sourceId: number,
+): SourceIntakeReportSummary | null {
+  let candidate: SourceIntakeReportSummary | null = null;
+  let candidateTs = Number.NEGATIVE_INFINITY;
+
+  for (const report of reports) {
+    if (report.ingestion_source_id !== sourceId) {
+      continue;
+    }
+    const ts = report.generated_at_utc ? Date.parse(report.generated_at_utc) : Number.NEGATIVE_INFINITY;
+    if (!candidate || ts > candidateTs) {
+      candidate = report;
+      candidateTs = ts;
+    }
+  }
+
+  return candidate;
+}
+
 function calculateExactDuplicateCount(
   selectedForSession: number | null | undefined,
   processedNewUnique: number | null | undefined,
@@ -719,7 +757,7 @@ export default function IngestionView() {
   }, [loadSourceIntakeReports, loadSourceIntakeStatus]);
 
   const isSourceIntakeActive = sourceIntakeStatus
-    ? ["running", "stop_requested"].includes(sourceIntakeStatus.status)
+    ? SOURCE_INTAKE_ACTIVE_STATUSES.has(sourceIntakeStatus.status)
     : false;
 
   useEffect(() => {
@@ -750,7 +788,7 @@ export default function IngestionView() {
   }, [isSourceIntakeActive, loadProfiles, loadSourceIntakeReports]);
 
   useEffect(() => {
-    if (!sourceIntakeStatus || !["completed", "failed", "stopped"].includes(sourceIntakeStatus.status)) {
+    if (!sourceIntakeStatus || !SOURCE_INTAKE_TERMINAL_STATUSES.has(sourceIntakeStatus.status)) {
       return;
     }
     void loadProfiles({ refreshOnly: true, resetBanner: false });
@@ -872,6 +910,28 @@ export default function IngestionView() {
       setIsLoadingIcloudReadiness(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!detailSourceId || !isDetailsOpen || !detailProfile || !isIcloudProfile(detailProfile) || !sourceIntakeStatus) {
+      return;
+    }
+    if (!SOURCE_INTAKE_TERMINAL_STATUSES.has(sourceIntakeStatus.status)) {
+      return;
+    }
+    if (!doesStatusMatchProfile(detailProfile, sourceIntakeStatus)) {
+      return;
+    }
+    void loadIcloudReadiness(detailSourceId);
+    void loadIcloudAcquisitionStatus();
+  }, [
+    detailProfile,
+    detailSourceId,
+    isDetailsOpen,
+    loadIcloudAcquisitionStatus,
+    loadIcloudReadiness,
+    sourceIntakeStatus?.run_id,
+    sourceIntakeStatus?.status,
+  ]);
 
   const closeIcloudAcquisitionConfirmation = useCallback(() => {
     setIsIcloudAcquisitionConfirmOpen(false);
@@ -1433,6 +1493,175 @@ export default function IngestionView() {
     return buildReportReferencePath(selectedReportFilename, rawPath);
   }, [selectedReportDetail, selectedReportFilename, sourceIntakeStatus?.report_path]);
 
+  const detailSourceIntakeStatus = useMemo(() => {
+    if (!detailProfile) {
+      return null;
+    }
+    return doesStatusMatchProfile(detailProfile, sourceIntakeStatus) ? sourceIntakeStatus : null;
+  }, [detailProfile, sourceIntakeStatus]);
+
+  const latestSourceIntakeReportForDetail = useMemo(() => {
+    if (!detailSourceId) {
+      return null;
+    }
+    return getMostRecentReportForSource(sourceIntakeReports, detailSourceId);
+  }, [detailSourceId, sourceIntakeReports]);
+
+  const latestAcquisitionForDetail = useMemo(() => {
+    if (!detailProfile) {
+      return null;
+    }
+    if (doesIcloudAcquisitionStatusMatchProfile(detailProfile, icloudAcquisitionStatus)) {
+      return {
+        status: icloudAcquisitionStatus?.status ?? null,
+        started_at: icloudAcquisitionStatus?.started_at ?? null,
+        finished_at: icloudAcquisitionStatus?.completed_at ?? null,
+        recent_count: icloudAcquisitionStatus?.recent_count ?? null,
+        file_inventory_count: icloudAcquisitionStatus?.file_inventory_count ?? null,
+        downloaded_count: icloudAcquisitionStatus?.downloaded_count ?? null,
+        skipped_count: icloudAcquisitionStatus?.skipped_existing_count ?? null,
+        failed_count: icloudAcquisitionStatus?.failed_count ?? null,
+        acquisition_mode: icloudAcquisitionStatus?.acquisition_mode ?? null,
+        report_path: icloudAcquisitionStatus?.report_path ?? null,
+      };
+    }
+
+    const readinessAcq = icloudReadinessSnapshot?.last_acquisition;
+    if (!readinessAcq) {
+      return null;
+    }
+    return {
+      status: readinessAcq.status,
+      started_at: readinessAcq.started_at,
+      finished_at: readinessAcq.finished_at,
+      recent_count: null,
+      file_inventory_count: null,
+      downloaded_count: readinessAcq.downloaded_count,
+      skipped_count: readinessAcq.skipped_count,
+      failed_count: readinessAcq.failed_count,
+      acquisition_mode: null,
+      report_path: readinessAcq.report_path,
+    };
+  }, [detailProfile, icloudAcquisitionStatus, icloudReadinessSnapshot?.last_acquisition]);
+
+  const overallIcloudWorkflowSummary = useMemo(() => {
+    if (!detailProfile || !isIcloudProfile(detailProfile)) {
+      return null;
+    }
+
+    const readiness = icloudReadinessSnapshot;
+    const intakeStatus = detailSourceIntakeStatus;
+    const intakeStatusActive = Boolean(intakeStatus && SOURCE_INTAKE_ACTIVE_STATUSES.has(intakeStatus.status));
+    const intakeStatusTerminal = Boolean(intakeStatus && SOURCE_INTAKE_TERMINAL_STATUSES.has(intakeStatus.status));
+    const intakeReport = latestSourceIntakeReportForDetail;
+    const intakeReportHasCounts = Boolean(intakeReport?.counts);
+    const acquisition = latestAcquisitionForDetail;
+    const acquisitionStatus = acquisition?.status ?? null;
+    const acquisitionActive = Boolean(acquisitionStatus && ICLOUD_ACQUISITION_ACTIVE_STATUSES.has(acquisitionStatus));
+    const hasReadinessBlockers = Boolean(
+      readiness
+      && (
+        readiness.readiness_status === "not_ready"
+        || readiness.blocking_reasons.length > 0
+        || readiness.path_alignment_status === "mismatch"
+        || readiness.source_root_alignment_status === "mismatch"
+        || readiness.source_registration_status === "mismatch"
+        || readiness.approved_root_status === "blocked"
+        || readiness.auth_status === "action_required"
+      )
+    );
+
+    const sameSourceConflict = Boolean(
+      (readiness?.operation_conflicts.source_intake_active_for_this_source ?? false)
+      || (readiness?.operation_conflicts.icloud_cleanup_active_for_this_source ?? false)
+    );
+
+    const acquisitionActiveDifferentSource = Boolean(
+      readiness?.operation_conflicts.icloud_acquisition_active
+      && !acquisitionActive,
+    );
+
+    const hasOtherSourceConflict = Boolean(
+      (readiness?.operation_conflicts.source_intake_active && !sameSourceConflict)
+      || (readiness?.operation_conflicts.icloud_cleanup_active && !sameSourceConflict)
+      || acquisitionActiveDifferentSource
+    );
+
+    const noActiveConflict = readiness
+      ? !(readiness.operation_conflicts.icloud_acquisition_active || readiness.operation_conflicts.source_intake_active || readiness.operation_conflicts.icloud_cleanup_active)
+      : false;
+
+    const readyForSourceIntake = Boolean(
+      detailProfile.profile_status === "active"
+      && readiness
+      && !hasReadinessBlockers
+      && noActiveConflict
+      && !acquisitionActive
+    );
+
+    const hasNoRecentAcquisition = !acquisition;
+    const hasRecentIntakeEvidence = Boolean(intakeStatus || intakeReport);
+
+    // Precedence table from milestone 12.62.8 answers:
+    // 1) same-profile active operation
+    // 2) hard blockers / attention needed
+    // 3) active operation conflict for another source
+    // 4) ready states (source intake / acquire)
+    // 5) review results
+    // 6) no recent activity
+    if (acquisitionActive) {
+      return {
+        status: "Acquisition running",
+        message: "iCloud acquisition is currently running for this profile.",
+      };
+    }
+    if (intakeStatusActive) {
+      return {
+        status: "Source Intake running",
+        message: "Source Intake is currently running for this profile.",
+      };
+    }
+    if (hasReadinessBlockers) {
+      return {
+        status: "Attention needed",
+        message: "Readiness blockers must be resolved before running acquisition or intake.",
+      };
+    }
+    if (hasOtherSourceConflict) {
+      return {
+        status: "Attention needed",
+        message: "Another ingestion-related operation is active. Wait for it to finish before starting Source Intake.",
+      };
+    }
+    if (readyForSourceIntake) {
+      return {
+        status: "Ready for Source Intake",
+        message: hasNoRecentAcquisition
+          ? "No recent iCloud acquisition found. You may acquire from iCloud or run Source Intake if staged files already exist."
+          : "Acquisition completed. Run Source Intake to process staged files.",
+      };
+    }
+    if ((intakeStatusTerminal && intakeStatus?.status === "completed") || (intakeReportHasCounts && intakeReport?.source_complete)) {
+      return {
+        status: "Ready for cleanup dry run later",
+        message: "Source Intake completed. Review the summary before cleanup. Cleanup will be added in a later milestone.",
+      };
+    }
+    if (intakeStatusTerminal || intakeReportHasCounts) {
+      return {
+        status: "Review intake results",
+        message: hasNoRecentAcquisition && hasRecentIntakeEvidence
+          ? "No recent acquisition found. Recent Source Intake results are available for this profile. Review intake results or acquire again if you need newer iCloud files."
+          : "Source Intake results are available for review.",
+      };
+    }
+
+    return {
+      status: "Ready to acquire",
+      message: "No recent iCloud acquisition found for this profile.",
+    };
+  }, [detailProfile, detailSourceIntakeStatus, icloudReadinessSnapshot, latestAcquisitionForDetail, latestSourceIntakeReportForDetail]);
+
   const loadReportDetail = useCallback(async (reportFilename: string) => {
     setIsReportDetailLoading(true);
     setReportDetailError(null);
@@ -1464,6 +1693,26 @@ export default function IngestionView() {
     }
     void loadReportDetail(selectedReportFilename);
   }, [loadReportDetail, selectedReportFilename]);
+
+  const handleRefreshIcloudWorkflowSummary = useCallback(async () => {
+    if (!detailSourceId || !detailProfile || !isIcloudProfile(detailProfile)) {
+      return;
+    }
+    setDetailBanner(null);
+    try {
+      await Promise.all([
+        loadIcloudReadiness(detailSourceId),
+        loadIcloudAcquisitionStatus(),
+        loadSourceIntakeStatus(),
+        loadSourceIntakeReports(),
+      ]);
+    } catch (error) {
+      setDetailBanner({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Failed to refresh workflow summary.",
+      });
+    }
+  }, [detailProfile, detailSourceId, loadIcloudAcquisitionStatus, loadIcloudReadiness, loadSourceIntakeReports, loadSourceIntakeStatus]);
 
   const closeRunConfirmation = useCallback(() => {
     setIsRunConfirmOpen(false);
@@ -2801,9 +3050,10 @@ export default function IngestionView() {
                             onClick={() => void handlePrepareIcloudSourceIntake()}
                             disabled={Boolean(icloudSourceIntakeDisabledReason) || isRunActionLoading || isIcloudAcquisitionActionLoading}
                           >
-                            Prepare Source Intake
+                            Run Source Intake for Staged iCloud Files
                           </button>
                         </div>
+                        <span className={styles.detailMeta}>You will confirm Total Limit and Batch Size before the run starts.</span>
                         {icloudSourceIntakeDisabledReason && (
                           <span className={styles.detailMeta}>{icloudSourceIntakeDisabledReason}</span>
                         )}
@@ -2878,6 +3128,97 @@ export default function IngestionView() {
                         )}
                       </section>
                     )}
+
+                    <section className={styles.runPanel}>
+                      <div className={styles.runPanelHeader}>
+                        <h3 className={styles.runPanelTitle}>iCloud Workflow Summary</h3>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          onClick={() => void handleRefreshIcloudWorkflowSummary()}
+                        >
+                          Refresh Summary
+                        </button>
+                      </div>
+
+                      <div className={styles.detailGrid}>
+                        <div className={styles.detailCard}>
+                          <span className={styles.detailLabel}>Acquisition</span>
+                          {latestAcquisitionForDetail ? (
+                            <>
+                              <span><strong>Status:</strong> <span className={`${styles.runStatusBadge} ${statusClassName(latestAcquisitionForDetail.status ?? "idle")}`}>{toStatusLabel(latestAcquisitionForDetail.status ?? "unknown")}</span></span>
+                              <span className={styles.detailMeta}>Started: {toDisplayDate(latestAcquisitionForDetail.started_at)}</span>
+                              <span className={styles.detailMeta}>Finished: {toDisplayDate(latestAcquisitionForDetail.finished_at)}</span>
+                              <span className={styles.detailMeta}>Requested recent count: {latestAcquisitionForDetail.recent_count ?? "-"}</span>
+                              <span className={styles.detailMeta}>File inventory count: {latestAcquisitionForDetail.file_inventory_count ?? "-"}</span>
+                              <span className={styles.detailMeta}>Downloaded: {latestAcquisitionForDetail.downloaded_count ?? "-"}</span>
+                              <span className={styles.detailMeta}>Skipped: {latestAcquisitionForDetail.skipped_count ?? "-"}</span>
+                              <span className={styles.detailMeta}>Failed: {latestAcquisitionForDetail.failed_count ?? "-"}</span>
+                              <span className={styles.detailMeta}>Acquisition mode: {latestAcquisitionForDetail.acquisition_mode ?? "-"}</span>
+                              <span className={styles.detailMeta}>Report: {latestAcquisitionForDetail.report_path ?? "-"}</span>
+                            </>
+                          ) : (
+                            <span>No recent iCloud acquisition found for this profile.</span>
+                          )}
+                        </div>
+
+                        <div className={styles.detailCard}>
+                          <span className={styles.detailLabel}>Source Intake</span>
+                          {detailSourceIntakeStatus ? (
+                            <>
+                              <span><strong>Status:</strong> <span className={`${styles.runStatusBadge} ${statusClassName(detailSourceIntakeStatus.status)}`}>{toStatusLabel(detailSourceIntakeStatus.status)}</span></span>
+                              <span className={styles.detailMeta}>Started: {toDisplayDate(detailSourceIntakeStatus.started_at)}</span>
+                              <span className={styles.detailMeta}>Finished: {toDisplayDate(detailSourceIntakeStatus.finished_at)}</span>
+                              <span className={styles.detailMeta}>Scanned: {detailSourceIntakeStatus.files_scanned}</span>
+                              <span className={styles.detailMeta}>Skipped known: {detailSourceIntakeStatus.skipped_known}</span>
+                              <span className={styles.detailMeta}>Selected: {detailSourceIntakeStatus.selected}</span>
+                              <span className={styles.detailMeta}>Staged to Drop Zone: {detailSourceIntakeStatus.staged}</span>
+                              <span className={styles.detailMeta}>Processed new unique: {detailSourceIntakeStatus.processed_new_unique}</span>
+                              <span className={styles.detailMeta}>Failed/rejected: {detailSourceIntakeStatus.failed_or_rejected}</span>
+                              <span className={styles.detailMeta}>Deferred/unready: {latestSourceIntakeReportForDetail?.counts?.deferred_unready_count ?? "-"}</span>
+                              <span className={styles.detailMeta}>Remaining unknown eligible: {detailSourceIntakeStatus.remaining_unknown}</span>
+                              <span className={styles.detailMeta}>Source complete: {latestSourceIntakeReportForDetail?.source_complete == null ? "-" : latestSourceIntakeReportForDetail.source_complete ? "Yes" : "No"}</span>
+                              <span className={styles.detailMeta}>Report: {detailSourceIntakeStatus.report_path ?? latestSourceIntakeReportForDetail?.report_filename ?? "-"}</span>
+                            </>
+                          ) : latestSourceIntakeReportForDetail ? (
+                            <>
+                              <span><strong>Status:</strong> Reported</span>
+                              <span className={styles.detailMeta}>Finished: {toDisplayDate(latestSourceIntakeReportForDetail.generated_at_utc)}</span>
+                              <span className={styles.detailMeta}>Scanned: {latestSourceIntakeReportForDetail.counts?.total_files_scanned ?? "-"}</span>
+                              <span className={styles.detailMeta}>Skipped known: {latestSourceIntakeReportForDetail.counts?.skipped_already_known ?? "-"}</span>
+                              <span className={styles.detailMeta}>Selected: {latestSourceIntakeReportForDetail.counts?.selected_for_session ?? "-"}</span>
+                              <span className={styles.detailMeta}>Staged to Drop Zone: {latestSourceIntakeReportForDetail.counts?.staged_to_dropzone ?? "-"}</span>
+                              <span className={styles.detailMeta}>Processed new unique: {latestSourceIntakeReportForDetail.counts?.processed_new_unique ?? "-"}</span>
+                              <span className={styles.detailMeta}>Failed/rejected: {latestSourceIntakeReportForDetail.counts?.failed_or_rejected ?? "-"}</span>
+                              <span className={styles.detailMeta}>Deferred/unready: {latestSourceIntakeReportForDetail.counts?.deferred_unready_count ?? "-"}</span>
+                              <span className={styles.detailMeta}>Remaining unknown eligible: {latestSourceIntakeReportForDetail.counts?.remaining_unknown_eligible ?? "-"}</span>
+                              <span className={styles.detailMeta}>Source complete: {latestSourceIntakeReportForDetail.source_complete == null ? "-" : latestSourceIntakeReportForDetail.source_complete ? "Yes" : "No"}</span>
+                              <span className={styles.detailMeta}>Report: {latestSourceIntakeReportForDetail.report_filename}</span>
+                            </>
+                          ) : (
+                            <span>Source Intake has not been run for this iCloud profile yet.</span>
+                          )}
+                        </div>
+
+                        <div className={styles.detailCard}>
+                          <span className={styles.detailLabel}>Overall Result / Next Step</span>
+                          <span>
+                            <strong>Status:</strong>{" "}
+                            <span className={`${styles.runStatusBadge} ${statusClassName(overallIcloudWorkflowSummary?.status ?? "idle")}`}>
+                              {overallIcloudWorkflowSummary?.status ?? "Unknown"}
+                            </span>
+                          </span>
+                          <span className={styles.detailMeta}>{overallIcloudWorkflowSummary?.message ?? "No iCloud workflow summary available."}</span>
+                          {overallIcloudWorkflowSummary?.status === "Attention needed" && readinessBlockingReasons.length > 0 && (
+                            <div className={styles.warningList}>
+                              {readinessBlockingReasons.map((reason) => (
+                                <span key={`summary-${reason.code}`} className={styles.detailMeta}>{reason.code}: {reason.message}</span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </section>
                   </section>
                 )}
 
