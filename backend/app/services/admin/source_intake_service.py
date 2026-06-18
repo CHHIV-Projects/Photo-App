@@ -309,7 +309,6 @@ def get_source_profile_detail(
     source_id: int,
     include_username: bool = False,
 ) -> SourceProfileDetail:
-    ensure_ingestion_context_schema(db_session)
     source = db_session.get(IngestionSource, source_id)
     if source is None:
         raise LookupError("Source profile not found.")
@@ -325,7 +324,6 @@ def verify_source_profile_path(
     *,
     source_id: int,
 ) -> SourceProfilePathCheckResponse:
-    ensure_ingestion_context_schema(db_session)
     source = db_session.get(IngestionSource, source_id)
     if source is None:
         raise LookupError("Source profile not found.")
@@ -352,7 +350,6 @@ def create_source_profile_staging_folder(
     *,
     source_id: int,
 ) -> SourceProfileStagingFolderCreateResponse:
-    ensure_ingestion_context_schema(db_session)
     source = db_session.get(IngestionSource, source_id)
     if source is None:
         raise LookupError("Source profile not found.")

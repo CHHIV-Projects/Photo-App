@@ -193,6 +193,41 @@ class AdminSourceProfilesApiTests(unittest.TestCase):
         self.assertIsNone(payload["expected_acquisition_path"])
         mocked_service.assert_called_once()
 
+    def test_get_source_profile_detail_repeat_10x_returns_200(self) -> None:
+        detail = SourceProfileDetail(
+            source_id=7,
+            source_label="Archive Candidate",
+            normalized_label="archive candidate",
+            source_type="local_folder",
+            source_root_path="/data/archive_candidate",
+            source_root_path_relative=None,
+            profile_status="active",
+            cloud_provider=None,
+            acquisition_method=None,
+            managed_staging_path=None,
+            managed_staging_path_relative=None,
+            effective_path="/data/archive_candidate",
+            effective_path_relative=None,
+            effective_path_kind="source_root_path",
+            expected_acquisition_path=None,
+            account_username_masked=None,
+            account_username=None,
+            first_seen_at=datetime.now(timezone.utc),
+            last_run_at=None,
+            provenance_count=10,
+            ingestion_runs_count=3,
+            source_intake_runs_count=2,
+            icloud_acquisition_runs_count=0,
+            is_referenced=True,
+            has_path_divergence=False,
+            warnings=["This source profile has historical references. Edits should preserve provenance meaning."],
+        )
+
+        with patch("app.api.admin.get_source_profile_detail", return_value=detail):
+            for _ in range(10):
+                response = self.client.get("/api/admin/source-profiles/7")
+                self.assertEqual(response.status_code, 200)
+
     def test_get_source_profile_detail_missing_source_returns_404(self) -> None:
         with patch("app.api.admin.get_source_profile_detail", side_effect=LookupError("missing")):
             response = self.client.get("/api/admin/source-profiles/99999")

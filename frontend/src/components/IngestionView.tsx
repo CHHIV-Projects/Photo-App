@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   createSourceProfile,
@@ -596,6 +596,7 @@ export default function IngestionView() {
   const [selectedReportDetail, setSelectedReportDetail] = useState<SourceIntakeReportDetail | null>(null);
   const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
   const [reportDetailError, setReportDetailError] = useState<string | null>(null);
+  const detailLoadRequestSeqRef = useRef(0);
 
   const normalizedRunLimitInput = useMemo(() => runLimitInput.trim(), [runLimitInput]);
   const normalizedRunBatchSizeInput = useMemo(() => runBatchSizeInput.trim(), [runBatchSizeInput]);
@@ -884,16 +885,25 @@ export default function IngestionView() {
   }, [editingProfile]);
 
   const loadDetail = useCallback(async (sourceId: number) => {
+    const requestSeq = ++detailLoadRequestSeqRef.current;
     setIsLoadingDetails(true);
     setDetailError(null);
     try {
       const detail = await getSourceProfileDetail(sourceId);
+      if (requestSeq !== detailLoadRequestSeqRef.current) {
+        return;
+      }
       setDetailProfile(detail);
     } catch (error) {
+      if (requestSeq !== detailLoadRequestSeqRef.current) {
+        return;
+      }
       setDetailProfile(null);
       setDetailError(error instanceof Error ? error.message : "Failed to load source profile details.");
     } finally {
-      setIsLoadingDetails(false);
+      if (requestSeq === detailLoadRequestSeqRef.current) {
+        setIsLoadingDetails(false);
+      }
     }
   }, []);
 
@@ -1121,6 +1131,7 @@ export default function IngestionView() {
   }, []);
 
   const closeDetails = useCallback(() => {
+    detailLoadRequestSeqRef.current += 1;
     setIsDetailsOpen(false);
     setDetailSourceId(null);
     setDetailProfile(null);
