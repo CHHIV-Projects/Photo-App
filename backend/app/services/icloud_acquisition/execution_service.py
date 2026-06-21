@@ -743,7 +743,7 @@ def _prepare_launch(
 
     matching_source = _lookup_source_registration(
         db_session,
-        source_label=sanitized_label,
+        source_label=source_label,
         source_type=normalized_source_type,
         source_root_path=source_root_path,
     )

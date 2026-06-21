@@ -69,6 +69,30 @@ class IcloudAcquisitionServiceTests(unittest.TestCase):
         self.assertEqual(sanitize_source_label("Chuck iCloudPD"), "chuck_icloudpd")
         self.assertEqual(sanitize_source_label("  "), "unnamed_source")
 
+    def test_sanitize_and_normalize_diverge_for_punctuated_labels(self) -> None:
+        # Regression: labels with dots/spaces produce different results from
+        # sanitize_source_label (used for path naming) vs normalize_source_label
+        # (used for DB label matching).  _lookup_source_registration must receive
+        # the original label so normalize_source_label matches the stored value.
+        from app.services.ingestion.ingestion_context_service import normalize_source_label
+
+        original = "Chuck iCloud E2E Test 12.62.10"
+        sanitized = sanitize_source_label(original)   # path-safe folder name
+        normalized = normalize_source_label(original)  # stored in DB
+
+        # Sanitized → underscores replace spaces and dots → "chuck_icloud_e2e_test_12_62_10"
+        self.assertEqual(sanitized, "chuck_icloud_e2e_test_12_62_10")
+        # Normalized → lowercase only → "chuck icloud e2e test 12.62.10"
+        self.assertEqual(normalized, "chuck icloud e2e test 12.62.10")
+        # They must differ — this is the root cause of the mismatch
+        self.assertNotEqual(sanitized, normalized)
+
+        # Verify simpler label (no punctuation) also behaves consistently
+        simple = "Chuck iCloud"
+        self.assertEqual(sanitize_source_label(simple), "chuck_icloud")
+        self.assertEqual(normalize_source_label(simple), "chuck icloud")
+        self.assertNotEqual(sanitize_source_label(simple), normalize_source_label(simple))
+
     def test_recent_count_validation_applies_default_and_bounds(self) -> None:
         self.assertEqual(normalize_recent_count(None), DEFAULT_RECENT_COUNT)
         self.assertEqual(normalize_recent_count(MAX_RECENT_COUNT), MAX_RECENT_COUNT)

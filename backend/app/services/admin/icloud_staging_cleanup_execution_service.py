@@ -140,9 +140,13 @@ def reset_stale_cleanup_runs(db: Session) -> int:
     return count
 
 
-def get_cleanup_status(db: Session) -> CleanupRunSnapshot | None:
+def get_cleanup_status(db: Session, *, source_id: int | None = None) -> CleanupRunSnapshot | None:
+    stmt = select(IcloudStagingCleanupRun)
+    if source_id is not None:
+        stmt = stmt.where(IcloudStagingCleanupRun.ingestion_source_id == source_id)
+
     row = db.execute(
-        select(IcloudStagingCleanupRun).order_by(IcloudStagingCleanupRun.created_at.desc(), IcloudStagingCleanupRun.id.desc()).limit(1)
+        stmt.order_by(IcloudStagingCleanupRun.created_at.desc(), IcloudStagingCleanupRun.id.desc()).limit(1)
     ).scalar_one_or_none()
     if row is None:
         return None

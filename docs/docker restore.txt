@@ -1,0 +1,7 @@
+taskkill /F /T /IM "Docker Desktop.exe"
+taskkill /F /T /IM "com.docker.backend.exe"
+taskkill /F /T /IM "com.docker.proxy.exe"
+taskkill /F /T /IM "com.docker.service"
+wsl --shutdown
+net start com.docker.service
+start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"

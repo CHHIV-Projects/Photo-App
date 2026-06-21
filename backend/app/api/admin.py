@@ -618,11 +618,14 @@ def stop_icloud_acquisition(db: Session = Depends(get_db_session)) -> IcloudAcqu
 
 
 @router.get("/icloud-staging-cleanup/status", response_model=IcloudStagingCleanupStatusResponse)
-def get_icloud_staging_cleanup_status(db: Session = Depends(get_db_session)) -> IcloudStagingCleanupStatusResponse:
+def get_icloud_staging_cleanup_status(
+    source_id: int | None = Query(default=None),
+    db: Session = Depends(get_db_session),
+) -> IcloudStagingCleanupStatusResponse:
     """Return current or latest iCloud staging cleanup run snapshot."""
     from datetime import datetime, timezone
 
-    snapshot = get_cleanup_status(db)
+    snapshot = get_cleanup_status(db, source_id=source_id)
     return IcloudStagingCleanupStatusResponse(
         generated_at=datetime.now(timezone.utc),
         current=_to_icloud_cleanup_run_status(snapshot),

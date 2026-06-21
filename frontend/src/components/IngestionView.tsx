@@ -158,12 +158,7 @@ function initialFormState(): EditorFormState {
 }
 
 function computeManagedStagingPreview(sourceLabel: string): string {
-  const slug = sourceLabel
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "_")
-    .replace(/[_-]{2,}/g, "_")
-    .replace(/^[_\-\s]+|[_\-\s]+$/g, "") || "unnamed_source";
+  const slug = sanitizeIcloudLabelForMatch(sourceLabel);
   return `storage/exports/icloud/${slug}`;
 }
 
@@ -515,18 +510,57 @@ function getIcloudSourceIntakeLimitSuggestion(status: IcloudAcquisitionRunStatus
 }
 
 function doesIcloudAcquisitionStatusMatchProfile(
-  profile: Pick<SourceProfileSummary, "source_label" | "source_type" | "source_root_path">,
+  profile: Pick<
+    SourceProfileSummary,
+    "source_id" | "source_label" | "source_type" | "source_root_path" | "managed_staging_path"
+  > & {
+    expected_acquisition_path?: string | null;
+  },
   status: IcloudAcquisitionRunStatus | null,
 ): boolean {
   if (!status) {
     return false;
   }
 
-  const sameType = normalizeIdentityValue(status.source_type) === normalizeIdentityValue(profile.source_type);
-  const sameLabel = normalizeIdentityValue(status.source_label) === normalizeIdentityValue(profile.source_label);
-  const samePath = normalizePathForMatch(status.source_root_path) === normalizePathForMatch(profile.source_root_path);
+  const statusWithIds = status as IcloudAcquisitionRunStatus & {
+    source_id?: number | null;
+    ingestion_source_id?: number | null;
+  };
+  const statusSourceId = statusWithIds.source_id ?? statusWithIds.ingestion_source_id ?? null;
+  if (statusSourceId != null && statusSourceId === profile.source_id) {
+    return true;
+  }
 
-  return sameType && sameLabel && samePath;
+  const sameType = normalizeIdentityValue(status.source_type) === normalizeIdentityValue(profile.source_type);
+  if (!sameType) {
+    return false;
+  }
+
+  const profilePaths = [
+    profile.managed_staging_path,
+    profile.expected_acquisition_path,
+    profile.source_root_path,
+  ]
+    .map(normalizePathForMatch)
+    .filter((value) => value.length > 0);
+  const statusPaths = [status.staging_path, status.source_root_path]
+    .map(normalizePathForMatch)
+    .filter((value) => value.length > 0);
+  if (statusPaths.some((statusPath) => profilePaths.includes(statusPath))) {
+    return true;
+  }
+
+  const sameSlug = sanitizeIcloudLabelForMatch(status.source_label) === sanitizeIcloudLabelForMatch(profile.source_label);
+  if (sameSlug) {
+    return true;
+  }
+
+  const sameLabel = normalizeIdentityValue(status.source_label) === normalizeIdentityValue(profile.source_label);
+  if (sameLabel) {
+    return true;
+  }
+
+  return false;
 }
 
 function getMostRecentReportForSource(
@@ -735,11 +769,11 @@ export default function IngestionView() {
     }
   }, []);
 
-  const loadIcloudCleanupStatus = useCallback(async () => {
+  const loadIcloudCleanupStatus = useCallback(async (sourceId?: number) => {
     setIsLoadingIcloudCleanupStatus(true);
     setIcloudCleanupError(null);
     try {
-      const response = await getIcloudStagingCleanupStatus();
+      const response = await getIcloudStagingCleanupStatus(sourceId);
       setIcloudCleanupStatus(response.current);
     } catch (error) {
       setIcloudCleanupError(error instanceof Error ? error.message : "Failed to load iCloud cleanup status.");
@@ -897,7 +931,7 @@ export default function IngestionView() {
     }
 
     const timer = window.setInterval(() => {
-      void loadIcloudCleanupStatus();
+      void loadIcloudCleanupStatus(detailProfile.source_id);
     }, ICLOUD_CLEANUP_POLL_MS);
 
     return () => window.clearInterval(timer);
@@ -1043,31 +1077,47 @@ export default function IngestionView() {
     setIcloudAcquisitionErrorCode(null);
     setIcloudAcquisitionBlockingReasons([]);
     setIcloudAcquisitionConflictSummary(null);
+    setIsIcloudAcquisitionConfirmOpen(true);
+    setIcloudAcquisitionUsernameForRun((prev) => prev ?? "");
+    setIcloudAcquisitionRecentCountInput((prev) => prev || "25");
+    setIcloudAcquisitionMode("standard");
 
     try {
-      const detailWithUsername = await getSourceProfileDetail(detailSourceId, { includeUsername: true });
+      let detailWithUsername;
+      try {
+        detailWithUsername = await getSourceProfileDetail(detailSourceId, { includeUsername: true });
+      } catch (error) {
+        if (!isTransientFetchError(error)) {
+          throw error;
+        }
+        await delay(350);
+        detailWithUsername = await getSourceProfileDetail(detailSourceId, { includeUsername: true });
+      }
       const username = (detailWithUsername.account_username || "").trim();
       if (!username) {
-        setIcloudAcquisitionError("Account username is required before acquisition can run.");
-        setIcloudAcquisitionUiState("idle");
+        setIcloudAcquisitionError("Account username is required before acquisition can run. Enter Apple ID username in the modal.");
+        setIcloudAcquisitionUiState("confirm_open");
         return;
       }
 
       setIcloudAcquisitionUsernameForRun(username);
-      setIcloudAcquisitionRecentCountInput("25");
-      setIcloudAcquisitionMode("standard");
-      setIsIcloudAcquisitionConfirmOpen(true);
       setIcloudAcquisitionUiState("confirm_open");
     } catch (error) {
-      setIcloudAcquisitionError(error instanceof Error ? error.message : "Failed to load acquisition details.");
-      setIcloudAcquisitionUiState("idle");
+      setIcloudAcquisitionError(
+        error instanceof Error
+          ? `${error.message} Enter Apple ID username in the modal and try again.`
+          : "Failed to load acquisition details. Enter Apple ID username in the modal and try again.",
+      );
+      setIcloudAcquisitionUiState("confirm_open");
     } finally {
       setIsLoadingIcloudAcquisitionDetails(false);
     }
   }, [detailProfile, detailSourceId, icloudAcquireDisabledReason]);
 
   const handleConfirmAcquireFromIcloud = useCallback(async () => {
-    if (!detailProfile || !isIcloudProfile(detailProfile) || !icloudAcquisitionUsernameForRun) {
+    const username = (icloudAcquisitionUsernameForRun || "").trim();
+    if (!detailProfile || !isIcloudProfile(detailProfile) || !username) {
+      setIcloudAcquisitionError("Account username is required before acquisition can run.");
       return;
     }
 
@@ -1086,7 +1136,7 @@ export default function IngestionView() {
     try {
       const response = await runIcloudAcquisitionWithDetails({
         source_label: detailProfile.source_label,
-        username: icloudAcquisitionUsernameForRun,
+        username,
         recent_count: Number(normalizedIcloudAcquisitionRecentCountInput),
         source_type: "cloud_export",
         acquisition_mode: icloudAcquisitionMode,
@@ -1202,7 +1252,7 @@ export default function IngestionView() {
     if (isIcloudProfile(profile)) {
       void loadIcloudReadiness(profile.source_id);
       void loadIcloudAcquisitionStatus();
-      void loadIcloudCleanupStatus();
+      void loadIcloudCleanupStatus(profile.source_id);
     }
   }, [loadDetail, loadIcloudAcquisitionStatus, loadIcloudCleanupStatus, loadIcloudReadiness]);
 
@@ -1891,7 +1941,7 @@ export default function IngestionView() {
       await Promise.all([
         loadIcloudReadiness(detailSourceId),
         loadIcloudAcquisitionStatus(),
-        loadIcloudCleanupStatus(),
+        loadIcloudCleanupStatus(detailSourceId),
         loadSourceIntakeStatus(),
         loadSourceIntakeReports(),
       ]);
@@ -2718,8 +2768,8 @@ export default function IngestionView() {
       )}
 
       {isRunConfirmOpen && runCandidateProfile && runCandidatePathCheck && (
-        <div className={styles.drawerBackdrop} role="dialog" aria-modal="true">
-          <div className={styles.drawerPanel}>
+        <div className={styles.modalBackdrop} role="dialog" aria-modal="true">
+          <div className={styles.modalPanel}>
             <div className={styles.drawerHeader}>
               <div>
                 <h3 className={styles.drawerTitle}>
@@ -2839,8 +2889,8 @@ export default function IngestionView() {
       )}
 
       {isIcloudAcquisitionConfirmOpen && detailProfile && isDetailIcloudProfile && (
-        <div className={styles.drawerBackdrop} role="dialog" aria-modal="true">
-          <div className={styles.drawerPanel}>
+        <div className={styles.modalBackdrop} role="dialog" aria-modal="true">
+          <div className={styles.modalPanel}>
             <div className={styles.drawerHeader}>
               <div>
                 <h3 className={styles.drawerTitle}>Confirm iCloud Acquisition</h3>
@@ -2866,7 +2916,17 @@ export default function IngestionView() {
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Account Username</span>
                 <span>{detailProfile.account_username_masked ?? "-"}</span>
-                <span className={styles.detailMeta}>Real username is used internally for API payload.</span>
+                <label className={styles.formLabel}>
+                  Apple ID Username
+                  <input
+                    className={styles.formInput}
+                    type="text"
+                    value={icloudAcquisitionUsernameForRun ?? ""}
+                    onChange={(event) => setIcloudAcquisitionUsernameForRun(event.target.value)}
+                    placeholder="name@example.com"
+                  />
+                  <span className={styles.formHint}>Used for icloudpd launch. Password/2FA are not stored here.</span>
+                </label>
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Managed Staging Path</span>
@@ -2937,7 +2997,7 @@ export default function IngestionView() {
                 type="button"
                 className={styles.runButton}
                 onClick={() => void handleConfirmAcquireFromIcloud()}
-                disabled={isIcloudAcquisitionActionLoading}
+                disabled={isIcloudAcquisitionActionLoading || !(icloudAcquisitionUsernameForRun || "").trim()}
               >
                 {isIcloudAcquisitionActionLoading ? "Starting..." : "Acquire from iCloud"}
               </button>
@@ -3286,6 +3346,9 @@ export default function IngestionView() {
                         {icloudAcquireDisabledReason && (
                           <p className={styles.inlineWarning}>{icloudAcquireDisabledReason}</p>
                         )}
+                        {icloudAcquisitionError && (
+                          <p className={styles.inlineWarning}>{icloudAcquisitionError}</p>
+                        )}
                         <div className={styles.rowActions}>
                           <button
                             type="button"
@@ -3615,7 +3678,7 @@ export default function IngestionView() {
                               <button
                                 type="button"
                                 className={styles.button}
-                                onClick={() => void loadIcloudCleanupStatus()}
+                                onClick={() => void loadIcloudCleanupStatus(detailSourceId ?? undefined)}
                                 disabled={isIcloudCleanupActionLoading || isLoadingIcloudCleanupStatus}
                               >
                                 Refresh Cleanup Status
@@ -3752,6 +3815,15 @@ export default function IngestionView() {
 
 function normalizeIdentityValue(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+function sanitizeIcloudLabelForMatch(value: string | null | undefined): string {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/[_-]{2,}/g, "_")
+    .replace(/^[_\-\s]+|[_\-\s]+$/g, "") || "unnamed_source";
 }
 
 function normalizePathForMatch(value: string | null | undefined): string {

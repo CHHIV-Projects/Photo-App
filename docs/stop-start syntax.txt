@@ -1,0 +1,87 @@
+start database
+
+docker compose -f docker/docker-compose.yml up -d postgres
+
+start backend api
+
+go to backend
+Set-Location "C:/Users/chhen/My Drive/AI Photo Organizer/Photo Organizer_v1/backend"
+
+activate venv
+& "C:/Users/chhen/My Drive/AI Photo Organizer/Photo Organizer_v1/.venv/Scripts/Activate.ps1"
+
+start api
+uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+
+
+frontend (in new terminal)
+
+Set-Location "C:/Users/chhen/My Drive/AI Photo Organizer/Photo Organizer_v1/frontend"
+npm run dev
+
+
+
+Single step startup
+
+Set-Location "C:\Users\chhen\My Drive\AI Photo Organizer\Photo Organizer_v1"
+.\scripts\runtime\start_photo_organizer_dev.ps1
+
+Single step close
+
+& "C:\Users\chhen\My Drive\AI Photo Organizer\Photo Organizer_v1\scripts\runtime\stop_photo_organizer.ps1"
+
+verify ports clear
+
+$ports=@(3000,8001,5432,6379); foreach($p in $ports){ $c=Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue; if($c){"Port $p -> PID $($c.OwningProcess)"} else {"Port $p -> free"}}
+
+
+
+
+minimal command path
+
+api check
+Invoke-RestMethod -Uri "http://127.0.0.1:8001/health"
+
+restart only front end cleanly
+Set-Location "C:/Users/chhen/My Drive/AI Photo Organizer/Photo Organizer_v1/frontend"
+Get-NetTCPConnection -LocalPort 3000 -State Listen | Select-Object -ExpandProperty OwningProcess -Unique
+Stop-Process -Id <PID_FROM_PREVIOUS_COMMAND> -Force
+npm run dev
+
+clear Next cache if required
+Remove-Item -Recurse -Force .next
+npm run dev
+
+
+Password update icloudpd
+
+Run icloudpd
+
+Set-Location "C:\Users\chhen\My Drive\AI Photo Organizer\Photo Organizer_v1"
+
+& ".tools\icloudpd\Scripts\icloudpd.exe" `
+  --auth-only `
+  --password-provider console `
+  --mfa-provider console `
+  --cookie-directory "$env:USERPROFILE\.pyicloud" `
+  -u <your-apple-id>
+
+Rerun acquisition
+
+Set-Location "C:\Users\chhen\My Drive\AI Photo Organizer\Photo Organizer_v1"
+
+& ".tools\icloudpd\Scripts\icloudpd.exe" `
+  --password-provider console `
+  --mfa-provider console `
+  --cookie-directory "$env:USERPROFILE\.pyicloud" `
+  --no-progress-bar `
+  --folder-structure none `
+  --size original `
+  --recent 25 `
+  -d "storage\exports\icloud\<label>" `
+  -u <your-apple-id>
+
+Clear old id session
+
+
+Remove-Item "$env:USERPROFILE\.pyicloud" -Recurse -Force

@@ -1613,3 +1613,8 @@ Future model:
 Source Profile = External 1
 Run path = current mount path + canonical subfolder
 Provenance = source-profile-based, with observed mount/path retained as evidence
+
+ICLOUD-TOOLS-001 — Add icloudpd version diagnostics to iCloud readiness/status UI.
+
+Runtime anomaly:
+Port 8001 remained in LISTENING state with nonexistent PID 14992 even after Photo Organizer shutdown, Docker process kills, WSL shutdown, and hns/winnat restart. Reboot required. Suspected Windows/Docker/WSL ghost listener, not confirmed app bug.

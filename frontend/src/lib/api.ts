@@ -1258,8 +1258,9 @@ export function stopSourceIntake(): Promise<SourceIntakeStopResponse> {
   });
 }
 
-export function getIcloudStagingCleanupStatus(): Promise<IcloudStagingCleanupStatusResponse> {
-  return apiRequest<IcloudStagingCleanupStatusResponse>("/api/admin/icloud-staging-cleanup/status");
+export function getIcloudStagingCleanupStatus(sourceId?: number): Promise<IcloudStagingCleanupStatusResponse> {
+  const query = sourceId == null ? "" : `?source_id=${sourceId}`;
+  return apiRequest<IcloudStagingCleanupStatusResponse>(`/api/admin/icloud-staging-cleanup/status${query}`);
 }
 
 export function runIcloudStagingCleanup(

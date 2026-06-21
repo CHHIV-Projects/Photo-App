@@ -475,7 +475,7 @@ def list_sources_with_latest_info(db_session: Session) -> list[SourceIntakeSourc
     Return known ingestion sources from DB, enriched with latest run timestamp
     and latest report counts where available.
     """
-    ensure_ingestion_context_schema(db_session)
+    # Schema sync is handled during app startup. Avoid read-path DDL checks here.
 
     # Query all sources
     sources = db_session.scalars(
@@ -547,7 +547,7 @@ def list_source_profiles(
     include_username: bool = False,
 ) -> list[SourceProfileSummary]:
     """Return source profile summaries from ingestion_sources with status filtering."""
-    ensure_ingestion_context_schema(db_session)
+    # Schema sync is handled during app startup. Avoid read-path DDL checks here.
 
     normalized_status = (status or "active").strip().lower()
     if normalized_status not in ALLOWED_PROFILE_STATUS:
