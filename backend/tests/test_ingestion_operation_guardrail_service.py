@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,10 +10,61 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.admin.ingestion_operation_guardrail_service import get_ingestion_operation_guardrail_snapshot
+from app.services.admin.ingestion_operation_guardrail_service import (
+    get_ingestion_operation_guardrail_snapshot,
+    protected_ingestion_operation_start,
+)
 
 
 class IngestionOperationGuardrailServiceTests(unittest.TestCase):
+    def test_protected_start_serializes_non_postgresql_callers(self) -> None:
+        class _Dialect:
+            name = "sqlite"
+
+        class _Bind:
+            dialect = _Dialect()
+
+        class _Session:
+            def get_bind(self):
+                return _Bind()
+
+        active = 0
+        maximum_active = 0
+        state_lock = threading.Lock()
+
+        def worker() -> None:
+            nonlocal active, maximum_active
+            with protected_ingestion_operation_start(_Session()):
+                with state_lock:
+                    active += 1
+                    maximum_active = max(maximum_active, active)
+                time.sleep(0.02)
+                with state_lock:
+                    active -= 1
+
+        threads = [threading.Thread(target=worker) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(maximum_active, 1)
+
+    def test_protected_start_uses_dedicated_postgresql_advisory_lock(self) -> None:
+        db = MagicMock()
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        db.get_bind.return_value = bind
+        connection = bind.engine.connect.return_value.__enter__.return_value
+        transaction = connection.begin.return_value
+
+        with protected_ingestion_operation_start(db):
+            pass
+
+        statement = str(connection.execute.call_args.args[0])
+        self.assertIn("pg_advisory_xact_lock", statement)
+        transaction.commit.assert_called_once()
+
     def test_returns_blocking_reasons_for_active_operations(self) -> None:
         db = MagicMock()
 

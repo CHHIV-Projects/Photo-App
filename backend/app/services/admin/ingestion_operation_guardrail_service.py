@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+import threading
+from collections.abc import Iterator
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
@@ -12,6 +15,10 @@ from app.schemas.admin import IcloudReadinessOperationConflicts, IcloudReadiness
 from app.services.admin.icloud_staging_cleanup_execution_service import RUNNING_STATUSES as CLEANUP_RUNNING_STATUSES
 from app.services.admin.source_intake_execution_service import RUNNING_STATUSES as SOURCE_INTAKE_RUNNING_STATUSES
 from app.services.icloud_acquisition.execution_service import RUNNING_STATUSES as ACQUISITION_RUNNING_STATUSES
+
+
+_OPERATION_START_ADVISORY_LOCK_KEY = 7_421_062_511
+_PROCESS_OPERATION_START_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -24,6 +31,35 @@ class IngestionOperationGuardrailSnapshot:
     @property
     def blocked(self) -> bool:
         return bool(self.blocking_reasons)
+
+
+@contextmanager
+def protected_ingestion_operation_start(db_session: Session) -> Iterator[None]:
+    """Serialize ingestion-operation check-and-start sections.
+
+    PostgreSQL uses a transaction-scoped advisory lock held by a dedicated
+    connection so commits performed by the operation service cannot release it
+    early. Tests and non-PostgreSQL environments use the in-process lock.
+    """
+    with _PROCESS_OPERATION_START_LOCK:
+        get_bind = getattr(db_session, "get_bind", None)
+        bind = get_bind() if callable(get_bind) else None
+        dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
+        if dialect_name != "postgresql":
+            yield
+            return
+
+        engine = getattr(bind, "engine", bind)
+        with engine.connect() as lock_connection:
+            transaction = lock_connection.begin()
+            try:
+                lock_connection.execute(
+                    text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                    {"lock_key": _OPERATION_START_ADVISORY_LOCK_KEY},
+                )
+                yield
+            finally:
+                transaction.commit()
 
 
 def _latest_active_acquisition(db_session: Session) -> IcloudAcquisitionRun | None:

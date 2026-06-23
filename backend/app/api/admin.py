@@ -44,6 +44,7 @@ from app.schemas.admin import (
     SourceProfileStatusUpdateRequest,
     SourceProfileSummary,
     SourceProfilesResponse,
+    IcloudReadinessReason,
     IcloudSourceReadinessResponse,
     IcloudAcquisitionRunRequest,
     IcloudAcquisitionRunResponse,
@@ -51,9 +52,11 @@ from app.schemas.admin import (
     IcloudAcquisitionStatusResponse,
     IcloudAcquisitionStopResponse,
     IcloudStagingCleanupRunRequest,
+    IcloudStagingCleanupExecuteRequest,
     IcloudStagingCleanupRunResponse,
     IcloudStagingCleanupRunStatus,
     IcloudStagingCleanupStatusResponse,
+    IcloudStagingCleanupReadinessResponse,
 )
 from app.services.admin import (
     build_admin_summary,
@@ -115,13 +118,21 @@ from app.services.icloud_acquisition.execution_service import (
 )
 from app.services.admin.icloud_staging_cleanup_execution_service import (
     CleanupBusyError,
+    CleanupAuthorizationError,
     CleanupRunSnapshot,
     CleanupValidationError,
     SourceIntakeActiveError,
     get_cleanup_status,
+    get_latest_cleanup_dry_run,
+    get_cleanup_source_readiness,
+    start_cleanup_execution,
     start_cleanup_run,
 )
-from app.services.admin.ingestion_operation_guardrail_service import IngestionOperationGuardrailSnapshot, get_ingestion_operation_guardrail_snapshot
+from app.services.admin.ingestion_operation_guardrail_service import (
+    IngestionOperationGuardrailSnapshot,
+    get_ingestion_operation_guardrail_snapshot,
+    protected_ingestion_operation_start,
+)
 from app.services.previews.heic_preview_processing_service import (
     HeicPreviewAlreadyRunningError,
     HeicPreviewStatusSnapshot,
@@ -423,9 +434,21 @@ def _to_icloud_cleanup_run_status(snapshot: CleanupRunSnapshot | None) -> Icloud
             eligible_count=0,
             deleted_count=0,
             skipped_count=0,
-            total_bytes_eligible=0,
-            total_bytes_deleted=0,
-            skipped_reasons={},
+        total_bytes_eligible=0,
+        total_bytes_deleted=0,
+        total_files=0,
+        processed_files=0,
+        current_stage=None,
+        protected_count=0,
+        verification_failed_count=0,
+        file_missing_count=0,
+        delete_failed_count=0,
+        manifest_fingerprint=None,
+        planner_version=None,
+        preview_expires_at=None,
+        authorized_dry_run_id=None,
+        authorization_consumed_at=None,
+        skipped_reasons={},
             skipped_samples={},
             report_path=None,
             error_message=None,
@@ -445,6 +468,18 @@ def _to_icloud_cleanup_run_status(snapshot: CleanupRunSnapshot | None) -> Icloud
         skipped_count=snapshot.skipped_count,
         total_bytes_eligible=snapshot.total_bytes_eligible,
         total_bytes_deleted=snapshot.total_bytes_deleted,
+        total_files=snapshot.total_files,
+        processed_files=snapshot.processed_files,
+        current_stage=snapshot.current_stage,
+        protected_count=snapshot.protected_count,
+        verification_failed_count=snapshot.verification_failed_count,
+        file_missing_count=snapshot.file_missing_count,
+        delete_failed_count=snapshot.delete_failed_count,
+        manifest_fingerprint=snapshot.manifest_fingerprint,
+        planner_version=snapshot.planner_version,
+        preview_expires_at=snapshot.preview_expires_at,
+        authorized_dry_run_id=snapshot.authorized_dry_run_id,
+        authorization_consumed_at=snapshot.authorization_consumed_at,
         skipped_reasons=snapshot.skipped_reasons,
         skipped_samples=snapshot.skipped_samples,
         report_path=snapshot.report_path,
@@ -555,6 +590,11 @@ def get_icloud_acquisition_run_status(db: Session = Depends(get_db_session)) -> 
 @router.post("/icloud-acquisition/run", response_model=IcloudAcquisitionRunResponse)
 def run_icloud_acquisition(body: IcloudAcquisitionRunRequest, db: Session = Depends(get_db_session)) -> IcloudAcquisitionRunResponse | JSONResponse:
     """Launch an icloudpd acquisition background run."""
+    with protected_ingestion_operation_start(db):
+        return _run_icloud_acquisition_locked(body, db)
+
+
+def _run_icloud_acquisition_locked(body: IcloudAcquisitionRunRequest, db: Session) -> IcloudAcquisitionRunResponse | JSONResponse:
     guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db)
     if guardrail_snapshot.blocked:
         return JSONResponse(
@@ -632,12 +672,44 @@ def get_icloud_staging_cleanup_status(
     )
 
 
+@router.get("/icloud-staging-cleanup/readiness", response_model=IcloudStagingCleanupReadinessResponse)
+def get_icloud_staging_cleanup_readiness(
+    source_id: int = Query(...),
+    db: Session = Depends(get_db_session),
+) -> IcloudStagingCleanupReadinessResponse:
+    """Return local-only cleanup readiness independently of iCloud auth state."""
+    from datetime import datetime, timezone
+
+    source_readiness = get_cleanup_source_readiness(db, source_id=source_id)
+    guardrail = get_ingestion_operation_guardrail_snapshot(db, source_id=source_id)
+    reasons = [IcloudReadinessReason(code=code, message=message) for code, message in source_readiness.blocking_reasons]
+    reasons.extend(guardrail.blocking_reasons)
+    latest = get_latest_cleanup_dry_run(db, source_id=source_id)
+    latest_status = _to_icloud_cleanup_run_status(latest)
+    return IcloudStagingCleanupReadinessResponse(
+        generated_at=datetime.now(timezone.utc),
+        source_id=source_id,
+        readiness_status="blocked" if reasons else "ready",
+        canonical_staging_path=source_readiness.canonical_staging_path,
+        blocking_reasons=reasons,
+        latest_dry_run=latest_status,
+    )
+
+
 @router.post("/icloud-staging-cleanup/run", response_model=IcloudStagingCleanupRunResponse)
 def run_icloud_staging_cleanup(
     body: IcloudStagingCleanupRunRequest,
     db: Session = Depends(get_db_session),
 ) -> IcloudStagingCleanupRunResponse | JSONResponse:
     """Launch conservative iCloud staging cleanup in background."""
+    with protected_ingestion_operation_start(db):
+        return _run_icloud_staging_cleanup_locked(body, db)
+
+
+def _run_icloud_staging_cleanup_locked(
+    body: IcloudStagingCleanupRunRequest,
+    db: Session,
+) -> IcloudStagingCleanupRunResponse | JSONResponse:
     guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db, source_id=body.source_id)
     if guardrail_snapshot.blocked:
         conflict_error_code = "INGESTION_OPERATION_ACTIVE"
@@ -678,7 +750,12 @@ def run_icloud_staging_cleanup(
     except CleanupValidationError as exc:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            content={"detail": str(exc), "error_code": "INVALID_CLEANUP_SOURCE"},
+            content={"detail": str(exc), "error_code": exc.code},
+        )
+    except CleanupAuthorizationError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc), "error_code": exc.code},
         )
 
     return IcloudStagingCleanupRunResponse(
@@ -686,6 +763,54 @@ def run_icloud_staging_cleanup(
         message="iCloud staging cleanup started.",
         current=_to_icloud_cleanup_run_status(snapshot),
     )
+
+
+@router.post("/icloud-staging-cleanup/execute", response_model=IcloudStagingCleanupRunResponse)
+def execute_icloud_staging_cleanup(
+    body: IcloudStagingCleanupExecuteRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudStagingCleanupRunResponse | JSONResponse:
+    """Execute cleanup only through a fresh, explicitly confirmed dry-run binding."""
+    with protected_ingestion_operation_start(db):
+        guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db, source_id=body.source_id)
+        if guardrail_snapshot.blocked:
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content=_guardrail_conflict_content(
+                    guardrail_snapshot,
+                    detail="Another ingestion-related operation is active.",
+                    error_code="INGESTION_OPERATION_ACTIVE",
+                ),
+            )
+        try:
+            snapshot = start_cleanup_execution(
+                db,
+                source_id=body.source_id,
+                dry_run_run_id=body.dry_run_run_id,
+                explicit_confirmation=body.explicit_confirmation,
+                created_by="ingestion_ui",
+            )
+        except (CleanupBusyError, SourceIntakeActiveError) as exc:
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"detail": str(exc), "error_code": "INGESTION_OPERATION_ACTIVE"},
+            )
+        except CleanupValidationError as exc:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": str(exc), "error_code": exc.code},
+            )
+        except CleanupAuthorizationError as exc:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": str(exc), "error_code": exc.code},
+            )
+
+        return IcloudStagingCleanupRunResponse(
+            status="started",
+            message="Verified local iCloud staging cleanup started.",
+            current=_to_icloud_cleanup_run_status(snapshot),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1003,6 +1128,14 @@ def launch_source_intake(
     db: Session = Depends(get_db_session),
 ) -> SourceIntakeRunResponse | JSONResponse:
     """Start an admin-launched source intake run."""
+    with protected_ingestion_operation_start(db):
+        return _launch_source_intake_locked(body, db)
+
+
+def _launch_source_intake_locked(
+    body: SourceIntakeRunRequest,
+    db: Session,
+) -> SourceIntakeRunResponse | JSONResponse:
     guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db, source_id=body.ingestion_source_id)
     if guardrail_snapshot.blocked:
         current_snapshot = _snapshot_to_schema(get_source_intake_status(db))

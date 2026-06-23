@@ -16,6 +16,7 @@ This workflow ensures:
 - minimal ambiguity during development
 - durable documentation that is easy to find
 - portability across chats, sessions, and future contributors
+- cost-aware AI coding-agent usage without weakening safety or quality
 
 ---
 
@@ -51,6 +52,7 @@ ChatGPT:
 - proposes next milestones
 - keeps scope controlled and avoids adding unrelated work mid-milestone
 - recommends documentation updates when project workflow or architecture changes
+- writes delta-focused milestone prompts that reference standing coding-agent rules when appropriate
 
 ---
 
@@ -64,6 +66,7 @@ Coder:
 - keeps changes tightly scoped to the approved milestone
 - avoids modifying unrelated systems
 - validates functionality locally
+- follows `docs/context/CODING_AGENT_RULES.md` as the standing implementation rule set
 - produces one milestone closeout document after implementation
 - reports deviations, validation results, known limitations, and recommended next steps
 
@@ -184,11 +187,56 @@ Required closeout filename:
 
 ---
 
+### Standing Coding-Agent Rules
+
+A standing coding-agent rules document should be maintained at:
+
+```text
+docs/context/CODING_AGENT_RULES.md
+```
+
+Purpose:
+
+- hold durable implementation rules
+- reduce repeated safety boilerplate in every milestone prompt
+- make coding-agent sessions more consistent
+- reduce coding-agent cost by allowing shorter delta-focused prompts
+- preserve project safety boundaries
+
+This file should include stable rules such as:
+
+- local-first architecture
+- preserve original media
+- Vault immutability
+- Source Intake as ingestion authority
+- cloud acquisition stages only
+- provenance preservation
+- no credential/session/token/password/2FA storage
+- no destructive behavior unless explicitly scoped
+- no unrelated refactors
+- reconnaissance before complex/risky implementation
+- one closeout document only
+- clear validation and deviation reporting
+
+Milestone prompts may reference this file instead of repeating every standing rule.
+
+However, safety-critical or destructive milestones should still repeat the most important safety rules directly in the milestone prompt.
+
+---
+
 ## Standard Workflow Cycle
 
 ### Step 1 — Milestone Definition
 
 ChatGPT generates a structured milestone prompt.
+
+For most implementation milestones, prompts should now be **delta-focused**:
+
+```text
+standing rules + current milestone delta
+```
+
+rather than repeating the entire architecture context.
 
 The prompt is written as reusable Markdown and includes:
 
@@ -204,6 +252,8 @@ The prompt is written as reusable Markdown and includes:
 - deliverables
 - definition of done
 - requested closeout filename and content
+- reference to `docs/context/CODING_AGENT_RULES.md`
+- specific context files or prior closeouts to read only when needed
 
 ChatGPT should anticipate common implementation questions within the prompt when possible.
 
@@ -220,7 +270,9 @@ The prompt may be saved in the milestone folder using the agreed naming conventi
 Coder:
 
 - reviews the prompt
+- reads `docs/context/CODING_AGENT_RULES.md`
 - inspects the current codebase
+- reads broader context documents only when needed for the milestone
 - identifies ambiguities, risks, or decisions
 - asks clarification questions before coding if needed
 
@@ -228,7 +280,25 @@ Coder:
 
 ### Step 2.5 — Codebase Reconnaissance
 
-For complex milestones, coder should perform reconnaissance before implementation.
+For complex or safety-sensitive milestones, coder should perform reconnaissance before implementation.
+
+Reconnaissance is required for milestones involving:
+
+- ingestion
+- Source Intake
+- Source Profiles
+- source identity
+- iCloud/cloud acquisition
+- cleanup/deletion
+- Vault behavior
+- provenance
+- duplicate canonicalization
+- face/person identity behavior
+- place/location canonical behavior
+- migrations/backfills
+- authentication/session behavior
+- production/runtime scripts
+- broad UI workflow changes
 
 Coder should inspect relevant existing systems and code paths and identify:
 
@@ -466,6 +536,109 @@ The purpose is to preserve context quality and reduce architectural drift.
 
 ---
 
+## Cost-Aware Agentic Coding Workflow
+
+The project uses AI coding agents in VS Code or similar tools. Because agentic coding can consume significant usage credits, prompts should be designed to reduce unnecessary context loading, broad repo wandering, and failed implementation attempts.
+
+### Core Cost-Control Principles
+
+- Keep durable rules in `docs/context/CODING_AGENT_RULES.md`.
+- Keep milestone prompts focused on the current delta.
+- Do not paste all global context into every prompt.
+- Do not ask the coding agent to read every project document for every small task.
+- Provide likely relevant files/systems when known.
+- Use reconnaissance-first for risky or uncertain work.
+- Split broad risky work into smaller prompts.
+- Preserve one closeout document per milestone.
+
+### Default Context Pattern
+
+For most implementation prompts:
+
+```text
+Before coding:
+1. Read docs/context/CODING_AGENT_RULES.md.
+2. Read this milestone prompt.
+3. Inspect the relevant code paths listed below.
+4. Read PROJECT_CONTEXT / PROJECT_ARCHITECTURE only if the affected behavior is unclear.
+```
+
+### When Full Context Is Still Justified
+
+A longer prompt or broader context read is justified when the milestone touches:
+
+- data model changes
+- source identity semantics
+- ingestion behavior
+- provenance
+- cleanup/deletion
+- Vault logic
+- cloud acquisition
+- credential/session handling
+- cross-cutting UI workflow redesign
+- migration/backfill work
+- deployment architecture
+
+### Prompt Modes
+
+#### 1. Reconnaissance-Only Prompt
+
+Use when implementation risk or code reality is uncertain.
+
+The coder should not edit files.
+
+Expected output:
+
+```text
+1. relevant files/services/routes/components
+2. current behavior
+3. proposed implementation plan
+4. risks and safety concerns
+5. migration/backfill needs, if any
+6. tests or validation to run
+7. clarification questions or blockers
+```
+
+#### 2. Implementation-After-Reconnaissance Prompt
+
+Use after User/ChatGPT approves the reconnaissance plan.
+
+The coder should implement only the approved plan and report deviations.
+
+#### 3. Direct Small Implementation Prompt
+
+Use for low-risk changes such as:
+
+- small UI copy changes
+- narrow display fixes
+- small tests
+- documentation updates
+- isolated non-destructive bug fixes
+
+Even direct implementation prompts should reference `CODING_AGENT_RULES.md`.
+
+### When to Split a Milestone
+
+Split a milestone when:
+
+- it mixes backend, frontend, migrations, and destructive behavior
+- safety verification is not yet understood
+- codebase reconnaissance may change the implementation plan
+- the prompt would require many unrelated systems
+- user testing should happen before the next step
+- failure would be expensive or risky to unwind
+
+Example split:
+
+```text
+1. Real cleanup execution
+2. Cleanup / reacquire / non-repeat validation
+3. Cloud ingestion flow consolidation
+4. Ingestion UX simplification
+```
+
+---
+
 ## Prompt Types
 
 Milestones generally fall into these categories:
@@ -477,6 +650,9 @@ Milestones generally fall into these categories:
 - **Design-First / Reconnaissance** — analyzes and plans before implementation
 - **Safety / Guardrail** — prevents unsafe state, destructive behavior, or race conditions
 - **Documentation / Workflow** — updates project practices or durable documentation
+- **Reconnaissance-Only** — investigates current code behavior and proposes an implementation plan before coding
+- **Implementation After Reconnaissance** — implements an approved reconnaissance plan
+- **Small Direct Implementation** — implements a low-risk, tightly scoped change
 
 Each type may require different levels of:
 
@@ -490,7 +666,9 @@ Each type may require different levels of:
 
 ## Prompt Structure Standard
 
-All milestone prompts should generally include:
+All milestone prompts should generally include enough information to implement the milestone without restating all standing project rules.
+
+The preferred compact structure is:
 
 1. Title
 2. Goal
@@ -505,12 +683,16 @@ All milestone prompts should generally include:
 11. Required closeout filename/content
 12. Recommended next milestone
 
-For future prompts, ChatGPT should include the new documentation instruction:
+For future prompts, ChatGPT should include these standing instructions:
 
 ```text
+Read and obey docs/context/CODING_AGENT_RULES.md.
+
 Create one closeout document only.
 Do not create separate operations and coder-response documents.
 ```
+
+For safety-sensitive prompts, ChatGPT should repeat the specific safety-critical rules directly in the prompt, even if they also exist in `CODING_AGENT_RULES.md`.
 
 ---
 
@@ -576,6 +758,8 @@ ChatGPT should:
 - avoid unnecessary complexity
 - preserve architectural consistency
 - produce coder-ready instructions
+- prefer delta-focused prompts that reference standing coding-agent rules
+- repeat safety-critical rules directly for destructive or high-risk milestones
 - incorporate coder question answers into the milestone prompt record when requested
 
 ---
@@ -587,7 +771,7 @@ Coder should:
 - not expand scope without approval
 - ask questions before implementing uncertain logic
 - challenge prompt assumptions if code reality differs
-- follow prompt structure and final lock-ins
+- follow prompt structure, `CODING_AGENT_RULES.md`, and final lock-ins
 - report deviations explicitly
 - create one closeout document only
 - validate before reporting completion
@@ -621,6 +805,7 @@ User should:
 
 Going forward:
 
+- `CODING_AGENT_RULES.md` is the standing coding-agent rule set
 - prompt and closeout files are the primary milestone records
 - closeout replaces separate operations/coder-response documents
 - documentation should reflect actual behavior, not intended behavior
@@ -642,6 +827,7 @@ Going forward:
 - Design for correctness before optimization
 - Safety before automation
 - Documentation that supports continuity without excessive overhead
+- Cost-aware AI coding-agent usage through standing rules and delta-focused prompts
 
 ---
 
@@ -653,6 +839,7 @@ The system should remain representable through:
 - `PROJECT_ARCHITECTURE.md` — architecture and direction
 - `MILESTONE_HISTORY.md` — milestone change log
 - `PROJECT_WORKFLOW.md` — collaboration and documentation workflow
+- `CODING_AGENT_RULES.md` — standing implementation rules for coding agents
 - Parking Lot files — deferred ideas and future work
 - milestone prompt/closeout files — detailed records for each milestone/action
 
@@ -673,6 +860,7 @@ This workflow is successful when:
 - coder knows exactly what to implement
 - clarification loops are shorter and more decisive
 - documentation overhead is reduced
+- repeated prompt boilerplate is reduced through `CODING_AGENT_RULES.md`
 - documentation still captures actual system behavior
 - regressions are minimized
 - architecture remains consistent

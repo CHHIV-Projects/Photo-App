@@ -1386,24 +1386,6 @@ export default function AdminView() {
               </button>
               <button
                 type="button"
-                className={styles.stopButton}
-                disabled={isCleanupActionLoading || intakeSourceId === ""}
-                onClick={() => {
-                  if (intakeSourceId === "") {
-                    return;
-                  }
-                  setCleanupError("");
-                  setIsCleanupActionLoading(true);
-                  runIcloudStagingCleanup({ source_id: intakeSourceId, dry_run: false })
-                    .then((res) => setCleanupStatus(res.current))
-                    .catch((err) => setCleanupError(err instanceof Error ? err.message : "Failed to start cleanup execution."))
-                    .finally(() => setIsCleanupActionLoading(false));
-                }}
-              >
-                {isCleanupActionLoading ? "Working..." : "Execute Cleanup"}
-              </button>
-              <button
-                type="button"
                 className={styles.refreshButton}
                 onClick={() => {
                   setCleanupError("");
@@ -1414,6 +1396,9 @@ export default function AdminView() {
                 Refresh Cleanup Status
               </button>
             </div>
+            <p className={styles.meta}>
+              Verified cleanup execution is available only from the guided Ingestion Source Profile flow after a fresh dry run.
+            </p>
             {cleanupError && <p className={styles.errorText}>{cleanupError}</p>}
             {cleanupStatus && (
               <>

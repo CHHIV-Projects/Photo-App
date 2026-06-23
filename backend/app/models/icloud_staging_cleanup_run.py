@@ -39,6 +39,21 @@ class IcloudStagingCleanupRun(Base):
     total_bytes_eligible: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_bytes_deleted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    total_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processed_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    current_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    protected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    verification_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    file_missing_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delete_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    manifest_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    planner_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    preview_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    authorized_dry_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    authorization_consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     skipped_reasons_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     skipped_samples_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 

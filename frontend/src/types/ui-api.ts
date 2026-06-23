@@ -1540,6 +1540,12 @@ export interface IcloudStagingCleanupRunRequest {
   dry_run: boolean;
 }
 
+export interface IcloudStagingCleanupExecuteRequest {
+  source_id: number;
+  dry_run_run_id: number;
+  explicit_confirmation: string;
+}
+
 export interface IcloudStagingCleanupRunStatus {
   run_id: number | null;
   status: string;
@@ -1555,6 +1561,18 @@ export interface IcloudStagingCleanupRunStatus {
   skipped_count: number;
   total_bytes_eligible: number;
   total_bytes_deleted: number;
+  total_files: number;
+  processed_files: number;
+  current_stage: string | null;
+  protected_count: number;
+  verification_failed_count: number;
+  file_missing_count: number;
+  delete_failed_count: number;
+  manifest_fingerprint: string | null;
+  planner_version: string | null;
+  preview_expires_at: string | null;
+  authorized_dry_run_id: number | null;
+  authorization_consumed_at: string | null;
   skipped_reasons: Record<string, number>;
   skipped_samples: Record<string, string[]>;
   report_path: string | null;
@@ -1570,4 +1588,13 @@ export interface IcloudStagingCleanupRunResponse {
   status: string;
   message: string;
   current: IcloudStagingCleanupRunStatus;
+}
+
+export interface IcloudStagingCleanupReadinessResponse {
+  generated_at: string;
+  source_id: number;
+  readiness_status: "ready" | "blocked";
+  canonical_staging_path: string | null;
+  blocking_reasons: IcloudReadinessReason[];
+  latest_dry_run: IcloudStagingCleanupRunStatus;
 }

@@ -551,6 +551,12 @@ class IcloudStagingCleanupRunRequest(BaseModel):
     dry_run: bool = True
 
 
+class IcloudStagingCleanupExecuteRequest(BaseModel):
+    source_id: int
+    dry_run_run_id: int
+    explicit_confirmation: str
+
+
 class IcloudStagingCleanupRunStatus(BaseModel):
     run_id: int | None
     status: str
@@ -566,6 +572,18 @@ class IcloudStagingCleanupRunStatus(BaseModel):
     skipped_count: int
     total_bytes_eligible: int
     total_bytes_deleted: int
+    total_files: int = 0
+    processed_files: int = 0
+    current_stage: str | None = None
+    protected_count: int = 0
+    verification_failed_count: int = 0
+    file_missing_count: int = 0
+    delete_failed_count: int = 0
+    manifest_fingerprint: str | None = None
+    planner_version: str | None = None
+    preview_expires_at: datetime | None = None
+    authorized_dry_run_id: int | None = None
+    authorization_consumed_at: datetime | None = None
     skipped_reasons: dict[str, int]
     skipped_samples: dict[str, list[str]]
     report_path: str | None
@@ -581,6 +599,15 @@ class IcloudStagingCleanupRunResponse(BaseModel):
     status: str
     message: str
     current: IcloudStagingCleanupRunStatus
+
+
+class IcloudStagingCleanupReadinessResponse(BaseModel):
+    generated_at: datetime
+    source_id: int
+    readiness_status: Literal["ready", "blocked"]
+    canonical_staging_path: str | None = None
+    blocking_reasons: list[IcloudReadinessReason] = Field(default_factory=list)
+    latest_dry_run: IcloudStagingCleanupRunStatus
 
 
 # ---------------------------------------------------------------------------

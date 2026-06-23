@@ -192,6 +192,58 @@ class AdminIngestionGuardrailsApiTests(unittest.TestCase):
         self.assertTrue(payload["operation_conflicts"]["icloud_acquisition_active"])
         mocked_start.assert_not_called()
 
+    def test_cleanup_run_rejects_legacy_direct_execution(self) -> None:
+        from unittest.mock import patch
+        from app.services.admin.icloud_staging_cleanup_execution_service import CleanupAuthorizationError
+
+        guardrail_snapshot = self._guardrail_snapshot(
+            acquisition_active=False,
+            intake_active=False,
+            cleanup_active=False,
+        )
+        with patch("app.api.admin.get_ingestion_operation_guardrail_snapshot", return_value=guardrail_snapshot), patch(
+            "app.api.admin.start_cleanup_run",
+            side_effect=CleanupAuthorizationError(
+                "Direct dry_run=false cleanup is disabled.",
+                code="GUARDED_EXECUTION_REQUIRED",
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/icloud-staging-cleanup/run",
+                json={"source_id": 12, "dry_run": False},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error_code"], "GUARDED_EXECUTION_REQUIRED")
+
+    def test_cleanup_execute_requires_guarded_authorization(self) -> None:
+        from unittest.mock import patch
+        from app.services.admin.icloud_staging_cleanup_execution_service import CleanupAuthorizationError
+
+        guardrail_snapshot = self._guardrail_snapshot(
+            acquisition_active=False,
+            intake_active=False,
+            cleanup_active=False,
+        )
+        with patch("app.api.admin.get_ingestion_operation_guardrail_snapshot", return_value=guardrail_snapshot), patch(
+            "app.api.admin.start_cleanup_execution",
+            side_effect=CleanupAuthorizationError(
+                "Explicit confirmation phrase does not match.",
+                code="CONFIRMATION_REQUIRED",
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/icloud-staging-cleanup/execute",
+                json={
+                    "source_id": 12,
+                    "dry_run_run_id": 45,
+                    "explicit_confirmation": "delete",
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error_code"], "CONFIRMATION_REQUIRED")
+
 
 if __name__ == "__main__":
     unittest.main()

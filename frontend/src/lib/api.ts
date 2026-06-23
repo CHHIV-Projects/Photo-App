@@ -40,7 +40,9 @@ import type {
   SourceReviewCreateEventRequest,
   SourceReviewCreateEventResponse,
   IcloudStagingCleanupRunRequest,
+  IcloudStagingCleanupExecuteRequest,
   IcloudStagingCleanupRunResponse,
+  IcloudStagingCleanupReadinessResponse,
   IcloudStagingCleanupStatusResponse,
   IcloudAcquisitionStatusResponse,
   IcloudAcquisitionRunStatus,
@@ -1263,6 +1265,10 @@ export function getIcloudStagingCleanupStatus(sourceId?: number): Promise<Icloud
   return apiRequest<IcloudStagingCleanupStatusResponse>(`/api/admin/icloud-staging-cleanup/status${query}`);
 }
 
+export function getIcloudStagingCleanupReadiness(sourceId: number): Promise<IcloudStagingCleanupReadinessResponse> {
+  return apiRequest<IcloudStagingCleanupReadinessResponse>(`/api/admin/icloud-staging-cleanup/readiness?source_id=${sourceId}`);
+}
+
 export function runIcloudStagingCleanup(
   req: IcloudStagingCleanupRunRequest
 ): Promise<IcloudStagingCleanupRunResponse> {
@@ -1274,4 +1280,13 @@ export function runIcloudStagingCleanup(
 
 export function runIcloudStagingCleanupDryRun(sourceId: number): Promise<IcloudStagingCleanupRunResponse> {
   return runIcloudStagingCleanup({ source_id: sourceId, dry_run: true });
+}
+
+export function executeIcloudStagingCleanup(
+  req: IcloudStagingCleanupExecuteRequest
+): Promise<IcloudStagingCleanupRunResponse> {
+  return apiRequest<IcloudStagingCleanupRunResponse>("/api/admin/icloud-staging-cleanup/execute", {
+    method: "POST",
+    body: JSON.stringify(req)
+  });
 }
