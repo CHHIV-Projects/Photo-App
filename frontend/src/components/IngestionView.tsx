@@ -3099,7 +3099,8 @@ export default function IngestionView() {
                     <option value="list_first_non_repeat">List first / non-repeat</option>
                   </select>
                   <span className={styles.formHint}>
-                    Standard downloads the requested recent items. List-first/non-repeat checks candidate filenames first and may skip download if candidates are already known.
+                    Standard downloads the requested recent items. List-first/non-repeat checks only the requested recent window.
+                    It skips downloading only when every listed candidate is already known; mixed windows download the full window.
                   </span>
                 </label>
               </div>

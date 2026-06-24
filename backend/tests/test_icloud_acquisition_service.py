@@ -180,6 +180,53 @@ class IcloudAcquisitionServiceTests(unittest.TestCase):
         mocked_start.assert_called_once()
         _, kwargs = mocked_start.call_args
         self.assertEqual(kwargs["recent_count"], 25)
+        self.assertEqual(kwargs["acquisition_mode"], ACQUISITION_MODE_STANDARD)
+
+    def test_run_endpoint_passes_non_repeat_mode(self) -> None:
+        snapshot = IcloudAcquisitionStatusSnapshot(
+            run_id=15,
+            status="running",
+            source_label="chuck_icloudpd_test",
+            source_type="cloud_export",
+            source_root_path="C:/repo/storage/exports/icloud/chuck_icloudpd_test",
+            source_registration_status="registered",
+            username="chuck@example.com",
+            staging_path="C:/repo/storage/exports/icloud/chuck_icloudpd_test",
+            recent_count=20,
+            resolved_executable="C:/tools/icloudpd.exe",
+            icloudpd_version="1.32.2",
+            started_at=None,
+            completed_at=None,
+            elapsed_seconds=None,
+            downloaded_count=0,
+            skipped_existing_count=0,
+            failed_count=0,
+            stdout_tail=None,
+            stderr_tail=None,
+            report_path=None,
+            error_code=None,
+            error_message=None,
+            stop_requested=False,
+            acquisition_mode=ACQUISITION_MODE_LIST_FIRST_NON_REPEAT,
+        )
+        result = IcloudAcquisitionRunResult(status=snapshot, message="icloudpd acquisition started.")
+
+        with patch("app.api.admin.start_icloud_acquisition_background", return_value=result) as mocked_start:
+            response = self.client.post(
+                "/api/admin/icloud-acquisition/run",
+                json={
+                    "source_label": "chuck_icloudpd_test",
+                    "username": "chuck@example.com",
+                    "recent_count": 20,
+                    "acquisition_mode": "list_first_non_repeat",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["current"]["acquisition_mode"], "list_first_non_repeat")
+        _, kwargs = mocked_start.call_args
+        self.assertEqual(kwargs["recent_count"], 20)
+        self.assertEqual(kwargs["acquisition_mode"], ACQUISITION_MODE_LIST_FIRST_NON_REPEAT)
 
     def test_run_endpoint_returns_source_not_registered_error(self) -> None:
         snapshot = IcloudAcquisitionStatusSnapshot(
