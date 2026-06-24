@@ -1,0 +1,3 @@
+# Official source pin required by milestone 12.62.15.
+# Upstream pyproject.toml pins the helper's transitive runtime dependencies.
+icloudpd @ git+https://github.com/icloud-photos-downloader/icloud_photos_downloader.git@879c561240d993d748ddb4546f935090502b16d3
