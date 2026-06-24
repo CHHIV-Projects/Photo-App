@@ -22,7 +22,10 @@ from app.services.icloud_acquisition.new_count_planner import (
     STOP_STAGED_UNKNOWN_PENDING_INTAKE,
     STOP_TARGET_NEW_COUNT_REACHED,
     STOP_TOOLING_LIMIT_REACHED,
+    ExplicitLogicalItemCandidate,
+    ExplicitLogicalResourceCandidate,
     build_new_count_plan_summary,
+    plan_explicit_new_count_selection,
     plan_new_count_selection,
 )
 
@@ -61,6 +64,100 @@ def _selected_paths(plan) -> list[str | None]:
 
 
 class IcloudNewCountPlannerTests(unittest.TestCase):
+    def test_explicit_adapter_group_preserves_live_photo_relationship(self) -> None:
+        plan = plan_explicit_new_count_selection(
+            [
+                ExplicitLogicalItemCandidate(
+                    adapter_logical_item_id="remote-item-1",
+                    grouping="live_photo_explicit",
+                    identity_ambiguous=False,
+                    resources=(
+                        ExplicitLogicalResourceCandidate(
+                            adapter_resource_id="primary_original",
+                            known_state=_candidate(
+                                "2026/06/24/IMG_2000.HEIC",
+                                already_known=True,
+                            ),
+                        ),
+                        ExplicitLogicalResourceCandidate(
+                            adapter_resource_id="live_photo_original",
+                            known_state=_candidate("2026/06/24/non_matching_name.MOV"),
+                        ),
+                    ),
+                )
+            ],
+            target_new_item_count=1,
+            candidate_scan_limit=1,
+        )
+
+        self.assertEqual(plan.classification, PLAN_CLASSIFICATION_COMPLETE)
+        self.assertEqual(plan.selected_new_item_count, 1)
+        self.assertEqual(plan.selected_new_resource_count, 1)
+        self.assertEqual(plan.items[0].adapter_logical_item_id, "remote-item-1")
+        self.assertEqual(plan.items[0].grouping, "live_photo_explicit")
+        self.assertEqual(_selected_paths(plan), ["2026/06/24/non_matching_name.MOV"])
+        self.assertEqual(
+            plan.items[0].resources[1].adapter_resource_id,
+            "live_photo_original",
+        )
+
+    def test_explicit_adapter_duplicate_item_identity_blocks(self) -> None:
+        plan = plan_explicit_new_count_selection(
+            [
+                ExplicitLogicalItemCandidate(
+                    adapter_logical_item_id="duplicate-id",
+                    grouping="primary_asset_explicit",
+                    identity_ambiguous=False,
+                    resources=(
+                        ExplicitLogicalResourceCandidate(
+                            adapter_resource_id="primary_original",
+                            known_state=_candidate("2026/06/24/IMG_2001.HEIC"),
+                        ),
+                    ),
+                ),
+                ExplicitLogicalItemCandidate(
+                    adapter_logical_item_id="duplicate-id",
+                    grouping="primary_asset_explicit",
+                    identity_ambiguous=False,
+                    resources=(
+                        ExplicitLogicalResourceCandidate(
+                            adapter_resource_id="primary_original",
+                            known_state=_candidate("2026/06/23/IMG_2002.HEIC"),
+                        ),
+                    ),
+                ),
+            ],
+            target_new_item_count=1,
+            candidate_scan_limit=2,
+        )
+
+        self.assertEqual(plan.classification, PLAN_CLASSIFICATION_BLOCKED)
+        self.assertEqual(plan.stopping_reason, STOP_LOGICAL_ITEM_IDENTITY_AMBIGUOUS)
+        self.assertEqual(plan.ambiguous_item_count, 2)
+
+    def test_explicit_adapter_unsupported_resource_relationship_blocks(self) -> None:
+        plan = plan_explicit_new_count_selection(
+            [
+                ExplicitLogicalItemCandidate(
+                    adapter_logical_item_id="remote-item-with-sidecar",
+                    grouping="adapter_explicit_unsupported_sidecar",
+                    identity_ambiguous=True,
+                    resources=(
+                        ExplicitLogicalResourceCandidate(
+                            adapter_resource_id="primary_original",
+                            known_state=_candidate("2026/06/24/IMG_2003.HEIC"),
+                        ),
+                    ),
+                )
+            ],
+            target_new_item_count=1,
+            candidate_scan_limit=1,
+        )
+
+        self.assertEqual(plan.classification, PLAN_CLASSIFICATION_BLOCKED)
+        self.assertEqual(plan.stopping_reason, STOP_LOGICAL_ITEM_IDENTITY_AMBIGUOUS)
+        self.assertEqual(plan.selected_new_item_count, 0)
+
     def test_mixed_window_selects_only_unknown_items_and_continues_past_known(self) -> None:
         plan = plan_new_count_selection(
             [

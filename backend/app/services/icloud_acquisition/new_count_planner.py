@@ -50,6 +50,7 @@ class PlannedNewCountResource:
     staged_known: bool
     unknown_identity: bool
     selected_for_download: bool = False
+    adapter_resource_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class PlannedNewCountItem:
     staged_unknown_pending_intake: bool
     selected_new: bool
     resources: tuple[PlannedNewCountResource, ...]
+    adapter_logical_item_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,24 @@ class NewCountSelectionPlan:
     remaining_unselected_new_item_count: int
     candidate_source_exhausted: bool
     items: tuple[PlannedNewCountItem, ...]
+
+
+@dataclass(frozen=True)
+class ExplicitLogicalResourceCandidate:
+    """One adapter-identified resource with source-profile known-state."""
+
+    adapter_resource_id: str
+    known_state: CandidateKnownState
+
+
+@dataclass(frozen=True)
+class ExplicitLogicalItemCandidate:
+    """One logical item whose resource relationship is supplied by the adapter."""
+
+    adapter_logical_item_id: str
+    grouping: str
+    identity_ambiguous: bool
+    resources: tuple[ExplicitLogicalResourceCandidate, ...]
 
 
 @dataclass(frozen=True)
@@ -208,7 +228,11 @@ def _group_candidates(candidates: Sequence[CandidateKnownState]) -> list[Planned
             for member in members
         )
         primary_path = next(
-            (resource.normalized_source_relative_path for resource in resources if resource.normalized_source_relative_path),
+            (
+                resource.normalized_source_relative_path
+                for resource in resources
+                if resource.normalized_source_relative_path
+            ),
             None,
         )
         items.append(
@@ -240,61 +264,13 @@ def _validate_counts(*, target_new_item_count: int, candidate_scan_limit: int) -
         raise ValueError("candidate_scan_limit must be at least target_new_item_count.")
 
 
-def _blocked_plan(
+def _plan_grouped_items(
+    all_items: Sequence[PlannedNewCountItem],
     *,
-    items: tuple[PlannedNewCountItem, ...],
     target_new_item_count: int,
     candidate_scan_limit: int,
     candidate_source_exhausted: bool,
-    blocking_reasons: tuple[str, ...],
-    stopping_reason: str,
-    guidance: str,
 ) -> NewCountSelectionPlan:
-    resources = tuple(resource for item in items for resource in item.resources)
-    return NewCountSelectionPlan(
-        classification=PLAN_CLASSIFICATION_BLOCKED,
-        stopping_reason=stopping_reason,
-        blocking_reasons=blocking_reasons,
-        guidance=guidance,
-        target_new_item_count=target_new_item_count,
-        candidate_scan_limit=candidate_scan_limit,
-        candidate_scan_item_count=len(items),
-        candidate_resource_count=len(resources),
-        known_skipped_item_count=sum(1 for item in items if item.already_known),
-        known_skipped_resource_count=sum(1 for resource in resources if resource.already_known),
-        selected_new_item_count=0,
-        selected_new_resource_count=0,
-        staged_pending_item_count=sum(1 for item in items if item.staged_unknown_pending_intake),
-        staged_pending_resource_count=sum(
-            1 for resource in resources if resource.staged_known and not resource.already_known
-        ),
-        unknown_identity_resource_count=sum(1 for resource in resources if resource.unknown_identity),
-        ambiguous_item_count=sum(1 for item in items if item.identity_ambiguous),
-        remaining_unselected_new_item_count=sum(1 for item in items if not item.already_known),
-        candidate_source_exhausted=candidate_source_exhausted,
-        items=items,
-    )
-
-
-def plan_new_count_selection(
-    candidates: Sequence[CandidateKnownState],
-    *,
-    target_new_item_count: int,
-    candidate_scan_limit: int = DEFAULT_CANDIDATE_SCAN_LIMIT,
-    candidate_source_exhausted: bool = False,
-) -> NewCountSelectionPlan:
-    """Plan unknown resources for up to ``target_new_item_count`` logical items.
-
-    Candidates must be ordered newest to oldest and already evaluated against
-    one selected Source Profile.  The function performs no I/O and never starts
-    acquisition.
-    """
-
-    _validate_counts(
-        target_new_item_count=target_new_item_count,
-        candidate_scan_limit=candidate_scan_limit,
-    )
-    all_items = _group_candidates(candidates)
     scan_limit_truncated_candidates = len(all_items) > candidate_scan_limit
     scan_limit_was_reached = (
         scan_limit_truncated_candidates
@@ -394,6 +370,175 @@ def plan_new_count_selection(
         remaining_unselected_new_item_count=unselected_new_count,
         candidate_source_exhausted=candidate_source_exhausted,
         items=planned_items_tuple,
+    )
+
+
+def _blocked_plan(
+    *,
+    items: tuple[PlannedNewCountItem, ...],
+    target_new_item_count: int,
+    candidate_scan_limit: int,
+    candidate_source_exhausted: bool,
+    blocking_reasons: tuple[str, ...],
+    stopping_reason: str,
+    guidance: str,
+) -> NewCountSelectionPlan:
+    resources = tuple(resource for item in items for resource in item.resources)
+    return NewCountSelectionPlan(
+        classification=PLAN_CLASSIFICATION_BLOCKED,
+        stopping_reason=stopping_reason,
+        blocking_reasons=blocking_reasons,
+        guidance=guidance,
+        target_new_item_count=target_new_item_count,
+        candidate_scan_limit=candidate_scan_limit,
+        candidate_scan_item_count=len(items),
+        candidate_resource_count=len(resources),
+        known_skipped_item_count=sum(1 for item in items if item.already_known),
+        known_skipped_resource_count=sum(1 for resource in resources if resource.already_known),
+        selected_new_item_count=0,
+        selected_new_resource_count=0,
+        staged_pending_item_count=sum(1 for item in items if item.staged_unknown_pending_intake),
+        staged_pending_resource_count=sum(
+            1 for resource in resources if resource.staged_known and not resource.already_known
+        ),
+        unknown_identity_resource_count=sum(1 for resource in resources if resource.unknown_identity),
+        ambiguous_item_count=sum(1 for item in items if item.identity_ambiguous),
+        remaining_unselected_new_item_count=sum(1 for item in items if not item.already_known),
+        candidate_source_exhausted=candidate_source_exhausted,
+        items=items,
+    )
+
+
+def plan_new_count_selection(
+    candidates: Sequence[CandidateKnownState],
+    *,
+    target_new_item_count: int,
+    candidate_scan_limit: int = DEFAULT_CANDIDATE_SCAN_LIMIT,
+    candidate_source_exhausted: bool = False,
+) -> NewCountSelectionPlan:
+    """Plan unknown resources for up to ``target_new_item_count`` logical items.
+
+    Candidates must be ordered newest to oldest and already evaluated against
+    one selected Source Profile.  The function performs no I/O and never starts
+    acquisition.
+    """
+
+    _validate_counts(
+        target_new_item_count=target_new_item_count,
+        candidate_scan_limit=candidate_scan_limit,
+    )
+    return _plan_grouped_items(
+        _group_candidates(candidates),
+        target_new_item_count=target_new_item_count,
+        candidate_scan_limit=candidate_scan_limit,
+        candidate_source_exhausted=candidate_source_exhausted,
+    )
+
+
+def plan_explicit_new_count_selection(
+    candidates: Sequence[ExplicitLogicalItemCandidate],
+    *,
+    target_new_item_count: int,
+    candidate_scan_limit: int = DEFAULT_CANDIDATE_SCAN_LIMIT,
+    candidate_source_exhausted: bool = False,
+) -> NewCountSelectionPlan:
+    """Plan adapter-grouped logical items without filename-based reconstruction."""
+
+    _validate_counts(
+        target_new_item_count=target_new_item_count,
+        candidate_scan_limit=candidate_scan_limit,
+    )
+
+    item_id_counts: dict[str, int] = {}
+    path_item_indexes: dict[str, set[int]] = {}
+    for index, item in enumerate(candidates):
+        item_id = item.adapter_logical_item_id.strip()
+        if item_id:
+            item_id_counts[item_id] = item_id_counts.get(item_id, 0) + 1
+        for resource in item.resources:
+            path = _normalize_path(resource.known_state.normalized_source_relative_path)
+            if path is not None:
+                path_item_indexes.setdefault(path.casefold(), set()).add(index)
+
+    collision_item_indexes = {
+        index
+        for indexes in path_item_indexes.values()
+        if len(indexes) > 1
+        for index in indexes
+    }
+    planned_candidates: list[PlannedNewCountItem] = []
+    for index, item in enumerate(candidates):
+        item_id = item.adapter_logical_item_id.strip()
+        resource_ids = [resource.adapter_resource_id.strip() for resource in item.resources]
+        resource_paths = [
+            _normalize_path(resource.known_state.normalized_source_relative_path)
+            for resource in item.resources
+        ]
+        duplicate_resource_ids = len(resource_ids) != len(set(resource_ids))
+        normalized_resource_paths = [path.casefold() for path in resource_paths if path]
+        duplicate_resource_paths = len(normalized_resource_paths) != len(
+            set(normalized_resource_paths)
+        )
+        identity_ambiguous = (
+            item.identity_ambiguous
+            or not item_id
+            or item_id_counts.get(item_id, 0) > 1
+            or not item.resources
+            or any(not resource_id for resource_id in resource_ids)
+            or duplicate_resource_ids
+            or duplicate_resource_paths
+            or index in collision_item_indexes
+        )
+
+        resources = tuple(
+            PlannedNewCountResource(
+                raw_line=resource.known_state.raw_line,
+                normalized_source_relative_path=_normalize_path(
+                    resource.known_state.normalized_source_relative_path
+                ),
+                known_state=resource.known_state.known_state,
+                already_known=resource.known_state.already_known,
+                staged_known=resource.known_state.staged_known,
+                unknown_identity=(
+                    resource.known_state.unknown_identity
+                    or _normalize_path(resource.known_state.normalized_source_relative_path) is None
+                    or not resource.adapter_resource_id.strip()
+                ),
+                adapter_resource_id=resource.adapter_resource_id.strip() or None,
+            )
+            for resource in item.resources
+        )
+        primary_path = next(
+            (
+                resource.normalized_source_relative_path
+                for resource in resources
+                if resource.normalized_source_relative_path
+            ),
+            None,
+        )
+        planned_candidates.append(
+            PlannedNewCountItem(
+                logical_item_key=primary_path or f"adapter_item:{index}",
+                grouping=item.grouping or "adapter_explicit",
+                identity_ambiguous=identity_ambiguous,
+                already_known=bool(resources) and all(
+                    resource.already_known for resource in resources
+                ),
+                staged_unknown_pending_intake=any(
+                    resource.staged_known and not resource.already_known
+                    for resource in resources
+                ),
+                selected_new=False,
+                resources=resources,
+                adapter_logical_item_id=item_id or None,
+            )
+        )
+
+    return _plan_grouped_items(
+        planned_candidates,
+        target_new_item_count=target_new_item_count,
+        candidate_scan_limit=candidate_scan_limit,
+        candidate_source_exhausted=candidate_source_exhausted,
     )
 
 
