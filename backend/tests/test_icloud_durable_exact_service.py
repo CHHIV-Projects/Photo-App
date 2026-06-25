@@ -377,6 +377,45 @@ class IcloudDurableExactServiceTests(unittest.TestCase):
         self.assertEqual(batch.failure_reason, "partial_publication_detected")
         self.assertEqual(batch.next_safe_action, durable.NEXT_INSPECT_REPORT)
 
+    def test_ordinary_still_only_blocks_non_still_selection_before_download(self) -> None:
+        still = b"still"
+        motion = b"motion"
+        still_path = "2026/06/24/IMG_804.HEIC"
+        motion_path = "2026/06/24/IMG_804_HEVC.MOV"
+        helper = _DurableFixtureHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-live-photo",
+                        (
+                            _resource("primary_original", still_path, still),
+                            _resource("live_photo_original", motion_path, motion),
+                        ),
+                    ),
+                )
+            ),
+            content_by_relative_path={still_path: still, motion_path: motion},
+        )
+
+        result = durable.run_durable_exact_selection_batch(
+            self.db,
+            source_id=self.source.id,
+            target_new_item_count=1,
+            candidate_scan_limit=1,
+            helper_client=helper,  # type: ignore[arg-type]
+            ordinary_still_only=True,
+        )
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.stop_reason, durable.STOP_SELECTED_CANDIDATE_NOT_ORDINARY_STILL)
+        self.assertFalse(result.batch_ready_for_source_intake)
+        self.assertEqual(helper.download_calls, 0)
+        batch = self.db.get(IcloudAcquisitionBatch, result.batch_id)
+        self.assertIsNotNone(batch)
+        self.assertEqual(batch.status, durable.STATUS_BATCH_BLOCKED)
+        self.assertFalse((self.staging_root / still_path).exists())
+        self.assertFalse((self.staging_root / motion_path).exists())
+
     def test_public_status_filters_internal_runs_but_global_active_query_sees_them(self) -> None:
         public_run = IcloudAcquisitionRun(
             status=acquisition.STATUS_COMPLETED,

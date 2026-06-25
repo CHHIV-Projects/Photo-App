@@ -44,6 +44,8 @@ from app.services.icloud_acquisition.exact_selection_protocol import (
     AUTHENTICATED,
     OPERATION_DOWNLOAD_SELECTED,
     PROTOCOL_VERSION,
+    RESOURCE_LIVE_PHOTO_ORIGINAL,
+    RESOURCE_PRIMARY_ORIGINAL,
     decode_verification_checksum,
     validate_helper_request,
 )
@@ -54,6 +56,7 @@ from app.services.icloud_acquisition.execution_service import (
     STATUS_FAILED,
     STATUS_RUNNING,
 )
+from app.services.icloud_acquisition.new_count_planner import STILL_EXTENSIONS
 from app.services.icloud_acquisition.schema import ensure_icloud_acquisition_schema
 
 
@@ -85,6 +88,8 @@ NEXT_RESOLVE_STAGED_UNKNOWN = "Resolve staged unknown files by running Source In
 NEXT_INSPECT_PARTIAL = "Clear or inspect partial workspace"
 NEXT_INSPECT_REPORT = "Stop and inspect report"
 NEXT_RETRY_NETWORK = "Retry after network/cloud issue"
+
+STOP_SELECTED_CANDIDATE_NOT_ORDINARY_STILL = "selected_candidate_not_ordinary_still"
 
 _TRANSIENT_FAILURE_REASONS = {
     "helper_timeout",
@@ -428,6 +433,101 @@ def _create_batch_from_preparation(
     return batch
 
 
+def _preparation_selects_one_ordinary_still(preparation: ExactSelectionPreparation) -> bool:
+    """Return true only for one selected still-image primary resource.
+
+    This is intentionally stricter than the generic durable path. It is used by
+    the 12.62.18 internal validation script to make the real-account execution
+    gate durable, not merely a pre-execution advisory.
+    """
+
+    plan = preparation.plan
+    listing = preparation.listing
+    if plan is None or listing is None:
+        return False
+    selected_items = [item for item in plan.items if item.selected_new]
+    if len(selected_items) != 1:
+        return False
+
+    planned_item = selected_items[0]
+    planned_resources = {
+        resource.adapter_resource_id: resource for resource in planned_item.resources
+    }
+    selected_resources = [
+        resource for resource in planned_item.resources if resource.selected_for_download
+    ]
+    if len(selected_resources) != 1:
+        return False
+    if RESOURCE_LIVE_PHOTO_ORIGINAL in planned_resources:
+        return False
+
+    primary = planned_resources.get(RESOURCE_PRIMARY_ORIGINAL)
+    if primary is None or primary.already_known or not primary.selected_for_download:
+        return False
+
+    listed_item = next(
+        (
+            item
+            for item in listing.items
+            if item.item_id == planned_item.adapter_logical_item_id
+        ),
+        None,
+    )
+    if listed_item is None:
+        return False
+    listed_primary = next(
+        (
+            resource
+            for resource in listed_item.resources
+            if resource.resource_id == RESOURCE_PRIMARY_ORIGINAL
+        ),
+        None,
+    )
+    if listed_primary is None:
+        return False
+
+    extension = Path(listed_primary.relative_path).suffix.casefold()
+    return listed_primary.content_type.casefold().startswith("image/") or extension in STILL_EXTENSIONS
+
+
+def _block_batch_before_download(
+    db_session: Session,
+    *,
+    run: IcloudAcquisitionRun,
+    batch: IcloudAcquisitionBatch | None,
+    reason: str,
+) -> DurableExactRunResult:
+    if batch is not None:
+        batch.status = STATUS_BATCH_BLOCKED
+        batch.failure_reason = reason
+        batch.next_safe_action = _next_safe_action(reason)
+        batch.finished_at = _utc_now()
+        for item in batch.items:
+            item.status = STATUS_ITEM_BLOCKED
+            item.failure_reason = reason
+            item.finished_at = batch.finished_at
+            for resource in item.resources:
+                resource.status = STATUS_RESOURCE_BLOCKED
+                resource.failure_reason = reason
+        db_session.commit()
+    _finalize_run(
+        db_session,
+        run,
+        status=STATUS_RUN_BLOCKED,
+        stop_reason=reason,
+        failure_reason=None,
+        next_safe_action=_next_safe_action(reason),
+    )
+    return DurableExactRunResult(
+        run_id=run.id,
+        batch_id=batch.id if batch is not None else None,
+        status=run.status,
+        stop_reason=run.stop_reason,
+        next_safe_action=run.next_safe_action,
+        batch_ready_for_source_intake=False,
+    )
+
+
 def _batch_resources(batch: IcloudAcquisitionBatch) -> list[IcloudAcquisitionResource]:
     return [resource for item in batch.items for resource in item.resources]
 
@@ -681,6 +781,7 @@ def run_durable_exact_selection_batch(
     candidate_scan_limit: int,
     helper_client: ExactSelectionHelperClient,
     created_by: str = "internal_exact_phase1",
+    ordinary_still_only: bool = False,
 ) -> DurableExactRunResult:
     """Plan and execute one durable exact-selection acquisition batch."""
 
@@ -741,6 +842,14 @@ def run_durable_exact_selection_batch(
                 stop_reason=run.stop_reason,
                 next_safe_action=run.next_safe_action,
                 batch_ready_for_source_intake=False,
+            )
+
+        if ordinary_still_only and not _preparation_selects_one_ordinary_still(preparation):
+            return _block_batch_before_download(
+                db_session,
+                run=run,
+                batch=batch,
+                reason=STOP_SELECTED_CANDIDATE_NOT_ORDINARY_STILL,
             )
 
         _heartbeat(db_session, run)
