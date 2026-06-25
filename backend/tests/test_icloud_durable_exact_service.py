@@ -178,11 +178,12 @@ class _DurableFixtureHelper:
             "failed_resource_count": 0,
             "items": [
                 {
-                    "selection_index": 1,
+                    "selection_index": index,
                     "status": "completed",
                     "error_code": None,
                     "resources": [],
                 }
+                for index, _selected_item in enumerate(selected_items, start=1)  # type: ignore[arg-type]
             ],
         }
 
@@ -415,6 +416,40 @@ class IcloudDurableExactServiceTests(unittest.TestCase):
         self.assertEqual(batch.status, durable.STATUS_BATCH_BLOCKED)
         self.assertFalse((self.staging_root / still_path).exists())
         self.assertFalse((self.staging_root / motion_path).exists())
+
+    def test_ordinary_still_only_allows_two_ordinary_stills_before_download(self) -> None:
+        first = b"first still"
+        second = b"second still"
+        first_path = "2026/06/24/IMG_805.JPG"
+        second_path = "2026/06/24/IMG_806.JPG"
+        helper = _DurableFixtureHelper(
+            _listing(
+                (
+                    _item("remote-still-one", (_resource("primary_original", first_path, first),)),
+                    _item("remote-still-two", (_resource("primary_original", second_path, second),)),
+                )
+            ),
+            content_by_relative_path={first_path: first, second_path: second},
+        )
+
+        result = durable.run_durable_exact_selection_batch(
+            self.db,
+            source_id=self.source.id,
+            target_new_item_count=2,
+            candidate_scan_limit=2,
+            helper_client=helper,  # type: ignore[arg-type]
+            ordinary_still_only=True,
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertTrue(result.batch_ready_for_source_intake)
+        batch = self.db.get(IcloudAcquisitionBatch, result.batch_id)
+        self.assertIsNotNone(batch)
+        self.assertEqual(batch.selected_new_item_count, 2)
+        self.assertEqual(batch.selected_new_resource_count, 2)
+        self.assertEqual(helper.download_calls, 1)
+        self.assertTrue((self.staging_root / first_path).is_file())
+        self.assertTrue((self.staging_root / second_path).is_file())
 
     def test_public_status_filters_internal_runs_but_global_active_query_sees_them(self) -> None:
         public_run = IcloudAcquisitionRun(

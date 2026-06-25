@@ -433,12 +433,14 @@ def _create_batch_from_preparation(
     return batch
 
 
-def _preparation_selects_one_ordinary_still(preparation: ExactSelectionPreparation) -> bool:
-    """Return true only for one selected still-image primary resource.
+def _preparation_selects_only_ordinary_stills(preparation: ExactSelectionPreparation) -> bool:
+    """Return true only when all selected items are still-image primaries.
 
     This is intentionally stricter than the generic durable path. It is used by
     the 12.62.18 internal validation script to make the real-account execution
-    gate durable, not merely a pre-execution advisory.
+    gate durable, not merely a pre-execution advisory. 12.62.19 generalizes the
+    same safety gate to small internal multi-batch validation where a batch may
+    select more than one ordinary still.
     """
 
     plan = preparation.plan
@@ -446,48 +448,54 @@ def _preparation_selects_one_ordinary_still(preparation: ExactSelectionPreparati
     if plan is None or listing is None:
         return False
     selected_items = [item for item in plan.items if item.selected_new]
-    if len(selected_items) != 1:
+    if not selected_items:
         return False
 
-    planned_item = selected_items[0]
-    planned_resources = {
-        resource.adapter_resource_id: resource for resource in planned_item.resources
-    }
-    selected_resources = [
-        resource for resource in planned_item.resources if resource.selected_for_download
-    ]
-    if len(selected_resources) != 1:
-        return False
-    if RESOURCE_LIVE_PHOTO_ORIGINAL in planned_resources:
-        return False
+    listing_by_id = {item.item_id: item for item in listing.items}
+    for planned_item in selected_items:
+        planned_resources = {
+            resource.adapter_resource_id: resource for resource in planned_item.resources
+        }
+        selected_resources = [
+            resource for resource in planned_item.resources if resource.selected_for_download
+        ]
+        if len(selected_resources) != 1:
+            return False
+        if RESOURCE_LIVE_PHOTO_ORIGINAL in planned_resources:
+            return False
 
-    primary = planned_resources.get(RESOURCE_PRIMARY_ORIGINAL)
-    if primary is None or primary.already_known or not primary.selected_for_download:
-        return False
+        primary = planned_resources.get(RESOURCE_PRIMARY_ORIGINAL)
+        if primary is None or primary.already_known or not primary.selected_for_download:
+            return False
 
-    listed_item = next(
-        (
-            item
-            for item in listing.items
-            if item.item_id == planned_item.adapter_logical_item_id
-        ),
-        None,
-    )
-    if listed_item is None:
-        return False
-    listed_primary = next(
-        (
-            resource
-            for resource in listed_item.resources
-            if resource.resource_id == RESOURCE_PRIMARY_ORIGINAL
-        ),
-        None,
-    )
-    if listed_primary is None:
-        return False
+        listed_item = listing_by_id.get(planned_item.adapter_logical_item_id or "")
+        if listed_item is None or listed_item.identity_ambiguous:
+            return False
+        blocking_reasons = [
+            reason
+            for reason in listed_item.unsupported_reasons
+            if reason != "unsupported_adjustment_metadata_only"
+        ]
+        if blocking_reasons:
+            return False
+        listed_primary = next(
+            (
+                resource
+                for resource in listed_item.resources
+                if resource.resource_id == RESOURCE_PRIMARY_ORIGINAL
+            ),
+            None,
+        )
+        if listed_primary is None:
+            return False
 
-    extension = Path(listed_primary.relative_path).suffix.casefold()
-    return listed_primary.content_type.casefold().startswith("image/") or extension in STILL_EXTENSIONS
+        extension = Path(listed_primary.relative_path).suffix.casefold()
+        if not (
+            listed_primary.content_type.casefold().startswith("image/")
+            or extension in STILL_EXTENSIONS
+        ):
+            return False
+    return True
 
 
 def _block_batch_before_download(
@@ -844,7 +852,7 @@ def run_durable_exact_selection_batch(
                 batch_ready_for_source_intake=False,
             )
 
-        if ordinary_still_only and not _preparation_selects_one_ordinary_still(preparation):
+        if ordinary_still_only and not _preparation_selects_only_ordinary_stills(preparation):
             return _block_batch_before_download(
                 db_session,
                 run=run,
