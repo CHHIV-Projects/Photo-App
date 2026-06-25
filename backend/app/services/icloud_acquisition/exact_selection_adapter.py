@@ -8,12 +8,13 @@ bounded secret-free JSON pipe.
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 import json
 from pathlib import Path
 import secrets
 import subprocess
+import tempfile
+import time
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
@@ -28,6 +29,7 @@ from app.services.icloud_acquisition.exact_selection_protocol import (
     OPERATION_LIST,
     PROTOCOL_VERSION,
     ExactSelectionProtocolError,
+    decode_verification_checksum,
     normalize_relative_resource_path,
     validate_helper_request,
 )
@@ -57,6 +59,7 @@ DEFAULT_LIBRARY = "PrimarySync"
 DEFAULT_HELPER_TIMEOUT_SECONDS = int(
     getattr(settings, "icloud_exact_helper_timeout_seconds", 7200)
 )
+_NON_BLOCKING_UNSUPPORTED_REASONS = frozenset({"unsupported_adjustment_metadata_only"})
 
 PREPARATION_READY = "ready"
 PREPARATION_BLOCKED = "blocked"
@@ -168,11 +171,82 @@ class ExactSelectionHelperClient:
         helper_script: Path = HELPER_SCRIPT,
         timeout_seconds: int = DEFAULT_HELPER_TIMEOUT_SECONDS,
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+        heartbeat_callback: Callable[[], None] | None = None,
+        stop_requested_callback: Callable[[], bool] | None = None,
+        poll_interval_seconds: float = 1.0,
     ) -> None:
         self.helper_python = helper_python or resolve_exact_selection_helper_python()
         self.helper_script = helper_script.resolve()
         self.timeout_seconds = timeout_seconds
         self._runner = runner
+        self.heartbeat_callback = heartbeat_callback
+        self.stop_requested_callback = stop_requested_callback
+        self.poll_interval_seconds = poll_interval_seconds
+
+    def _invoke_with_polling(
+        self,
+        command: list[str],
+        *,
+        request_json: str,
+    ) -> subprocess.CompletedProcess[str]:
+        started = time.monotonic()
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stdout_file:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(BACKEND_ROOT),
+                    stdin=subprocess.PIPE,
+                    stdout=stdout_file,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+            except OSError as exc:
+                raise ExactSelectionPrototypeError(
+                    "The exact-selection helper could not start.",
+                    code="helper_crash",
+                ) from exc
+            try:
+                if process.stdin is None:
+                    raise ExactSelectionPrototypeError(
+                        "The exact-selection helper stdin pipe could not be opened.",
+                        code="helper_crash",
+                    )
+                process.stdin.write(request_json)
+                process.stdin.close()
+                while process.poll() is None:
+                    if self.heartbeat_callback is not None:
+                        self.heartbeat_callback()
+                    if (
+                        self.stop_requested_callback is not None
+                        and self.stop_requested_callback()
+                    ):
+                        process.terminate()
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=10)
+                        raise ExactSelectionPrototypeError(
+                            "The exact-selection helper was stopped.",
+                            code="user_stopped",
+                        )
+                    if time.monotonic() - started > self.timeout_seconds:
+                        process.kill()
+                        process.wait(timeout=10)
+                        raise ExactSelectionPrototypeError(
+                            "The exact-selection helper timed out.",
+                            code="helper_timeout",
+                        )
+                    time.sleep(max(0.1, self.poll_interval_seconds))
+                if self.heartbeat_callback is not None:
+                    self.heartbeat_callback()
+                stdout_file.seek(0)
+                stdout = stdout_file.read(MAX_HELPER_JSON_BYTES + 1)
+                return subprocess.CompletedProcess(command, process.returncode, stdout=stdout)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
 
     def invoke(self, request: dict[str, Any]) -> dict[str, Any]:
         validated_request = validate_helper_request(request)
@@ -193,27 +267,31 @@ class ExactSelectionHelperClient:
                 "The exact-selection helper request exceeded its bound.",
                 code="helper_request_too_large",
             )
-        try:
-            completed = self._runner(
-                [str(self.helper_python), str(self.helper_script)],
-                cwd=str(BACKEND_ROOT),
-                input=request_json,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                check=False,
-                timeout=self.timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ExactSelectionPrototypeError(
-                "The exact-selection helper timed out.",
-                code="helper_timeout",
-            ) from exc
-        except OSError as exc:
-            raise ExactSelectionPrototypeError(
-                "The exact-selection helper could not start.",
-                code="helper_crash",
-            ) from exc
+        command = [str(self.helper_python), str(self.helper_script)]
+        if self._runner is subprocess.run:
+            completed = self._invoke_with_polling(command, request_json=request_json)
+        else:
+            try:
+                completed = self._runner(
+                    command,
+                    cwd=str(BACKEND_ROOT),
+                    input=request_json,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    check=False,
+                    timeout=self.timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ExactSelectionPrototypeError(
+                    "The exact-selection helper timed out.",
+                    code="helper_timeout",
+                ) from exc
+            except OSError as exc:
+                raise ExactSelectionPrototypeError(
+                    "The exact-selection helper could not start.",
+                    code="helper_crash",
+                ) from exc
 
         stdout = completed.stdout or ""
         if len(stdout.encode("utf-8")) > MAX_HELPER_JSON_BYTES:
@@ -313,17 +391,12 @@ def _bounded_string(value: object, field: str, *, max_length: int) -> str:
 def _validate_checksum(value: object) -> str:
     checksum = _bounded_string(value, "expected_checksum", max_length=256)
     try:
-        decoded = base64.b64decode(checksum, validate=True)
-    except (ValueError, TypeError) as exc:
+        decode_verification_checksum(checksum)
+    except ExactSelectionProtocolError as exc:
         raise ExactSelectionPrototypeError(
             "The helper returned invalid verification metadata.",
             code="helper_invalid_response",
         ) from exc
-    if len(decoded) not in {16, 20, 32}:
-        raise ExactSelectionPrototypeError(
-            "The helper returned unsupported verification metadata.",
-            code="helper_invalid_response",
-        )
     return checksum
 
 
@@ -350,6 +423,7 @@ def parse_listing_response(
         )
 
     items: list[ExactSelectionLogicalItem] = []
+    raw_ambiguous_flags: list[bool] = []
     for item_value in items_value:
         if not isinstance(item_value, dict):
             raise ExactSelectionPrototypeError(
@@ -407,17 +481,27 @@ def parse_listing_response(
                 "The helper returned invalid unsupported-reason data.",
                 code="helper_invalid_response",
             )
-        unsupported_reasons = tuple(
+        raw_unsupported_reasons = tuple(
             _bounded_string(reason, "unsupported_reason", max_length=128)
             for reason in unsupported
+        )
+        raw_identity_ambiguous = item_value.get("identity_ambiguous") is True or bool(
+            raw_unsupported_reasons
+        )
+        raw_ambiguous_flags.append(raw_identity_ambiguous)
+        unsupported_reasons = tuple(
+            reason
+            for reason in raw_unsupported_reasons
+            if reason not in _NON_BLOCKING_UNSUPPORTED_REASONS
+        )
+        identity_ambiguous = bool(unsupported_reasons) or (
+            item_value.get("identity_ambiguous") is True and not raw_unsupported_reasons
         )
         items.append(
             ExactSelectionLogicalItem(
                 item_id=_bounded_string(item_value.get("item_id"), "item_id", max_length=512),
                 grouping=_bounded_string(item_value.get("grouping"), "grouping", max_length=128),
-                identity_ambiguous=(
-                    item_value.get("identity_ambiguous") is True or bool(unsupported_reasons)
-                ),
+                identity_ambiguous=identity_ambiguous,
                 unsupported_reasons=unsupported_reasons,
                 created_at=_bounded_string(
                     item_value.get("created_at"),
@@ -438,10 +522,11 @@ def parse_listing_response(
     ambiguous_item_count = response.get("ambiguous_item_count")
     actual_resource_count = sum(len(item.resources) for item in items)
     actual_ambiguous_count = sum(1 for item in items if item.identity_ambiguous)
+    raw_ambiguous_count = sum(1 for is_ambiguous in raw_ambiguous_flags if is_ambiguous)
     if (
         logical_item_count != len(items)
         or resource_file_count != actual_resource_count
-        or ambiguous_item_count != actual_ambiguous_count
+        or ambiguous_item_count not in {actual_ambiguous_count, raw_ambiguous_count}
     ):
         raise ExactSelectionPrototypeError(
             "The helper listing counts did not match its candidate data.",

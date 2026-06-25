@@ -42,6 +42,41 @@ class ExactSelectionProtocolError(ValueError):
         self.code = code
 
 
+def decode_verification_checksum(value: object) -> tuple[str, bytes]:
+    """Decode supported provider checksum metadata.
+
+    Apple CloudKit commonly returns a one-byte algorithm marker (``0x01``)
+    followed by a 20-byte value. Real iCloud downloads have shown that value
+    should not be treated as a content digest for the bytes returned by the
+    download URL. Raw MD5/SHA-1/SHA-256 digests remain accepted for fixtures or
+    providers that do supply content-verifiable digests. Unknown marker formats
+    are rejected.
+    """
+
+    if not isinstance(value, str) or not value:
+        raise ExactSelectionProtocolError(
+            "expected_checksum is required.",
+            code="verification_metadata_unavailable",
+        )
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ExactSelectionProtocolError(
+            "expected_checksum must be valid base64.",
+            code="verification_metadata_unavailable",
+        ) from exc
+    if len(decoded) == 21 and decoded[0] == 0x01:
+        return "icloud_file_checksum", decoded[1:]
+    raw_algorithms = {16: "md5", 20: "sha1", 32: "sha256"}
+    algorithm = raw_algorithms.get(len(decoded))
+    if algorithm is None:
+        raise ExactSelectionProtocolError(
+            "expected_checksum uses an unsupported digest.",
+            code="verification_metadata_unavailable",
+        )
+    return algorithm, decoded
+
+
 def _required_string(
     payload: dict[str, Any],
     field: str,
@@ -166,16 +201,7 @@ def validate_helper_request(payload: object) -> dict[str, Any]:
                 "expected_checksum",
                 max_length=256,
             )
-            try:
-                decoded_checksum = base64.b64decode(expected_checksum, validate=True)
-            except (ValueError, TypeError) as exc:
-                raise ExactSelectionProtocolError(
-                    "expected_checksum must be valid base64."
-                ) from exc
-            if len(decoded_checksum) not in {16, 20, 32}:
-                raise ExactSelectionProtocolError(
-                    "expected_checksum uses an unsupported digest."
-                )
+            decode_verification_checksum(expected_checksum)
 
             cleaned_resources.append(
                 {

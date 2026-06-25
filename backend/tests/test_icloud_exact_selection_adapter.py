@@ -27,6 +27,7 @@ from app.services.icloud_acquisition.exact_selection_adapter import (
     ExactSelectionPrototypeError,
     ExactSelectionResource,
     execute_prepared_exact_selection,
+    parse_listing_response,
     prepare_exact_selection_prototype,
 )
 from app.services.icloud_acquisition.exact_selection_protocol import (
@@ -284,6 +285,96 @@ class IcloudExactSelectionAdapterTests(unittest.TestCase):
         self.assertNotIn(remote_live, summary_text)
         self.assertNotIn(remote_still, summary_text)
 
+    def test_listing_parser_accepts_apple_marker_prefixed_sha1(self) -> None:
+        content = b"apple-checksum-fixture"
+        apple_checksum = base64.b64encode(
+            b"\x01" + hashlib.sha1(content).digest()
+        ).decode("ascii")
+
+        listing = parse_listing_response(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "operation": "list",
+                "status": "completed",
+                "auth_state": "authenticated",
+                "stop_reason": "no_more_candidates",
+                "source_exhausted": True,
+                "scan_limit_reached": False,
+                "logical_item_count": 1,
+                "resource_file_count": 1,
+                "ambiguous_item_count": 0,
+                "items": [
+                    {
+                        "item_id": "transient-fixture-id",
+                        "grouping": "primary_asset_explicit",
+                        "identity_ambiguous": False,
+                        "unsupported_reasons": [],
+                        "created_at": "2026-06-24T10:00:00+00:00",
+                        "added_at": "2026-06-24T10:01:00+00:00",
+                        "resources": [
+                            {
+                                "resource_id": "primary_original",
+                                "role": "primary_original",
+                                "relative_path": "2026/06/24/IMG_900.JPG",
+                                "expected_size": len(content),
+                                "expected_checksum": apple_checksum,
+                                "content_type": "public.jpeg",
+                            }
+                        ],
+                    }
+                ],
+            },
+            candidate_scan_limit=25,
+        )
+
+        self.assertEqual(listing.logical_item_count, 1)
+        self.assertEqual(listing.items[0].resources[0].expected_checksum, apple_checksum)
+
+    def test_listing_parser_treats_adjustment_metadata_only_as_non_blocking(
+        self,
+    ) -> None:
+        content = b"metadata-only-fixture"
+
+        listing = parse_listing_response(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "operation": "list",
+                "status": "completed",
+                "auth_state": "authenticated",
+                "stop_reason": "no_more_candidates",
+                "source_exhausted": True,
+                "scan_limit_reached": False,
+                "logical_item_count": 1,
+                "resource_file_count": 1,
+                "ambiguous_item_count": 1,
+                "items": [
+                    {
+                        "item_id": "metadata-only-fixture-id",
+                        "grouping": "primary_asset_explicit",
+                        "identity_ambiguous": True,
+                        "unsupported_reasons": ["unsupported_adjustment_metadata_only"],
+                        "created_at": "2026-06-24T10:00:00+00:00",
+                        "added_at": "2026-06-24T10:01:00+00:00",
+                        "resources": [
+                            {
+                                "resource_id": "primary_original",
+                                "role": "primary_original",
+                                "relative_path": "2026/06/24/IMG_901.JPG",
+                                "expected_size": len(content),
+                                "expected_checksum": _checksum(content),
+                                "content_type": "public.jpeg",
+                            }
+                        ],
+                    }
+                ],
+            },
+            candidate_scan_limit=25,
+        )
+
+        self.assertEqual(listing.ambiguous_item_count, 0)
+        self.assertFalse(listing.items[0].identity_ambiguous)
+        self.assertEqual(listing.items[0].unsupported_reasons, ())
+
     def test_staged_unknown_blocks_before_helper_or_cloud_access(self) -> None:
         staged = self.staging_root / "2026" / "06" / "24" / "NEW.JPG"
         staged.parent.mkdir(parents=True)
@@ -440,6 +531,44 @@ class IcloudExactSelectionAdapterTests(unittest.TestCase):
                 }
             )
         self.assertEqual(context.exception.code, "helper_forbidden_output")
+
+    def test_default_subprocess_path_polls_with_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_root:
+            helper_script = Path(temporary_root) / "helper.py"
+            helper_script.write_text(
+                "\n".join(
+                    [
+                        "import json, sys, time",
+                        "json.loads(sys.stdin.read())",
+                        "time.sleep(0.2)",
+                        "print(json.dumps({",
+                        f"  'protocol_version': {PROTOCOL_VERSION},",
+                        "  'operation': 'auth_status',",
+                        "  'status': 'completed',",
+                        "  'auth_state': 'authenticated',",
+                        "  'error_code': None,",
+                        "}))",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            heartbeats = 0
+
+            def heartbeat() -> None:
+                nonlocal heartbeats
+                heartbeats += 1
+
+            client = ExactSelectionHelperClient(
+                helper_python=Path(sys.executable),
+                helper_script=helper_script,
+                heartbeat_callback=heartbeat,
+                poll_interval_seconds=0.05,
+            )
+
+            state = client.check_auth(account_username="fixture@example.com")
+
+            self.assertEqual(state, "authenticated")
+            self.assertGreaterEqual(heartbeats, 1)
 
 
 if __name__ == "__main__":

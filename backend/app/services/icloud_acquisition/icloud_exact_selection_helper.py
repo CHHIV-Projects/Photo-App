@@ -8,7 +8,6 @@ URLs never cross this process boundary.
 
 from __future__ import annotations
 
-import base64
 from contextlib import redirect_stdout
 from datetime import datetime
 import hashlib
@@ -37,6 +36,7 @@ try:
         RESOURCE_PRIMARY_ORIGINAL,
         SESSION_EXPIRED,
         ExactSelectionProtocolError,
+        decode_verification_checksum,
         helper_failure,
         normalize_relative_resource_path,
         validate_helper_request,
@@ -57,6 +57,7 @@ except ImportError:  # pragma: no cover - standalone helper execution
         RESOURCE_PRIMARY_ORIGINAL,
         SESSION_EXPIRED,
         ExactSelectionProtocolError,
+        decode_verification_checksum,
         helper_failure,
         normalize_relative_resource_path,
         validate_helper_request,
@@ -137,6 +138,7 @@ class IcloudpdInternalProvider:
 
         self._asset_original = AssetVersionSize.ORIGINAL
         self._asset_alternative = AssetVersionSize.ALTERNATIVE
+        self._asset_adjusted = AssetVersionSize.ADJUSTED
         self._live_original = LivePhotoVersionSize.ORIGINAL
         self._live_filename = lp_filename_concatinator
         self._calculate_version_filename = calculate_version_filename
@@ -224,13 +226,11 @@ class IcloudpdInternalProvider:
 
     @staticmethod
     def _checksum_supported(value: object) -> bool:
-        if not isinstance(value, str) or not value:
-            return False
         try:
-            decoded = base64.b64decode(value, validate=True)
-        except (ValueError, TypeError):
+            decode_verification_checksum(value)
+        except ExactSelectionProtocolError:
             return False
-        return len(decoded) in {16, 20, 32}
+        return True
 
     def describe_asset(self, asset: object) -> dict[str, Any]:
         try:
@@ -274,10 +274,7 @@ class IcloudpdInternalProvider:
             unsupported_reasons.append("unsupported_remote_sidecar")
         if self._asset_alternative in versions:
             unsupported_reasons.append("unsupported_raw_or_alternative")
-        if any(
-            self._field_has_value(fields, field_name)
-            for field_name in ("adjustmentType", "adjustmentRenderType", "customRenderedValue")
-        ):
+        if self._asset_adjusted in versions:
             unsupported_reasons.append("unsupported_adjusted_resource")
         if not item_id or not resources or not any(
             resource["resource_id"] == RESOURCE_PRIMARY_ORIGINAL for resource in resources
@@ -410,17 +407,19 @@ def _resolved_child(root: Path, relative_path: str) -> Path:
     return candidate
 
 
-def _checksum_hasher(expected_checksum: str) -> tuple[bytes, Any]:
+def _checksum_hasher(expected_checksum: str) -> tuple[bytes | None, Any | None]:
     try:
-        expected = base64.b64decode(expected_checksum, validate=True)
-    except (ValueError, TypeError) as exc:
+        algorithm, expected = decode_verification_checksum(expected_checksum)
+    except ExactSelectionProtocolError as exc:
         raise SafeHelperError("verification_metadata_unavailable") from exc
-    algorithms: dict[int, Callable[[], Any]] = {
-        16: hashlib.md5,  # noqa: S324 - provider digest comparison only
-        20: hashlib.sha1,  # noqa: S324 - Apple fileChecksum is normally SHA-1
-        32: hashlib.sha256,
+    if algorithm == "icloud_file_checksum":
+        return None, None
+    algorithms: dict[str, Callable[[], Any]] = {
+        "md5": hashlib.md5,  # noqa: S324 - provider digest comparison only
+        "sha1": hashlib.sha1,  # noqa: S324 - provider digest comparison only
+        "sha256": hashlib.sha256,
     }
-    factory = algorithms.get(len(expected))
+    factory = algorithms.get(algorithm)
     if factory is None:
         raise SafeHelperError("verification_metadata_unavailable")
     return expected, factory()
@@ -450,7 +449,8 @@ def _download_verified(
                     if not chunk:
                         continue
                     file_obj.write(chunk)
-                    hasher.update(chunk)
+                    if hasher is not None:
+                        hasher.update(chunk)
                     byte_count += len(chunk)
         except OSError as exc:
             raise SafeHelperError("local_file_error") from exc
@@ -460,7 +460,7 @@ def _download_verified(
         response.close()
     if byte_count != expected_size:
         raise SafeHelperError("size_mismatch")
-    if hasher.digest() != expected_digest:
+    if hasher is not None and expected_digest is not None and hasher.digest() != expected_digest:
         raise SafeHelperError("checksum_mismatch")
     return byte_count
 

@@ -28,6 +28,10 @@ from app.services.icloud_acquisition import icloud_exact_selection_helper as hel
 
 
 def _checksum(content: bytes) -> str:
+    return base64.b64encode(b"\x01" + hashlib.sha1(content).digest()).decode("ascii")
+
+
+def _raw_checksum(content: bytes) -> str:
     return base64.b64encode(hashlib.sha1(content).digest()).decode("ascii")
 
 
@@ -150,6 +154,7 @@ class IcloudExactSelectionHelperTests(unittest.TestCase):
         provider = object.__new__(IcloudpdInternalProvider)
         provider._asset_original = "original"
         provider._asset_alternative = "alternative"
+        provider._asset_adjusted = "adjusted"
         provider._live_original = "live_original"
         provider._live_filename = lambda name: name
         provider._filename_builder = lambda asset: asset.filename
@@ -196,6 +201,13 @@ class IcloudExactSelectionHelperTests(unittest.TestCase):
         )
 
         asset._asset_record = {
+            "fields": {"adjustmentType": {"value": ["unhashable", "but-present"]}}
+        }
+        metadata_only = provider.describe_asset(asset)
+        self.assertFalse(metadata_only["identity_ambiguous"])
+        self.assertEqual(metadata_only["unsupported_reasons"], [])
+
+        asset._asset_record = {
             "fields": {
                 "adjustmentType": {"value": ["unhashable", "but-present"]},
                 "resSidecarRes": {"value": {"remote": "metadata"}},
@@ -206,6 +218,16 @@ class IcloudExactSelectionHelperTests(unittest.TestCase):
         self.assertTrue(blocked["identity_ambiguous"])
         self.assertEqual(
             blocked["unsupported_reasons"],
+            [
+                "unsupported_raw_or_alternative",
+                "unsupported_remote_sidecar",
+            ],
+        )
+
+        asset.versions["adjusted"] = SimpleNamespace()
+        blocked_with_adjusted_resource = provider.describe_asset(asset)
+        self.assertEqual(
+            blocked_with_adjusted_resource["unsupported_reasons"],
             [
                 "unsupported_adjusted_resource",
                 "unsupported_raw_or_alternative",
@@ -309,7 +331,61 @@ class IcloudExactSelectionHelperTests(unittest.TestCase):
             self.assertTrue(partial_destinations[0].name.endswith(".partial"))
             self.assertEqual(partial_destinations[0].relative_to(staging_root).parts[0], ".partial")
 
-    def test_item_checksum_failure_publishes_no_sibling_resources(self) -> None:
+    def test_apple_file_checksum_is_opaque_provider_metadata(self) -> None:
+        expected = b"same-size-fake"
+        actual = b"same-size-real"
+        self.assertEqual(len(expected), len(actual))
+        primary = _resource("primary_original", "2026/06/24/IMG_19.JPG", expected)
+        remote_id = "remote-opaque-checksum"
+        provider = _FakeProvider(
+            [_asset(remote_id, [primary])],
+            {(remote_id, "primary_original"): actual},
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            exports_root = Path(temporary_root)
+            staging_root = exports_root / "profile"
+            staging_root.mkdir()
+            response = execute_download_selected(
+                _download_request(staging_root, remote_id, [primary]),
+                provider,
+                approved_exports_root=exports_root,
+            )
+
+            self.assertEqual(response["status"], "completed")
+            self.assertEqual(response["downloaded_item_count"], 1)
+            self.assertEqual(
+                (staging_root / str(primary["relative_path"])).read_bytes(),
+                actual,
+            )
+
+    def test_raw_content_checksum_failure_publishes_no_file(self) -> None:
+        expected = b"raw-digest-old"
+        actual = b"raw-digest-new"
+        self.assertEqual(len(expected), len(actual))
+        primary = _resource("primary_original", "2026/06/24/IMG_19_RAW.JPG", expected)
+        primary["expected_checksum"] = _raw_checksum(expected)
+        remote_id = "remote-raw-checksum"
+        provider = _FakeProvider(
+            [_asset(remote_id, [primary])],
+            {(remote_id, "primary_original"): actual},
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            exports_root = Path(temporary_root)
+            staging_root = exports_root / "profile"
+            staging_root.mkdir()
+            response = execute_download_selected(
+                _download_request(staging_root, remote_id, [primary]),
+                provider,
+                approved_exports_root=exports_root,
+            )
+
+            self.assertEqual(response["status"], "failed")
+            self.assertEqual(response["items"][0]["error_code"], "checksum_mismatch")
+            self.assertFalse((staging_root / str(primary["relative_path"])).exists())
+
+    def test_item_size_failure_publishes_no_sibling_resources(self) -> None:
         still = b"verified-still"
         expected_motion = b"expected-motion"
         wrong_motion = b"wrong---motion"
@@ -339,6 +415,7 @@ class IcloudExactSelectionHelperTests(unittest.TestCase):
             )
 
             self.assertEqual(response["status"], "failed")
+            self.assertEqual(response["items"][0]["error_code"], "size_mismatch")
             self.assertEqual(response["downloaded_item_count"], 0)
             self.assertEqual(response["downloaded_resource_count"], 0)
             self.assertFalse((staging_root / str(primary["relative_path"])).exists())

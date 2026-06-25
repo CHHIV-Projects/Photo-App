@@ -58,10 +58,12 @@ MAX_INVENTORY_SAMPLE = 200
 
 ACQUISITION_MODE_STANDARD = "standard"
 ACQUISITION_MODE_LIST_FIRST_NON_REPEAT = "list_first_non_repeat"
+ACQUISITION_MODE_INTERNAL_EXACT_SELECTION = "internal_exact_selection"
 SUPPORTED_ACQUISITION_MODES = {
     ACQUISITION_MODE_STANDARD,
     ACQUISITION_MODE_LIST_FIRST_NON_REPEAT,
 }
+PUBLIC_ACQUISITION_MODES = tuple(sorted(SUPPORTED_ACQUISITION_MODES))
 
 _runner_lock = threading.Lock()
 _runner_thread: threading.Thread | None = None
@@ -217,17 +219,18 @@ def _to_snapshot(run: IcloudAcquisitionRun | None) -> IcloudAcquisitionStatusSna
     )
 
 
-def _latest_run_stmt() -> Select[tuple[IcloudAcquisitionRun]]:
-    return select(IcloudAcquisitionRun).order_by(IcloudAcquisitionRun.id.desc()).limit(1)
+def _latest_run_stmt(*, public_only: bool = False) -> Select[tuple[IcloudAcquisitionRun]]:
+    stmt = select(IcloudAcquisitionRun)
+    if public_only:
+        stmt = stmt.where(IcloudAcquisitionRun.acquisition_mode.in_(PUBLIC_ACQUISITION_MODES))
+    return stmt.order_by(IcloudAcquisitionRun.id.desc()).limit(1)
 
 
-def _active_run_stmt() -> Select[tuple[IcloudAcquisitionRun]]:
-    return (
-        select(IcloudAcquisitionRun)
-        .where(IcloudAcquisitionRun.status.in_(RUNNING_STATUSES))
-        .order_by(IcloudAcquisitionRun.id.desc())
-        .limit(1)
-    )
+def _active_run_stmt(*, public_only: bool = False) -> Select[tuple[IcloudAcquisitionRun]]:
+    stmt = select(IcloudAcquisitionRun).where(IcloudAcquisitionRun.status.in_(RUNNING_STATUSES))
+    if public_only:
+        stmt = stmt.where(IcloudAcquisitionRun.acquisition_mode.in_(PUBLIC_ACQUISITION_MODES))
+    return stmt.order_by(IcloudAcquisitionRun.id.desc()).limit(1)
 
 
 def _project_root() -> Path:
@@ -676,7 +679,7 @@ def _update_run_row(
 def get_icloud_acquisition_status(db_session: Session) -> IcloudAcquisitionStatusView:
     """Return status snapshot and latest run state."""
     ensure_icloud_acquisition_schema(db_session)
-    latest_run = db_session.scalar(_latest_run_stmt())
+    latest_run = db_session.scalar(_latest_run_stmt(public_only=True))
     snapshot = _make_snapshot(latest_run)
     return IcloudAcquisitionStatusView(generated_at=_utc_now(), current=snapshot)
 
@@ -684,9 +687,9 @@ def get_icloud_acquisition_status(db_session: Session) -> IcloudAcquisitionStatu
 def request_icloud_acquisition_stop(db_session: Session) -> IcloudAcquisitionRunResult:
     """Request graceful stop of the active icloudpd acquisition run."""
     ensure_icloud_acquisition_schema(db_session)
-    active = db_session.scalar(_active_run_stmt())
+    active = db_session.scalar(_active_run_stmt(public_only=True))
     if active is None:
-        latest_run = db_session.scalar(_latest_run_stmt())
+        latest_run = db_session.scalar(_latest_run_stmt(public_only=True))
         return IcloudAcquisitionRunResult(
             status=_make_snapshot(latest_run),
             message="No active icloudpd acquisition run.",
