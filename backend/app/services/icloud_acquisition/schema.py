@@ -26,6 +26,12 @@ def _timestamp_column_type(dialect_name: str) -> str:
     return "DATETIME"
 
 
+def _boolean_false_column_type(dialect_name: str) -> str:
+    if dialect_name == "postgresql":
+        return "BOOLEAN NOT NULL DEFAULT FALSE"
+    return "BOOLEAN NOT NULL DEFAULT 0"
+
+
 def ensure_icloud_acquisition_schema(db_session: Session) -> IcloudAcquisitionSchemaSummary:
     """Ensure icloud_acquisition_runs exists for persistent job status."""
     bind = db_session.connection()
@@ -41,11 +47,15 @@ def ensure_icloud_acquisition_schema(db_session: Session) -> IcloudAcquisitionSc
         created_tables.append("icloud_acquisition_runs")
     else:
         IcloudAcquisitionRun.__table__.create(bind=bind, checkfirst=True)
+        def add_column(table_name: str, existing_columns: set[str], column_name: str, ddl: str) -> None:
+            if column_name not in existing_columns:
+                db_session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {ddl}"))
+                existing_columns.add(column_name)
+
         run_columns = {column["name"] for column in inspector.get_columns("icloud_acquisition_runs")}
+
         def add_run_column(column_name: str, ddl: str) -> None:
-            if column_name not in run_columns:
-                db_session.execute(text(f"ALTER TABLE icloud_acquisition_runs ADD COLUMN {ddl}"))
-                run_columns.add(column_name)
+            add_column("icloud_acquisition_runs", run_columns, column_name, ddl)
 
         if "acquisition_mode" not in run_columns:
             db_session.execute(
@@ -75,6 +85,117 @@ def ensure_icloud_acquisition_schema(db_session: Session) -> IcloudAcquisitionSc
             created_tables.append(table.name)
         else:
             table.create(bind=bind, checkfirst=True)
+
+    refreshed_inspector = inspect(bind)
+
+    def add_existing_table_column(table_name: str, column_name: str, ddl: str) -> None:
+        columns = {column["name"] for column in refreshed_inspector.get_columns(table_name)}
+        if column_name not in columns:
+            db_session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {ddl}"))
+
+    timestamp_type = _timestamp_column_type(bind.dialect.name)
+    boolean_false_type = _boolean_false_column_type(bind.dialect.name)
+    if "icloud_acquisition_batches" in set(refreshed_inspector.get_table_names()):
+        add_existing_table_column("icloud_acquisition_batches", "source_intake_run_id", "source_intake_run_id INTEGER")
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "source_intake_report_path",
+            "source_intake_report_path VARCHAR(2048)",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "intake_started_at",
+            f"intake_started_at {timestamp_type}",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "intake_finished_at",
+            f"intake_finished_at {timestamp_type}",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "intake_processed_resource_count",
+            "intake_processed_resource_count INTEGER NOT NULL DEFAULT 0",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "intake_duplicate_resource_count",
+            "intake_duplicate_resource_count INTEGER NOT NULL DEFAULT 0",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "intake_skipped_known_resource_count",
+            "intake_skipped_known_resource_count INTEGER NOT NULL DEFAULT 0",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "intake_failed_resource_count",
+            "intake_failed_resource_count INTEGER NOT NULL DEFAULT 0",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "intake_deferred_resource_count",
+            "intake_deferred_resource_count INTEGER NOT NULL DEFAULT 0",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "ready_for_cleanup_dry_run",
+            f"ready_for_cleanup_dry_run {boolean_false_type}",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_batches",
+            "cleanup_readiness_reason",
+            "cleanup_readiness_reason VARCHAR(128)",
+        )
+
+    if "icloud_acquisition_items" in set(refreshed_inspector.get_table_names()):
+        add_existing_table_column(
+            "icloud_acquisition_items",
+            "source_intake_status",
+            "source_intake_status VARCHAR(64)",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_items",
+            "source_intake_error",
+            "source_intake_error VARCHAR(255)",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_items",
+            "source_intake_completed_at",
+            f"source_intake_completed_at {timestamp_type}",
+        )
+
+    if "icloud_acquisition_resources" in set(refreshed_inspector.get_table_names()):
+        add_existing_table_column(
+            "icloud_acquisition_resources",
+            "source_intake_status",
+            "source_intake_status VARCHAR(64)",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_resources",
+            "source_intake_run_id",
+            "source_intake_run_id INTEGER",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_resources",
+            "ingestion_run_id",
+            "ingestion_run_id INTEGER",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_resources",
+            "asset_sha256",
+            "asset_sha256 VARCHAR(64)",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_resources",
+            "source_intake_error",
+            "source_intake_error VARCHAR(255)",
+        )
+        add_existing_table_column(
+            "icloud_acquisition_resources",
+            "source_intake_completed_at",
+            f"source_intake_completed_at {timestamp_type}",
+        )
 
     db_session.commit()
     return IcloudAcquisitionSchemaSummary(created_tables=created_tables)

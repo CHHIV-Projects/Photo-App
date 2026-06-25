@@ -72,6 +72,8 @@ class PipelineContext:
     ingest_source_limit: int | None
     source_label: str | None
     source_type: str | None
+    explicit_source_records: list[FileScanRecord] = field(default_factory=list)
+    source_intake_context: dict[str, Any] = field(default_factory=dict)
     source_scan_result: ScanResult | None = None
     source_selected_records: list[FileScanRecord] = field(default_factory=list)
     stage_result: DropzoneStageResult | None = None
@@ -196,6 +198,64 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
             raise RuntimeError(
                 "Drop Zone already contains an active batch. Process or clear it before using --from-path."
             )
+
+        if ctx.explicit_source_records:
+            source_root = ctx.from_path.resolve()
+            selected_source_records: list[FileScanRecord] = []
+            for record in ctx.explicit_source_records:
+                resolved_record_path = Path(record.full_path).resolve()
+                try:
+                    resolved_record_path.relative_to(source_root)
+                except ValueError as exc:
+                    raise RuntimeError(
+                        f"Explicit Source Intake record is outside source root: {resolved_record_path}"
+                    ) from exc
+                selected_source_records.append(record)
+
+            source_scan_result = ScanResult(files=selected_source_records, errors=[])
+            stage_result = stage_source_records_to_dropzone(
+                selected_source_records,
+                ctx.drop_zone_path,
+                ctx.quarantine_path,
+            )
+            dropzone_scan_result = scan_folder(ctx.drop_zone_path)
+            processing_records = build_dropzone_processing_records(
+                dropzone_scan_result.files,
+                stage_result.staged_files,
+            )
+
+            ctx.source_scan_result = source_scan_result
+            ctx.source_selected_records = selected_source_records
+            ctx.stage_result = stage_result
+            ctx.dropzone_scan_result = dropzone_scan_result
+            ctx.processing_records = processing_records
+            ctx.source_files_scanned_total = len(selected_source_records)
+            ctx.source_files_skipped_known = 0
+            ctx.source_files_eligible = len(selected_source_records)
+            ctx.source_files_selected = len(selected_source_records)
+            ctx.source_files_deferred_unready = 0
+            ctx.source_deferred_unready_reasons = {}
+            ctx.source_deferred_unready_sample = []
+            ctx.source_files_remaining_unknown = 0
+            ctx.source_skipped_known_sample = []
+
+            return {
+                "scope": "batch",
+                "input_mode": "explicit selected source records via drop zone staging",
+                "source_path": str(ctx.from_path),
+                "source_files_scanned": len(source_scan_result.files),
+                "source_scan_errors": 0,
+                "source_files_skipped_known": 0,
+                "source_files_eligible_ready_unknown": ctx.source_files_eligible,
+                "source_files_selected_for_session": ctx.source_files_selected,
+                "source_files_deferred_unready": 0,
+                "source_files_remaining_unknown": 0,
+                "source_limit": None,
+                "files_staged": len(stage_result.staged_files),
+                "stage_failures": len(stage_result.failures),
+                "drop_zone_records_total": len(dropzone_scan_result.files),
+                "drop_zone_records_frozen": len(processing_records),
+            }
 
         source_scan_result = scan_folder(ctx.from_path)
 
@@ -745,6 +805,7 @@ def _build_ingestion_run_manifest(
                 if ctx.resolved_ingestion_context is not None
                 else None
             ),
+            "source_intake_context": dict(ctx.source_intake_context),
         },
         "files": {
             "selected_from_source": selected_from_source,
@@ -860,6 +921,8 @@ def _write_source_intake_report(ctx: PipelineContext) -> Path | None:
         "deferred_unready_sample": ctx.source_deferred_unready_sample,
         "failure_details": list(ctx.moved_to_ingest_failures),
     }
+    if ctx.source_intake_context:
+        payload["source_intake_context"] = dict(ctx.source_intake_context)
     report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     ctx.source_intake_report_path = report_path
     return report_path

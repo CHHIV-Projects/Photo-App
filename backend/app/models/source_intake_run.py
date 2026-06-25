@@ -36,6 +36,8 @@ class SourceIntakeRun(Base):
     source_root_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
     # Run configuration
+    intake_mode: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    icloud_acquisition_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     source_intake_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ingest_batch_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
