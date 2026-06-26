@@ -67,6 +67,7 @@ from app.services.icloud_acquisition.exact_selection_adapter import (
     ExactSelectionPrototypeError,
     count_partial_workspace_files,
     find_staged_unknown_resources,
+    is_ordinary_still_logical_item,
     prepare_exact_selection_prototype,
     validate_exact_selection_profile,
 )
@@ -102,11 +103,30 @@ BATCH_STATUS_FAILED = "failed"
 
 NEXT_RUN_SOURCE_INTAKE = "Run batch Source Intake"
 NEXT_CONTINUE_CLEANUP = "Review cleanup dry run, then continue cleanup with explicit confirmation"
-NEXT_ADD_NEW_ITEMS_OR_INCREASE_SCAN = "Add new ordinary stills or get approval for a larger scan limit"
+NEXT_ADD_NEW_ITEMS_OR_INCREASE_SEARCH_CAP = "Add new ordinary stills or get approval for a larger candidate search cap"
+NEXT_OPERATOR_DECISION_PARTIAL = "Operator decision required before acquiring a partial batch"
 NEXT_RESOLVE_STAGING = "Resolve staging state before retrying"
 NEXT_RESOLVE_DROP_ZONE = "Clear or process the Drop Zone before retrying"
 NEXT_INSPECT_REPORT = "Inspect orchestration report"
 NEXT_COMPLETE = "No further action required"
+NEXT_FRESH_CLEANUP_PREVIEW = (
+    "Run a fresh guarded cleanup dry run for this source, then continue cleanup with the new dry-run ID."
+)
+
+STOP_REASON_CLEANUP_PREVIEW_EXPIRED = "cleanup_preview_expired"
+STOP_REASON_CLEANUP_PREVIEW_ALREADY_CONSUMED = "cleanup_preview_already_consumed"
+STOP_REASON_CLEANUP_STATE_AMBIGUOUS = "cleanup_state_ambiguous"
+
+_RECOVERABLE_CLEANUP_ERROR_CODES: dict[str, str] = {
+    "DRY_RUN_EXPIRED": STOP_REASON_CLEANUP_PREVIEW_EXPIRED,
+    "DRY_RUN_ALREADY_CONSUMED": STOP_REASON_CLEANUP_PREVIEW_ALREADY_CONSUMED,
+}
+
+_RECOVERY_STOP_REASONS = {
+    STOP_REASON_CLEANUP_PREVIEW_EXPIRED,
+    STOP_REASON_CLEANUP_PREVIEW_ALREADY_CONSUMED,
+    STOP_REASON_CLEANUP_STATE_AMBIGUOUS,
+}
 
 REPORT_TYPE = "icloud_internal_multibatch_loop"
 DEFAULT_CLEANUP_WAIT_TIMEOUT_SECONDS = 60.0
@@ -154,12 +174,19 @@ class IcloudLoopPlanSummary:
     selected_logical_items: int = 0
     selected_resources: int = 0
     unsupported_or_blocked_count: int = 0
+    selected_unsupported_or_blocked_count: int = 0
+    safe_but_not_selected_logical_items: int = 0
+    batch_target_filled: bool = False
+    partial_batch_selected: bool = False
+    operator_decision_required: bool = False
+    candidate_search_cap_reached: bool = False
     auth_state: str | None = None
 
 
 @dataclass(frozen=True)
 class IcloudInternalLoopResult:
     orchestration_run_id: int | None
+    source_profile_id: int | None
     status: str
     stop_reason: str | None
     failure_reason: str | None
@@ -174,6 +201,30 @@ class IcloudInternalLoopResult:
     cleanup_dry_run_id: int | None = None
     cleanup_execution_run_id: int | None = None
     batches: list[dict[str, Any]] | None = None
+    batch_size: int | None = None
+    total_limit: int | None = None
+    candidate_search_cap: int | None = None
+    scan_limit_meaning: str = "candidate_search_cap"
+    candidate_page_size: int | None = None
+    candidate_page_size_status: str = "deferred"
+    total_candidates_considered: int | None = None
+    total_resource_candidates_considered: int | None = None
+    acquisition_run_ids: list[int] | None = None
+    acquisition_batch_ids: list[int] | None = None
+    source_intake_run_ids: list[int] | None = None
+    ingestion_run_ids: list[int] | None = None
+    cleanup_dry_run_ids: list[int] | None = None
+    cleanup_execution_run_ids: list[int] | None = None
+    final_cleanup_verification_ids: list[int] | None = None
+    staging_clean: bool | None = None
+    drop_zone_clean: bool | None = None
+    partial_workspace_clear: bool | None = None
+    cleanup_review_required: bool = False
+    cleanup_recovery_required: bool = False
+    original_cleanup_error_code: str | None = None
+    stale_cleanup_dry_run_id: int | None = None
+    continue_cleanup_command_template: str | None = None
+    fresh_cleanup_preview_command: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -218,6 +269,61 @@ def _drop_zone_file_count() -> int:
     return sum(1 for path in drop_zone.rglob("*") if path.is_file())
 
 
+def _continue_cleanup_command_template(*, orchestration_run_id: int, cleanup_dry_run_id: str | int) -> str:
+    return "\n".join(
+        (
+            "$env:PYTHONPATH='backend'",
+            "& '.\\.venv\\Scripts\\python.exe' '.\\backend\\scripts\\run_icloud_internal_loop.py' `",
+            "  --continue-cleanup `",
+            f"  --orchestration-run-id {orchestration_run_id} `",
+            f"  --cleanup-dry-run-id {cleanup_dry_run_id} `",
+            f"  --confirm '{EXECUTION_CONFIRMATION_PHRASE}'",
+        )
+    )
+
+
+def _fresh_cleanup_preview_command(*, source_id: int) -> str:
+    return "\n".join(
+        (
+            "Invoke-RestMethod `",
+            "  -Method Post `",
+            "  -Uri 'http://127.0.0.1:8001/api/admin/icloud-staging-cleanup/run' `",
+            "  -ContentType 'application/json' `",
+            f"  -Body '{{\"source_id\": {source_id}, \"dry_run\": true}}'",
+        )
+    )
+
+
+def _staging_state_payload(db_session: Session, *, source_id: int) -> dict[str, Any]:
+    try:
+        profile = validate_exact_selection_profile(db_session, source_id=source_id)
+        partial_count = count_partial_workspace_files(profile)
+        normal_files = _normal_staging_files(profile.staging_root)
+        staged_unknown = find_staged_unknown_resources(db_session, profile=profile)
+        drop_zone_count = _drop_zone_file_count()
+        return {
+            "staging_clean": not normal_files and partial_count == 0,
+            "normal_staging_file_count": len(normal_files),
+            "partial_workspace_clear": partial_count == 0,
+            "partial_workspace_file_count": partial_count,
+            "drop_zone_clean": drop_zone_count == 0,
+            "drop_zone_file_count": drop_zone_count,
+            "staged_unknown_pending_intake": bool(staged_unknown),
+            "staged_unknown_resource_count": len(staged_unknown),
+        }
+    except Exception:  # noqa: BLE001 - status reporting must not mask the real run state
+        return {
+            "staging_clean": None,
+            "normal_staging_file_count": None,
+            "partial_workspace_clear": None,
+            "partial_workspace_file_count": None,
+            "drop_zone_clean": None,
+            "drop_zone_file_count": None,
+            "staged_unknown_pending_intake": None,
+            "staged_unknown_resource_count": None,
+        }
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -255,6 +361,7 @@ def _batch_payload(row: IcloudOrchestrationBatch) -> dict[str, Any]:
         "batch_target": row.batch_target,
         "status": row.status,
         "stop_reason": row.stop_reason,
+        "failure_reason": row.failure_reason,
         "next_safe_action": row.next_safe_action,
         "acquisition_run_id": row.acquisition_run_id,
         "acquisition_batch_id": row.acquisition_batch_id,
@@ -267,20 +374,36 @@ def _batch_payload(row: IcloudOrchestrationBatch) -> dict[str, Any]:
         "selected_resources": row.selected_resources,
         "intaken_resources": row.intaken_resources,
         "cleaned_resources": row.cleaned_resources,
+        "candidates_considered": row.candidates_considered,
+        "resource_candidates_considered": row.resource_candidates_considered,
+        "unsupported_or_blocked_count": row.unsupported_or_blocked_count,
+        "safe_but_not_selected_logical_items": row.safe_but_not_selected_logical_items,
         "report_path": row.report_path,
     }
 
 
+def _compact_ints(values: list[int | None]) -> list[int]:
+    return [int(value) for value in values if value is not None]
+
+
 def _run_payload(db_session: Session, run: IcloudOrchestrationRun) -> dict[str, Any]:
-    batches = [_batch_payload(row) for row in _batch_rows(db_session, run.id)]
-    return {
+    batch_rows = _batch_rows(db_session, run.id)
+    batches = [_batch_payload(row) for row in batch_rows]
+    latest_batch = batch_rows[-1] if batch_rows else None
+    recovery_required = run.status == STATUS_BLOCKED and run.stop_reason in _RECOVERY_STOP_REASONS
+    payload = {
         "report_type": REPORT_TYPE,
         "generated_at_utc": _utc_now().isoformat(),
         "orchestration_run_id": run.id,
         "source_profile_id": run.source_profile_id,
         "batch_size": run.batch_size,
         "total_limit": run.total_limit,
+        "candidate_search_cap": run.candidate_scan_limit,
+        "scan_limit_meaning": "candidate_search_cap",
         "candidate_scan_limit": run.candidate_scan_limit,
+        "candidate_page_size": None,
+        "candidate_page_size_status": "deferred",
+        "candidate_pages_scanned": None,
         "ordinary_still_only": bool(run.ordinary_still_only),
         "pause_before_cleanup": bool(run.pause_before_cleanup),
         "status": run.status,
@@ -298,11 +421,34 @@ def _run_payload(db_session: Session, run: IcloudOrchestrationRun) -> dict[str, 
         "last_source_intake_run_id": run.last_source_intake_run_id,
         "last_cleanup_dry_run_id": run.last_cleanup_dry_run_id,
         "last_cleanup_execution_run_id": run.last_cleanup_execution_run_id,
+        "total_candidates_considered": sum(row.candidates_considered for row in batch_rows),
+        "total_resource_candidates_considered": sum(row.resource_candidates_considered for row in batch_rows),
+        "acquisition_run_ids": _compact_ints([row.acquisition_run_id for row in batch_rows]),
+        "acquisition_batch_ids": _compact_ints([row.acquisition_batch_id for row in batch_rows]),
+        "source_intake_run_ids": _compact_ints([row.source_intake_run_id for row in batch_rows]),
+        "ingestion_run_ids": _compact_ints([row.ingestion_run_id for row in batch_rows]),
+        "cleanup_dry_run_ids": _compact_ints([row.cleanup_dry_run_id for row in batch_rows]),
+        "cleanup_execution_run_ids": _compact_ints([row.cleanup_execution_run_id for row in batch_rows]),
+        "final_cleanup_verification_ids": _compact_ints(
+            [row.final_cleanup_verification_run_id for row in batch_rows]
+        ),
+        "cleanup_review_required": run.status == STATUS_PAUSED_FOR_CLEANUP,
+        "cleanup_recovery_required": recovery_required,
+        "original_cleanup_error_code": latest_batch.failure_reason if latest_batch is not None else None,
+        "stale_cleanup_dry_run_id": latest_batch.cleanup_dry_run_id if latest_batch is not None else None,
         "cloud_deletion_performed": False,
         "normal_ui_exposure_added": False,
         "normal_admin_api_exposure_added": False,
         "batches": batches,
     }
+    if recovery_required:
+        payload["continue_cleanup_command_template"] = _continue_cleanup_command_template(
+            orchestration_run_id=run.id,
+            cleanup_dry_run_id="<fresh_cleanup_dry_run_id>",
+        )
+        payload["fresh_cleanup_preview_command"] = _fresh_cleanup_preview_command(source_id=run.source_profile_id)
+    payload.update(_staging_state_payload(db_session, source_id=run.source_profile_id))
+    return payload
 
 
 def _assert_secret_free(payload: dict[str, Any]) -> None:
@@ -325,9 +471,11 @@ def _write_report(db_session: Session, run: IcloudOrchestrationRun) -> str:
 
 def _result_from_run(db_session: Session, run: IcloudOrchestrationRun) -> IcloudInternalLoopResult:
     report_path = _write_report(db_session, run)
-    batches = [_batch_payload(row) for row in _batch_rows(db_session, run.id)]
+    payload = _run_payload(db_session, run)
+    batches = payload["batches"]
     return IcloudInternalLoopResult(
         orchestration_run_id=run.id,
+        source_profile_id=run.source_profile_id,
         status=run.status,
         stop_reason=run.stop_reason,
         failure_reason=run.failure_reason,
@@ -342,6 +490,27 @@ def _result_from_run(db_session: Session, run: IcloudOrchestrationRun) -> Icloud
         cleanup_dry_run_id=run.last_cleanup_dry_run_id,
         cleanup_execution_run_id=run.last_cleanup_execution_run_id,
         batches=batches,
+        batch_size=run.batch_size,
+        total_limit=run.total_limit,
+        candidate_search_cap=run.candidate_scan_limit,
+        total_candidates_considered=payload["total_candidates_considered"],
+        total_resource_candidates_considered=payload["total_resource_candidates_considered"],
+        acquisition_run_ids=payload["acquisition_run_ids"],
+        acquisition_batch_ids=payload["acquisition_batch_ids"],
+        source_intake_run_ids=payload["source_intake_run_ids"],
+        ingestion_run_ids=payload["ingestion_run_ids"],
+        cleanup_dry_run_ids=payload["cleanup_dry_run_ids"],
+        cleanup_execution_run_ids=payload["cleanup_execution_run_ids"],
+        final_cleanup_verification_ids=payload["final_cleanup_verification_ids"],
+        staging_clean=payload["staging_clean"],
+        drop_zone_clean=payload["drop_zone_clean"],
+        partial_workspace_clear=payload["partial_workspace_clear"],
+        cleanup_review_required=payload["cleanup_review_required"],
+        cleanup_recovery_required=payload["cleanup_recovery_required"],
+        original_cleanup_error_code=payload["original_cleanup_error_code"],
+        stale_cleanup_dry_run_id=payload["stale_cleanup_dry_run_id"],
+        continue_cleanup_command_template=payload.get("continue_cleanup_command_template"),
+        fresh_cleanup_preview_command=payload.get("fresh_cleanup_preview_command"),
     )
 
 
@@ -374,11 +543,12 @@ def _block_run(
     next_safe_action: str | None = NEXT_INSPECT_REPORT,
     batch: IcloudOrchestrationBatch | None = None,
     failure: bool = False,
+    batch_failure_reason: str | None = None,
 ) -> IcloudInternalLoopResult:
     if batch is not None:
         batch.status = BATCH_STATUS_FAILED if failure else BATCH_STATUS_BLOCKED
         batch.stop_reason = reason
-        batch.failure_reason = reason if failure else None
+        batch.failure_reason = reason if failure else batch_failure_reason
         batch.next_safe_action = next_safe_action
         batch.finished_at = _utc_now()
         if failure:
@@ -452,10 +622,6 @@ def _build_plan_summary(
     status = STATUS_FAILED if preparation.status == PREPARATION_FAILED else STATUS_COMPLETED
     stop_reason = preparation.error_code if preparation.status == PREPARATION_FAILED else preparation.stopping_reason
     auth_state = preparation.auth_state
-    if stop_reason == STOP_SCAN_LIMIT_REACHED and not (plan and plan.selected_new_item_count):
-        stop_reason = "scan_limit_reached_with_no_selection"
-    if stop_reason == STOP_NO_MORE_CANDIDATES:
-        stop_reason = "no_more_new_items"
 
     if plan is None:
         return IcloudLoopPlanSummary(
@@ -468,21 +634,30 @@ def _build_plan_summary(
         )
 
     all_resources = [resource for item in plan.items for resource in item.resources]
+    candidates_considered = (
+        listing.logical_item_count if listing is not None else plan.candidate_scan_item_count
+    )
+    resource_candidates_considered = (
+        listing.resource_file_count if listing is not None else plan.candidate_resource_count
+    )
+    selected_adapter_item_ids = {
+        item.adapter_logical_item_id
+        for item in plan.items
+        if item.selected_new and item.adapter_logical_item_id
+    }
     unsupported_or_blocked = plan.ambiguous_item_count
+    selected_unsupported_or_blocked = 0
     if listing is not None:
-        selected_adapter_item_ids = {
-            item.adapter_logical_item_id
-            for item in plan.items
-            if item.selected_new and item.adapter_logical_item_id
-        }
-        unsupported_or_blocked += sum(
-            1
+        listed_blocked_items = [
+            item
             for item in listing.items
-            if item.item_id in selected_adapter_item_ids
-            and (
-                item.identity_ambiguous
-                or any(reason != "unsupported_adjustment_metadata_only" for reason in item.unsupported_reasons)
-            )
+            if item.identity_ambiguous
+            or item.unsupported_reasons
+            or (ordinary_still_only and not is_ordinary_still_logical_item(item))
+        ]
+        unsupported_or_blocked += len(listed_blocked_items)
+        selected_unsupported_or_blocked = sum(
+            1 for item in listed_blocked_items if item.item_id in selected_adapter_item_ids
         )
     ordinary_safe = True
     if ordinary_still_only:
@@ -494,36 +669,63 @@ def _build_plan_summary(
             ordinary_safe = _preparation_selects_only_ordinary_stills(preparation)
         except Exception:  # noqa: BLE001 - safety gate failure means not safe
             ordinary_safe = False
+    selected_count = plan.selected_new_item_count
+    selected_resource_count = plan.selected_new_resource_count
+    batch_target_filled = selected_count == batch_target and selected_resource_count == batch_target
+    partial_batch_selected = 0 < selected_count < batch_target
+    search_cap_reached = bool(
+        preparation.stopping_reason == STOP_SCAN_LIMIT_REACHED
+        or (listing is not None and listing.scan_limit_reached)
+    )
+    operator_decision_required = partial_batch_selected
     execution_safe = bool(
         preparation.status == PREPARATION_READY
         and preparation.download_request is not None
         and auth_state == AUTHENTICATED
         and preparation.stopping_reason == STOP_TARGET_NEW_COUNT_REACHED
-        and plan.selected_new_item_count == batch_target
-        and plan.selected_new_resource_count == batch_target
-        and unsupported_or_blocked == 0
+        and batch_target_filled
+        and selected_unsupported_or_blocked == 0
         and ordinary_safe
     )
-    if not execution_safe and ordinary_still_only and plan.selected_new_item_count:
-        stop_reason = "unsupported_or_ambiguous_selection"
+    if execution_safe:
+        stop_reason = STOP_TARGET_NEW_COUNT_REACHED
+    elif partial_batch_selected:
+        stop_reason = "partial_batch_selected"
+    elif selected_count > 0 and (selected_unsupported_or_blocked or not ordinary_safe):
+        stop_reason = "unsupported_or_ambiguous_candidates_only"
+    elif search_cap_reached:
+        stop_reason = "candidate_search_cap_reached"
+    elif unsupported_or_blocked and selected_count == 0:
+        stop_reason = "unsupported_or_ambiguous_candidates_only"
+    elif stop_reason == STOP_NO_MORE_CANDIDATES:
+        stop_reason = "no_more_new_items" if plan.items else "no_more_candidates"
+
     next_action = "Acquire exact-selection batch" if execution_safe else NEXT_INSPECT_REPORT
-    if stop_reason in {"scan_limit_reached_with_no_selection", "no_more_new_items"}:
-        next_action = NEXT_ADD_NEW_ITEMS_OR_INCREASE_SCAN
+    if operator_decision_required:
+        next_action = NEXT_OPERATOR_DECISION_PARTIAL
+    elif stop_reason in {"candidate_search_cap_reached", "no_more_new_items", "no_more_candidates"}:
+        next_action = NEXT_ADD_NEW_ITEMS_OR_INCREASE_SEARCH_CAP
     return IcloudLoopPlanSummary(
         status=STATUS_COMPLETED,
         stop_reason=stop_reason,
         next_safe_action=next_action,
         execution_safe_to_attempt=execution_safe,
         batch_target=batch_target,
-        logical_candidates_considered=plan.candidate_scan_item_count,
-        resource_candidates_considered=plan.candidate_resource_count,
+        logical_candidates_considered=candidates_considered,
+        resource_candidates_considered=resource_candidates_considered,
         known_logical_items=sum(1 for item in plan.items if item.already_known),
         known_resources=sum(1 for resource in all_resources if resource.already_known),
         unknown_logical_items=sum(1 for item in plan.items if not item.already_known),
         unknown_resources=sum(1 for resource in all_resources if not resource.already_known),
-        selected_logical_items=plan.selected_new_item_count,
-        selected_resources=plan.selected_new_resource_count,
+        selected_logical_items=selected_count,
+        selected_resources=selected_resource_count,
         unsupported_or_blocked_count=unsupported_or_blocked,
+        selected_unsupported_or_blocked_count=selected_unsupported_or_blocked,
+        safe_but_not_selected_logical_items=plan.remaining_unselected_new_item_count,
+        batch_target_filled=batch_target_filled,
+        partial_batch_selected=partial_batch_selected,
+        operator_decision_required=operator_decision_required,
+        candidate_search_cap_reached=search_cap_reached,
         auth_state=auth_state,
     )
 
@@ -556,7 +758,12 @@ def plan_internal_loop(
             "source_profile_id": source_id,
             "batch_size": batch_size,
             "total_limit": total_limit,
+            "candidate_search_cap": candidate_scan_limit,
+            "scan_limit_meaning": "candidate_search_cap",
             "candidate_scan_limit": candidate_scan_limit,
+            "candidate_page_size": None,
+            "candidate_page_size_status": "deferred",
+            "candidate_pages_scanned": None,
             "ordinary_still_only": ordinary_still_only,
             "execution_safe_to_attempt": False,
         }
@@ -568,6 +775,7 @@ def plan_internal_loop(
         target_new_item_count=batch_target,
         candidate_scan_limit=candidate_scan_limit,
         helper_client=helper_client,
+        ordinary_still_only=ordinary_still_only,
     )
     plan = _build_plan_summary(
         preparation,
@@ -582,10 +790,16 @@ def plan_internal_loop(
         "batch_size": batch_size,
         "total_limit": total_limit,
         "batch_target": batch_target,
+        "candidate_search_cap": candidate_scan_limit,
+        "scan_limit_meaning": "candidate_search_cap",
         "candidate_scan_limit": candidate_scan_limit,
+        "candidate_page_size": None,
+        "candidate_page_size_status": "deferred",
+        "candidate_pages_scanned": None,
         "ordinary_still_only": ordinary_still_only,
         "execution_safe_to_attempt": plan.execution_safe_to_attempt,
         "auth_state": plan.auth_state,
+        "candidates_considered": plan.logical_candidates_considered,
         "logical_candidates_considered": plan.logical_candidates_considered,
         "resource_candidates_considered": plan.resource_candidates_considered,
         "known_logical_items": plan.known_logical_items,
@@ -595,6 +809,12 @@ def plan_internal_loop(
         "selected_logical_items": plan.selected_logical_items,
         "selected_resources": plan.selected_resources,
         "unsupported_or_blocked_count": plan.unsupported_or_blocked_count,
+        "selected_unsupported_or_blocked_count": plan.selected_unsupported_or_blocked_count,
+        "safe_but_not_selected_logical_items": plan.safe_but_not_selected_logical_items,
+        "batch_target_filled": plan.batch_target_filled,
+        "partial_batch_selected": plan.partial_batch_selected,
+        "operator_decision_required": plan.operator_decision_required,
+        "candidate_search_cap_reached": plan.candidate_search_cap_reached,
         "cloud_deletion_performed": False,
         "source_intake_performed": False,
         "vault_write_performed": False,
@@ -873,6 +1093,173 @@ def _verify_final_staging_clean(
     return True, None, snapshot
 
 
+def _supports_cleanup_recovery(run: IcloudOrchestrationRun, batch: IcloudOrchestrationBatch) -> bool:
+    return (
+        (run.status == STATUS_PAUSED_FOR_CLEANUP or run.status == STATUS_BLOCKED)
+        and (run.stop_reason in {"cleanup_review_required", *_RECOVERY_STOP_REASONS} or run.stop_reason is None)
+        and batch.status in {BATCH_STATUS_CLEANUP_REVIEW_REQUIRED, BATCH_STATUS_BLOCKED}
+    )
+
+
+def _verify_batch_source_intake_evidence(
+    db_session: Session,
+    *,
+    source_id: int,
+    batch: IcloudOrchestrationBatch,
+) -> tuple[bool, str | None]:
+    if batch.acquisition_batch_id is None:
+        return False, "acquisition_batch_missing"
+    if batch.source_intake_run_id is None or batch.ingestion_run_id is None:
+        return False, "source_intake_linkage_missing"
+    resources = _batch_resources(db_session, batch.acquisition_batch_id)
+    if not resources:
+        return False, "source_intake_no_resources"
+    for resource in resources:
+        if resource.source_intake_status not in RESOURCE_SUCCESS_STATUSES:
+            return False, "source_intake_resource_outcome_missing"
+        if not resource.source_intake_run_id or not resource.ingestion_run_id:
+            return False, "source_intake_linkage_missing"
+        if not resource.asset_sha256:
+            return False, "source_intake_asset_evidence_missing"
+        provenance_count = int(
+            db_session.scalar(
+                select(func.count())
+                .select_from(Provenance)
+                .where(
+                    Provenance.ingestion_source_id == source_id,
+                    Provenance.asset_sha256 == resource.asset_sha256,
+                )
+            )
+            or 0
+        )
+        asset_count = int(db_session.scalar(select(func.count()).select_from(Asset).where(Asset.sha256 == resource.asset_sha256)) or 0)
+        if provenance_count <= 0 or asset_count <= 0:
+            return False, "source_intake_provenance_or_asset_missing"
+    return True, None
+
+
+def _cleanup_continue_environment_ready(db_session: Session, *, source_id: int) -> tuple[bool, str | None, str | None]:
+    profile = validate_exact_selection_profile(db_session, source_id=source_id)
+    if count_partial_workspace_files(profile):
+        return False, "partial_workspace_present", NEXT_RESOLVE_STAGING
+    if _drop_zone_file_count():
+        return False, "drop_zone_not_empty", NEXT_RESOLVE_DROP_ZONE
+    return True, None, None
+
+
+def _dirty_staging_reason(reason: str | None) -> bool:
+    return reason in {
+        "staging_not_clean",
+        "staged_unknown_pending_intake",
+        "resource_missing_after_acquisition",
+        "partial_workspace_present",
+        "drop_zone_not_empty",
+    }
+
+
+def _reconcile_cleanup_already_applied(
+    db_session: Session,
+    *,
+    run: IcloudOrchestrationRun,
+    batch: IcloudOrchestrationBatch,
+    final_verification: CleanupRunSnapshot | None,
+    helper_client: ExactSelectionHelperClient,
+    cleanup_wait_timeout_seconds: float,
+    cleanup_poll_seconds: float,
+) -> IcloudInternalLoopResult:
+    if final_verification is not None:
+        batch.final_cleanup_verification_run_id = final_verification.run_id
+    was_completed = batch.status == BATCH_STATUS_COMPLETED
+    batch.status = BATCH_STATUS_COMPLETED
+    batch.stop_reason = None
+    batch.failure_reason = None
+    batch.cleaned_resources = max(batch.cleaned_resources, 0)
+    batch.finished_at = _utc_now()
+    batch.next_safe_action = NEXT_COMPLETE
+    if not was_completed:
+        run.completed_batches += 1
+        run.completed_logical_items += batch.selected_logical_items
+        run.completed_resources += batch.selected_resources
+    run.status = STATUS_RUNNING
+    run.stop_reason = None
+    run.failure_reason = None
+    run.next_safe_action = None
+    run.last_heartbeat_at = _utc_now()
+    db_session.commit()
+
+    if run.completed_logical_items >= run.total_limit:
+        return _finish_run(
+            db_session,
+            run,
+            status=STATUS_COMPLETED,
+            stop_reason="total_limit_reached",
+            next_safe_action=NEXT_COMPLETE,
+        )
+    return _execute_next_batch_until_pause_or_done(
+        db_session,
+        run=run,
+        helper_client=helper_client,
+        cleanup_wait_timeout_seconds=cleanup_wait_timeout_seconds,
+        cleanup_poll_seconds=cleanup_poll_seconds,
+    )
+
+
+def _handle_recoverable_cleanup_error(
+    db_session: Session,
+    *,
+    run: IcloudOrchestrationRun,
+    batch: IcloudOrchestrationBatch,
+    cleanup_error_code: str,
+    helper_client: ExactSelectionHelperClient,
+    cleanup_wait_timeout_seconds: float,
+    cleanup_poll_seconds: float,
+) -> IcloudInternalLoopResult:
+    normalized_reason = _RECOVERABLE_CLEANUP_ERROR_CODES[cleanup_error_code]
+    clean, reason, verification = _verify_final_staging_clean(
+        db_session,
+        source_id=run.source_profile_id,
+        timeout_seconds=cleanup_wait_timeout_seconds,
+        poll_seconds=cleanup_poll_seconds,
+    )
+
+    if clean:
+        evidence_ok, evidence_reason = _verify_batch_source_intake_evidence(
+            db_session,
+            source_id=run.source_profile_id,
+            batch=batch,
+        )
+        if evidence_ok:
+            return _reconcile_cleanup_already_applied(
+                db_session,
+                run=run,
+                batch=batch,
+                final_verification=verification,
+                helper_client=helper_client,
+                cleanup_wait_timeout_seconds=cleanup_wait_timeout_seconds,
+                cleanup_poll_seconds=cleanup_poll_seconds,
+            )
+        return _block_run(
+            db_session,
+            run,
+            reason=STOP_REASON_CLEANUP_STATE_AMBIGUOUS,
+            next_safe_action=NEXT_FRESH_CLEANUP_PREVIEW,
+            batch=batch,
+            failure=False,
+            batch_failure_reason=cleanup_error_code,
+        )
+
+    reason_to_report = normalized_reason if _dirty_staging_reason(reason) else STOP_REASON_CLEANUP_STATE_AMBIGUOUS
+    return _block_run(
+        db_session,
+        run,
+        reason=reason_to_report,
+        next_safe_action=NEXT_FRESH_CLEANUP_PREVIEW,
+        batch=batch,
+        failure=False,
+        batch_failure_reason=cleanup_error_code,
+    )
+
+
 def _execute_next_batch_until_pause_or_done(
     db_session: Session,
     *,
@@ -902,6 +1289,7 @@ def _execute_next_batch_until_pause_or_done(
             target_new_item_count=batch_target,
             candidate_scan_limit=run.candidate_scan_limit,
             helper_client=helper_client,
+            ordinary_still_only=bool(run.ordinary_still_only),
         )
         plan = _build_plan_summary(
             preparation,
@@ -919,6 +1307,11 @@ def _execute_next_batch_until_pause_or_done(
             )
 
         loop_batch = _new_batch(db_session, run=run, batch_target=batch_target)
+        loop_batch.candidates_considered = plan.logical_candidates_considered
+        loop_batch.resource_candidates_considered = plan.resource_candidates_considered
+        loop_batch.unsupported_or_blocked_count = plan.unsupported_or_blocked_count
+        loop_batch.safe_but_not_selected_logical_items = plan.safe_but_not_selected_logical_items
+        db_session.commit()
         try:
             acquisition = run_durable_exact_selection_batch(
                 db_session,
@@ -1130,19 +1523,48 @@ def continue_internal_icloud_loop_cleanup(
     run = db_session.get(IcloudOrchestrationRun, orchestration_run_id)
     if run is None:
         raise IcloudInternalLoopError("orchestration_run_not_found", "Orchestration run not found.")
-    if run.status != STATUS_PAUSED_FOR_CLEANUP:
+    if run.status not in {STATUS_PAUSED_FOR_CLEANUP, STATUS_BLOCKED}:
         raise IcloudInternalLoopError("orchestration_not_paused_for_cleanup", "Run is not paused for cleanup.")
     batch = db_session.scalar(
         select(IcloudOrchestrationBatch)
-        .where(
-            IcloudOrchestrationBatch.orchestration_run_id == run.id,
-            IcloudOrchestrationBatch.cleanup_dry_run_id == cleanup_dry_run_id,
-        )
-        .order_by(IcloudOrchestrationBatch.id.desc())
+        .where(IcloudOrchestrationBatch.orchestration_run_id == run.id)
+        .order_by(IcloudOrchestrationBatch.batch_index.desc(), IcloudOrchestrationBatch.id.desc())
         .limit(1)
     )
     if batch is None:
         raise IcloudInternalLoopError("cleanup_dry_run_not_linked", "Cleanup dry run is not linked to this run.")
+
+    if not _supports_cleanup_recovery(run, batch):
+        raise IcloudInternalLoopError("orchestration_not_paused_for_cleanup", "Run is not paused for cleanup.")
+
+    if batch.cleanup_dry_run_id != cleanup_dry_run_id:
+        if run.status != STATUS_BLOCKED or run.stop_reason not in _RECOVERY_STOP_REASONS:
+            raise IcloudInternalLoopError("cleanup_dry_run_not_linked", "Cleanup dry run is not linked to this run.")
+        batch.cleanup_dry_run_id = cleanup_dry_run_id
+        batch.stop_reason = None
+        batch.failure_reason = None
+        batch.status = BATCH_STATUS_CLEANUP_REVIEW_REQUIRED
+        batch.next_safe_action = NEXT_CONTINUE_CLEANUP
+        run.status = STATUS_PAUSED_FOR_CLEANUP
+        run.stop_reason = "cleanup_review_required"
+        run.failure_reason = None
+        run.next_safe_action = NEXT_CONTINUE_CLEANUP
+        run.last_cleanup_dry_run_id = cleanup_dry_run_id
+        run.last_heartbeat_at = _utc_now()
+        db_session.commit()
+
+    env_ok, env_reason, env_next_action = _cleanup_continue_environment_ready(
+        db_session,
+        source_id=run.source_profile_id,
+    )
+    if not env_ok:
+        return _block_run(
+            db_session,
+            run,
+            reason=env_reason or "cleanup_recovery_blocked",
+            next_safe_action=env_next_action or NEXT_INSPECT_REPORT,
+            batch=batch,
+        )
 
     try:
         execution = _start_and_wait_cleanup_execution(
@@ -1153,8 +1575,26 @@ def continue_internal_icloud_loop_cleanup(
             timeout_seconds=cleanup_wait_timeout_seconds,
             poll_seconds=cleanup_poll_seconds,
         )
+    except CleanupAuthorizationError as exc:
+        if exc.code in _RECOVERABLE_CLEANUP_ERROR_CODES:
+            return _handle_recoverable_cleanup_error(
+                db_session,
+                run=run,
+                batch=batch,
+                cleanup_error_code=exc.code,
+                helper_client=helper_client or ExactSelectionHelperClient(),
+                cleanup_wait_timeout_seconds=cleanup_wait_timeout_seconds,
+                cleanup_poll_seconds=cleanup_poll_seconds,
+            )
+        return _block_run(
+            db_session,
+            run,
+            reason=exc.code,
+            next_safe_action=NEXT_INSPECT_REPORT,
+            batch=batch,
+            failure=True,
+        )
     except (
-        CleanupAuthorizationError,
         CleanupBusyError,
         CleanupValidationError,
         SourceIntakeActiveError,
@@ -1187,6 +1627,8 @@ def continue_internal_icloud_loop_cleanup(
         timeout_seconds=cleanup_wait_timeout_seconds,
         poll_seconds=cleanup_poll_seconds,
     )
+    batch.cleanup_execution_run_id = execution.run_id
+    run.last_cleanup_execution_run_id = execution.run_id
     if verification is not None:
         batch.final_cleanup_verification_run_id = verification.run_id
     if not clean:

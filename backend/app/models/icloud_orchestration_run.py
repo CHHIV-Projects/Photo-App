@@ -87,6 +87,10 @@ class IcloudOrchestrationBatch(Base):
     selected_resources: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     intaken_resources: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cleaned_resources: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidates_considered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resource_candidates_considered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unsupported_or_blocked_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    safe_but_not_selected_logical_items: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     stop_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)

@@ -60,6 +60,19 @@ DEFAULT_HELPER_TIMEOUT_SECONDS = int(
     getattr(settings, "icloud_exact_helper_timeout_seconds", 7200)
 )
 _NON_BLOCKING_UNSUPPORTED_REASONS = frozenset({"unsupported_adjustment_metadata_only"})
+_PRIMARY_ORIGINAL_RESOURCE_ID = "primary_original"
+_STILL_EXTENSIONS = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".heic",
+        ".heif",
+        ".png",
+        ".tif",
+        ".tiff",
+        ".webp",
+    }
+)
 
 PREPARATION_READY = "ready"
 PREPARATION_BLOCKED = "blocked"
@@ -123,6 +136,20 @@ class ExactSelectionPreparation:
     download_request: dict[str, Any] | None
     staged_unknown_resource_count: int = 0
     error_code: str | None = None
+
+
+def is_ordinary_still_logical_item(item: ExactSelectionLogicalItem) -> bool:
+    """Return true when an iCloud logical item is safe for ordinary-still-only selection."""
+
+    if item.identity_ambiguous or item.unsupported_reasons:
+        return False
+    if len(item.resources) != 1:
+        return False
+    resource = item.resources[0]
+    if resource.resource_id != _PRIMARY_ORIGINAL_RESOURCE_ID:
+        return False
+    extension = Path(resource.relative_path).suffix.casefold()
+    return resource.content_type.casefold().startswith("image/") or extension in _STILL_EXTENSIONS
 
 
 def _contains_forbidden_helper_key(value: object) -> bool:
@@ -684,14 +711,20 @@ def build_plan_from_listing(
     listing: ExactSelectionListing,
     target_new_item_count: int,
     candidate_scan_limit: int,
+    ordinary_still_only: bool = False,
 ) -> NewCountSelectionPlan:
+    planning_items = (
+        tuple(item for item in listing.items if is_ordinary_still_logical_item(item))
+        if ordinary_still_only
+        else listing.items
+    )
     flat_candidates = [
         PreflightCandidate(
             raw_line=resource.relative_path,
             normalized_source_relative_path=resource.relative_path,
             unknown_identity=False,
         )
-        for item in listing.items
+        for item in planning_items
         for resource in item.resources
     ]
     known_summary = evaluate_known_state(
@@ -703,7 +736,7 @@ def build_plan_from_listing(
 
     explicit_items: list[ExplicitLogicalItemCandidate] = []
     offset = 0
-    for item in listing.items:
+    for item in planning_items:
         item_known_states = known_summary.candidates[offset : offset + len(item.resources)]
         offset += len(item.resources)
         explicit_items.append(
@@ -805,6 +838,7 @@ def prepare_exact_selection_prototype(
     candidate_scan_limit: int,
     helper_client: ExactSelectionHelperClient,
     library: str = DEFAULT_LIBRARY,
+    ordinary_still_only: bool = False,
 ) -> ExactSelectionPreparation:
     if target_new_item_count < 1 or target_new_item_count > MAX_TARGET_NEW_ITEM_COUNT:
         raise ExactSelectionPrototypeError(
@@ -899,6 +933,7 @@ def prepare_exact_selection_prototype(
         listing=listing,
         target_new_item_count=target_new_item_count,
         candidate_scan_limit=candidate_scan_limit,
+        ordinary_still_only=ordinary_still_only,
     )
     request = build_exact_download_request(
         profile=profile,

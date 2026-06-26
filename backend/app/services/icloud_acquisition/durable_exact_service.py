@@ -821,6 +821,7 @@ def run_durable_exact_selection_batch(
             target_new_item_count=target_new_item_count,
             candidate_scan_limit=candidate_scan_limit,
             helper_client=helper_client,
+            ordinary_still_only=ordinary_still_only,
         )
         batch = _create_batch_from_preparation(
             db_session,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 import importlib.util
 import json
@@ -71,6 +71,17 @@ def _resource(relative_path: str, content: bytes) -> ExactSelectionResource:
     )
 
 
+def _video_resource(relative_path: str, content: bytes) -> ExactSelectionResource:
+    return ExactSelectionResource(
+        resource_id="primary_original",
+        role="primary_original",
+        relative_path=relative_path,
+        expected_size=len(content),
+        expected_checksum=_checksum(content),
+        content_type="video/quicktime",
+    )
+
+
 def _item(item_id: str, relative_path: str, content: bytes) -> ExactSelectionLogicalItem:
     return ExactSelectionLogicalItem(
         item_id=item_id,
@@ -80,6 +91,18 @@ def _item(item_id: str, relative_path: str, content: bytes) -> ExactSelectionLog
         created_at="2026-06-25T10:00:00+00:00",
         added_at="2026-06-25T10:01:00+00:00",
         resources=(_resource(relative_path, content),),
+    )
+
+
+def _video_item(item_id: str, relative_path: str, content: bytes) -> ExactSelectionLogicalItem:
+    return ExactSelectionLogicalItem(
+        item_id=item_id,
+        grouping="primary_asset_explicit",
+        identity_ambiguous=False,
+        unsupported_reasons=(),
+        created_at="2026-06-25T10:00:00+00:00",
+        added_at="2026-06-25T10:01:00+00:00",
+        resources=(_video_resource(relative_path, content),),
     )
 
 
@@ -330,7 +353,7 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
             source_id=self.source.id,
             batch_size=1,
             total_limit=2,
-            scan_limit=25,
+            candidate_search_cap=25,
             ordinary_still_only=True,
             helper_client=helper,  # type: ignore[arg-type]
         )
@@ -338,6 +361,10 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
         self.assertEqual(payload["status"], "completed")
         self.assertTrue(payload["execution_safe_to_attempt"])
         self.assertEqual(payload["batch_target"], 1)
+        self.assertEqual(payload["candidate_search_cap"], 25)
+        self.assertEqual(payload["scan_limit_meaning"], "candidate_search_cap")
+        self.assertIsNone(payload["candidate_page_size"])
+        self.assertEqual(payload["candidate_page_size_status"], "deferred")
         self.assertEqual(helper.download_calls, 0)
         self.assertFalse((self.staging_root / relative_path).exists())
         self.assertTrue(Path(payload["report_path"]).exists())
@@ -395,8 +422,92 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
         self.assertEqual(payload["status"], "completed")
         self.assertTrue(payload["execution_safe_to_attempt"])
         self.assertEqual(payload["selected_logical_items"], 1)
-        self.assertEqual(payload["unsupported_or_blocked_count"], 0)
+        self.assertEqual(payload["unsupported_or_blocked_count"], 1)
+        self.assertEqual(payload["selected_unsupported_or_blocked_count"], 0)
         self.assertEqual(helper.download_calls, 0)
+
+    def test_batch_size_two_excludes_video_and_reports_it_as_unsupported(self) -> None:
+        first_path = "2026/06/25/IMG_9120.JPG"
+        video_path = "2026/06/25/IMG_9121.MOV"
+        second_path = "2026/06/25/IMG_9122.JPG"
+        first = _bytes(b"safe-still-one")
+        video = _bytes(b"unsupported-video")
+        second = _bytes(b"safe-still-two")
+        helper = _LoopFixtureHelper(
+            _listing(
+                (
+                    _item("raw-safe-one", first_path, first),
+                    _video_item("raw-video", video_path, video),
+                    _item("raw-safe-two", second_path, second),
+                )
+            ),
+            content_by_relative_path={first_path: first, video_path: video, second_path: second},
+        )
+
+        payload = orchestrator.plan_internal_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=2,
+            total_limit=4,
+            candidate_scan_limit=50,
+            ordinary_still_only=True,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertTrue(payload["execution_safe_to_attempt"])
+        self.assertEqual(payload["candidates_considered"], 3)
+        self.assertEqual(payload["selected_logical_items"], 2)
+        self.assertEqual(payload["unsupported_or_blocked_count"], 1)
+        self.assertEqual(payload["selected_unsupported_or_blocked_count"], 0)
+        self.assertTrue(payload["batch_target_filled"])
+        self.assertFalse(payload["partial_batch_selected"])
+        self.assertEqual(helper.download_calls, 0)
+
+    def test_partial_batch_stops_for_operator_decision_without_download(self) -> None:
+        still_path = "2026/06/25/IMG_9130.JPG"
+        video_path = "2026/06/25/IMG_9131.MOV"
+        still = _bytes(b"partial-safe-still")
+        video = _bytes(b"partial-video")
+        helper = _LoopFixtureHelper(
+            _listing(
+                (
+                    _item("raw-one-safe", still_path, still),
+                    _video_item("raw-video-only-other", video_path, video),
+                )
+            ),
+            content_by_relative_path={still_path: still, video_path: video},
+        )
+
+        payload = orchestrator.plan_internal_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=2,
+            total_limit=4,
+            candidate_scan_limit=50,
+            ordinary_still_only=True,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertFalse(payload["execution_safe_to_attempt"])
+        self.assertEqual(payload["stop_reason"], "partial_batch_selected")
+        self.assertTrue(payload["partial_batch_selected"])
+        self.assertTrue(payload["operator_decision_required"])
+        self.assertEqual(payload["selected_logical_items"], 1)
+        self.assertEqual(payload["unsupported_or_blocked_count"], 1)
+        self.assertEqual(helper.download_calls, 0)
+
+    def test_parser_accepts_candidate_search_cap_and_scan_limit_alias(self) -> None:
+        preferred = script._build_parser().parse_args(
+            ["--dry-run", "--source-id", "66", "--candidate-search-cap", "50"]
+        )
+        legacy = script._build_parser().parse_args(
+            ["--dry-run", "--source-id", "66", "--scan-limit", "25"]
+        )
+
+        self.assertEqual(preferred.candidate_search_cap, 50)
+        self.assertEqual(legacy.candidate_search_cap, 25)
 
     def test_execute_pauses_after_source_intake_and_cleanup_dry_run(self) -> None:
         helper, relative_path, content = self._single_helper()
@@ -426,6 +537,29 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
         self.assertEqual(cleanup_row.eligible_count, 1)
         self.assertEqual(cleanup_row.deleted_count, 0)
 
+    def test_script_execute_payload_includes_continue_cleanup_command(self) -> None:
+        helper, _, _ = self._single_helper()
+
+        payload = script.build_execute_payload(
+            self.db,
+            source_id=self.source.id,
+            batch_size=1,
+            total_limit=1,
+            candidate_search_cap=25,
+            ordinary_still_only=True,
+            pause_before_cleanup=True,
+            helper_client=helper,  # type: ignore[arg-type]
+            created_by="test_script",
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        self.assertEqual(payload["status"], orchestrator.STATUS_PAUSED_FOR_CLEANUP)
+        self.assertTrue(payload["cleanup_review_required"])
+        self.assertIn("--continue-cleanup", payload["continue_cleanup_command"])
+        self.assertIn("--orchestration-run-id", payload["continue_cleanup_command"])
+        self.assertIn("--cleanup-dry-run-id", payload["continue_cleanup_command"])
+        self.assertIn(cleanup.EXECUTION_CONFIRMATION_PHRASE, payload["continue_cleanup_command"])
+
     def test_continue_cleanup_completes_total_limit_one_and_verifies_staging_clean(self) -> None:
         helper, relative_path, _ = self._single_helper()
         started = orchestrator.start_internal_icloud_loop(
@@ -452,6 +586,12 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
         self.assertEqual(completed.stop_reason, "total_limit_reached")
         self.assertEqual(completed.completed_logical_items, 1)
         self.assertEqual(completed.completed_batches, 1)
+        self.assertTrue(completed.staging_clean)
+        self.assertTrue(completed.drop_zone_clean)
+        self.assertTrue(completed.partial_workspace_clear)
+        self.assertEqual(completed.acquisition_run_ids, [1])
+        self.assertEqual(completed.source_intake_run_ids, [1])
+        self.assertEqual(completed.cleanup_execution_run_ids, [2])
         self.assertFalse((self.staging_root / relative_path).exists())
         self.assertEqual(list(self.staging_root.rglob("*")), [])
 
@@ -496,6 +636,223 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
             )
         )
         self.assertEqual([batch.status for batch in batches], ["completed", "cleanup_review_required"])
+
+    def test_continue_cleanup_expired_preview_blocks_with_recovery_guidance(self) -> None:
+        helper, _, _ = self._single_helper()
+        started = orchestrator.start_internal_icloud_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=1,
+            total_limit=1,
+            candidate_scan_limit=25,
+            ordinary_still_only=True,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+        dry_run = self.db.get(IcloudStagingCleanupRun, started.cleanup_dry_run_id)
+        assert dry_run is not None
+        dry_run.preview_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        self.db.commit()
+
+        blocked = orchestrator.continue_internal_icloud_loop_cleanup(
+            self.db,
+            orchestration_run_id=started.orchestration_run_id or 0,
+            cleanup_dry_run_id=started.cleanup_dry_run_id or 0,
+            confirmation=cleanup.EXECUTION_CONFIRMATION_PHRASE,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        self.assertEqual(blocked.status, orchestrator.STATUS_BLOCKED)
+        self.assertEqual(blocked.stop_reason, "cleanup_preview_expired")
+        self.assertIsNone(blocked.failure_reason)
+        self.assertEqual(blocked.failed_batches, 0)
+        self.assertTrue(blocked.cleanup_recovery_required)
+        self.assertEqual(blocked.original_cleanup_error_code, "DRY_RUN_EXPIRED")
+        self.assertEqual(blocked.stale_cleanup_dry_run_id, started.cleanup_dry_run_id)
+        self.assertEqual(
+            blocked.next_safe_action,
+            "Run a fresh guarded cleanup dry run for this source, then continue cleanup with the new dry-run ID.",
+        )
+        self.assertIn("--cleanup-dry-run-id <fresh_cleanup_dry_run_id>", blocked.continue_cleanup_command_template or "")
+        self.assertIn("/api/admin/icloud-staging-cleanup/run", blocked.fresh_cleanup_preview_command or "")
+
+    def test_continue_cleanup_consumed_preview_and_clean_staging_reconciles_idempotently(self) -> None:
+        helper, _, _ = self._single_helper()
+        started = orchestrator.start_internal_icloud_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=1,
+            total_limit=1,
+            candidate_scan_limit=25,
+            ordinary_still_only=True,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        pre_execution = cleanup.start_cleanup_execution(
+            self.db,
+            source_id=self.source.id,
+            dry_run_run_id=started.cleanup_dry_run_id or 0,
+            explicit_confirmation=cleanup.EXECUTION_CONFIRMATION_PHRASE,
+            created_by="test_preconsume",
+        )
+        final_execution = orchestrator._wait_for_cleanup(
+            self.db,
+            run_id=pre_execution.run_id,
+            source_id=self.source.id,
+            timeout_seconds=5,
+            poll_seconds=0.05,
+        )
+        self.assertEqual(final_execution.status, "completed")
+
+        reconciled = orchestrator.continue_internal_icloud_loop_cleanup(
+            self.db,
+            orchestration_run_id=started.orchestration_run_id or 0,
+            cleanup_dry_run_id=started.cleanup_dry_run_id or 0,
+            confirmation=cleanup.EXECUTION_CONFIRMATION_PHRASE,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        self.assertEqual(reconciled.status, orchestrator.STATUS_COMPLETED)
+        self.assertEqual(reconciled.stop_reason, "total_limit_reached")
+        self.assertEqual(reconciled.completed_batches, 1)
+        self.assertEqual(reconciled.completed_logical_items, 1)
+        self.assertTrue(reconciled.staging_clean)
+
+    def test_continue_cleanup_consumed_preview_with_dirty_staging_blocks(self) -> None:
+        helper, _, _ = self._single_helper()
+        started = orchestrator.start_internal_icloud_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=1,
+            total_limit=1,
+            candidate_scan_limit=25,
+            ordinary_still_only=True,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+        dry_run = self.db.get(IcloudStagingCleanupRun, started.cleanup_dry_run_id)
+        assert dry_run is not None
+        dry_run.authorization_consumed_at = datetime.now(UTC)
+        self.db.commit()
+
+        blocked = orchestrator.continue_internal_icloud_loop_cleanup(
+            self.db,
+            orchestration_run_id=started.orchestration_run_id or 0,
+            cleanup_dry_run_id=started.cleanup_dry_run_id or 0,
+            confirmation=cleanup.EXECUTION_CONFIRMATION_PHRASE,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        self.assertEqual(blocked.status, orchestrator.STATUS_BLOCKED)
+        self.assertEqual(blocked.stop_reason, "cleanup_preview_already_consumed")
+        self.assertIsNone(blocked.failure_reason)
+        self.assertEqual(blocked.failed_batches, 0)
+        self.assertTrue(blocked.cleanup_recovery_required)
+        self.assertEqual(blocked.original_cleanup_error_code, "DRY_RUN_ALREADY_CONSUMED")
+        self.assertEqual(blocked.stale_cleanup_dry_run_id, started.cleanup_dry_run_id)
+
+    def test_continue_cleanup_allows_fresh_recovery_dry_run_after_blocked_state(self) -> None:
+        helper, _, _ = self._single_helper()
+        started = orchestrator.start_internal_icloud_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=1,
+            total_limit=1,
+            candidate_scan_limit=25,
+            ordinary_still_only=True,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+        original_dry = self.db.get(IcloudStagingCleanupRun, started.cleanup_dry_run_id)
+        assert original_dry is not None
+        original_dry.preview_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        self.db.commit()
+
+        blocked = orchestrator.continue_internal_icloud_loop_cleanup(
+            self.db,
+            orchestration_run_id=started.orchestration_run_id or 0,
+            cleanup_dry_run_id=started.cleanup_dry_run_id or 0,
+            confirmation=cleanup.EXECUTION_CONFIRMATION_PHRASE,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+        self.assertEqual(blocked.status, orchestrator.STATUS_BLOCKED)
+
+        fresh = cleanup.start_cleanup_run(
+            self.db,
+            source_id=self.source.id,
+            dry_run=True,
+            created_by="test_fresh_recovery",
+        )
+        fresh_done = orchestrator._wait_for_cleanup(
+            self.db,
+            run_id=fresh.run_id,
+            source_id=self.source.id,
+            timeout_seconds=5,
+            poll_seconds=0.05,
+        )
+        self.assertEqual(fresh_done.status, "completed")
+
+        resumed = orchestrator.continue_internal_icloud_loop_cleanup(
+            self.db,
+            orchestration_run_id=started.orchestration_run_id or 0,
+            cleanup_dry_run_id=fresh_done.run_id,
+            confirmation=cleanup.EXECUTION_CONFIRMATION_PHRASE,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        self.assertEqual(resumed.status, orchestrator.STATUS_COMPLETED)
+        self.assertEqual(resumed.stop_reason, "total_limit_reached")
+        self.assertEqual(resumed.completed_batches, 1)
+        batch = self.db.scalars(
+            select(IcloudOrchestrationBatch)
+            .where(IcloudOrchestrationBatch.orchestration_run_id == (started.orchestration_run_id or 0))
+            .order_by(IcloudOrchestrationBatch.batch_index.desc())
+        ).first()
+        assert batch is not None
+        self.assertEqual(batch.cleanup_dry_run_id, fresh_done.run_id)
+
+    def test_script_continue_cleanup_payload_exposes_recovery_commands(self) -> None:
+        helper, _, _ = self._single_helper()
+        started = orchestrator.start_internal_icloud_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=1,
+            total_limit=1,
+            candidate_scan_limit=25,
+            ordinary_still_only=True,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+        dry_run = self.db.get(IcloudStagingCleanupRun, started.cleanup_dry_run_id)
+        assert dry_run is not None
+        dry_run.preview_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        self.db.commit()
+
+        payload = script.build_continue_cleanup_payload(
+            self.db,
+            orchestration_run_id=started.orchestration_run_id or 0,
+            cleanup_dry_run_id=started.cleanup_dry_run_id or 0,
+            confirmation=cleanup.EXECUTION_CONFIRMATION_PHRASE,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["stop_reason"], "cleanup_preview_expired")
+        self.assertTrue(payload["cleanup_recovery_required"])
+        self.assertEqual(payload["original_cleanup_error_code"], "DRY_RUN_EXPIRED")
+        self.assertIn("<fresh_cleanup_dry_run_id>", payload["continue_cleanup_command_template"])
+        self.assertIn("/api/admin/icloud-staging-cleanup/run", payload["fresh_cleanup_preview_command"])
+        serialized = json.dumps(payload).casefold()
+        self.assertNotIn("password", serialized)
+        self.assertNotIn("token", serialized)
+        self.assertNotIn("cookie", serialized)
 
 
 if __name__ == "__main__":

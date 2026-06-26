@@ -38,7 +38,7 @@ from app.services.ingestion.pipeline_orchestrator import resolve_runtime_path  #
 REPORT_TYPE = "icloud_internal_multibatch_loop"
 DEFAULT_BATCH_SIZE = 1
 DEFAULT_TOTAL_LIMIT = 2
-DEFAULT_SCAN_LIMIT = 25
+DEFAULT_CANDIDATE_SEARCH_CAP = 25
 DEFAULT_CLEANUP_WAIT_TIMEOUT_SECONDS = 60.0
 
 _FORBIDDEN_OUTPUT_TERMS = (
@@ -76,7 +76,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-id", type=int)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--total-limit", type=int, default=DEFAULT_TOTAL_LIMIT)
-    parser.add_argument("--scan-limit", type=int, default=DEFAULT_SCAN_LIMIT)
+    parser.add_argument(
+        "--candidate-search-cap",
+        dest="candidate_search_cap",
+        type=int,
+        default=None,
+        help="Maximum total iCloud candidates to inspect while filling one batch.",
+    )
+    parser.add_argument(
+        "--scan-limit",
+        dest="candidate_search_cap",
+        type=int,
+        default=None,
+        help=(
+            "Backward-compatible alias for --candidate-search-cap. "
+            "This is not batch size or total limit."
+        ),
+    )
     parser.add_argument(
         "--ordinary-still-only",
         action="store_true",
@@ -96,7 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help=f"Cleanup continuation requires the exact value {EXECUTION_CONFIRMATION_PHRASE}.",
     )
-    parser.add_argument("--created-by", default="internal_12_62_19")
+    parser.add_argument("--created-by", default="internal_12_62_20")
     parser.add_argument(
         "--cleanup-wait-timeout-seconds",
         type=float,
@@ -139,13 +155,54 @@ def _base_payload(*, phase: str, source_id: int | None) -> dict[str, Any]:
     }
 
 
+def _continue_cleanup_command(*, orchestration_run_id: int, cleanup_dry_run_id: int) -> str:
+    return "\n".join(
+        (
+            "$env:PYTHONPATH='backend'",
+            "& '.\\.venv\\Scripts\\python.exe' '.\\backend\\scripts\\run_icloud_internal_loop.py' `",
+            "  --continue-cleanup `",
+            f"  --orchestration-run-id {orchestration_run_id} `",
+            f"  --cleanup-dry-run-id {cleanup_dry_run_id} `",
+            f"  --confirm '{EXECUTION_CONFIRMATION_PHRASE}'",
+        )
+    )
+
+
+def _augment_operator_payload(
+    payload: dict[str, Any],
+    *,
+    candidate_search_cap: int | None = None,
+) -> dict[str, Any]:
+    if candidate_search_cap is not None:
+        payload.setdefault("candidate_search_cap", candidate_search_cap)
+        payload.setdefault("scan_limit_meaning", "candidate_search_cap")
+        payload.setdefault("candidate_scan_limit", candidate_search_cap)
+    payload.setdefault("candidate_page_size", None)
+    payload.setdefault("candidate_page_size_status", "deferred")
+    payload.setdefault("candidate_pages_scanned", None)
+    cleanup_dry_run_id = payload.get("cleanup_dry_run_id")
+    orchestration_run_id = payload.get("orchestration_run_id")
+    cleanup_review_required = (
+        payload.get("status") == "paused_for_cleanup"
+        and cleanup_dry_run_id is not None
+        and orchestration_run_id is not None
+    )
+    payload["cleanup_review_required"] = cleanup_review_required
+    if cleanup_review_required:
+        payload["continue_cleanup_command"] = _continue_cleanup_command(
+            orchestration_run_id=int(orchestration_run_id),
+            cleanup_dry_run_id=int(cleanup_dry_run_id),
+        )
+    return payload
+
+
 def build_dry_run_payload(
     db_session,
     *,
     source_id: int,
     batch_size: int,
     total_limit: int,
-    scan_limit: int,
+    candidate_search_cap: int,
     ordinary_still_only: bool,
     helper_client: ExactSelectionHelperClient,
 ) -> dict[str, Any]:
@@ -155,13 +212,14 @@ def build_dry_run_payload(
         source_id=source_id,
         batch_size=batch_size,
         total_limit=total_limit,
-        candidate_scan_limit=scan_limit,
+        candidate_scan_limit=candidate_search_cap,
         ordinary_still_only=ordinary_still_only,
         helper_client=helper_client,
     )
     payload.update(plan)
     payload["source_intake_performed"] = False
     payload["cleanup_performed"] = False
+    _augment_operator_payload(payload, candidate_search_cap=candidate_search_cap)
     _write_report(payload, phase="dry_run", source_id=source_id)
     return payload
 
@@ -172,7 +230,7 @@ def build_execute_payload(
     source_id: int,
     batch_size: int,
     total_limit: int,
-    scan_limit: int,
+    candidate_search_cap: int,
     ordinary_still_only: bool,
     pause_before_cleanup: bool,
     helper_client: ExactSelectionHelperClient,
@@ -184,7 +242,7 @@ def build_execute_payload(
         source_id=source_id,
         batch_size=batch_size,
         total_limit=total_limit,
-        candidate_scan_limit=scan_limit,
+        candidate_scan_limit=candidate_search_cap,
         ordinary_still_only=ordinary_still_only,
         pause_before_cleanup=pause_before_cleanup,
         helper_client=helper_client,
@@ -197,6 +255,7 @@ def build_execute_payload(
     payload["cloud_deletion_performed"] = False
     payload["normal_ui_exposure_added"] = False
     payload["normal_admin_api_exposure_added"] = False
+    _augment_operator_payload(payload, candidate_search_cap=candidate_search_cap)
     _assert_secret_free(payload)
     return payload
 
@@ -224,6 +283,7 @@ def build_continue_cleanup_payload(
     payload["cloud_deletion_performed"] = False
     payload["normal_ui_exposure_added"] = False
     payload["normal_admin_api_exposure_added"] = False
+    _augment_operator_payload(payload)
     _assert_secret_free(payload)
     return payload
 
@@ -236,6 +296,10 @@ def _error_payload(*, phase: str, source_id: int | None, code: str, next_safe_ac
             "stop_reason": code,
             "failure_reason": None,
             "next_safe_action": next_safe_action or "Inspect orchestration report",
+            "candidate_search_cap": None,
+            "scan_limit_meaning": "candidate_search_cap",
+            "candidate_page_size": None,
+            "candidate_page_size_status": "deferred",
             "source_intake_performed": False,
             "cleanup_performed": False,
         }
@@ -257,6 +321,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--continue-cleanup requires --orchestration-run-id and --cleanup-dry-run-id")
     elif args.source_id is None:
         parser.error("--dry-run and --execute require --source-id")
+    candidate_search_cap = args.candidate_search_cap or DEFAULT_CANDIDATE_SEARCH_CAP
 
     try:
         with SessionLocal() as db_session:
@@ -267,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
                     source_id=args.source_id,
                     batch_size=args.batch_size,
                     total_limit=args.total_limit,
-                    scan_limit=args.scan_limit,
+                    candidate_search_cap=candidate_search_cap,
                     ordinary_still_only=args.ordinary_still_only,
                     helper_client=helper_client,
                 )
@@ -277,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
                     source_id=args.source_id,
                     batch_size=args.batch_size,
                     total_limit=args.total_limit,
-                    scan_limit=args.scan_limit,
+                    candidate_search_cap=candidate_search_cap,
                     ordinary_still_only=args.ordinary_still_only,
                     pause_before_cleanup=args.pause_before_cleanup,
                     helper_client=helper_client,
