@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.models.asset import Asset
 from app.models.icloud_acquisition_run import (
     IcloudAcquisitionBatch,
+    IcloudAcquisitionItem,
     IcloudAcquisitionResource,
 )
 from app.models.icloud_orchestration_run import (
@@ -72,6 +73,7 @@ from app.services.icloud_acquisition.exact_selection_adapter import (
     validate_exact_selection_profile,
 )
 from app.services.icloud_acquisition.exact_selection_protocol import AUTHENTICATED
+from app.services.icloud_acquisition.exact_selection_protocol import RESOURCE_LIVE_PHOTO_ORIGINAL
 from app.services.icloud_acquisition.new_count_planner import (
     MAX_CANDIDATE_SCAN_LIMIT,
     MAX_TARGET_NEW_ITEM_COUNT,
@@ -103,7 +105,10 @@ BATCH_STATUS_FAILED = "failed"
 
 NEXT_RUN_SOURCE_INTAKE = "Run batch Source Intake"
 NEXT_CONTINUE_CLEANUP = "Review cleanup dry run, then continue cleanup with explicit confirmation"
-NEXT_ADD_NEW_ITEMS_OR_INCREASE_SEARCH_CAP = "Add new ordinary stills or get approval for a larger candidate search cap"
+NEXT_ADD_NEW_ORDINARY_STILLS_OR_INCREASE_SEARCH_CAP = "Add new ordinary stills or get approval for a larger candidate search cap"
+NEXT_ADD_NEW_SUPPORTED_ASSETS_OR_INCREASE_SEARCH_CAP = (
+    "Add new supported iCloud assets or increase candidate_search_cap after review."
+)
 NEXT_OPERATOR_DECISION_PARTIAL = "Operator decision required before acquiring a partial batch"
 NEXT_RESOLVE_STAGING = "Resolve staging state before retrying"
 NEXT_RESOLVE_DROP_ZONE = "Clear or process the Drop Zone before retrying"
@@ -391,6 +396,10 @@ def _run_payload(db_session: Session, run: IcloudOrchestrationRun) -> dict[str, 
     batches = [_batch_payload(row) for row in batch_rows]
     latest_batch = batch_rows[-1] if batch_rows else None
     recovery_required = run.status == STATUS_BLOCKED and run.stop_reason in _RECOVERY_STOP_REASONS
+    media_counts = _media_counts_for_batches(
+        db_session,
+        acquisition_batch_ids=_compact_ints([row.acquisition_batch_id for row in batch_rows]),
+    )
     payload = {
         "report_type": REPORT_TYPE,
         "generated_at_utc": _utc_now().isoformat(),
@@ -405,6 +414,8 @@ def _run_payload(db_session: Session, run: IcloudOrchestrationRun) -> dict[str, 
         "candidate_page_size_status": "deferred",
         "candidate_pages_scanned": None,
         "ordinary_still_only": bool(run.ordinary_still_only),
+        "requested_asset_scope": "ordinary_stills_only" if run.ordinary_still_only else "all_supported_assets",
+        "effective_asset_scope": "ordinary_stills_only" if run.ordinary_still_only else "all_supported_assets",
         "pause_before_cleanup": bool(run.pause_before_cleanup),
         "status": run.status,
         "stop_reason": run.stop_reason,
@@ -439,6 +450,16 @@ def _run_payload(db_session: Session, run: IcloudOrchestrationRun) -> dict[str, 
         "cloud_deletion_performed": False,
         "normal_ui_exposure_added": False,
         "normal_admin_api_exposure_added": False,
+        "ordinary_still_logical_count": media_counts["ordinary_still_logical_count"],
+        "ordinary_still_resource_count": media_counts["ordinary_still_resource_count"],
+        "video_logical_count": media_counts["video_logical_count"],
+        "video_resource_count": media_counts["video_resource_count"],
+        "live_photo_logical_count": media_counts["live_photo_logical_count"],
+        "live_photo_still_resource_count": media_counts["live_photo_still_resource_count"],
+        "live_photo_motion_resource_count": media_counts["live_photo_motion_resource_count"],
+        "ambiguous_count": "unknown",
+        "orphaned_companion_count": "unknown",
+        "pairing_warning_count": "unknown",
         "batches": batches,
     }
     if recovery_required:
@@ -449,6 +470,57 @@ def _run_payload(db_session: Session, run: IcloudOrchestrationRun) -> dict[str, 
         payload["fresh_cleanup_preview_command"] = _fresh_cleanup_preview_command(source_id=run.source_profile_id)
     payload.update(_staging_state_payload(db_session, source_id=run.source_profile_id))
     return payload
+
+
+def _is_video_resource(resource: IcloudAcquisitionResource) -> bool:
+    relative = (resource.relative_path or "").casefold()
+    return relative.endswith(".mov") or relative.endswith(".mp4") or relative.endswith(".m4v")
+
+
+def _is_live_photo_item(item: IcloudAcquisitionItem) -> bool:
+    grouping = (item.grouping or "").casefold()
+    if "live_photo" in grouping:
+        return True
+    return any((resource.resource_role or "") == RESOURCE_LIVE_PHOTO_ORIGINAL for resource in item.resources)
+
+
+def _media_counts_for_batches(
+    db_session: Session,
+    *,
+    acquisition_batch_ids: list[int],
+) -> dict[str, int]:
+    counts = {
+        "ordinary_still_logical_count": 0,
+        "ordinary_still_resource_count": 0,
+        "video_logical_count": 0,
+        "video_resource_count": 0,
+        "live_photo_logical_count": 0,
+        "live_photo_still_resource_count": 0,
+        "live_photo_motion_resource_count": 0,
+    }
+    for batch_id in acquisition_batch_ids:
+        batch = db_session.get(IcloudAcquisitionBatch, batch_id)
+        if batch is None:
+            continue
+        for item in batch.items:
+            selected_resources = [resource for resource in item.resources if resource.selected_for_download]
+            if not selected_resources:
+                continue
+            if _is_live_photo_item(item):
+                counts["live_photo_logical_count"] += 1
+                for resource in selected_resources:
+                    if _is_video_resource(resource):
+                        counts["live_photo_motion_resource_count"] += 1
+                    else:
+                        counts["live_photo_still_resource_count"] += 1
+                continue
+            if any(_is_video_resource(resource) for resource in selected_resources):
+                counts["video_logical_count"] += 1
+                counts["video_resource_count"] += len(selected_resources)
+                continue
+            counts["ordinary_still_logical_count"] += 1
+            counts["ordinary_still_resource_count"] += len(selected_resources)
+    return counts
 
 
 def _assert_secret_free(payload: dict[str, Any]) -> None:
@@ -671,7 +743,7 @@ def _build_plan_summary(
             ordinary_safe = False
     selected_count = plan.selected_new_item_count
     selected_resource_count = plan.selected_new_resource_count
-    batch_target_filled = selected_count == batch_target and selected_resource_count == batch_target
+    batch_target_filled = selected_count == batch_target
     partial_batch_selected = 0 < selected_count < batch_target
     search_cap_reached = bool(
         preparation.stopping_reason == STOP_SCAN_LIMIT_REACHED
@@ -704,7 +776,11 @@ def _build_plan_summary(
     if operator_decision_required:
         next_action = NEXT_OPERATOR_DECISION_PARTIAL
     elif stop_reason in {"candidate_search_cap_reached", "no_more_new_items", "no_more_candidates"}:
-        next_action = NEXT_ADD_NEW_ITEMS_OR_INCREASE_SEARCH_CAP
+        next_action = (
+            NEXT_ADD_NEW_ORDINARY_STILLS_OR_INCREASE_SEARCH_CAP
+            if ordinary_still_only
+            else NEXT_ADD_NEW_SUPPORTED_ASSETS_OR_INCREASE_SEARCH_CAP
+        )
     return IcloudLoopPlanSummary(
         status=STATUS_COMPLETED,
         stop_reason=stop_reason,

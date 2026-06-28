@@ -647,6 +647,8 @@ class InternalIcloudRunStatus(BaseModel):
     candidate_search_cap: int
     requested_media_scope: MediaScopeValue
     effective_media_scope: MediaScopeValue | None = None
+    requested_asset_scope: str | None = None
+    effective_asset_scope: str | None = None
     auto_cleanup_if_safe: bool
     dry_run_performed: bool
     execution_performed: bool
@@ -668,12 +670,17 @@ class InternalIcloudRunStatus(BaseModel):
     final_cleanup_verification_run_ids: list[int] = Field(default_factory=list)
     logical_assets_selected: CountOrStatusValue = "unknown"
     resources_selected: CountOrStatusValue = "unknown"
+    ordinary_still_logical_count: CountOrStatusValue = "not_available"
+    ordinary_still_resource_count: CountOrStatusValue = "not_available"
+    video_logical_count: CountOrStatusValue = "not_available"
+    video_resource_count: CountOrStatusValue = "not_available"
     ordinary_still_count: CountOrStatusValue = "not_available"
     live_photo_logical_count: CountOrStatusValue = "not_available"
     live_photo_still_resource_count: CountOrStatusValue = "not_available"
     live_photo_motion_resource_count: CountOrStatusValue = "not_available"
     video_count: CountOrStatusValue = "not_available"
     unsupported_or_blocked_count: CountOrStatusValue = "unknown"
+    ambiguous_count: CountOrStatusValue = "unknown"
     acquired_resource_count: CountOrStatusValue = "unknown"
     source_intake_count: CountOrStatusValue = "unknown"
     ingestion_count: CountOrStatusValue = "unknown"

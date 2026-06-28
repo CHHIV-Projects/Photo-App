@@ -71,6 +71,17 @@ def _resource(relative_path: str, content: bytes) -> ExactSelectionResource:
     )
 
 
+def _resource_with_role(relative_path: str, content: bytes, *, role: str, content_type: str) -> ExactSelectionResource:
+    return ExactSelectionResource(
+        resource_id=role,
+        role=role,
+        relative_path=relative_path,
+        expected_size=len(content),
+        expected_checksum=_checksum(content),
+        content_type=content_type,
+    )
+
+
 def _video_resource(relative_path: str, content: bytes) -> ExactSelectionResource:
     return ExactSelectionResource(
         resource_id="primary_original",
@@ -103,6 +114,27 @@ def _video_item(item_id: str, relative_path: str, content: bytes) -> ExactSelect
         created_at="2026-06-25T10:00:00+00:00",
         added_at="2026-06-25T10:01:00+00:00",
         resources=(_video_resource(relative_path, content),),
+    )
+
+
+def _live_photo_item(
+    item_id: str,
+    still_relative_path: str,
+    still_content: bytes,
+    motion_relative_path: str,
+    motion_content: bytes,
+) -> ExactSelectionLogicalItem:
+    return ExactSelectionLogicalItem(
+        item_id=item_id,
+        grouping="live_photo_pair",
+        identity_ambiguous=False,
+        unsupported_reasons=(),
+        created_at="2026-06-25T10:00:00+00:00",
+        added_at="2026-06-25T10:01:00+00:00",
+        resources=(
+            _resource_with_role(still_relative_path, still_content, role="primary_original", content_type="image/jpeg"),
+            _resource_with_role(motion_relative_path, motion_content, role="live_photo_original", content_type="video/quicktime"),
+        ),
     )
 
 
@@ -497,6 +529,85 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
         self.assertEqual(payload["selected_logical_items"], 1)
         self.assertEqual(payload["unsupported_or_blocked_count"], 1)
         self.assertEqual(helper.download_calls, 0)
+
+    def test_all_supported_media_marks_batch_filled_by_logical_count(self) -> None:
+        still_path = "2026/06/25/IMG_9140.JPG"
+        motion_path = "2026/06/25/IMG_9140.MOV"
+        still = _bytes(b"live-photo-still")
+        motion = _bytes(b"live-photo-motion")
+        helper = _LoopFixtureHelper(
+            _listing(
+                (
+                    _live_photo_item("raw-live-photo", still_path, still, motion_path, motion),
+                )
+            ),
+            content_by_relative_path={still_path: still, motion_path: motion},
+        )
+
+        payload = orchestrator.plan_internal_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=1,
+            total_limit=1,
+            candidate_scan_limit=50,
+            ordinary_still_only=False,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertTrue(payload["execution_safe_to_attempt"])
+        self.assertEqual(payload["selected_logical_items"], 1)
+        self.assertEqual(payload["selected_resources"], 2)
+        self.assertTrue(payload["batch_target_filled"])
+        self.assertFalse(payload["partial_batch_selected"])
+
+    def test_run_payload_reports_mixed_asset_counts(self) -> None:
+        still_path = "2026/06/25/IMG_9150.JPG"
+        video_path = "2026/06/25/IMG_9151.MOV"
+        live_still_path = "2026/06/25/IMG_9152.JPG"
+        live_motion_path = "2026/06/25/IMG_9152.MOV"
+        still = _bytes(b"mixed-still")
+        video = _bytes(b"mixed-video")
+        live_still = _bytes(b"mixed-live-still")
+        live_motion = _bytes(b"mixed-live-motion")
+        helper = _LoopFixtureHelper(
+            _listing(
+                (
+                    _item("raw-still", still_path, still),
+                    _video_item("raw-video", video_path, video),
+                    _live_photo_item("raw-live", live_still_path, live_still, live_motion_path, live_motion),
+                )
+            ),
+            content_by_relative_path={
+                still_path: still,
+                video_path: video,
+                live_still_path: live_still,
+                live_motion_path: live_motion,
+            },
+        )
+
+        result = orchestrator.start_internal_icloud_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=3,
+            total_limit=3,
+            candidate_scan_limit=50,
+            ordinary_still_only=False,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        self.assertEqual(result.status, orchestrator.STATUS_PAUSED_FOR_CLEANUP)
+        run_row = self.db.get(IcloudOrchestrationRun, result.orchestration_run_id)
+        self.assertIsNotNone(run_row)
+        report_payload = json.loads(Path(str(run_row.report_path)).read_text(encoding="utf-8"))
+        self.assertEqual(report_payload["ordinary_still_logical_count"], 1)
+        self.assertEqual(report_payload["ordinary_still_resource_count"], 1)
+        self.assertEqual(report_payload["video_logical_count"], 1)
+        self.assertEqual(report_payload["video_resource_count"], 1)
+        self.assertEqual(report_payload["live_photo_logical_count"], 1)
+        self.assertEqual(report_payload["live_photo_still_resource_count"], 1)
+        self.assertEqual(report_payload["live_photo_motion_resource_count"], 1)
 
     def test_parser_accepts_candidate_search_cap_and_scan_limit_alias(self) -> None:
         preferred = script._build_parser().parse_args(

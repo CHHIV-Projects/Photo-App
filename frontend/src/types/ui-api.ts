@@ -1605,6 +1605,7 @@ export type InternalIcloudMediaScope =
   | "all_supported_media";
 
 export type InternalIcloudCountOrStatus = number | "not_available" | "deferred" | "not_applicable" | "unknown";
+export type InternalIcloudAssetScope = "ordinary_stills_only" | "all_supported_assets";
 
 export interface InternalIcloudRunRequest {
   source_id: number;
@@ -1628,6 +1629,8 @@ export interface InternalIcloudRunStatus {
   candidate_search_cap: number;
   requested_media_scope: InternalIcloudMediaScope;
   effective_media_scope: InternalIcloudMediaScope | null;
+  requested_asset_scope: InternalIcloudAssetScope | null;
+  effective_asset_scope: InternalIcloudAssetScope | null;
   auto_cleanup_if_safe: boolean;
   dry_run_performed: boolean;
   execution_performed: boolean;
@@ -1649,12 +1652,17 @@ export interface InternalIcloudRunStatus {
   final_cleanup_verification_run_ids: number[];
   logical_assets_selected: InternalIcloudCountOrStatus;
   resources_selected: InternalIcloudCountOrStatus;
+  ordinary_still_logical_count: InternalIcloudCountOrStatus;
+  ordinary_still_resource_count: InternalIcloudCountOrStatus;
+  video_logical_count: InternalIcloudCountOrStatus;
+  video_resource_count: InternalIcloudCountOrStatus;
   ordinary_still_count: InternalIcloudCountOrStatus;
   live_photo_logical_count: InternalIcloudCountOrStatus;
   live_photo_still_resource_count: InternalIcloudCountOrStatus;
   live_photo_motion_resource_count: InternalIcloudCountOrStatus;
   video_count: InternalIcloudCountOrStatus;
   unsupported_or_blocked_count: InternalIcloudCountOrStatus;
+  ambiguous_count: InternalIcloudCountOrStatus;
   acquired_resource_count: InternalIcloudCountOrStatus;
   source_intake_count: InternalIcloudCountOrStatus;
   ingestion_count: InternalIcloudCountOrStatus;

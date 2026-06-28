@@ -29,6 +29,7 @@ from app.services.icloud_acquisition.orchestration_schema import ensure_icloud_o
 
 
 MEDIA_SCOPE_ORDINARY_STILLS = "ordinary_stills"
+MEDIA_SCOPE_ALL_SUPPORTED = "all_supported_media"
 MediaScope = Literal[
     "ordinary_stills",
     "stills_with_live_photo_pairs",
@@ -92,6 +93,9 @@ def _unsupported_media_scope_status(
     media_scope: MediaScope,
     auto_cleanup_if_safe: bool,
 ) -> InternalIcloudRunStatus:
+    requested_asset_scope = (
+        "all_supported_assets" if media_scope == MEDIA_SCOPE_ALL_SUPPORTED else "ordinary_stills_only"
+    )
     return InternalIcloudRunStatus(
         run_id=None,
         status="stopped",
@@ -105,6 +109,8 @@ def _unsupported_media_scope_status(
         candidate_search_cap=candidate_search_cap,
         requested_media_scope=media_scope,
         effective_media_scope=None,
+        requested_asset_scope=requested_asset_scope,
+        effective_asset_scope=None,
         auto_cleanup_if_safe=auto_cleanup_if_safe,
         dry_run_performed=False,
         execution_performed=False,
@@ -116,12 +122,17 @@ def _unsupported_media_scope_status(
         orchestration_report_path=None,
         logical_assets_selected="not_available",
         resources_selected="not_available",
+        ordinary_still_logical_count="not_available",
+        ordinary_still_resource_count="not_available",
+        video_logical_count="not_available",
+        video_resource_count="not_available",
         ordinary_still_count="not_available",
         live_photo_logical_count="not_available",
         live_photo_still_resource_count="not_available",
         live_photo_motion_resource_count="not_available",
         video_count="not_available",
         unsupported_or_blocked_count="not_available",
+        ambiguous_count="unknown",
         acquired_resource_count="not_available",
         source_intake_count="not_available",
         ingestion_count="not_available",
@@ -146,6 +157,9 @@ def _from_orchestration_row(
     media_scope: MediaScope,
     auto_cleanup_if_safe: bool,
 ) -> InternalIcloudRunStatus:
+    effective_media_scope = (
+        MEDIA_SCOPE_ORDINARY_STILLS if bool(run.ordinary_still_only) else MEDIA_SCOPE_ALL_SUPPORTED
+    )
     cleanup_performed = bool(run.last_cleanup_execution_run_id)
     final_verification_passed = bool(
         run.status == "completed"
@@ -164,7 +178,9 @@ def _from_orchestration_row(
         total_limit=run.total_limit,
         candidate_search_cap=run.candidate_scan_limit,
         requested_media_scope=media_scope,
-        effective_media_scope=MEDIA_SCOPE_ORDINARY_STILLS,
+        effective_media_scope=effective_media_scope,
+        requested_asset_scope=("all_supported_assets" if media_scope == MEDIA_SCOPE_ALL_SUPPORTED else "ordinary_stills_only"),
+        effective_asset_scope=("all_supported_assets" if effective_media_scope == MEDIA_SCOPE_ALL_SUPPORTED else "ordinary_stills_only"),
         auto_cleanup_if_safe=auto_cleanup_if_safe,
         dry_run_performed=True,
         execution_performed=run.attempted_batches > 0,
@@ -186,12 +202,17 @@ def _from_orchestration_row(
         final_cleanup_verification_run_ids=[],
         logical_assets_selected=run.completed_logical_items,
         resources_selected=run.completed_resources,
+        ordinary_still_logical_count="unknown",
+        ordinary_still_resource_count="unknown",
+        video_logical_count="unknown",
+        video_resource_count="unknown",
         ordinary_still_count=run.completed_resources,
         live_photo_logical_count="not_available",
         live_photo_still_resource_count="not_available",
         live_photo_motion_resource_count="not_available",
         video_count="not_available",
         unsupported_or_blocked_count="unknown",
+        ambiguous_count="unknown",
         acquired_resource_count=run.completed_resources,
         source_intake_count=run.completed_resources,
         ingestion_count=run.completed_resources,
@@ -229,6 +250,20 @@ def _from_orchestration_payload(
     final_verification_ids = _list_ints("final_cleanup_verification_ids")
     cleanup_execution_ids = _list_ints("cleanup_execution_run_ids")
 
+    effective_media_scope = (
+        MEDIA_SCOPE_ORDINARY_STILLS
+        if bool(payload.get("ordinary_still_only"))
+        else MEDIA_SCOPE_ALL_SUPPORTED
+    )
+
+    def _count_or_status(key: str, fallback: str = "unknown") -> int | str:
+        raw = payload.get(key)
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw in {"not_available", "deferred", "not_applicable", "unknown"}:
+            return raw
+        return fallback
+
     return InternalIcloudRunStatus(
         run_id=int(payload.get("orchestration_run_id") or 0) or None,
         status=str(payload.get("status") or "unknown"),
@@ -244,7 +279,13 @@ def _from_orchestration_payload(
         total_limit=int(payload.get("total_limit") or 0),
         candidate_search_cap=int(payload.get("candidate_search_cap") or 0),
         requested_media_scope=media_scope,
-        effective_media_scope=MEDIA_SCOPE_ORDINARY_STILLS,
+        effective_media_scope=effective_media_scope,
+        requested_asset_scope=("all_supported_assets" if media_scope == MEDIA_SCOPE_ALL_SUPPORTED else "ordinary_stills_only"),
+        effective_asset_scope=(
+            str(payload.get("effective_asset_scope"))
+            if payload.get("effective_asset_scope") is not None
+            else ("all_supported_assets" if effective_media_scope == MEDIA_SCOPE_ALL_SUPPORTED else "ordinary_stills_only")
+        ),
         auto_cleanup_if_safe=auto_cleanup_if_safe,
         dry_run_performed=True,
         execution_performed=bool(int(payload.get("attempted_batches") or 0) > 0),
@@ -266,20 +307,25 @@ def _from_orchestration_payload(
         final_cleanup_verification_run_ids=final_verification_ids,
         logical_assets_selected=(int(payload.get("completed_logical_items") or 0)),
         resources_selected=(int(payload.get("completed_resources") or 0)),
+        ordinary_still_logical_count=_count_or_status("ordinary_still_logical_count"),
+        ordinary_still_resource_count=_count_or_status("ordinary_still_resource_count"),
+        video_logical_count=_count_or_status("video_logical_count", fallback="not_available"),
+        video_resource_count=_count_or_status("video_resource_count", fallback="not_available"),
         ordinary_still_count=(int(payload.get("completed_resources") or 0)),
-        live_photo_logical_count="not_available",
-        live_photo_still_resource_count="not_available",
-        live_photo_motion_resource_count="not_available",
-        video_count="not_available",
-        unsupported_or_blocked_count="unknown",
+        live_photo_logical_count=_count_or_status("live_photo_logical_count", fallback="not_available"),
+        live_photo_still_resource_count=_count_or_status("live_photo_still_resource_count", fallback="not_available"),
+        live_photo_motion_resource_count=_count_or_status("live_photo_motion_resource_count", fallback="not_available"),
+        video_count=_count_or_status("video_logical_count", fallback="not_available"),
+        unsupported_or_blocked_count=_count_or_status("unsupported_or_blocked_count"),
+        ambiguous_count=_count_or_status("ambiguous_count"),
         acquired_resource_count=(int(payload.get("completed_resources") or 0)),
         source_intake_count=(int(payload.get("completed_resources") or 0)),
         ingestion_count=(int(payload.get("completed_resources") or 0)),
         cleanup_eligible_count="unknown",
         cleanup_completed_deleted_count=("unknown" if not cleanup_execution_ids else "unknown"),
         cleanup_failed_count=(int(payload.get("failed_batches") or 0)),
-        orphaned_companion_count="not_available",
-        pairing_warning_count="not_available",
+        orphaned_companion_count=_count_or_status("orphaned_companion_count", fallback="unknown"),
+        pairing_warning_count=_count_or_status("pairing_warning_count", fallback="unknown"),
         final_staging_clean=(bool(payload.get("staging_clean")) if payload.get("staging_clean") is not None else None),
         drop_zone_clean=(bool(payload.get("drop_zone_clean")) if payload.get("drop_zone_clean") is not None else None),
         partial_workspace_clean=(bool(payload.get("partial_workspace_clear")) if payload.get("partial_workspace_clear") is not None else None),
@@ -296,6 +342,7 @@ def _run_single_flow_background(
     batch_size: int,
     total_limit: int,
     candidate_search_cap: int,
+    ordinary_still_only: bool,
     auto_cleanup_if_safe: bool,
     created_by: str,
 ) -> None:
@@ -307,7 +354,7 @@ def _run_single_flow_background(
                 batch_size=batch_size,
                 total_limit=total_limit,
                 candidate_scan_limit=candidate_search_cap,
-                ordinary_still_only=True,
+                ordinary_still_only=ordinary_still_only,
                 pause_before_cleanup=True,
                 created_by=created_by,
             )
@@ -344,6 +391,14 @@ def _wait_for_run_id(db_session: Session, *, created_by: str, timeout_seconds: f
     return None
 
 
+def _ordinary_still_only_for_scope(media_scope: MediaScope) -> bool | None:
+    if media_scope == MEDIA_SCOPE_ORDINARY_STILLS:
+        return True
+    if media_scope == MEDIA_SCOPE_ALL_SUPPORTED:
+        return False
+    return None
+
+
 def start_internal_single_flow_run(
     db_session: Session,
     *,
@@ -371,7 +426,8 @@ def start_internal_single_flow_run(
         status.next_safe_action = "Select an existing active Source Profile."
         return InternalIcloudRunStartResult(False, "Source profile not found.", status)
 
-    if media_scope != MEDIA_SCOPE_ORDINARY_STILLS:
+    ordinary_still_only = _ordinary_still_only_for_scope(media_scope)
+    if ordinary_still_only is None:
         status = _unsupported_media_scope_status(
             source_id=source_id,
             source_label=source.source_label,
@@ -404,7 +460,7 @@ def start_internal_single_flow_run(
         batch_size=batch_size,
         total_limit=total_limit,
         candidate_scan_limit=candidate_search_cap,
-        ordinary_still_only=True,
+        ordinary_still_only=ordinary_still_only,
         helper_client=ExactSelectionHelperClient(),
     )
     if not bool(dry_plan.get("execution_safe_to_attempt")):
@@ -435,6 +491,7 @@ def start_internal_single_flow_run(
             "batch_size": batch_size,
             "total_limit": total_limit,
             "candidate_search_cap": candidate_search_cap,
+            "ordinary_still_only": ordinary_still_only,
             "auto_cleanup_if_safe": auto_cleanup_if_safe,
             "created_by": created_by,
         },

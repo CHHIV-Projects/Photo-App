@@ -107,6 +107,30 @@ class AdminInternalIcloudRunApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "stopped")
         self.assertEqual(payload["current"]["stop_reason"], "MEDIA_SCOPE_NOT_SUPPORTED_FOR_EXECUTION")
 
+    def test_start_internal_run_accepts_all_supported_media_scope(self) -> None:
+        result = InternalIcloudRunStartResult(
+            accepted=True,
+            message="Internal iCloud single-flow run started.",
+            status=_status(run_id=124, status="running"),
+        )
+        with patch("app.api.admin.start_internal_single_flow_run", return_value=result):
+            response = self.client.post(
+                "/api/admin/internal/icloud-runs",
+                json={
+                    "source_id": 66,
+                    "batch_size": 5,
+                    "total_limit": 10,
+                    "candidate_search_cap": 50,
+                    "media_scope": "all_supported_media",
+                    "auto_cleanup_if_safe": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "started")
+        self.assertEqual(payload["current"]["run_id"], 124)
+
     def test_start_internal_run_request_validation_rejects_batch_size_zero(self) -> None:
         response = self.client.post(
             "/api/admin/internal/icloud-runs",

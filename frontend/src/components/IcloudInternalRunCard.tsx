@@ -12,10 +12,10 @@ import type {
 import styles from "./IcloudInternalRunCard.module.css";
 
 const MEDIA_SCOPE_OPTIONS: Array<{ value: InternalIcloudMediaScope; label: string }> = [
-  { value: "ordinary_stills", label: "ordinary_stills" },
-  { value: "stills_with_live_photo_pairs", label: "stills_with_live_photo_pairs" },
-  { value: "videos_only", label: "videos_only" },
-  { value: "all_supported_media", label: "all_supported_media" },
+  { value: "all_supported_media", label: "All supported assets" },
+  { value: "ordinary_stills", label: "Ordinary stills only" },
+  { value: "stills_with_live_photo_pairs", label: "Stills with Live Photo pairs (not executable yet)" },
+  { value: "videos_only", label: "Videos only (not executable yet)" },
 ];
 
 export default function IcloudInternalRunCard() {
@@ -24,7 +24,7 @@ export default function IcloudInternalRunCard() {
   const [batchSize, setBatchSize] = useState("5");
   const [totalLimit, setTotalLimit] = useState("10");
   const [candidateSearchCap, setCandidateSearchCap] = useState("50");
-  const [mediaScope, setMediaScope] = useState<InternalIcloudMediaScope>("ordinary_stills");
+  const [mediaScope, setMediaScope] = useState<InternalIcloudMediaScope>("all_supported_media");
   const [autoCleanupIfSafe, setAutoCleanupIfSafe] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -123,9 +123,7 @@ export default function IcloudInternalRunCard() {
   return (
     <section className={styles.card}>
       <h3 className={styles.title}>iCloud Internal Run</h3>
-      <p className={styles.meta}>
-        Internal/admin single-flow wrapper over the bounded orchestration pipeline. Non-ordinary media scopes may be exposed but can stop safely if execution support is not available.
-      </p>
+      <p className={styles.meta}>Internal/admin single-flow wrapper over the bounded orchestration pipeline with explicit asset-scope reporting.</p>
 
       <div className={styles.grid}>
         <label className={styles.label}>
@@ -166,7 +164,7 @@ export default function IcloudInternalRunCard() {
         </label>
 
         <label className={styles.label}>
-          Media Scope
+          Asset Scope
           <select className={styles.select} value={mediaScope} onChange={(event) => setMediaScope(event.target.value as InternalIcloudMediaScope)}>
             {MEDIA_SCOPE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -212,14 +210,23 @@ export default function IcloudInternalRunCard() {
           <p className={styles.kv}><strong>Failure Reason:</strong> {current.failure_reason ?? "-"}</p>
           <p className={styles.kv}><strong>Requested Scope:</strong> {current.requested_media_scope}</p>
           <p className={styles.kv}><strong>Effective Scope:</strong> {current.effective_media_scope ?? "not_executed"}</p>
+          <p className={styles.kv}><strong>Requested Asset Scope:</strong> {current.requested_asset_scope ?? "-"}</p>
+          <p className={styles.kv}><strong>Effective Asset Scope:</strong> {current.effective_asset_scope ?? "-"}</p>
           <p className={styles.kv}><strong>Dry Run Performed:</strong> {current.dry_run_performed ? "yes" : "no"}</p>
           <p className={styles.kv}><strong>Execution Performed:</strong> {current.execution_performed ? "yes" : "no"}</p>
           <p className={styles.kv}><strong>Cleanup Performed:</strong> {current.cleanup_performed ? "yes" : "no"}</p>
           <p className={styles.kv}><strong>Final Verification Passed:</strong> {current.final_verification_passed ? "yes" : "no"}</p>
           <p className={styles.kv}><strong>Logical Selected:</strong> {String(current.logical_assets_selected)}</p>
           <p className={styles.kv}><strong>Resources Selected:</strong> {String(current.resources_selected)}</p>
-          <p className={styles.kv}><strong>Video Count:</strong> {String(current.video_count)}</p>
+          <p className={styles.kv}><strong>Ordinary Still Logical Count:</strong> {String(current.ordinary_still_logical_count)}</p>
+          <p className={styles.kv}><strong>Ordinary Still Resource Count:</strong> {String(current.ordinary_still_resource_count)}</p>
+          <p className={styles.kv}><strong>Video Logical Count:</strong> {String(current.video_logical_count)}</p>
+          <p className={styles.kv}><strong>Video Resource Count:</strong> {String(current.video_resource_count)}</p>
+          <p className={styles.kv}><strong>Video Count (legacy):</strong> {String(current.video_count)}</p>
           <p className={styles.kv}><strong>Live Photo Logical Count:</strong> {String(current.live_photo_logical_count)}</p>
+          <p className={styles.kv}><strong>Live Photo Still Resource Count:</strong> {String(current.live_photo_still_resource_count)}</p>
+          <p className={styles.kv}><strong>Live Photo Motion Resource Count:</strong> {String(current.live_photo_motion_resource_count)}</p>
+          <p className={styles.kv}><strong>Ambiguous Count:</strong> {String(current.ambiguous_count)}</p>
           <p className={styles.kv}><strong>Final staging clean:</strong> {current.final_staging_clean == null ? "unknown" : current.final_staging_clean ? "yes" : "no"}</p>
           <p className={styles.kv}><strong>Drop Zone clean:</strong> {current.drop_zone_clean == null ? "unknown" : current.drop_zone_clean ? "yes" : "no"}</p>
           <p className={styles.kv}><strong>.partial clean:</strong> {current.partial_workspace_clean == null ? "unknown" : current.partial_workspace_clean ? "yes" : "no"}</p>
