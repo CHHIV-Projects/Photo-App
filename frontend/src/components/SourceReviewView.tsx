@@ -799,7 +799,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
 
       {!assetSha256 ? (
         <div className={styles.panel}>
-          <p className={styles.status}>Open Photo Detail and choose "Open Source Review" to begin.</p>
+          <p className={styles.status}>Open Photo Detail and choose &quot;Open Source Review&quot; to begin.</p>
         </div>
       ) : isLoadingAsset ? (
         <div className={styles.panel}>
@@ -1115,7 +1115,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
 
                     {collectionActionResult ? (
                       <div className={styles.successBox}>
-                        <p className={styles.successText}>Created collection "{collectionActionResult.collection_name}".</p>
+                        <p className={styles.successText}>Created collection &quot;{collectionActionResult.collection_name}&quot;.</p>
                         <p className={styles.status}>
                           Added: {collectionActionResult.added_count} | Already present: {collectionActionResult.already_present_count} | Failed: {collectionActionResult.failed_count}
                         </p>
@@ -1247,7 +1247,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
 
                     {addToCollectionResult ? (
                       <div className={styles.successBox}>
-                        <p className={styles.successText}>Added matching assets to "{addToCollectionResult.collection_name}".</p>
+                        <p className={styles.successText}>Added matching assets to &quot;{addToCollectionResult.collection_name}&quot;.</p>
                         <p className={styles.status}>
                           Requested: {addToCollectionResult.requested_count} | Added: {addToCollectionResult.added_count} | Already present: {addToCollectionResult.already_present_count} | Failed: {addToCollectionResult.failed_count}
                         </p>
@@ -1497,7 +1497,7 @@ export function SourceReviewView({ assetSha256, onOpenPhotoDetail, onOpenAlbums,
 
                     {eventActionResult ? (
                       <div className={styles.successBox}>
-                        <p className={styles.successText}>Created event "{eventActionResult.event_label ?? "(unlabeled)"}".</p>
+                        <p className={styles.successText}>Created event &quot;{eventActionResult.event_label ?? "(unlabeled)"}&quot;.</p>
                         <p className={styles.status}>
                           Assigned: {eventActionResult.assigned_count} | Skipped existing event: {eventActionResult.skipped_existing_event_count} | Failed: {eventActionResult.failed_count}
                         </p>

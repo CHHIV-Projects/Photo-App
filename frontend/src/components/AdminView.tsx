@@ -45,6 +45,7 @@ import type {
 
 import styles from "./admin-view.module.css";
 import IcloudAcquisitionCard, { type IcloudAcquisitionSourceIntakeHandoff } from "./IcloudAcquisitionCard";
+import IcloudInternalRunCard from "./IcloudInternalRunCard";
 
 function normalizeSourceLabelForMatch(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
@@ -925,6 +926,7 @@ export default function AdminView() {
       </p>
 
       <IcloudAcquisitionCard onPrepareSourceIntake={handlePrepareSourceIntake} />
+      <IcloudInternalRunCard />
 
       <section className={styles.sourceIntakeSection}>
         <div className={styles.sectionHeader}>

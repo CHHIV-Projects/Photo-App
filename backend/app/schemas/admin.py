@@ -611,6 +611,98 @@ class IcloudStagingCleanupReadinessResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Internal single-flow iCloud run (12.62.22)
+# ---------------------------------------------------------------------------
+
+
+MediaScopeValue = Literal[
+    "ordinary_stills",
+    "stills_with_live_photo_pairs",
+    "videos_only",
+    "all_supported_media",
+]
+
+CountOrStatusValue = int | Literal["not_available", "deferred", "not_applicable", "unknown"]
+
+
+class InternalIcloudRunRequest(BaseModel):
+    source_id: int
+    batch_size: int = Field(default=5, ge=1, le=500)
+    total_limit: int = Field(default=10, ge=1, le=500)
+    candidate_search_cap: int = Field(default=50, ge=1, le=500)
+    media_scope: MediaScopeValue = "ordinary_stills"
+    auto_cleanup_if_safe: bool = True
+
+
+class InternalIcloudRunStatus(BaseModel):
+    run_id: int | None
+    status: str
+    stop_reason: str | None = None
+    failure_reason: str | None = None
+    current_phase: str | None = None
+    source_id: int
+    source_label: str | None = None
+    batch_size: int
+    total_limit: int
+    candidate_search_cap: int
+    requested_media_scope: MediaScopeValue
+    effective_media_scope: MediaScopeValue | None = None
+    auto_cleanup_if_safe: bool
+    dry_run_performed: bool
+    execution_performed: bool
+    cleanup_performed: bool
+    cleanup_recovery_used: bool
+    final_verification_passed: bool
+    next_safe_action: str | None = None
+    report_path: str | None = None
+    orchestration_report_path: str | None = None
+    cleanup_dry_run_id: int | None = None
+    cleanup_execution_run_id: int | None = None
+    final_cleanup_verification_run_id: int | None = None
+    acquisition_run_ids: list[int] = Field(default_factory=list)
+    acquisition_batch_ids: list[int] = Field(default_factory=list)
+    source_intake_run_ids: list[int] = Field(default_factory=list)
+    ingestion_run_ids: list[int] = Field(default_factory=list)
+    cleanup_dry_run_ids: list[int] = Field(default_factory=list)
+    cleanup_execution_run_ids: list[int] = Field(default_factory=list)
+    final_cleanup_verification_run_ids: list[int] = Field(default_factory=list)
+    logical_assets_selected: CountOrStatusValue = "unknown"
+    resources_selected: CountOrStatusValue = "unknown"
+    ordinary_still_count: CountOrStatusValue = "not_available"
+    live_photo_logical_count: CountOrStatusValue = "not_available"
+    live_photo_still_resource_count: CountOrStatusValue = "not_available"
+    live_photo_motion_resource_count: CountOrStatusValue = "not_available"
+    video_count: CountOrStatusValue = "not_available"
+    unsupported_or_blocked_count: CountOrStatusValue = "unknown"
+    acquired_resource_count: CountOrStatusValue = "unknown"
+    source_intake_count: CountOrStatusValue = "unknown"
+    ingestion_count: CountOrStatusValue = "unknown"
+    cleanup_eligible_count: CountOrStatusValue = "unknown"
+    cleanup_completed_deleted_count: CountOrStatusValue = "unknown"
+    cleanup_failed_count: CountOrStatusValue = "unknown"
+    orphaned_companion_count: CountOrStatusValue = "not_available"
+    pairing_warning_count: CountOrStatusValue = "not_available"
+    final_staging_clean: bool | None = None
+    drop_zone_clean: bool | None = None
+    partial_workspace_clean: bool | None = None
+    cloud_deletion_occurred: bool = False
+    normal_ui_exposure_added: bool = False
+    normal_admin_api_exposure_added: bool = False
+    mixed_media_supported_for_execution: bool = False
+
+
+class InternalIcloudRunResponse(BaseModel):
+    status: str
+    message: str
+    current: InternalIcloudRunStatus
+
+
+class InternalIcloudRunStatusResponse(BaseModel):
+    generated_at: datetime
+    current: InternalIcloudRunStatus
+
+
+# ---------------------------------------------------------------------------
 # icloudpd acquisition (12.42)
 # ---------------------------------------------------------------------------
 

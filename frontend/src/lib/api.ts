@@ -44,6 +44,9 @@ import type {
   IcloudStagingCleanupRunResponse,
   IcloudStagingCleanupReadinessResponse,
   IcloudStagingCleanupStatusResponse,
+  InternalIcloudRunRequest,
+  InternalIcloudRunResponse,
+  InternalIcloudRunStatusResponse,
   IcloudAcquisitionStatusResponse,
   IcloudAcquisitionRunStatus,
   IcloudAcquisitionRunRequest,
@@ -1289,4 +1292,43 @@ export function executeIcloudStagingCleanup(
     method: "POST",
     body: JSON.stringify(req)
   });
+}
+
+export function startInternalIcloudRun(
+  req: InternalIcloudRunRequest
+): Promise<InternalIcloudRunResponse> {
+  return fetch(`${API_BASE_URL}/api/admin/internal/icloud-runs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(req),
+    cache: "no-store"
+  }).then(async (response) => {
+    let payload: InternalIcloudRunResponse | { detail?: string } | null = null;
+    try {
+      payload = (await response.json()) as InternalIcloudRunResponse | { detail?: string };
+    } catch {
+      payload = null;
+    }
+
+    if (response.ok) {
+      return payload as InternalIcloudRunResponse;
+    }
+
+    // 409 is an expected safe stop path for unsupported execution scopes; return payload to UI.
+    if (response.status === 409 && payload && typeof payload === "object" && "current" in payload) {
+      return payload as InternalIcloudRunResponse;
+    }
+
+    const detail =
+      payload && typeof payload === "object" && "detail" in payload && typeof payload.detail === "string"
+        ? payload.detail
+        : null;
+    throw new Error(detail ?? `Request failed with status ${response.status}`);
+  });
+}
+
+export function getInternalIcloudRunStatus(runId: number): Promise<InternalIcloudRunStatusResponse> {
+  return apiRequest<InternalIcloudRunStatusResponse>(`/api/admin/internal/icloud-runs/${runId}`);
 }

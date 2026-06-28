@@ -1463,8 +1463,7 @@ export interface SourceIntakeReportsResponse {
 
 export interface SourceIntakeReportDetail {
   report_filename: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  raw: Record<string, any>;
+  raw: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1597,4 +1596,89 @@ export interface IcloudStagingCleanupReadinessResponse {
   canonical_staging_path: string | null;
   blocking_reasons: IcloudReadinessReason[];
   latest_dry_run: IcloudStagingCleanupRunStatus;
+}
+
+export type InternalIcloudMediaScope =
+  | "ordinary_stills"
+  | "stills_with_live_photo_pairs"
+  | "videos_only"
+  | "all_supported_media";
+
+export type InternalIcloudCountOrStatus = number | "not_available" | "deferred" | "not_applicable" | "unknown";
+
+export interface InternalIcloudRunRequest {
+  source_id: number;
+  batch_size: number;
+  total_limit: number;
+  candidate_search_cap: number;
+  media_scope: InternalIcloudMediaScope;
+  auto_cleanup_if_safe: boolean;
+}
+
+export interface InternalIcloudRunStatus {
+  run_id: number | null;
+  status: string;
+  stop_reason: string | null;
+  failure_reason: string | null;
+  current_phase: string | null;
+  source_id: number;
+  source_label: string | null;
+  batch_size: number;
+  total_limit: number;
+  candidate_search_cap: number;
+  requested_media_scope: InternalIcloudMediaScope;
+  effective_media_scope: InternalIcloudMediaScope | null;
+  auto_cleanup_if_safe: boolean;
+  dry_run_performed: boolean;
+  execution_performed: boolean;
+  cleanup_performed: boolean;
+  cleanup_recovery_used: boolean;
+  final_verification_passed: boolean;
+  next_safe_action: string | null;
+  report_path: string | null;
+  orchestration_report_path: string | null;
+  cleanup_dry_run_id: number | null;
+  cleanup_execution_run_id: number | null;
+  final_cleanup_verification_run_id: number | null;
+  acquisition_run_ids: number[];
+  acquisition_batch_ids: number[];
+  source_intake_run_ids: number[];
+  ingestion_run_ids: number[];
+  cleanup_dry_run_ids: number[];
+  cleanup_execution_run_ids: number[];
+  final_cleanup_verification_run_ids: number[];
+  logical_assets_selected: InternalIcloudCountOrStatus;
+  resources_selected: InternalIcloudCountOrStatus;
+  ordinary_still_count: InternalIcloudCountOrStatus;
+  live_photo_logical_count: InternalIcloudCountOrStatus;
+  live_photo_still_resource_count: InternalIcloudCountOrStatus;
+  live_photo_motion_resource_count: InternalIcloudCountOrStatus;
+  video_count: InternalIcloudCountOrStatus;
+  unsupported_or_blocked_count: InternalIcloudCountOrStatus;
+  acquired_resource_count: InternalIcloudCountOrStatus;
+  source_intake_count: InternalIcloudCountOrStatus;
+  ingestion_count: InternalIcloudCountOrStatus;
+  cleanup_eligible_count: InternalIcloudCountOrStatus;
+  cleanup_completed_deleted_count: InternalIcloudCountOrStatus;
+  cleanup_failed_count: InternalIcloudCountOrStatus;
+  orphaned_companion_count: InternalIcloudCountOrStatus;
+  pairing_warning_count: InternalIcloudCountOrStatus;
+  final_staging_clean: boolean | null;
+  drop_zone_clean: boolean | null;
+  partial_workspace_clean: boolean | null;
+  cloud_deletion_occurred: boolean;
+  normal_ui_exposure_added: boolean;
+  normal_admin_api_exposure_added: boolean;
+  mixed_media_supported_for_execution: boolean;
+}
+
+export interface InternalIcloudRunResponse {
+  status: string;
+  message: string;
+  current: InternalIcloudRunStatus;
+}
+
+export interface InternalIcloudRunStatusResponse {
+  generated_at: string;
+  current: InternalIcloudRunStatus;
 }

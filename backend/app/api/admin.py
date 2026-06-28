@@ -57,6 +57,9 @@ from app.schemas.admin import (
     IcloudStagingCleanupRunStatus,
     IcloudStagingCleanupStatusResponse,
     IcloudStagingCleanupReadinessResponse,
+    InternalIcloudRunRequest,
+    InternalIcloudRunResponse,
+    InternalIcloudRunStatusResponse,
 )
 from app.services.admin import (
     build_admin_summary,
@@ -75,6 +78,8 @@ from app.services.admin import (
     update_source_profile_status,
     verify_source_profile_path,
     get_icloud_source_readiness,
+    start_internal_single_flow_run,
+    get_internal_single_flow_run_status,
 )
 from app.services.ingestion.ingestion_context_service import normalize_source_label
 from app.services.admin.source_intake_execution_service import (
@@ -811,6 +816,62 @@ def execute_icloud_staging_cleanup(
             message="Verified local iCloud staging cleanup started.",
             current=_to_icloud_cleanup_run_status(snapshot),
         )
+
+
+@router.post("/internal/icloud-runs", response_model=InternalIcloudRunResponse)
+def start_internal_icloud_single_flow_run(
+    body: InternalIcloudRunRequest,
+    db: Session = Depends(get_db_session),
+) -> InternalIcloudRunResponse | JSONResponse:
+    """Start a bounded internal/admin single-flow iCloud run and return a pollable run reference."""
+
+    try:
+        result = start_internal_single_flow_run(
+            db,
+            source_id=body.source_id,
+            batch_size=body.batch_size,
+            total_limit=body.total_limit,
+            candidate_search_cap=body.candidate_search_cap,
+            media_scope=body.media_scope,
+            auto_cleanup_if_safe=body.auto_cleanup_if_safe,
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": str(exc), "error_code": "INVALID_INTERNAL_ICLOUD_RUN_REQUEST"},
+        )
+
+    payload = InternalIcloudRunResponse(
+        status="started" if result.accepted else "stopped",
+        message=result.message,
+        current=result.status,
+    )
+    if result.accepted:
+        return payload
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content=payload.model_dump(mode="json"),
+    )
+
+
+@router.get("/internal/icloud-runs/{run_id}", response_model=InternalIcloudRunStatusResponse)
+def get_internal_icloud_single_flow_run_status(
+    run_id: int,
+    db: Session = Depends(get_db_session),
+) -> InternalIcloudRunStatusResponse | JSONResponse:
+    """Return current status for an internal/admin single-flow iCloud run."""
+    from datetime import datetime, timezone
+
+    current = get_internal_single_flow_run_status(db, run_id=run_id)
+    if current is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": f"Internal iCloud run {run_id} was not found.", "error_code": "INTERNAL_ICLOUD_RUN_NOT_FOUND"},
+        )
+    return InternalIcloudRunStatusResponse(
+        generated_at=datetime.now(timezone.utc),
+        current=current,
+    )
 
 
 # ---------------------------------------------------------------------------
