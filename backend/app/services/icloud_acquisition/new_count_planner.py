@@ -270,6 +270,7 @@ def _plan_grouped_items(
     target_new_item_count: int,
     candidate_scan_limit: int,
     candidate_source_exhausted: bool,
+    block_on_ambiguous_identity: bool = True,
 ) -> NewCountSelectionPlan:
     scan_limit_truncated_candidates = len(all_items) > candidate_scan_limit
     scan_limit_was_reached = (
@@ -300,7 +301,7 @@ def _plan_grouped_items(
             guidance="Candidate identity is incomplete; do not suppress or selectively acquire it.",
         )
 
-    if any(item.identity_ambiguous for item in considered_items):
+    if block_on_ambiguous_identity and any(item.identity_ambiguous for item in considered_items):
         return _blocked_plan(
             items=considered_items,
             target_new_item_count=target_new_item_count,
@@ -314,7 +315,11 @@ def _plan_grouped_items(
     selected_count = 0
     planned_items: list[PlannedNewCountItem] = []
     for item in considered_items:
-        if item.already_known or selected_count >= target_new_item_count:
+        if (
+            item.already_known
+            or selected_count >= target_new_item_count
+            or (item.identity_ambiguous and not block_on_ambiguous_identity)
+        ):
             planned_items.append(item)
             continue
 
@@ -441,6 +446,7 @@ def plan_explicit_new_count_selection(
     target_new_item_count: int,
     candidate_scan_limit: int = DEFAULT_CANDIDATE_SCAN_LIMIT,
     candidate_source_exhausted: bool = False,
+    block_on_ambiguous_identity: bool = True,
 ) -> NewCountSelectionPlan:
     """Plan adapter-grouped logical items without filename-based reconstruction."""
 
@@ -539,6 +545,7 @@ def plan_explicit_new_count_selection(
         target_new_item_count=target_new_item_count,
         candidate_scan_limit=candidate_scan_limit,
         candidate_source_exhausted=candidate_source_exhausted,
+        block_on_ambiguous_identity=block_on_ambiguous_identity,
     )
 
 

@@ -158,6 +158,42 @@ class IcloudNewCountPlannerTests(unittest.TestCase):
         self.assertEqual(plan.stopping_reason, STOP_LOGICAL_ITEM_IDENTITY_AMBIGUOUS)
         self.assertEqual(plan.selected_new_item_count, 0)
 
+    def test_explicit_adapter_can_skip_ambiguous_candidates_when_configured(self) -> None:
+        plan = plan_explicit_new_count_selection(
+            [
+                ExplicitLogicalItemCandidate(
+                    adapter_logical_item_id="ambiguous-item",
+                    grouping="adapter_explicit_unsupported_sidecar",
+                    identity_ambiguous=True,
+                    resources=(
+                        ExplicitLogicalResourceCandidate(
+                            adapter_resource_id="primary_original",
+                            known_state=_candidate("2026/06/24/IMG_3001.HEIC"),
+                        ),
+                    ),
+                ),
+                ExplicitLogicalItemCandidate(
+                    adapter_logical_item_id="safe-item",
+                    grouping="primary_asset_explicit",
+                    identity_ambiguous=False,
+                    resources=(
+                        ExplicitLogicalResourceCandidate(
+                            adapter_resource_id="primary_original",
+                            known_state=_candidate("2026/06/24/IMG_3002.HEIC"),
+                        ),
+                    ),
+                ),
+            ],
+            target_new_item_count=1,
+            candidate_scan_limit=2,
+            block_on_ambiguous_identity=False,
+        )
+
+        self.assertEqual(plan.classification, PLAN_CLASSIFICATION_COMPLETE)
+        self.assertEqual(plan.stopping_reason, STOP_TARGET_NEW_COUNT_REACHED)
+        self.assertEqual(plan.selected_new_item_count, 1)
+        self.assertEqual(_selected_paths(plan), ["2026/06/24/IMG_3002.HEIC"])
+
     def test_mixed_window_selects_only_unknown_items_and_continues_past_known(self) -> None:
         plan = plan_new_count_selection(
             [

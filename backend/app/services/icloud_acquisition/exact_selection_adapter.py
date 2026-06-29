@@ -757,11 +757,17 @@ def build_plan_from_listing(
                 ),
             )
         )
+    has_blocking_unsupported_relationships = any(
+        item.unsupported_reasons for item in planning_items
+    )
     return plan_explicit_new_count_selection(
         explicit_items,
         target_new_item_count=target_new_item_count,
         candidate_scan_limit=candidate_scan_limit,
         candidate_source_exhausted=listing.source_exhausted,
+        block_on_ambiguous_identity=(
+            ordinary_still_only or has_blocking_unsupported_relationships
+        ),
     )
 
 
