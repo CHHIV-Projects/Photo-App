@@ -107,6 +107,46 @@ class AdminInternalIcloudRunApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "stopped")
         self.assertEqual(payload["current"]["stop_reason"], "MEDIA_SCOPE_NOT_SUPPORTED_FOR_EXECUTION")
 
+    def test_start_internal_run_returns_dry_run_explanation_fields(self) -> None:
+        status = _status(
+            run_id=None,
+            status="stopped",
+            stop_reason="DRY_RUN_NOT_SAFE",
+        )
+        status.candidates_considered = 500
+        status.safe_unknown_supported_count = 3
+        status.already_known_count = 40
+        status.ambiguous_skipped_count = 12
+        status.unsupported_skipped_count = 7
+        status.selected_count = 3
+        status.execution_decision_reason = "partial_safe_batch_ready"
+        result = InternalIcloudRunStartResult(
+            accepted=False,
+            message="Dry run blocked execution safety.",
+            status=status,
+        )
+        with patch("app.api.admin.start_internal_single_flow_run", return_value=result):
+            response = self.client.post(
+                "/api/admin/internal/icloud-runs",
+                json={
+                    "source_id": 66,
+                    "batch_size": 10,
+                    "total_limit": 100,
+                    "candidate_search_cap": 500,
+                    "media_scope": "all_supported_media",
+                    "auto_cleanup_if_safe": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 409)
+        payload = response.json()
+        self.assertEqual(payload["current"]["candidates_considered"], 500)
+        self.assertEqual(payload["current"]["safe_unknown_supported_count"], 3)
+        self.assertEqual(payload["current"]["ambiguous_skipped_count"], 12)
+        self.assertEqual(payload["current"]["unsupported_skipped_count"], 7)
+        self.assertEqual(payload["current"]["selected_count"], 3)
+        self.assertEqual(payload["current"]["execution_decision_reason"], "partial_safe_batch_ready")
+
     def test_start_internal_run_accepts_all_supported_media_scope(self) -> None:
         result = InternalIcloudRunStartResult(
             accepted=True,

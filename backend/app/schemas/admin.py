@@ -670,6 +670,13 @@ class InternalIcloudRunStatus(BaseModel):
     final_cleanup_verification_run_ids: list[int] = Field(default_factory=list)
     logical_assets_selected: CountOrStatusValue = "unknown"
     resources_selected: CountOrStatusValue = "unknown"
+    candidates_considered: CountOrStatusValue = "unknown"
+    safe_unknown_supported_count: CountOrStatusValue = "unknown"
+    already_known_count: CountOrStatusValue = "unknown"
+    ambiguous_skipped_count: CountOrStatusValue = "unknown"
+    unsupported_skipped_count: CountOrStatusValue = "unknown"
+    selected_count: CountOrStatusValue = "unknown"
+    execution_decision_reason: str | None = None
     ordinary_still_logical_count: CountOrStatusValue = "not_available"
     ordinary_still_resource_count: CountOrStatusValue = "not_available"
     video_logical_count: CountOrStatusValue = "not_available"

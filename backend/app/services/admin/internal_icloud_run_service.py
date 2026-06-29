@@ -122,6 +122,13 @@ def _unsupported_media_scope_status(
         orchestration_report_path=None,
         logical_assets_selected="not_available",
         resources_selected="not_available",
+        candidates_considered="unknown",
+        safe_unknown_supported_count="unknown",
+        already_known_count="unknown",
+        ambiguous_skipped_count="unknown",
+        unsupported_skipped_count="unknown",
+        selected_count="unknown",
+        execution_decision_reason=None,
         ordinary_still_logical_count="not_available",
         ordinary_still_resource_count="not_available",
         video_logical_count="not_available",
@@ -202,6 +209,13 @@ def _from_orchestration_row(
         final_cleanup_verification_run_ids=[],
         logical_assets_selected=run.completed_logical_items,
         resources_selected=run.completed_resources,
+        candidates_considered="unknown",
+        safe_unknown_supported_count="unknown",
+        already_known_count="unknown",
+        ambiguous_skipped_count="unknown",
+        unsupported_skipped_count="unknown",
+        selected_count=run.completed_logical_items,
+        execution_decision_reason=None,
         ordinary_still_logical_count="unknown",
         ordinary_still_resource_count="unknown",
         video_logical_count="unknown",
@@ -295,8 +309,8 @@ def _from_orchestration_payload(
         next_safe_action=(str(payload.get("next_safe_action")) if payload.get("next_safe_action") is not None else None),
         report_path=(str(payload.get("report_path")) if payload.get("report_path") is not None else None),
         orchestration_report_path=(str(payload.get("report_path")) if payload.get("report_path") is not None else None),
-        cleanup_dry_run_id=(int(payload.get("cleanup_dry_run_id")) if payload.get("cleanup_dry_run_id") is not None else None),
-        cleanup_execution_run_id=(int(payload.get("cleanup_execution_run_id")) if payload.get("cleanup_execution_run_id") is not None else None),
+        cleanup_dry_run_id=(int(payload.get("cleanup_dry_run_id")) if payload.get("cleanup_dry_run_id") is not None else (int(payload.get("last_cleanup_dry_run_id")) if payload.get("last_cleanup_dry_run_id") is not None else None)),
+        cleanup_execution_run_id=(int(payload.get("cleanup_execution_run_id")) if payload.get("cleanup_execution_run_id") is not None else (cleanup_execution_ids[-1] if cleanup_execution_ids else None)),
         final_cleanup_verification_run_id=(final_verification_ids[-1] if final_verification_ids else None),
         acquisition_run_ids=_list_ints("acquisition_run_ids"),
         acquisition_batch_ids=_list_ints("acquisition_batch_ids"),
@@ -307,6 +321,13 @@ def _from_orchestration_payload(
         final_cleanup_verification_run_ids=final_verification_ids,
         logical_assets_selected=(int(payload.get("completed_logical_items") or 0)),
         resources_selected=(int(payload.get("completed_resources") or 0)),
+        candidates_considered=_count_or_status("candidates_considered"),
+        safe_unknown_supported_count=_count_or_status("safe_unknown_supported_count"),
+        already_known_count=_count_or_status("already_known_count"),
+        ambiguous_skipped_count=_count_or_status("ambiguous_skipped_count"),
+        unsupported_skipped_count=_count_or_status("unsupported_skipped_count"),
+        selected_count=_count_or_status("selected_count"),
+        execution_decision_reason=(str(payload.get("execution_decision_reason")) if payload.get("execution_decision_reason") is not None else None),
         ordinary_still_logical_count=_count_or_status("ordinary_still_logical_count"),
         ordinary_still_resource_count=_count_or_status("ordinary_still_resource_count"),
         video_logical_count=_count_or_status("video_logical_count", fallback="not_available"),
@@ -355,7 +376,7 @@ def _run_single_flow_background(
                 total_limit=total_limit,
                 candidate_scan_limit=candidate_search_cap,
                 ordinary_still_only=ordinary_still_only,
-                pause_before_cleanup=True,
+                pause_before_cleanup=not auto_cleanup_if_safe,
                 created_by=created_by,
             )
             while auto_cleanup_if_safe and result.status == "paused_for_cleanup" and result.cleanup_dry_run_id is not None:
@@ -477,6 +498,13 @@ def start_internal_single_flow_run(
         status.next_safe_action = str(dry_plan.get("next_safe_action") or "Inspect dry-run report and resolve blockers.")
         status.dry_run_performed = True
         status.execution_performed = False
+        status.candidates_considered = int(dry_plan.get("candidates_considered") or 0)
+        status.safe_unknown_supported_count = int(dry_plan.get("safe_unknown_supported_count") or 0)
+        status.already_known_count = int(dry_plan.get("already_known_count") or 0)
+        status.ambiguous_skipped_count = int(dry_plan.get("ambiguous_skipped_count") or 0)
+        status.unsupported_skipped_count = int(dry_plan.get("unsupported_skipped_count") or 0)
+        status.selected_count = int(dry_plan.get("selected_count") or 0)
+        status.execution_decision_reason = str(dry_plan.get("execution_decision_reason") or "execution_not_safe")
         status.logical_assets_selected = int(dry_plan.get("selected_logical_items") or 0)
         status.resources_selected = int(dry_plan.get("selected_resources") or 0)
         status.unsupported_or_blocked_count = int(dry_plan.get("unsupported_or_blocked_count") or 0)

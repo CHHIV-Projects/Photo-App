@@ -712,6 +712,7 @@ def build_plan_from_listing(
     target_new_item_count: int,
     candidate_scan_limit: int,
     ordinary_still_only: bool = False,
+    skip_blocking_unsupported_relationships: bool = False,
 ) -> NewCountSelectionPlan:
     planning_items = (
         tuple(item for item in listing.items if is_ordinary_still_logical_item(item))
@@ -743,7 +744,13 @@ def build_plan_from_listing(
             ExplicitLogicalItemCandidate(
                 adapter_logical_item_id=item.item_id,
                 grouping=item.grouping,
-                identity_ambiguous=item.identity_ambiguous,
+                identity_ambiguous=(
+                    item.identity_ambiguous
+                    or any(
+                        reason not in _NON_BLOCKING_UNSUPPORTED_REASONS
+                        for reason in item.unsupported_reasons
+                    )
+                ),
                 resources=tuple(
                     ExplicitLogicalResourceCandidate(
                         adapter_resource_id=resource.resource_id,
@@ -757,16 +764,13 @@ def build_plan_from_listing(
                 ),
             )
         )
-    has_blocking_unsupported_relationships = any(
-        item.unsupported_reasons for item in planning_items
-    )
     return plan_explicit_new_count_selection(
         explicit_items,
         target_new_item_count=target_new_item_count,
         candidate_scan_limit=candidate_scan_limit,
         candidate_source_exhausted=listing.source_exhausted,
         block_on_ambiguous_identity=(
-            ordinary_still_only or has_blocking_unsupported_relationships
+            ordinary_still_only or not skip_blocking_unsupported_relationships
         ),
     )
 
@@ -845,6 +849,7 @@ def prepare_exact_selection_prototype(
     helper_client: ExactSelectionHelperClient,
     library: str = DEFAULT_LIBRARY,
     ordinary_still_only: bool = False,
+    skip_blocking_unsupported_relationships: bool = False,
 ) -> ExactSelectionPreparation:
     if target_new_item_count < 1 or target_new_item_count > MAX_TARGET_NEW_ITEM_COUNT:
         raise ExactSelectionPrototypeError(
@@ -940,6 +945,7 @@ def prepare_exact_selection_prototype(
         target_new_item_count=target_new_item_count,
         candidate_scan_limit=candidate_scan_limit,
         ordinary_still_only=ordinary_still_only,
+        skip_blocking_unsupported_relationships=skip_blocking_unsupported_relationships,
     )
     request = build_exact_download_request(
         profile=profile,

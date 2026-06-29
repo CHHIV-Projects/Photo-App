@@ -176,8 +176,13 @@ class IcloudLoopPlanSummary:
     known_resources: int = 0
     unknown_logical_items: int = 0
     unknown_resources: int = 0
+    safe_unknown_supported_count: int = 0
+    already_known_count: int = 0
+    ambiguous_skipped_count: int = 0
+    unsupported_skipped_count: int = 0
     selected_logical_items: int = 0
     selected_resources: int = 0
+    selected_count: int = 0
     unsupported_or_blocked_count: int = 0
     selected_unsupported_or_blocked_count: int = 0
     safe_but_not_selected_logical_items: int = 0
@@ -186,6 +191,7 @@ class IcloudLoopPlanSummary:
     operator_decision_required: bool = False
     candidate_search_cap_reached: bool = False
     auth_state: str | None = None
+    execution_decision_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -717,16 +723,28 @@ def _build_plan_summary(
         for item in plan.items
         if item.selected_new and item.adapter_logical_item_id
     }
+    listing_items = list(listing.items) if listing is not None else []
+    blocked_item_ids: set[str] = set()
+    ambiguous_skipped_count = 0
+    unsupported_skipped_count = 0
     unsupported_or_blocked = plan.ambiguous_item_count
     selected_unsupported_or_blocked = 0
-    if listing is not None:
-        listed_blocked_items = [
-            item
-            for item in listing.items
-            if item.identity_ambiguous
-            or item.unsupported_reasons
-            or (ordinary_still_only and not is_ordinary_still_logical_item(item))
-        ]
+    if listing_items:
+        listed_blocked_items = []
+        for item in listing_items:
+            blocked_for_scope = bool(
+                item.unsupported_reasons
+                or item.identity_ambiguous
+                or (ordinary_still_only and not is_ordinary_still_logical_item(item))
+            )
+            if not blocked_for_scope:
+                continue
+            listed_blocked_items.append(item)
+            blocked_item_ids.add(item.item_id)
+            if item.unsupported_reasons or (ordinary_still_only and not is_ordinary_still_logical_item(item)):
+                unsupported_skipped_count += 1
+            elif item.identity_ambiguous:
+                ambiguous_skipped_count += 1
         unsupported_or_blocked += len(listed_blocked_items)
         selected_unsupported_or_blocked = sum(
             1 for item in listed_blocked_items if item.item_id in selected_adapter_item_ids
@@ -745,32 +763,67 @@ def _build_plan_summary(
     selected_resource_count = plan.selected_new_resource_count
     batch_target_filled = selected_count == batch_target
     partial_batch_selected = 0 < selected_count < batch_target
+    already_known_count = sum(1 for item in plan.items if item.already_known)
+    safe_unknown_supported_count = sum(
+        1
+        for item in plan.items
+        if not item.already_known
+        and not item.identity_ambiguous
+        and (item.adapter_logical_item_id or "") not in blocked_item_ids
+    )
+    safe_but_not_selected_count = max(safe_unknown_supported_count - selected_count, 0)
     search_cap_reached = bool(
         preparation.stopping_reason == STOP_SCAN_LIMIT_REACHED
         or (listing is not None and listing.scan_limit_reached)
     )
-    operator_decision_required = partial_batch_selected
-    execution_safe = bool(
+    operator_decision_required = bool(ordinary_still_only and partial_batch_selected)
+    base_execution_ready = bool(
         preparation.status == PREPARATION_READY
         and preparation.download_request is not None
         and auth_state == AUTHENTICATED
-        and preparation.stopping_reason == STOP_TARGET_NEW_COUNT_REACHED
-        and batch_target_filled
         and selected_unsupported_or_blocked == 0
-        and ordinary_safe
     )
+    execution_safe = bool(
+        base_execution_ready
+        and ordinary_safe
+        and (
+            (
+                preparation.stopping_reason == STOP_TARGET_NEW_COUNT_REACHED
+                and batch_target_filled
+            )
+            if ordinary_still_only
+            else selected_count > 0
+        )
+    )
+    execution_decision_reason: str | None = None
     if execution_safe:
-        stop_reason = STOP_TARGET_NEW_COUNT_REACHED
-    elif partial_batch_selected:
+        if ordinary_still_only or batch_target_filled:
+            stop_reason = STOP_TARGET_NEW_COUNT_REACHED
+            execution_decision_reason = "full_safe_batch_ready"
+        else:
+            stop_reason = "safe_partial_batch_ready"
+            execution_decision_reason = "partial_safe_batch_ready"
+    elif partial_batch_selected and ordinary_still_only:
         stop_reason = "partial_batch_selected"
+        execution_decision_reason = "partial_batch_requires_operator_review"
     elif selected_count > 0 and (selected_unsupported_or_blocked or not ordinary_safe):
         stop_reason = "unsupported_or_ambiguous_candidates_only"
+        execution_decision_reason = "selected_candidate_set_unsafe"
     elif search_cap_reached:
         stop_reason = "candidate_search_cap_reached"
+        execution_decision_reason = "candidate_search_cap_reached_without_safe_selection"
     elif unsupported_or_blocked and selected_count == 0:
         stop_reason = "unsupported_or_ambiguous_candidates_only"
+        execution_decision_reason = "no_safe_supported_unknown_candidates"
     elif stop_reason == STOP_NO_MORE_CANDIDATES:
         stop_reason = "no_more_new_items" if plan.items else "no_more_candidates"
+        execution_decision_reason = (
+            "all_considered_candidates_already_known"
+            if already_known_count and safe_unknown_supported_count == 0
+            else "no_safe_supported_unknown_candidates"
+        )
+    elif execution_decision_reason is None:
+        execution_decision_reason = str(stop_reason or "execution_not_safe")
 
     next_action = "Acquire exact-selection batch" if execution_safe else NEXT_INSPECT_REPORT
     if operator_decision_required:
@@ -789,20 +842,26 @@ def _build_plan_summary(
         batch_target=batch_target,
         logical_candidates_considered=candidates_considered,
         resource_candidates_considered=resource_candidates_considered,
-        known_logical_items=sum(1 for item in plan.items if item.already_known),
+        known_logical_items=already_known_count,
         known_resources=sum(1 for resource in all_resources if resource.already_known),
         unknown_logical_items=sum(1 for item in plan.items if not item.already_known),
         unknown_resources=sum(1 for resource in all_resources if not resource.already_known),
+        safe_unknown_supported_count=safe_unknown_supported_count,
+        already_known_count=already_known_count,
+        ambiguous_skipped_count=ambiguous_skipped_count,
+        unsupported_skipped_count=unsupported_skipped_count,
         selected_logical_items=selected_count,
         selected_resources=selected_resource_count,
+        selected_count=selected_count,
         unsupported_or_blocked_count=unsupported_or_blocked,
         selected_unsupported_or_blocked_count=selected_unsupported_or_blocked,
-        safe_but_not_selected_logical_items=plan.remaining_unselected_new_item_count,
+        safe_but_not_selected_logical_items=safe_but_not_selected_count,
         batch_target_filled=batch_target_filled,
         partial_batch_selected=partial_batch_selected,
         operator_decision_required=operator_decision_required,
         candidate_search_cap_reached=search_cap_reached,
         auth_state=auth_state,
+        execution_decision_reason=execution_decision_reason,
     )
 
 
@@ -842,6 +901,28 @@ def plan_internal_loop(
             "candidate_pages_scanned": None,
             "ordinary_still_only": ordinary_still_only,
             "execution_safe_to_attempt": False,
+            "candidates_considered": 0,
+            "logical_candidates_considered": 0,
+            "resource_candidates_considered": 0,
+            "known_logical_items": 0,
+            "known_resources": 0,
+            "unknown_logical_items": 0,
+            "unknown_resources": 0,
+            "safe_unknown_supported_count": 0,
+            "already_known_count": 0,
+            "ambiguous_skipped_count": 0,
+            "unsupported_skipped_count": 0,
+            "selected_logical_items": 0,
+            "selected_resources": 0,
+            "selected_count": 0,
+            "unsupported_or_blocked_count": 0,
+            "selected_unsupported_or_blocked_count": 0,
+            "safe_but_not_selected_logical_items": 0,
+            "batch_target_filled": False,
+            "partial_batch_selected": False,
+            "operator_decision_required": False,
+            "candidate_search_cap_reached": False,
+            "execution_decision_reason": reason,
         }
 
     batch_target = min(batch_size, total_limit)
@@ -852,6 +933,7 @@ def plan_internal_loop(
         candidate_scan_limit=candidate_scan_limit,
         helper_client=helper_client,
         ordinary_still_only=ordinary_still_only,
+        skip_blocking_unsupported_relationships=not ordinary_still_only,
     )
     plan = _build_plan_summary(
         preparation,
@@ -882,8 +964,13 @@ def plan_internal_loop(
         "known_resources": plan.known_resources,
         "unknown_logical_items": plan.unknown_logical_items,
         "unknown_resources": plan.unknown_resources,
+        "safe_unknown_supported_count": plan.safe_unknown_supported_count,
+        "already_known_count": plan.already_known_count,
+        "ambiguous_skipped_count": plan.ambiguous_skipped_count,
+        "unsupported_skipped_count": plan.unsupported_skipped_count,
         "selected_logical_items": plan.selected_logical_items,
         "selected_resources": plan.selected_resources,
+        "selected_count": plan.selected_count,
         "unsupported_or_blocked_count": plan.unsupported_or_blocked_count,
         "selected_unsupported_or_blocked_count": plan.selected_unsupported_or_blocked_count,
         "safe_but_not_selected_logical_items": plan.safe_but_not_selected_logical_items,
@@ -891,6 +978,7 @@ def plan_internal_loop(
         "partial_batch_selected": plan.partial_batch_selected,
         "operator_decision_required": plan.operator_decision_required,
         "candidate_search_cap_reached": plan.candidate_search_cap_reached,
+        "execution_decision_reason": plan.execution_decision_reason,
         "cloud_deletion_performed": False,
         "source_intake_performed": False,
         "vault_write_performed": False,
@@ -1341,6 +1429,7 @@ def _execute_next_batch_until_pause_or_done(
     *,
     run: IcloudOrchestrationRun,
     helper_client: ExactSelectionHelperClient,
+    pause_before_cleanup: bool,
     cleanup_wait_timeout_seconds: float,
     cleanup_poll_seconds: float,
 ) -> IcloudInternalLoopResult:
@@ -1366,6 +1455,7 @@ def _execute_next_batch_until_pause_or_done(
             candidate_scan_limit=run.candidate_scan_limit,
             helper_client=helper_client,
             ordinary_still_only=bool(run.ordinary_still_only),
+            skip_blocking_unsupported_relationships=not bool(run.ordinary_still_only),
         )
         plan = _build_plan_summary(
             preparation,
@@ -1513,6 +1603,22 @@ def _execute_next_batch_until_pause_or_done(
                 next_safe_action=NEXT_INSPECT_REPORT,
                 batch=loop_batch,
             )
+        if not pause_before_cleanup:
+            loop_batch.status = BATCH_STATUS_CLEANUP_REVIEW_REQUIRED
+            loop_batch.next_safe_action = NEXT_CONTINUE_CLEANUP
+            run.status = STATUS_PAUSED_FOR_CLEANUP
+            run.stop_reason = "cleanup_review_required"
+            run.next_safe_action = NEXT_CONTINUE_CLEANUP
+            db_session.commit()
+            return continue_internal_icloud_loop_cleanup(
+                db_session,
+                orchestration_run_id=run.id,
+                cleanup_dry_run_id=cleanup_dry_run.run_id,
+                confirmation=EXECUTION_CONFIRMATION_PHRASE,
+                helper_client=helper_client,
+                cleanup_wait_timeout_seconds=cleanup_wait_timeout_seconds,
+                cleanup_poll_seconds=cleanup_poll_seconds,
+            )
         loop_batch.status = BATCH_STATUS_CLEANUP_REVIEW_REQUIRED
         loop_batch.next_safe_action = NEXT_CONTINUE_CLEANUP
         run.status = STATUS_PAUSED_FOR_CLEANUP
@@ -1553,11 +1659,6 @@ def start_internal_icloud_loop(
         total_limit=total_limit,
         candidate_scan_limit=candidate_scan_limit,
     )
-    if not pause_before_cleanup:
-        raise IcloudInternalLoopError(
-            "cleanup_pause_required",
-            "12.62.19 internal loop requires pause-before-cleanup by default.",
-        )
     source = db_session.get(IngestionSource, source_id)
     if source is None:
         raise IcloudInternalLoopError("source_not_found", "Source Profile not found.")
@@ -1575,6 +1676,7 @@ def start_internal_icloud_loop(
         db_session,
         run=run,
         helper_client=helper_client or ExactSelectionHelperClient(),
+        pause_before_cleanup=pause_before_cleanup,
         cleanup_wait_timeout_seconds=cleanup_wait_timeout_seconds,
         cleanup_poll_seconds=cleanup_poll_seconds,
     )
@@ -1740,6 +1842,7 @@ def continue_internal_icloud_loop_cleanup(
         db_session,
         run=run,
         helper_client=helper_client or ExactSelectionHelperClient(),
+        pause_before_cleanup=bool(run.pause_before_cleanup),
         cleanup_wait_timeout_seconds=cleanup_wait_timeout_seconds,
         cleanup_poll_seconds=cleanup_poll_seconds,
     )

@@ -561,6 +561,44 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
         self.assertTrue(payload["batch_target_filled"])
         self.assertFalse(payload["partial_batch_selected"])
 
+    def test_all_supported_media_executes_partial_safe_batch_without_global_block(self) -> None:
+        safe_path = "2026/06/25/IMG_9145.JPG"
+        blocked_path = "2026/06/25/IMG_9146.JPG"
+        safe = _bytes(b"all-supported-safe")
+        blocked = _bytes(b"all-supported-blocked")
+        helper = _LoopFixtureHelper(
+            _listing(
+                (
+                    _item("raw-safe", safe_path, safe),
+                    _unsupported_item("raw-unsupported", blocked_path, blocked),
+                )
+            ),
+            content_by_relative_path={safe_path: safe, blocked_path: blocked},
+        )
+
+        payload = orchestrator.plan_internal_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=2,
+            total_limit=10,
+            candidate_scan_limit=50,
+            ordinary_still_only=False,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertTrue(payload["execution_safe_to_attempt"])
+        self.assertEqual(payload["stop_reason"], "safe_partial_batch_ready")
+        self.assertEqual(payload["selected_logical_items"], 1)
+        self.assertEqual(payload["selected_count"], 1)
+        self.assertEqual(payload["safe_unknown_supported_count"], 1)
+        self.assertEqual(payload["unsupported_skipped_count"], 1)
+        self.assertEqual(payload["ambiguous_skipped_count"], 0)
+        self.assertEqual(payload["selected_unsupported_or_blocked_count"], 0)
+        self.assertTrue(payload["partial_batch_selected"])
+        self.assertFalse(payload["operator_decision_required"])
+        self.assertEqual(payload["execution_decision_reason"], "partial_safe_batch_ready")
+
     def test_run_payload_reports_mixed_asset_counts(self) -> None:
         still_path = "2026/06/25/IMG_9150.JPG"
         video_path = "2026/06/25/IMG_9151.MOV"
@@ -705,6 +743,31 @@ class IcloudInternalLoopOrchestratorTests(unittest.TestCase):
         self.assertEqual(completed.cleanup_execution_run_ids, [2])
         self.assertFalse((self.staging_root / relative_path).exists())
         self.assertEqual(list(self.staging_root.rglob("*")), [])
+
+    def test_auto_cleanup_mode_completes_total_limit_one_without_pause(self) -> None:
+        helper, relative_path, _ = self._single_helper()
+
+        completed = orchestrator.start_internal_icloud_loop(
+            self.db,
+            source_id=self.source.id,
+            batch_size=1,
+            total_limit=1,
+            candidate_scan_limit=25,
+            ordinary_still_only=True,
+            pause_before_cleanup=False,
+            helper_client=helper,  # type: ignore[arg-type]
+            cleanup_wait_timeout_seconds=5,
+        )
+
+        self.assertEqual(completed.status, orchestrator.STATUS_COMPLETED)
+        self.assertEqual(completed.stop_reason, "total_limit_reached")
+        self.assertEqual(completed.completed_logical_items, 1)
+        self.assertEqual(completed.completed_batches, 1)
+        self.assertTrue(completed.staging_clean)
+        self.assertTrue(completed.drop_zone_clean)
+        self.assertTrue(completed.partial_workspace_clear)
+        self.assertEqual(completed.cleanup_execution_run_ids, [2])
+        self.assertFalse((self.staging_root / relative_path).exists())
 
     def test_continue_cleanup_repeats_next_batch_until_next_cleanup_pause(self) -> None:
         helper, (first_path, second_path) = self._two_item_helper()

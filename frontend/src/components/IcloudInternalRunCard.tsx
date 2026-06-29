@@ -216,6 +216,13 @@ export default function IcloudInternalRunCard() {
           <p className={styles.kv}><strong>Execution Performed:</strong> {current.execution_performed ? "yes" : "no"}</p>
           <p className={styles.kv}><strong>Cleanup Performed:</strong> {current.cleanup_performed ? "yes" : "no"}</p>
           <p className={styles.kv}><strong>Final Verification Passed:</strong> {current.final_verification_passed ? "yes" : "no"}</p>
+          <p className={styles.kv}><strong>Candidates Considered:</strong> {String(current.candidates_considered)}</p>
+          <p className={styles.kv}><strong>Safe Unknown Supported Count:</strong> {String(current.safe_unknown_supported_count)}</p>
+          <p className={styles.kv}><strong>Already Known Count:</strong> {String(current.already_known_count)}</p>
+          <p className={styles.kv}><strong>Ambiguous Skipped Count:</strong> {String(current.ambiguous_skipped_count)}</p>
+          <p className={styles.kv}><strong>Unsupported Skipped Count:</strong> {String(current.unsupported_skipped_count)}</p>
+          <p className={styles.kv}><strong>Selected Count:</strong> {String(current.selected_count)}</p>
+          <p className={styles.kv}><strong>Execution Decision Reason:</strong> {current.execution_decision_reason ?? "-"}</p>
           <p className={styles.kv}><strong>Logical Selected:</strong> {String(current.logical_assets_selected)}</p>
           <p className={styles.kv}><strong>Resources Selected:</strong> {String(current.resources_selected)}</p>
           <p className={styles.kv}><strong>Ordinary Still Logical Count:</strong> {String(current.ordinary_still_logical_count)}</p>

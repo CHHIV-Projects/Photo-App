@@ -822,6 +822,7 @@ def run_durable_exact_selection_batch(
             candidate_scan_limit=candidate_scan_limit,
             helper_client=helper_client,
             ordinary_still_only=ordinary_still_only,
+            skip_blocking_unsupported_relationships=not ordinary_still_only,
         )
         batch = _create_batch_from_preparation(
             db_session,

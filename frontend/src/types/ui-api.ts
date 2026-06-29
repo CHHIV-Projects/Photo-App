@@ -1652,6 +1652,13 @@ export interface InternalIcloudRunStatus {
   final_cleanup_verification_run_ids: number[];
   logical_assets_selected: InternalIcloudCountOrStatus;
   resources_selected: InternalIcloudCountOrStatus;
+  candidates_considered: InternalIcloudCountOrStatus;
+  safe_unknown_supported_count: InternalIcloudCountOrStatus;
+  already_known_count: InternalIcloudCountOrStatus;
+  ambiguous_skipped_count: InternalIcloudCountOrStatus;
+  unsupported_skipped_count: InternalIcloudCountOrStatus;
+  selected_count: InternalIcloudCountOrStatus;
+  execution_decision_reason: string | null;
   ordinary_still_logical_count: InternalIcloudCountOrStatus;
   ordinary_still_resource_count: InternalIcloudCountOrStatus;
   video_logical_count: InternalIcloudCountOrStatus;
