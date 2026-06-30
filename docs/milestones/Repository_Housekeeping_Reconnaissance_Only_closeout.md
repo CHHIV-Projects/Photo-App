@@ -208,3 +208,87 @@ Suggested verification after each commit:
 Recon boundary confirmation:
 
 - No files were modified, moved, deleted, staged, committed, or tagged during this reconnaissance.
+
+## Cleanup Action 1 - .gitignore Hardening
+
+Scope confirmation for this action:
+
+- Executed on branch: housekeeping/repo-cleanup-pass1
+- Changed files in this action: .gitignore and this closeout file only
+- No edits to README
+- Did not touch 14/
+- Did not remove frontend/tsconfig.tsbuildinfo
+- No file deletes, moves, commit, or tag
+
+### Exact .gitignore Changes Made
+
+Added/updated sections:
+
+- Python:
+  - added .pytest_cache/
+  - added .mypy_cache/
+- Node / Next.js:
+  - added *.tsbuildinfo
+- Env files:
+  - kept .env and .env.* ignored
+  - added allowlist for examples:
+    - !.env.example
+    - !**/.env.example
+    - !.env.*.example
+    - !**/.env.*.example
+- Logs / temp files:
+  - kept *.log
+  - added *.tmp, *.patch, *.bak
+- Databases:
+  - added *.db, *.sqlite, *.sqlite3
+- Partial/interrupted downloads:
+  - added *.partial
+- Runtime storage:
+  - preserved storage/ and backend/storage/
+- Vision models:
+  - preserved backend/app/services/vision/models/
+
+Removed duplicate/noisy entries:
+
+- removed duplicate trailing .env entry
+- removed redundant separate onnx line because the enclosing models directory ignore already covers it
+
+### Verification Commands Run
+
+Commands executed exactly as requested:
+
+- git diff -- .gitignore
+- git check-ignore -v .env.example
+- git check-ignore -v docker/.env.example
+- git check-ignore -v .env.local
+- git check-ignore -v backend/storage/logs/example.json
+- git check-ignore -v test.partial
+- git check-ignore -v frontend/tsconfig.tsbuildinfo
+- git status
+
+### Verification Results
+
+- .env.example: NOT ignored
+  - matched unignore rule: .gitignore line with !**/.env.example
+- docker/.env.example: NOT ignored
+  - matched unignore rule: .gitignore line with !**/.env.example
+- .env.local: ignored
+  - matched ignore rule: .env.*
+- backend/storage/logs/example.json: ignored
+  - matched ignore rule: backend/storage/
+- test.partial: ignored
+  - matched ignore rule: *.partial
+- frontend/tsconfig.tsbuildinfo:
+  - check-ignore produced no output (expected for a tracked file path in many Git workflows)
+  - ignore rule exists in .gitignore: *.tsbuildinfo
+
+### Unexpected Behavior
+
+- One pre-existing working-tree modification was present and unrelated to this action:
+  - docs/milestones/Repository_Housekeeping_Reconnaissance_Only_prompt.md showed as modified before/after verification.
+- docker/.env.example appears as untracked after allowlisting, which is expected once it is no longer ignored.
+
+### Final Changed File List
+
+- .gitignore
+- docs/milestones/Repository_Housekeeping_Reconnaissance_Only_closeout.md

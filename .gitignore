@@ -3,34 +3,45 @@
 .tools/
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
 
 # Node / Next.js
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 
 # Env files
 .env
 .env.*
 # Allow committed example/template files
+!.env.example
+!**/.env.example
 !.env.*.example
+!**/.env.*.example
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs / temp files
 *.log
+*.tmp
+*.patch
+*.bak
 
-# vault
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Partial / interrupted downloads
+*.partial
+
+# Runtime storage / vault / exports
 storage/
 backend/storage/
 
-# face detection model binaries
-backend/app/services/vision/models/*.onnx
-
-# vision models
+# Vision model binaries
 backend/app/services/vision/models/
-
-#keys
-.env
