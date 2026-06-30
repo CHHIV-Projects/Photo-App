@@ -1263,3 +1263,545 @@ Finish ingestion confidence first.
 Then simplify and consolidate ingestion UX.
 Then return to people, events, places, source review, visual enrichment, and semantic search with a stronger foundation.
 ```
+
+# Parking Lot Prompt: Full Repository / Workspace Surface Audit for v1 Stabilization
+
+## Purpose
+
+This is a deferred stabilization task. Do not execute now unless explicitly instructed.
+
+The goal is to perform a full repository and workspace audit before v1 to reduce clutter, improve developer/agent reliability, clarify project structure, and reduce the chance that humans, VS Code, Copilot/Codex, or tests are distracted by stale/generated/irrelevant files.
+
+This task is broader than normal `.gitignore` cleanup. It should evaluate both:
+
+```text
+1. Git repository bloat:
+   files actually tracked by Git
+
+2. Workspace bloat:
+   ignored/untracked/generated/local files that still exist in the project folder and may affect VS Code, search, indexing, agent context, or developer confusion
+```
+
+## Background
+
+The project folder has grown large, with roughly tens of thousands of files. Some of that is expected because of local dependencies and runtime data:
+
+```text
+.venv/
+frontend/node_modules/
+frontend/.next/
+storage/
+backend/storage/
+__pycache__/
+logs/
+exports/
+```
+
+However, project stability may be affected if source files, stale docs, generated artifacts, runtime exports, test artifacts, and historical files are mixed together.
+
+The concern is not only whether files are tracked by Git. The real question is:
+
+```text
+What files should the app, Git, VS Code, Copilot/Codex, tests, and humans actually see?
+```
+
+## Core Principle
+
+Use **program relevance**, not Git tracking status, as the classification standard.
+
+A file or folder should be kept only if it is:
+
+```text
+- required by runtime
+- required by tests
+- required as intentional test fixture
+- required as current documentation
+- required as final milestone/project history
+- required for local development setup as a safe template
+```
+
+Otherwise classify as:
+
+```text
+DELETE CANDIDATE
+ARCHIVE CANDIDATE
+MOVE CANDIDATE
+IGNORE CANDIDATE
+NEEDS USER DECISION
+```
+
+## Important Boundaries
+
+This task is initially **reconnaissance only**.
+
+Do not delete files.  
+Do not move files.  
+Do not edit code.  
+Do not edit docs.  
+Do not edit `.gitignore`.  
+Do not run destructive cleanup commands.  
+Do not commit or tag.  
+Do not rewrite Git history.  
+Do not expose or print secret values from `.env` files.
+
+Reports may list environment variable names, but never values.
+
+Example acceptable:
+
+```text
+backend/.env contains local values for:
+DATABASE_URL
+GOOGLE_MAPS_API_KEY
+```
+
+Example not acceptable:
+
+```text
+GOOGLE_MAPS_API_KEY=actual_key_here
+```
+
+## Required Audit Areas
+
+### 1. Workspace Size Breakdown
+
+Report where the files are coming from.
+
+Include:
+
+```text
+total file count in project folder
+total directory count
+top 20 folders by file count
+top 20 folders by total size
+tracked file count
+ignored file count
+untracked non-ignored file count
+largest folders
+largest tracked files
+largest untracked files
+```
+
+Classify major folders as:
+
+```text
+source
+tests
+docs
+dependencies
+runtime/generated
+local environment
+unknown/suspicious
+```
+
+### 2. Git Repository Surface Audit
+
+Use Git-native commands to determine what is actually part of the repository.
+
+Report:
+
+```text
+git ls-files count
+largest tracked files
+tracked media files
+tracked generated/build files
+tracked runtime/log/export files
+tracked binary/model files
+tracked docs over a size threshold
+```
+
+Suggested commands:
+
+```powershell
+git ls-files | Measure-Object
+git ls-files | ForEach-Object { Get-Item $_ -ErrorAction SilentlyContinue } | Sort-Object Length -Descending | Select-Object -First 50 FullName,Length
+git ls-files "*.jpg" "*.jpeg" "*.png" "*.heic" "*.mov" "*.mp4" "*.json" "*.log" "*.tmp" "*.db" "*.sqlite" "*.tsbuildinfo"
+```
+
+### 3. Workspace / Ignored File Audit
+
+Determine whether ignored/generated files are still polluting the local workspace.
+
+Report:
+
+```text
+ignored folders with high file counts
+untracked non-ignored files
+runtime storage/log/export files
+large JSON reports
+.partial files
+cache/build output
+files that should be moved outside repo
+files that should be ignored
+files that should be deleted locally
+```
+
+Suggested commands:
+
+```powershell
+git status --ignored -s
+git clean -ndX
+git clean -nd
+```
+
+Important: use dry-run only. Do not actually run destructive `git clean`.
+
+### 4. `.gitignore` Audit
+
+Evaluate whether `.gitignore` protects against common generated/local artifacts.
+
+Check coverage for:
+
+```text
+.venv/
+.tools/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+!**/.env.example
+storage/
+backend/storage/
+*.partial
+*.log
+*.tmp
+*.patch
+*.bak
+*.db
+*.sqlite
+*.sqlite3
+.DS_Store
+Thumbs.db
+model binaries / downloaded models
+```
+
+Report missing patterns only. Do not edit unless later instructed.
+
+### 5. VS Code / Agent Workspace Noise Audit
+
+Assess whether VS Code/Copilot/Codex may be seeing too much irrelevant material.
+
+Look for whether the repo has:
+
+```text
+.vscode/settings.json
+search.exclude
+files.exclude
+files.watcherExclude
+```
+
+Recommend exclusions for:
+
+```text
+.venv/
+.tools/
+frontend/node_modules/
+frontend/.next/
+storage/
+backend/storage/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.partial
+*.log
+*.tmp
+*.tsbuildinfo
+```
+
+Do not edit `.vscode/settings.json` unless later instructed.
+
+### 6. Python Dead-Code / Unused-Code Recon
+
+Use tools only if available or easy to install in the existing environment. Do not make cleanup changes.
+
+Candidate tools:
+
+```text
+vulture
+ruff
+```
+
+Purpose:
+
+```text
+vulture:
+  find likely unused Python code
+
+ruff:
+  unused imports, lint problems, import hygiene
+```
+
+Important:
+
+- Treat results as leads, not truth.
+
+- Dynamic FastAPI routes, SQLAlchemy models, scripts, migrations, CLI entrypoints, and tests may produce false positives.
+
+- Do not delete code based only on tool output.
+
+Report:
+
+```text
+tool run command
+summary count of findings
+top/high-confidence findings
+known false-positive categories
+recommendation for follow-up
+```
+
+### 7. Python Dependency Audit
+
+Use tools only in report mode.
+
+Candidate tools:
+
+```text
+deptry
+pipdeptree
+pip-audit
+```
+
+Purpose:
+
+```text
+deptry:
+  unused/missing/transitive dependency findings
+
+pipdeptree:
+  installed package tree and dependency complexity
+
+pip-audit:
+  security vulnerability scan
+```
+
+Report:
+
+```text
+unused dependency candidates
+missing dependency candidates
+large/heavy dependency clusters
+security concerns if pip-audit is run
+recommendation for follow-up
+```
+
+Do not remove dependencies during recon.
+
+### 8. Frontend Dependency / Build Artifact Audit
+
+Inspect frontend structure and dependency/build artifacts.
+
+Report:
+
+```text
+tracked frontend generated files
+node_modules ignored status
+.next ignored status
+package-lock.json status
+large frontend source files
+unused frontend components if detectable
+```
+
+Optional tools if already configured:
+
+```text
+npm run lint
+npm run build
+npm ls
+```
+
+Do not modify frontend dependencies during recon.
+
+### 9. Docs Audit
+
+Evaluate docs volume and usefulness.
+
+Report:
+
+```text
+docs file count
+prompt/closeout count
+Coder response file count
+large legacy docs
+duplicate-looking docs
+stale docs likely to mislead agents/humans
+docs that should be kept as milestone history
+docs that should be archived
+docs that should be summarized then removed
+```
+
+Policy preference:
+
+```text
+Keep:
+- final milestone prompts
+- final milestone closeouts
+- architecture/context/workflow docs
+- release roadmaps
+- parking lot docs
+
+Needs user decision:
+- raw coder response files
+- huge generated inventory docs
+- duplicate drafts
+- pasted terminal logs
+```
+
+### 10. Test Fixture / Media Audit
+
+Find all tracked media and fixture-like files.
+
+Report:
+
+```text
+tracked images/videos/media files
+whether tests reference them
+whether docs reference them
+whether they are root clutter
+whether they belong under backend/tests/fixtures/
+whether they should be deleted
+```
+
+Use evidence-based classification:
+
+```text
+KEEP:
+  referenced by test or documented fixture
+
+MOVE:
+  useful fixture in wrong location
+
+DELETE CANDIDATE:
+  no runtime/test/docs references
+
+NEEDS USER DECISION:
+  unclear provenance
+```
+
+### 11. Branch / Tag Audit
+
+Report local and remote branches.
+
+Classify:
+
+```text
+active
+merged/stale
+safe deletion candidate
+needs user decision
+```
+
+Confirm tags around recent stable points.
+
+Do not delete branches during recon.
+
+## Tool Suggestions
+
+Consider using these tools in report-only mode:
+
+```text
+git-sizer:
+  Git repository size/health metrics
+
+vulture:
+  likely unused Python code
+
+deptry:
+  dependency issues
+
+ruff:
+  lint/import hygiene
+
+pipdeptree:
+  dependency tree
+
+pip-audit:
+  Python package vulnerability audit
+
+pyclean:
+  possible cache/generated cleanup tool, but do not run destructively during recon
+```
+
+Do not install or run tools that require significant setup without asking first.
+
+## Report Format
+
+Produce a Markdown report with this structure:
+
+```markdown
+# Full Repository / Workspace Surface Audit
+
+## Executive Summary
+
+## Key Risks
+
+## File Count and Size Breakdown
+
+## Git-Tracked Surface
+
+## Ignored / Untracked Workspace Surface
+
+## .gitignore Findings
+
+## VS Code / Agent Indexing Findings
+
+## Python Code Hygiene Findings
+
+## Python Dependency Findings
+
+## Frontend Findings
+
+## Docs Findings
+
+## Test Fixture / Media Findings
+
+## Branch and Tag Findings
+
+## Recommended Cleanup Actions
+
+## Items Requiring User Decision
+
+## Suggested Stabilization Plan Before v1
+```
+
+For cleanup candidates, use this table:
+
+```markdown
+| Item | Category | Evidence of Use | Evidence Against Use | Classification | Recommended Action | Risk |
+|---|---|---|---|---|---|---|
+```
+
+Risk values:
+
+```text
+Low
+Medium
+High
+Unknown
+```
+
+## Desired Output
+
+The final report should answer these questions:
+
+```text
+1. Are the 80K local files mostly expected dependency/runtime files?
+2. How many files are actually tracked by Git?
+3. Are generated/log/export/storage files safely ignored?
+4. Are stale docs or generated artifacts likely confusing agents/humans?
+5. Are there tracked files that should clearly be deleted or moved?
+6. Is VS Code/Copilot likely indexing too much noise?
+7. Are there unused Python files/functions/dependencies that deserve later review?
+8. What cleanup should happen now vs later?
+```
+
+## Final Boundary
+
+This is a stabilization audit for later. It should not derail current feature development.
+
+Do not modify anything unless explicitly instructed after the report is reviewed.
