@@ -646,6 +646,41 @@ class IcloudBackfillStatusResponse(BaseModel):
     current: IcloudBackfillInventoryStatus
 
 
+class IcloudBackfillAcquirePreviewRequest(BaseModel):
+    source_id: int
+    acquire_limit: int = Field(default=500, ge=1, le=1000)
+    max_listing_candidates: int = Field(default=100000, ge=1, le=100000)
+    include_items: bool = False
+
+
+class IcloudBackfillAcquirePreviewItem(BaseModel):
+    inventory_id: int
+    logical_resource_count: int
+    is_live_photo: bool
+    primary_relative_path: str | None = None
+
+
+class IcloudBackfillAcquirePreviewResponse(BaseModel):
+    source_id: int
+    status: str
+    selected_inventory_count: int
+    matched_listing_count: int
+    preview_selected_logical_count: int
+    preview_selected_resource_count: int
+    skipped_stale_count: int
+    skipped_known_count: int
+    skipped_unsupported_count: int
+    skipped_ambiguous_count: int
+    skipped_missing_identity_count: int
+    skipped_pending_classification_count: int = 0
+    unsafe_manifest_count: int = 0
+    acquire_limit: int
+    max_listing_candidates: int
+    stop_reason: str
+    next_safe_action: str
+    preview_items: list[IcloudBackfillAcquirePreviewItem] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Internal single-flow iCloud run (12.62.22)
 # ---------------------------------------------------------------------------

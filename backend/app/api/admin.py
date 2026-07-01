@@ -57,6 +57,8 @@ from app.schemas.admin import (
     IcloudStagingCleanupRunStatus,
     IcloudStagingCleanupStatusResponse,
     IcloudStagingCleanupReadinessResponse,
+    IcloudBackfillAcquirePreviewRequest,
+    IcloudBackfillAcquirePreviewResponse,
     IcloudBackfillInventoryScanRequest,
     IcloudBackfillInventoryScanResponse,
     IcloudBackfillInventoryStatus,
@@ -144,6 +146,10 @@ from app.services.icloud_backfill_inventory_service import (
     IcloudInventoryScanResult,
     get_icloud_backfill_status,
     run_icloud_backfill_inventory_scan as run_icloud_backfill_inventory_scan_service,
+)
+from app.services.icloud_backfill_acquisition_preview_service import (
+    IcloudBackfillAcquisitionPreviewResult,
+    preview_icloud_backfill_acquisition as preview_icloud_backfill_acquisition_service,
 )
 from app.services.admin.ingestion_operation_guardrail_service import (
     IngestionOperationGuardrailSnapshot,
@@ -538,6 +544,39 @@ def _to_icloud_backfill_inventory_status(
     )
 
 
+def _to_icloud_backfill_acquire_preview_response(
+    snapshot: IcloudBackfillAcquisitionPreviewResult,
+) -> IcloudBackfillAcquirePreviewResponse:
+    return IcloudBackfillAcquirePreviewResponse(
+        source_id=snapshot.source_id,
+        status=snapshot.status,
+        selected_inventory_count=snapshot.selected_inventory_count,
+        matched_listing_count=snapshot.matched_listing_count,
+        preview_selected_logical_count=snapshot.preview_selected_logical_count,
+        preview_selected_resource_count=snapshot.preview_selected_resource_count,
+        skipped_stale_count=snapshot.skipped_stale_count,
+        skipped_known_count=snapshot.skipped_known_count,
+        skipped_unsupported_count=snapshot.skipped_unsupported_count,
+        skipped_ambiguous_count=snapshot.skipped_ambiguous_count,
+        skipped_missing_identity_count=snapshot.skipped_missing_identity_count,
+        skipped_pending_classification_count=snapshot.skipped_pending_classification_count,
+        unsafe_manifest_count=snapshot.unsafe_manifest_count,
+        acquire_limit=snapshot.acquire_limit,
+        max_listing_candidates=snapshot.max_listing_candidates,
+        stop_reason=snapshot.stop_reason,
+        next_safe_action=snapshot.next_safe_action,
+        preview_items=[
+            {
+                "inventory_id": item.inventory_id,
+                "logical_resource_count": item.logical_resource_count,
+                "is_live_photo": item.is_live_photo,
+                "primary_relative_path": item.primary_relative_path,
+            }
+            for item in snapshot.preview_items
+        ],
+    )
+
+
 
 def _guardrail_conflict_content(
     snapshot: IngestionOperationGuardrailSnapshot,
@@ -893,6 +932,35 @@ def run_icloud_backfill_inventory_scan(
         message="iCloud backfill inventory scan completed.",
         current=_to_icloud_backfill_inventory_status(result),
     )
+
+
+@router.post("/icloud-backfill/acquire-preview", response_model=IcloudBackfillAcquirePreviewResponse)
+def preview_icloud_backfill_acquisition(
+    body: IcloudBackfillAcquirePreviewRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudBackfillAcquirePreviewResponse | JSONResponse:
+    """Preview inventory-driven historical backfill acquisition without downloading."""
+
+    try:
+        result = preview_icloud_backfill_acquisition_service(
+            db,
+            source_id=body.source_id,
+            acquire_limit=body.acquire_limit,
+            max_listing_candidates=body.max_listing_candidates,
+            include_items=body.include_items,
+        )
+    except IcloudBackfillValidationError as exc:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if exc.code == "source_not_found"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": str(exc), "error_code": exc.code},
+        )
+
+    return _to_icloud_backfill_acquire_preview_response(result)
 
 
 @router.get("/icloud-backfill/status", response_model=IcloudBackfillStatusResponse)
