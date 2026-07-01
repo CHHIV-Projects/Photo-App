@@ -19,6 +19,7 @@ SUPPORTED_OPERATIONS = {
 }
 
 MAX_CANDIDATE_SCAN_LIMIT = 1000
+MAX_LIST_CANDIDATE_SCAN_LIMIT = 100_000
 MAX_SELECTED_ITEM_COUNT = 1000
 MAX_RESOURCES_PER_ITEM = 8
 MAX_HELPER_JSON_BYTES = 5_000_000
@@ -109,13 +110,13 @@ def normalize_relative_resource_path(value: object) -> str:
     return path.as_posix()
 
 
-def _candidate_scan_limit(payload: dict[str, Any]) -> int:
+def _candidate_scan_limit(payload: dict[str, Any], *, max_limit: int = MAX_CANDIDATE_SCAN_LIMIT) -> int:
     value = payload.get("candidate_scan_limit")
     if not isinstance(value, int) or isinstance(value, bool):
         raise ExactSelectionProtocolError("candidate_scan_limit must be an integer.")
-    if value < 1 or value > MAX_CANDIDATE_SCAN_LIMIT:
+    if value < 1 or value > max_limit:
         raise ExactSelectionProtocolError(
-            f"candidate_scan_limit must be between 1 and {MAX_CANDIDATE_SCAN_LIMIT}."
+            f"candidate_scan_limit must be between 1 and {max_limit}."
         )
     return value
 
@@ -146,7 +147,14 @@ def validate_helper_request(payload: object) -> dict[str, Any]:
         return cleaned
 
     cleaned["library"] = _required_string(payload, "library", max_length=255)
-    cleaned["candidate_scan_limit"] = _candidate_scan_limit(payload)
+    cleaned["candidate_scan_limit"] = _candidate_scan_limit(
+        payload,
+        max_limit=(
+            MAX_LIST_CANDIDATE_SCAN_LIMIT
+            if operation == OPERATION_LIST
+            else MAX_CANDIDATE_SCAN_LIMIT
+        ),
+    )
     if operation == OPERATION_LIST:
         return cleaned
 

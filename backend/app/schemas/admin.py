@@ -611,6 +611,42 @@ class IcloudStagingCleanupReadinessResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# iCloud historical backfill inventory scan (12.62.27)
+# ---------------------------------------------------------------------------
+
+
+class IcloudBackfillInventoryScanRequest(BaseModel):
+    source_id: int
+    max_candidates: int = Field(default=50000, ge=1, le=100000)
+
+
+class IcloudBackfillInventoryStatus(BaseModel):
+    source_id: int
+    status: str
+    last_inventory_scan_at: datetime | None = None
+    last_scan_candidate_count: int = 0
+    last_scan_created_count: int = 0
+    last_scan_updated_count: int = 0
+    inventory_total_count: int = 0
+    eligible_metadata_count: int = 0
+    unsupported_or_ambiguous_count: int = 0
+    source_exhausted: bool = False
+    scan_limit_reached: bool = False
+    stop_reason: str | None = None
+
+
+class IcloudBackfillInventoryScanResponse(BaseModel):
+    status: str
+    message: str
+    current: IcloudBackfillInventoryStatus
+
+
+class IcloudBackfillStatusResponse(BaseModel):
+    generated_at: datetime
+    current: IcloudBackfillInventoryStatus
+
+
+# ---------------------------------------------------------------------------
 # Internal single-flow iCloud run (12.62.22)
 # ---------------------------------------------------------------------------
 

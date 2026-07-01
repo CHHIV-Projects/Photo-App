@@ -41,6 +41,7 @@ from app.services.admin.source_intake_execution_service import _reset_stale_runs
 from app.services.live_photo.pairing_schema import ensure_live_photo_pairing_schema
 from app.services.icloud_acquisition.schema import ensure_icloud_acquisition_schema
 from app.services.icloud_acquisition.execution_service import _reset_stale_runs as _reset_stale_icloud_acquisition_runs
+from app.services.icloud_backfill_schema import ensure_icloud_backfill_schema
 from app.services.admin.icloud_staging_cleanup_schema import ensure_icloud_staging_cleanup_schema
 from app.services.admin.icloud_staging_cleanup_execution_service import reset_stale_cleanup_runs
 from app.services.face.face_processing_service import _reset_stale_runs as _reset_stale_face_processing_runs
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
 			ensure_source_intake_schema(db_session)
 			ensure_live_photo_pairing_schema(db_session)
 			ensure_icloud_acquisition_schema(db_session)
+			ensure_icloud_backfill_schema(db_session)
 			ensure_icloud_staging_cleanup_schema(db_session)
 			ensure_place_geocoding_schema(db_session.connection())
 			_reset_stale_runs(db_session)

@@ -57,6 +57,10 @@ from app.schemas.admin import (
     IcloudStagingCleanupRunStatus,
     IcloudStagingCleanupStatusResponse,
     IcloudStagingCleanupReadinessResponse,
+    IcloudBackfillInventoryScanRequest,
+    IcloudBackfillInventoryScanResponse,
+    IcloudBackfillInventoryStatus,
+    IcloudBackfillStatusResponse,
     InternalIcloudRunRequest,
     InternalIcloudRunResponse,
     InternalIcloudRunStatusResponse,
@@ -132,6 +136,14 @@ from app.services.admin.icloud_staging_cleanup_execution_service import (
     get_cleanup_source_readiness,
     start_cleanup_execution,
     start_cleanup_run,
+)
+from app.services.icloud_backfill_inventory_service import (
+    IcloudBackfillStateNotFound,
+    IcloudBackfillStatusSnapshot,
+    IcloudBackfillValidationError,
+    IcloudInventoryScanResult,
+    get_icloud_backfill_status,
+    run_icloud_backfill_inventory_scan as run_icloud_backfill_inventory_scan_service,
 )
 from app.services.admin.ingestion_operation_guardrail_service import (
     IngestionOperationGuardrailSnapshot,
@@ -492,6 +504,40 @@ def _to_icloud_cleanup_run_status(snapshot: CleanupRunSnapshot | None) -> Icloud
     )
 
 
+def _to_icloud_backfill_inventory_status(
+    snapshot: IcloudInventoryScanResult | IcloudBackfillStatusSnapshot,
+) -> IcloudBackfillInventoryStatus:
+    if isinstance(snapshot, IcloudInventoryScanResult):
+        return IcloudBackfillInventoryStatus(
+            source_id=snapshot.source_id,
+            status=snapshot.status,
+            last_inventory_scan_at=snapshot.scanned_at,
+            last_scan_candidate_count=snapshot.scanned_count,
+            last_scan_created_count=snapshot.created_count,
+            last_scan_updated_count=snapshot.updated_count,
+            inventory_total_count=snapshot.inventory_total_count,
+            eligible_metadata_count=snapshot.eligible_metadata_count,
+            unsupported_or_ambiguous_count=snapshot.unsupported_or_ambiguous_count,
+            source_exhausted=snapshot.source_exhausted,
+            scan_limit_reached=snapshot.scan_limit_reached,
+            stop_reason=snapshot.stop_reason,
+        )
+    return IcloudBackfillInventoryStatus(
+        source_id=snapshot.source_id,
+        status=snapshot.status,
+        last_inventory_scan_at=snapshot.last_inventory_scan_at,
+        last_scan_candidate_count=snapshot.last_scan_candidate_count,
+        last_scan_created_count=snapshot.last_scan_created_count,
+        last_scan_updated_count=snapshot.last_scan_updated_count,
+        inventory_total_count=snapshot.inventory_total_count,
+        eligible_metadata_count=snapshot.eligible_metadata_count,
+        unsupported_or_ambiguous_count=snapshot.unsupported_or_ambiguous_count,
+        source_exhausted=snapshot.source_exhausted,
+        scan_limit_reached=snapshot.scan_limit_reached,
+        stop_reason=snapshot.stop_reason,
+    )
+
+
 
 def _guardrail_conflict_content(
     snapshot: IngestionOperationGuardrailSnapshot,
@@ -816,6 +862,62 @@ def execute_icloud_staging_cleanup(
             message="Verified local iCloud staging cleanup started.",
             current=_to_icloud_cleanup_run_status(snapshot),
         )
+
+
+@router.post("/icloud-backfill/inventory-scan", response_model=IcloudBackfillInventoryScanResponse)
+def run_icloud_backfill_inventory_scan(
+    body: IcloudBackfillInventoryScanRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudBackfillInventoryScanResponse | JSONResponse:
+    """Run a metadata-only historical iCloud inventory scan."""
+
+    try:
+        result = run_icloud_backfill_inventory_scan_service(
+            db,
+            source_id=body.source_id,
+            max_candidates=body.max_candidates,
+        )
+    except IcloudBackfillValidationError as exc:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if exc.code == "source_not_found"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": str(exc), "error_code": exc.code},
+        )
+
+    return IcloudBackfillInventoryScanResponse(
+        status="completed",
+        message="iCloud backfill inventory scan completed.",
+        current=_to_icloud_backfill_inventory_status(result),
+    )
+
+
+@router.get("/icloud-backfill/status", response_model=IcloudBackfillStatusResponse)
+def get_icloud_backfill_inventory_status(
+    source_id: int,
+    db: Session = Depends(get_db_session),
+) -> IcloudBackfillStatusResponse | JSONResponse:
+    """Return metadata-only historical iCloud backfill inventory status."""
+    from datetime import datetime, timezone
+
+    try:
+        snapshot = get_icloud_backfill_status(db, source_id=source_id)
+    except IcloudBackfillStateNotFound:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "detail": f"No iCloud backfill state exists for source {source_id}.",
+                "error_code": "ICLOUD_BACKFILL_STATE_NOT_FOUND",
+            },
+        )
+
+    return IcloudBackfillStatusResponse(
+        generated_at=datetime.now(timezone.utc),
+        current=_to_icloud_backfill_inventory_status(snapshot),
+    )
 
 
 @router.post("/internal/icloud-runs", response_model=InternalIcloudRunResponse)
