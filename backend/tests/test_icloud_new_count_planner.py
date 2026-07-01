@@ -12,6 +12,9 @@ from app.services.icloud_acquisition.new_count_planner import (
     BLOCK_IDENTITY_UNAVAILABLE,
     BLOCK_LOGICAL_ITEM_IDENTITY_AMBIGUOUS,
     BLOCK_STAGED_UNKNOWN_PENDING_INTAKE,
+    DEFAULT_CANDIDATE_SCAN_LIMIT,
+    MAX_CANDIDATE_SCAN_LIMIT,
+    MAX_TARGET_NEW_ITEM_COUNT,
     PLAN_CLASSIFICATION_BLOCKED,
     PLAN_CLASSIFICATION_COMPLETE,
     PLAN_CLASSIFICATION_PARTIAL,
@@ -374,6 +377,56 @@ class IcloudNewCountPlannerTests(unittest.TestCase):
             plan_new_count_selection([], target_new_item_count=0)
         with self.assertRaises(ValueError):
             plan_new_count_selection([], target_new_item_count=2, candidate_scan_limit=1)
+
+    def test_planner_limits_align_with_recent_sync_1000_cap(self) -> None:
+        self.assertEqual(DEFAULT_CANDIDATE_SCAN_LIMIT, 1000)
+        self.assertEqual(MAX_CANDIDATE_SCAN_LIMIT, 1000)
+        self.assertEqual(MAX_TARGET_NEW_ITEM_COUNT, 1000)
+
+    def test_grouped_planner_accepts_target_and_scan_limit_1000(self) -> None:
+        plan = plan_new_count_selection(
+            [_candidate(f"2026/06/24/IMG_{index:04d}.HEIC") for index in range(1000)],
+            target_new_item_count=1000,
+            candidate_scan_limit=1000,
+        )
+
+        self.assertEqual(plan.classification, PLAN_CLASSIFICATION_COMPLETE)
+        self.assertEqual(plan.target_new_item_count, 1000)
+        self.assertEqual(plan.candidate_scan_limit, 1000)
+        self.assertEqual(plan.candidate_scan_item_count, 1000)
+        self.assertEqual(plan.selected_new_item_count, 1000)
+
+    def test_explicit_adapter_planner_accepts_target_and_scan_limit_1000(self) -> None:
+        plan = plan_explicit_new_count_selection(
+            [
+                ExplicitLogicalItemCandidate(
+                    adapter_logical_item_id=f"remote-item-{index:04d}",
+                    grouping="primary_asset_explicit",
+                    identity_ambiguous=False,
+                    resources=(
+                        ExplicitLogicalResourceCandidate(
+                            adapter_resource_id="primary_original",
+                            known_state=_candidate(f"2026/06/24/IMG_{index:04d}.HEIC"),
+                        ),
+                    ),
+                )
+                for index in range(1000)
+            ],
+            target_new_item_count=1000,
+            candidate_scan_limit=1000,
+        )
+
+        self.assertEqual(plan.classification, PLAN_CLASSIFICATION_COMPLETE)
+        self.assertEqual(plan.target_new_item_count, 1000)
+        self.assertEqual(plan.candidate_scan_limit, 1000)
+        self.assertEqual(plan.candidate_scan_item_count, 1000)
+        self.assertEqual(plan.selected_new_item_count, 1000)
+
+    def test_planner_rejects_limits_above_1000(self) -> None:
+        with self.assertRaises(ValueError):
+            plan_new_count_selection([], target_new_item_count=1001, candidate_scan_limit=1001)
+        with self.assertRaises(ValueError):
+            plan_new_count_selection([], target_new_item_count=1, candidate_scan_limit=1001)
 
 
 if __name__ == "__main__":
