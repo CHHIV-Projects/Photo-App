@@ -628,8 +628,8 @@ CountOrStatusValue = int | Literal["not_available", "deferred", "not_applicable"
 class InternalIcloudRunRequest(BaseModel):
     source_id: int
     batch_size: int = Field(default=5, ge=1, le=500)
-    total_limit: int = Field(default=10, ge=1, le=500)
-    candidate_search_cap: int = Field(default=50, ge=1, le=500)
+    total_limit: int = Field(default=500, ge=1, le=1000)
+    candidate_search_cap: int = Field(default=1000, ge=1, le=1000)
     media_scope: MediaScopeValue = "ordinary_stills"
     auto_cleanup_if_safe: bool = True
 

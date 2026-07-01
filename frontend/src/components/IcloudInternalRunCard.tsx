@@ -22,8 +22,8 @@ export default function IcloudInternalRunCard() {
   const [profiles, setProfiles] = useState<SourceProfileSummary[]>([]);
   const [sourceId, setSourceId] = useState<number | "">(66);
   const [batchSize, setBatchSize] = useState("5");
-  const [totalLimit, setTotalLimit] = useState("10");
-  const [candidateSearchCap, setCandidateSearchCap] = useState("50");
+  const [totalLimit, setTotalLimit] = useState("500");
+  const [candidateSearchCap, setCandidateSearchCap] = useState("1000");
   const [mediaScope, setMediaScope] = useState<InternalIcloudMediaScope>("all_supported_media");
   const [autoCleanupIfSafe, setAutoCleanupIfSafe] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
@@ -148,16 +148,17 @@ export default function IcloudInternalRunCard() {
         </label>
 
         <label className={styles.label}>
-          total_limit
-          <input className={styles.input} type="number" min={1} value={totalLimit} onChange={(event) => setTotalLimit(event.target.value)} />
+          Total Limit (acquire up to N logical assets, default 500, max 1000)
+          <input className={styles.input} type="number" min={1} max={1000} value={totalLimit} onChange={(event) => setTotalLimit(event.target.value)} />
         </label>
 
         <label className={styles.label}>
-          Candidate Search Cap
+          Candidate Search Cap (scan newest N candidates, default 1000, max 1000)
           <input
             className={styles.input}
             type="number"
             min={1}
+            max={1000}
             value={candidateSearchCap}
             onChange={(event) => setCandidateSearchCap(event.target.value)}
           />
