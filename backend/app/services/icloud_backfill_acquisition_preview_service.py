@@ -69,6 +69,7 @@ class IcloudBackfillAcquisitionPreviewResult:
     skipped_ambiguous_count: int
     skipped_missing_identity_count: int
     skipped_pending_classification_count: int
+    skipped_completed_count: int
     unsafe_manifest_count: int
     acquire_limit: int
     max_listing_candidates: int
@@ -86,6 +87,7 @@ class _SelectionAccumulator:
     skipped_ambiguous_count: int = 0
     skipped_missing_identity_count: int = 0
     skipped_pending_classification_count: int = 0
+    skipped_completed_count: int = 0
 
 
 def _validate_acquire_limit(acquire_limit: int) -> None:
@@ -167,6 +169,9 @@ def _select_inventory_rows(
         eligibility = (row.eligibility_state or "").strip()
         known_state = (row.known_state or "").strip()
 
+        if bool(getattr(row, "backfill_completed", False)):
+            selected.skipped_completed_count += 1
+            continue
         if not _has_required_identity(row):
             selected.skipped_missing_identity_count += 1
             continue
@@ -255,6 +260,7 @@ def preview_icloud_backfill_acquisition(
             skipped_ambiguous_count=selection.skipped_ambiguous_count,
             skipped_missing_identity_count=selection.skipped_missing_identity_count,
             skipped_pending_classification_count=selection.skipped_pending_classification_count,
+            skipped_completed_count=selection.skipped_completed_count,
             unsafe_manifest_count=0,
             acquire_limit=acquire_limit,
             max_listing_candidates=max_listing_candidates,
@@ -281,6 +287,7 @@ def preview_icloud_backfill_acquisition(
             skipped_ambiguous_count=selection.skipped_ambiguous_count,
             skipped_missing_identity_count=selection.skipped_missing_identity_count,
             skipped_pending_classification_count=selection.skipped_pending_classification_count,
+            skipped_completed_count=selection.skipped_completed_count,
             unsafe_manifest_count=0,
             acquire_limit=acquire_limit,
             max_listing_candidates=max_listing_candidates,
@@ -341,6 +348,7 @@ def preview_icloud_backfill_acquisition(
         skipped_ambiguous_count=selection.skipped_ambiguous_count,
         skipped_missing_identity_count=selection.skipped_missing_identity_count,
         skipped_pending_classification_count=selection.skipped_pending_classification_count,
+        skipped_completed_count=selection.skipped_completed_count,
         unsafe_manifest_count=unsafe_manifest_count,
         acquire_limit=acquire_limit,
         max_listing_candidates=max_listing_candidates,

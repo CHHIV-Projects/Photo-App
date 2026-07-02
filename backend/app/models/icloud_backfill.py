@@ -49,6 +49,18 @@ class IcloudRemoteAssetInventory(Base):
     eligibility_state: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     known_state: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
+    backfill_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    backfill_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    backfill_resolution_state: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    acquisition_state: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    acquisition_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    acquisition_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    source_intake_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    acquisition_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_acquisition_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

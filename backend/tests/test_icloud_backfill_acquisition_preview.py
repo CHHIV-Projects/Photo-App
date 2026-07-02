@@ -350,7 +350,7 @@ class IcloudBackfillPreviewReResolutionTests(IcloudBackfillPreviewFixture):
         self.db.refresh(row)
         self.assertEqual(result.skipped_stale_count, 1)
         self.assertEqual(result.preview_selected_logical_count, 0)
-        self.assertFalse(hasattr(row, "backfill_completed"))
+        self.assertFalse(row.backfill_completed)
         self.assertFalse(hasattr(row, "acquired"))
 
     def test_listing_requery_empty_does_not_construct_download_request(self) -> None:
@@ -480,6 +480,7 @@ class IcloudBackfillPreviewApiTests(IcloudBackfillPreviewFixture):
             skipped_ambiguous_count=0,
             skipped_missing_identity_count=0,
             skipped_pending_classification_count=0,
+            skipped_completed_count=0,
             unsafe_manifest_count=0,
             acquire_limit=500,
             max_listing_candidates=100000,

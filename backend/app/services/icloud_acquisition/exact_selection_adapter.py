@@ -840,6 +840,51 @@ def build_exact_download_request(
     )
 
 
+def build_exact_download_request_for_listing_items(
+    *,
+    profile: ExactSelectionProfileContext,
+    selected_items: tuple[ExactSelectionLogicalItem, ...],
+    candidate_scan_limit: int,
+    library: str = DEFAULT_LIBRARY,
+    run_token: str | None = None,
+) -> dict[str, Any] | None:
+    """Build a selected download request from already re-resolved helper listing items."""
+
+    request_items: list[dict[str, Any]] = []
+    for item in selected_items:
+        selected_resources: list[dict[str, Any]] = []
+        for resource in item.resources:
+            selected_resources.append(
+                {
+                    "resource_id": resource.resource_id,
+                    "relative_path": resource.relative_path,
+                    "expected_size": resource.expected_size,
+                    "expected_checksum": resource.expected_checksum,
+                }
+            )
+        if not selected_resources:
+            raise ExactSelectionPrototypeError(
+                "A selected inventory item had no helper resources.",
+                code="selection_manifest_invalid",
+            )
+        request_items.append({"item_id": item.item_id, "resources": selected_resources})
+    if not request_items:
+        return None
+
+    return validate_helper_request(
+        {
+            "protocol_version": PROTOCOL_VERSION,
+            "operation": OPERATION_DOWNLOAD_SELECTED,
+            "account_username": profile.account_username,
+            "library": library,
+            "candidate_scan_limit": candidate_scan_limit,
+            "staging_root": str(profile.staging_root),
+            "run_token": run_token or secrets.token_hex(16),
+            "selected_items": request_items,
+        }
+    )
+
+
 def prepare_exact_selection_prototype(
     db_session: Session,
     *,

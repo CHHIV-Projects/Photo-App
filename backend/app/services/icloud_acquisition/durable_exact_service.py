@@ -934,6 +934,142 @@ def run_durable_exact_selection_batch(
         _restore_helper_callbacks(helper_client, callbacks)
 
 
+def run_durable_exact_selection_preparation(
+    db_session: Session,
+    *,
+    source_id: int,
+    preparation: ExactSelectionPreparation,
+    helper_client: ExactSelectionHelperClient,
+    target_new_item_count: int,
+    candidate_scan_limit: int,
+    created_by: str = "icloud_backfill_acquire",
+) -> DurableExactRunResult:
+    """Execute an already prepared exact-selection manifest through durable acquisition."""
+
+    ensure_icloud_acquisition_schema(db_session)
+    active = _active_lease(db_session)
+    if active is not None:
+        raise DurableExactAcquisitionError(
+            "icloud_acquisition_lease_active",
+            "Another iCloud acquisition run is active.",
+        )
+    source = db_session.get(IngestionSource, source_id)
+    if source is None:
+        raise DurableExactAcquisitionError("source_not_found", "Source Profile not found.")
+    run = _create_internal_run(
+        db_session,
+        source=source,
+        target_new_item_count=target_new_item_count,
+        candidate_scan_limit=candidate_scan_limit,
+        created_by=created_by,
+    )
+    callbacks = _attach_helper_callbacks(helper_client, db_session=db_session, run=run)
+
+    batch: IcloudAcquisitionBatch | None = None
+    try:
+        _heartbeat(db_session, run)
+        batch = _create_batch_from_preparation(
+            db_session,
+            run=run,
+            preparation=preparation,
+            target_new_item_count=target_new_item_count,
+        )
+        status, reason = _classify_preparation_status(preparation)
+        if preparation.status != PREPARATION_READY:
+            if batch is not None:
+                batch.status = STATUS_BATCH_BLOCKED if status == STATUS_RUN_BLOCKED else STATUS_BATCH_FAILED
+                batch.failure_reason = reason
+                batch.next_safe_action = _next_safe_action(reason)
+                batch.finished_at = _utc_now()
+            _finalize_run(
+                db_session,
+                run,
+                status=status,
+                stop_reason=reason,
+                failure_reason=reason if status == STATUS_FAILED else None,
+                next_safe_action=_next_safe_action(reason),
+            )
+            return DurableExactRunResult(
+                run_id=run.id,
+                batch_id=batch.id if batch is not None else None,
+                status=run.status,
+                stop_reason=run.stop_reason,
+                next_safe_action=run.next_safe_action,
+                batch_ready_for_source_intake=False,
+            )
+
+        _heartbeat(db_session, run)
+        if batch is not None:
+            batch.status = STATUS_BATCH_DOWNLOADING
+            for item in batch.items:
+                item.status = STATUS_ITEM_DOWNLOADING
+            db_session.commit()
+        response = execute_prepared_exact_selection(
+            db_session,
+            preparation=preparation,
+            helper_client=helper_client,
+        )
+        if batch is not None:
+            _apply_download_response(db_session, batch=batch, response=response)
+            batch = reconcile_batch_filesystem(db_session, batch_id=batch.id)
+        ready = bool(batch and batch.batch_ready_for_source_intake)
+        stop_reason = "target_new_count_reached" if ready else str(response.get("stop_reason") or "partial_item_failed")
+        _finalize_run(
+            db_session,
+            run,
+            status=STATUS_COMPLETED if ready else STATUS_FAILED,
+            stop_reason=stop_reason,
+            failure_reason=None if ready else stop_reason,
+            next_safe_action=_next_safe_action(stop_reason, ready=ready),
+            downloaded_count=batch.downloaded_resource_count if batch else 0,
+            failed_count=batch.failed_resource_count if batch else 0,
+        )
+        return DurableExactRunResult(
+            run_id=run.id,
+            batch_id=batch.id if batch is not None else None,
+            status=run.status,
+            stop_reason=run.stop_reason,
+            next_safe_action=run.next_safe_action,
+            batch_ready_for_source_intake=ready,
+        )
+    except ExactSelectionPrototypeError as exc:
+        reason = exc.code
+        if batch is not None:
+            batch = reconcile_batch_filesystem(db_session, batch_id=batch.id)
+            if not batch.batch_ready_for_source_intake:
+                batch.failure_reason = batch.failure_reason or reason
+                batch.next_safe_action = _next_safe_action(batch.failure_reason)
+                db_session.commit()
+        _finalize_run(
+            db_session,
+            run,
+            status=STATUS_COMPLETED if batch and batch.batch_ready_for_source_intake else STATUS_FAILED,
+            stop_reason=(
+                "lost_response_reconciled"
+                if batch and batch.batch_ready_for_source_intake
+                else reason
+            ),
+            failure_reason=None if batch and batch.batch_ready_for_source_intake else reason,
+            next_safe_action=(
+                NEXT_RUN_SOURCE_INTAKE
+                if batch and batch.batch_ready_for_source_intake
+                else _next_safe_action(reason)
+            ),
+            downloaded_count=batch.downloaded_resource_count if batch else 0,
+            failed_count=batch.failed_resource_count if batch else 0,
+        )
+        return DurableExactRunResult(
+            run_id=run.id,
+            batch_id=batch.id if batch is not None else None,
+            status=run.status,
+            stop_reason=run.stop_reason,
+            next_safe_action=run.next_safe_action,
+            batch_ready_for_source_intake=bool(batch and batch.batch_ready_for_source_intake),
+        )
+    finally:
+        _restore_helper_callbacks(helper_client, callbacks)
+
+
 def retry_durable_exact_selection_batch(
     db_session: Session,
     *,

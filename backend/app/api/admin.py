@@ -57,6 +57,8 @@ from app.schemas.admin import (
     IcloudStagingCleanupRunStatus,
     IcloudStagingCleanupStatusResponse,
     IcloudStagingCleanupReadinessResponse,
+    IcloudBackfillAcquireRequest,
+    IcloudBackfillAcquireResponse,
     IcloudBackfillAcquirePreviewRequest,
     IcloudBackfillAcquirePreviewResponse,
     IcloudBackfillInventoryScanRequest,
@@ -150,6 +152,10 @@ from app.services.icloud_backfill_inventory_service import (
 from app.services.icloud_backfill_acquisition_preview_service import (
     IcloudBackfillAcquisitionPreviewResult,
     preview_icloud_backfill_acquisition as preview_icloud_backfill_acquisition_service,
+)
+from app.services.icloud_backfill_acquisition_execution_service import (
+    IcloudBackfillAcquireResult,
+    run_icloud_backfill_acquisition as run_icloud_backfill_acquisition_service,
 )
 from app.services.admin.ingestion_operation_guardrail_service import (
     IngestionOperationGuardrailSnapshot,
@@ -560,6 +566,7 @@ def _to_icloud_backfill_acquire_preview_response(
         skipped_ambiguous_count=snapshot.skipped_ambiguous_count,
         skipped_missing_identity_count=snapshot.skipped_missing_identity_count,
         skipped_pending_classification_count=snapshot.skipped_pending_classification_count,
+        skipped_completed_count=snapshot.skipped_completed_count,
         unsafe_manifest_count=snapshot.unsafe_manifest_count,
         acquire_limit=snapshot.acquire_limit,
         max_listing_candidates=snapshot.max_listing_candidates,
@@ -573,6 +580,49 @@ def _to_icloud_backfill_acquire_preview_response(
                 "primary_relative_path": item.primary_relative_path,
             }
             for item in snapshot.preview_items
+        ],
+    )
+
+
+def _to_icloud_backfill_acquire_response(
+    snapshot: IcloudBackfillAcquireResult,
+) -> IcloudBackfillAcquireResponse:
+    return IcloudBackfillAcquireResponse(
+        source_id=snapshot.source_id,
+        status=snapshot.status,
+        dry_run=snapshot.dry_run,
+        auto_run_source_intake=snapshot.auto_run_source_intake,
+        selected_inventory_count=snapshot.selected_inventory_count,
+        matched_listing_count=snapshot.matched_listing_count,
+        selected_logical_count=snapshot.selected_logical_count,
+        selected_resource_count=snapshot.selected_resource_count,
+        downloaded_logical_count=snapshot.downloaded_logical_count,
+        downloaded_resource_count=snapshot.downloaded_resource_count,
+        source_intake_attempted=snapshot.source_intake_attempted,
+        source_intake_succeeded=snapshot.source_intake_succeeded,
+        source_intake_run_id=snapshot.source_intake_run_id,
+        acquisition_run_id=snapshot.acquisition_run_id,
+        acquisition_batch_id=snapshot.acquisition_batch_id,
+        backfill_completed_count=snapshot.backfill_completed_count,
+        skipped_stale_count=snapshot.skipped_stale_count,
+        skipped_known_count=snapshot.skipped_known_count,
+        skipped_unsupported_count=snapshot.skipped_unsupported_count,
+        skipped_ambiguous_count=snapshot.skipped_ambiguous_count,
+        skipped_missing_identity_count=snapshot.skipped_missing_identity_count,
+        skipped_pending_classification_count=snapshot.skipped_pending_classification_count,
+        skipped_completed_count=snapshot.skipped_completed_count,
+        failed_retryable_count=snapshot.failed_retryable_count,
+        failed_terminal_count=snapshot.failed_terminal_count,
+        stop_reason=snapshot.stop_reason,
+        next_safe_action=snapshot.next_safe_action,
+        items=[
+            {
+                "inventory_id": item.inventory_id,
+                "acquisition_state": item.acquisition_state,
+                "backfill_completed": item.backfill_completed,
+                "backfill_resolution_state": item.backfill_resolution_state,
+            }
+            for item in snapshot.items
         ],
     )
 
@@ -961,6 +1011,37 @@ def preview_icloud_backfill_acquisition(
         )
 
     return _to_icloud_backfill_acquire_preview_response(result)
+
+
+@router.post("/icloud-backfill/acquire", response_model=IcloudBackfillAcquireResponse)
+def run_icloud_backfill_acquisition(
+    body: IcloudBackfillAcquireRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudBackfillAcquireResponse | JSONResponse:
+    """Run dry-run preview or explicit historical backfill acquisition execution."""
+
+    try:
+        result = run_icloud_backfill_acquisition_service(
+            db,
+            source_id=body.source_id,
+            acquire_limit=body.acquire_limit,
+            max_listing_candidates=body.max_listing_candidates,
+            dry_run=body.dry_run,
+            auto_run_source_intake=body.auto_run_source_intake,
+            include_items=body.include_items,
+        )
+    except IcloudBackfillValidationError as exc:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if exc.code == "source_not_found"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": str(exc), "error_code": exc.code},
+        )
+
+    return _to_icloud_backfill_acquire_response(result)
 
 
 @router.get("/icloud-backfill/status", response_model=IcloudBackfillStatusResponse)

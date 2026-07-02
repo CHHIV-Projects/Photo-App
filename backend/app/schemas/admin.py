@@ -673,12 +673,60 @@ class IcloudBackfillAcquirePreviewResponse(BaseModel):
     skipped_ambiguous_count: int
     skipped_missing_identity_count: int
     skipped_pending_classification_count: int = 0
+    skipped_completed_count: int = 0
     unsafe_manifest_count: int = 0
     acquire_limit: int
     max_listing_candidates: int
     stop_reason: str
     next_safe_action: str
     preview_items: list[IcloudBackfillAcquirePreviewItem] = Field(default_factory=list)
+
+
+class IcloudBackfillAcquireRequest(BaseModel):
+    source_id: int
+    acquire_limit: int = Field(default=500, ge=1, le=1000)
+    max_listing_candidates: int = Field(default=100000, ge=1, le=100000)
+    dry_run: bool = True
+    auto_run_source_intake: bool = True
+    include_items: bool = False
+
+
+class IcloudBackfillAcquireItem(BaseModel):
+    inventory_id: int
+    acquisition_state: str | None = None
+    backfill_completed: bool
+    backfill_resolution_state: str | None = None
+
+
+class IcloudBackfillAcquireResponse(BaseModel):
+    source_id: int
+    status: str
+    dry_run: bool
+    auto_run_source_intake: bool
+    selected_inventory_count: int
+    matched_listing_count: int
+    selected_logical_count: int
+    selected_resource_count: int
+    downloaded_logical_count: int
+    downloaded_resource_count: int
+    source_intake_attempted: bool
+    source_intake_succeeded: bool
+    source_intake_run_id: int | None = None
+    acquisition_run_id: int | None = None
+    acquisition_batch_id: int | None = None
+    backfill_completed_count: int
+    skipped_stale_count: int
+    skipped_known_count: int
+    skipped_unsupported_count: int
+    skipped_ambiguous_count: int
+    skipped_missing_identity_count: int
+    skipped_pending_classification_count: int = 0
+    skipped_completed_count: int = 0
+    failed_retryable_count: int
+    failed_terminal_count: int
+    stop_reason: str
+    next_safe_action: str
+    items: list[IcloudBackfillAcquireItem] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
