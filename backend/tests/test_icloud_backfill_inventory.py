@@ -119,7 +119,7 @@ class IcloudBackfillInventoryFixture(unittest.TestCase):
             future=True,
         )
         IngestionSource.__table__.create(self.engine)
-        self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
+        self.session_factory = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False)
         self.db: Session = self.session_factory()
         ensure_icloud_backfill_schema(self.db)
         self.source = self._add_source("Backfill Profile")
@@ -252,6 +252,8 @@ class IcloudBackfillInventoryServiceTests(IcloudBackfillInventoryFixture):
         state = self.db.scalar(select(IcloudBackfillState).where(IcloudBackfillState.source_profile_id == self.source.id))
         self.assertIsNotNone(state)
         self.assertEqual(result.status, "inventory_scanned")
+        self.assertEqual(result.inventory_total_count, 1)
+        self.assertEqual(result.eligible_metadata_count, 1)
         self.assertEqual(state.inventory_total_count, 1)
 
     def test_scan_writes_inventory_rows(self) -> None:
@@ -438,6 +440,11 @@ class IcloudBackfillInventoryServiceTests(IcloudBackfillInventoryFixture):
         self.assertEqual(snapshot.source_id, self.source.id)
         self.assertEqual(snapshot.inventory_total_count, 1)
         self.assertEqual(snapshot.eligible_metadata_count, 1)
+        self.assertEqual(snapshot.backfill_completed_count, 0)
+        self.assertEqual(snapshot.unresolved_eligible_count, 1)
+        self.assertEqual(snapshot.acquirable_pending_count, 1)
+        self.assertEqual(snapshot.retryable_failed_count, 0)
+        self.assertEqual(snapshot.ambiguous_or_unsupported_count, 0)
 
 
 class IcloudBackfillInventoryApiTests(IcloudBackfillInventoryFixture):
@@ -466,6 +473,11 @@ class IcloudBackfillInventoryApiTests(IcloudBackfillInventoryFixture):
             inventory_total_count=1,
             eligible_metadata_count=1,
             unsupported_or_ambiguous_count=0,
+            backfill_completed_count=0,
+            unresolved_eligible_count=1,
+            acquirable_pending_count=1,
+            retryable_failed_count=0,
+            ambiguous_or_unsupported_count=0,
             source_exhausted=True,
             scan_limit_reached=False,
             stop_reason="source_exhausted",
@@ -482,6 +494,7 @@ class IcloudBackfillInventoryApiTests(IcloudBackfillInventoryFixture):
         payload = response.json()
         self.assertEqual(payload["status"], "completed")
         self.assertEqual(payload["current"]["inventory_total_count"], 1)
+        self.assertEqual(payload["current"]["unresolved_eligible_count"], 1)
         mocked_scan.assert_called_once()
 
     def test_post_inventory_scan_rejects_max_candidates_above_100000(self) -> None:
@@ -502,6 +515,34 @@ class IcloudBackfillInventoryApiTests(IcloudBackfillInventoryFixture):
         self.assertEqual(response.json()["error_code"], "source_not_found")
 
     def test_get_status_returns_expected_state_counts_when_state_exists(self) -> None:
+        observed_at = datetime.now(UTC)
+        self.db.add_all(
+            [
+                IcloudRemoteAssetInventory(
+                    source_profile_id=self.source.id,
+                    remote_identity="remote-safe",
+                    remote_identity_basis=REMOTE_IDENTITY_BASIS_HELPER_ITEM_ID,
+                    observed_remote_position=1,
+                    observed_at=observed_at,
+                    first_observed_at=observed_at,
+                    last_observed_at=observed_at,
+                    eligibility_state=ELIGIBILITY_ELIGIBLE_METADATA_ONLY,
+                    known_state=KNOWN_STATE_PENDING_CHECK,
+                ),
+                IcloudRemoteAssetInventory(
+                    source_profile_id=self.source.id,
+                    remote_identity="remote-ambiguous",
+                    remote_identity_basis=REMOTE_IDENTITY_BASIS_HELPER_ITEM_ID,
+                    observed_remote_position=2,
+                    observed_at=observed_at,
+                    first_observed_at=observed_at,
+                    last_observed_at=observed_at,
+                    eligibility_state=ELIGIBILITY_AMBIGUOUS_METADATA_ONLY,
+                    known_state=KNOWN_STATE_PENDING_CHECK,
+                    identity_ambiguous=True,
+                ),
+            ]
+        )
         state = IcloudBackfillState(
             source_profile_id=self.source.id,
             status="inventory_scanned",

@@ -51,6 +51,11 @@ class IcloudInventoryScanResult:
     inventory_total_count: int
     eligible_metadata_count: int
     unsupported_or_ambiguous_count: int
+    backfill_completed_count: int
+    unresolved_eligible_count: int
+    acquirable_pending_count: int
+    retryable_failed_count: int
+    ambiguous_or_unsupported_count: int
     source_exhausted: bool
     scan_limit_reached: bool
     stop_reason: str
@@ -68,6 +73,11 @@ class IcloudBackfillStatusSnapshot:
     inventory_total_count: int
     eligible_metadata_count: int
     unsupported_or_ambiguous_count: int
+    backfill_completed_count: int
+    unresolved_eligible_count: int
+    acquirable_pending_count: int
+    retryable_failed_count: int
+    ambiguous_or_unsupported_count: int
     source_exhausted: bool
     scan_limit_reached: bool
     stop_reason: str | None
@@ -136,7 +146,7 @@ def _eligibility_state(item: ExactSelectionLogicalItem) -> str:
     return ELIGIBILITY_ELIGIBLE_METADATA_ONLY
 
 
-def _inventory_counts(db_session: Session, *, source_id: int) -> tuple[int, int, int]:
+def _inventory_counts(db_session: Session, *, source_id: int) -> tuple[int, int, int, int, int, int, int, int]:
     total = db_session.scalar(
         select(func.count())
         .select_from(IcloudRemoteAssetInventory)
@@ -158,7 +168,61 @@ def _inventory_counts(db_session: Session, *, source_id: int) -> tuple[int, int,
             IcloudRemoteAssetInventory.eligibility_state != ELIGIBILITY_ELIGIBLE_METADATA_ONLY,
         )
     )
-    return int(total or 0), int(eligible or 0), int(unsupported_or_ambiguous or 0)
+    completed = db_session.scalar(
+        select(func.count())
+        .select_from(IcloudRemoteAssetInventory)
+        .where(
+            IcloudRemoteAssetInventory.source_profile_id == source_id,
+            IcloudRemoteAssetInventory.backfill_completed.is_(True),
+        )
+    )
+    unresolved_eligible = db_session.scalar(
+        select(func.count())
+        .select_from(IcloudRemoteAssetInventory)
+        .where(
+            IcloudRemoteAssetInventory.source_profile_id == source_id,
+            IcloudRemoteAssetInventory.eligibility_state == ELIGIBILITY_ELIGIBLE_METADATA_ONLY,
+            IcloudRemoteAssetInventory.backfill_completed.is_(False),
+        )
+    )
+    retryable_failed = db_session.scalar(
+        select(func.count())
+        .select_from(IcloudRemoteAssetInventory)
+        .where(
+            IcloudRemoteAssetInventory.source_profile_id == source_id,
+            IcloudRemoteAssetInventory.backfill_completed.is_(False),
+            (
+                (IcloudRemoteAssetInventory.acquisition_state == "failed_retryable")
+                | (IcloudRemoteAssetInventory.backfill_resolution_state == "failed_retryable")
+            ),
+        )
+    )
+    acquirable_pending = db_session.scalar(
+        select(func.count())
+        .select_from(IcloudRemoteAssetInventory)
+        .where(
+            IcloudRemoteAssetInventory.source_profile_id == source_id,
+            IcloudRemoteAssetInventory.eligibility_state == ELIGIBILITY_ELIGIBLE_METADATA_ONLY,
+            IcloudRemoteAssetInventory.backfill_completed.is_(False),
+            IcloudRemoteAssetInventory.known_state.in_((KNOWN_STATE_PENDING_CHECK, "unknown")),
+            IcloudRemoteAssetInventory.identity_ambiguous.is_(False),
+            IcloudRemoteAssetInventory.remote_identity != "",
+            IcloudRemoteAssetInventory.remote_identity_basis != "",
+            IcloudRemoteAssetInventory.acquisition_state.is_distinct_from("failed_retryable"),
+            IcloudRemoteAssetInventory.backfill_resolution_state.is_distinct_from("failed_retryable"),
+        )
+    )
+    unsupported_or_ambiguous_int = int(unsupported_or_ambiguous or 0)
+    return (
+        int(total or 0),
+        int(eligible or 0),
+        unsupported_or_ambiguous_int,
+        int(completed or 0),
+        int(unresolved_eligible or 0),
+        int(acquirable_pending or 0),
+        int(retryable_failed or 0),
+        unsupported_or_ambiguous_int,
+    )
 
 
 def _upsert_inventory_row(
@@ -248,7 +312,19 @@ def run_icloud_backfill_inventory_scan(
         else:
             updated_count += 1
 
-    inventory_total_count, eligible_count, unsupported_or_ambiguous_count = _inventory_counts(
+    # Session autoflush is disabled in the app; flush so first-scan count snapshots
+    # include rows added above before the final transaction commit.
+    db_session.flush()
+    (
+        inventory_total_count,
+        eligible_count,
+        unsupported_or_ambiguous_count,
+        backfill_completed_count,
+        unresolved_eligible_count,
+        acquirable_pending_count,
+        retryable_failed_count,
+        ambiguous_or_unsupported_count,
+    ) = _inventory_counts(
         db_session,
         source_id=source_id,
     )
@@ -287,6 +363,11 @@ def run_icloud_backfill_inventory_scan(
         inventory_total_count=inventory_total_count,
         eligible_metadata_count=eligible_count,
         unsupported_or_ambiguous_count=unsupported_or_ambiguous_count,
+        backfill_completed_count=backfill_completed_count,
+        unresolved_eligible_count=unresolved_eligible_count,
+        acquirable_pending_count=acquirable_pending_count,
+        retryable_failed_count=retryable_failed_count,
+        ambiguous_or_unsupported_count=ambiguous_or_unsupported_count,
         source_exhausted=listing.source_exhausted,
         scan_limit_reached=listing.scan_limit_reached,
         stop_reason=stop_reason,
@@ -307,6 +388,16 @@ def get_icloud_backfill_status(
     )
     if state is None:
         raise IcloudBackfillStateNotFound(f"No iCloud backfill state exists for source {source_id}.")
+    (
+        inventory_total_count,
+        eligible_count,
+        unsupported_or_ambiguous_count,
+        backfill_completed_count,
+        unresolved_eligible_count,
+        acquirable_pending_count,
+        retryable_failed_count,
+        ambiguous_or_unsupported_count,
+    ) = _inventory_counts(db_session, source_id=source_id)
     return IcloudBackfillStatusSnapshot(
         source_id=state.source_profile_id,
         status=state.status,
@@ -314,9 +405,14 @@ def get_icloud_backfill_status(
         last_scan_candidate_count=state.last_scan_candidate_count,
         last_scan_created_count=state.last_scan_created_count,
         last_scan_updated_count=state.last_scan_updated_count,
-        inventory_total_count=state.inventory_total_count,
-        eligible_metadata_count=state.eligible_metadata_count,
-        unsupported_or_ambiguous_count=state.unsupported_or_ambiguous_count,
+        inventory_total_count=inventory_total_count,
+        eligible_metadata_count=eligible_count,
+        unsupported_or_ambiguous_count=unsupported_or_ambiguous_count,
+        backfill_completed_count=backfill_completed_count,
+        unresolved_eligible_count=unresolved_eligible_count,
+        acquirable_pending_count=acquirable_pending_count,
+        retryable_failed_count=retryable_failed_count,
+        ambiguous_or_unsupported_count=ambiguous_or_unsupported_count,
         source_exhausted=state.source_exhausted,
         scan_limit_reached=state.scan_limit_reached,
         stop_reason=state.stop_reason,

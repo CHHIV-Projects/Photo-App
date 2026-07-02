@@ -100,6 +100,9 @@ class IcloudBackfillAcquireItem:
     acquisition_state: str | None
     backfill_completed: bool
     backfill_resolution_state: str | None
+    logical_resource_count: int | None = None
+    is_live_photo: bool | None = None
+    primary_relative_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,18 @@ def _result_from_preview(
         failed_terminal_count=0,
         stop_reason=STOP_REASON_DRY_RUN_PREVIEW_READY,
         next_safe_action=NEXT_RUN_ACQUIRE,
+        items=tuple(
+            IcloudBackfillAcquireItem(
+                inventory_id=item.inventory_id,
+                acquisition_state=None,
+                backfill_completed=False,
+                backfill_resolution_state=None,
+                logical_resource_count=item.logical_resource_count,
+                is_live_photo=item.is_live_photo,
+                primary_relative_path=item.primary_relative_path,
+            )
+            for item in preview.preview_items
+        ),
     )
 
 
@@ -338,6 +353,9 @@ def _safe_items(
             acquisition_state=row.acquisition_state,
             backfill_completed=bool(row.backfill_completed),
             backfill_resolution_state=row.backfill_resolution_state,
+            logical_resource_count=int(row.resource_count or 0),
+            is_live_photo=bool(row.is_live_photo),
+            primary_relative_path=row.primary_relative_path,
         )
         for row in rows
     )

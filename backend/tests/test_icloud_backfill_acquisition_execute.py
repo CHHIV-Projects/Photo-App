@@ -319,6 +319,7 @@ class IcloudBackfillExecutionServiceTests(IcloudBackfillExecuteFixture):
                 self.db,
                 source_id=self.source.id,
                 dry_run=True,
+                include_items=True,
                 helper_client=helper,  # type: ignore[arg-type]
             )
 
@@ -326,6 +327,10 @@ class IcloudBackfillExecutionServiceTests(IcloudBackfillExecuteFixture):
         self.assertEqual(result.selected_logical_count, 1)
         self.assertFalse(result.source_intake_attempted)
         self.assertEqual(helper.download_calls, 0)
+        self.assertEqual(len(result.items), 1)
+        self.assertEqual(result.items[0].logical_resource_count, 1)
+        self.assertFalse(result.items[0].is_live_photo)
+        self.assertEqual(result.items[0].primary_relative_path, "2026/06/24/remote-1.HEIC")
 
     def test_dry_run_false_executes_durable_path_and_source_intake_success_completes_row(self) -> None:
         row = self._add_inventory("remote-1")

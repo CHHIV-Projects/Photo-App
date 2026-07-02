@@ -630,6 +630,11 @@ class IcloudBackfillInventoryStatus(BaseModel):
     inventory_total_count: int = 0
     eligible_metadata_count: int = 0
     unsupported_or_ambiguous_count: int = 0
+    backfill_completed_count: int = 0
+    unresolved_eligible_count: int = 0
+    acquirable_pending_count: int = 0
+    retryable_failed_count: int = 0
+    ambiguous_or_unsupported_count: int = 0
     source_exhausted: bool = False
     scan_limit_reached: bool = False
     stop_reason: str | None = None
@@ -696,6 +701,9 @@ class IcloudBackfillAcquireItem(BaseModel):
     acquisition_state: str | None = None
     backfill_completed: bool
     backfill_resolution_state: str | None = None
+    logical_resource_count: int | None = None
+    is_live_photo: bool | None = None
+    primary_relative_path: str | None = None
 
 
 class IcloudBackfillAcquireResponse(BaseModel):
