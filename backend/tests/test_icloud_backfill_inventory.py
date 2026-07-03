@@ -17,6 +17,10 @@ from app.api.admin import router as admin_router
 from app.db.session import get_db_session
 from app.models.icloud_backfill import IcloudBackfillState, IcloudRemoteAssetInventory
 from app.models.ingestion_source import IngestionSource
+from app.models.source_profile_deferred_asset import (
+    SourceProfileDeferredAsset,
+    SourceProfileDeferredAssetEvent,
+)
 from app.services.icloud_acquisition.exact_selection_adapter import (
     ExactSelectionListing,
     ExactSelectionLogicalItem,
@@ -112,6 +116,12 @@ class _FakeHelper:
 
 class IcloudBackfillInventoryFixture(unittest.TestCase):
     def setUp(self) -> None:
+        self.report_temp = tempfile.TemporaryDirectory()
+        self.report_root_patcher = patch(
+            "app.services.source_profile_deferred_asset_service.REPORT_ROOT",
+            Path(self.report_temp.name),
+        )
+        self.report_root_patcher.start()
         self.engine = create_engine(
             "sqlite+pysqlite://",
             connect_args={"check_same_thread": False},
@@ -126,6 +136,8 @@ class IcloudBackfillInventoryFixture(unittest.TestCase):
         self.other_source = self._add_source("Other Backfill Profile")
 
     def tearDown(self) -> None:
+        self.report_root_patcher.stop()
+        self.report_temp.cleanup()
         self.db.close()
         self.engine.dispose()
 
@@ -412,6 +424,243 @@ class IcloudBackfillInventoryServiceTests(IcloudBackfillInventoryFixture):
         self.assertEqual(rows["remote-unsupported"].eligibility_state, ELIGIBILITY_UNSUPPORTED_METADATA_ONLY)
         self.assertEqual(rows["remote-ambiguous"].eligibility_state, ELIGIBILITY_AMBIGUOUS_METADATA_ONLY)
 
+    def test_deferred_ledger_records_non_eligible_rows_and_adjusted_counts(self) -> None:
+        helper = _FakeHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-adjusted",
+                        "2026/06/24/IMG_ADJ.HEIC",
+                        ambiguous=True,
+                        unsupported_reasons=("unsupported_adjusted_resource",),
+                    ),
+                    _item(
+                        "remote-live-adjusted",
+                        "2026/06/24/IMG_LIVE.HEIC",
+                        grouping="live_photo_explicit",
+                        resources=(
+                            _resource("2026/06/24/IMG_LIVE.HEIC"),
+                            _resource(
+                                "2026/06/24/IMG_LIVE_HEVC.MOV",
+                                resource_id="live_photo_original",
+                                content_type="video/quicktime",
+                            ),
+                        ),
+                        ambiguous=True,
+                        unsupported_reasons=("unsupported_adjusted_resource",),
+                    ),
+                    _item(
+                        "remote-unsupported",
+                        "2026/06/24/IMG_RAW.DNG",
+                        unsupported_reasons=("unsupported_raw_or_alternative",),
+                    ),
+                    _item(
+                        "remote-ambiguous",
+                        "2026/06/24/IMG_AMBIG.HEIC",
+                        ambiguous=True,
+                    ),
+                )
+            )
+        )
+
+        result = run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+
+        rows = list(
+            self.db.scalars(
+                select(SourceProfileDeferredAsset).order_by(SourceProfileDeferredAsset.remote_identity)
+            )
+        )
+        self.assertEqual(len(rows), 4)
+        categories = {row.remote_identity: row.deferred_category for row in rows}
+        self.assertEqual(categories["remote-adjusted"], "adjusted_resource_deferred")
+        self.assertEqual(categories["remote-live-adjusted"], "adjusted_resource_deferred")
+        self.assertEqual(categories["remote-unsupported"], "unsupported_metadata_deferred")
+        self.assertEqual(categories["remote-ambiguous"], "ambiguous_metadata_deferred")
+        self.assertEqual(result.deferred_current_count, 4)
+        self.assertEqual(result.deferred_adjusted_resource_count, 2)
+        self.assertEqual(result.deferred_ambiguous_count, 1)
+        self.assertEqual(result.deferred_unsupported_count, 1)
+        self.assertEqual(result.deferred_new_since_last_scan_count, 4)
+        self.assertIsNotNone(result.deferred_report_path)
+
+    def test_deferred_ledger_repeat_observation_updates_without_duplicate_event(self) -> None:
+        helper = _FakeHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-adjusted",
+                        "2026/06/24/IMG_ADJ.HEIC",
+                        ambiguous=True,
+                        unsupported_reasons=("unsupported_adjusted_resource",),
+                    ),
+                )
+            )
+        )
+
+        first = run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+        second = run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+
+        row = self.db.scalars(select(SourceProfileDeferredAsset)).one()
+        events = list(self.db.scalars(select(SourceProfileDeferredAssetEvent)))
+        self.assertEqual(first.deferred_new_since_last_scan_count, 1)
+        self.assertEqual(second.deferred_new_since_last_scan_count, 0)
+        self.assertEqual(second.deferred_changed_since_last_scan_count, 0)
+        self.assertEqual(row.observation_count, 2)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].event_type, "first_deferred")
+
+    def test_deferred_ledger_canonicalizes_reason_json_without_noisy_change(self) -> None:
+        first_helper = _FakeHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-unsupported",
+                        "2026/06/24/IMG_RAW.DNG",
+                        unsupported_reasons=(
+                            "unsupported_raw_or_alternative",
+                            "unsupported_remote_sidecar",
+                        ),
+                    ),
+                )
+            )
+        )
+        second_helper = _FakeHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-unsupported",
+                        "2026/06/24/IMG_RAW.DNG",
+                        unsupported_reasons=(
+                            "unsupported_remote_sidecar",
+                            "unsupported_raw_or_alternative",
+                            "unsupported_remote_sidecar",
+                        ),
+                    ),
+                )
+            )
+        )
+
+        run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=first_helper,  # type: ignore[arg-type]
+        )
+        result = run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=second_helper,  # type: ignore[arg-type]
+        )
+
+        row = self.db.scalars(select(SourceProfileDeferredAsset)).one()
+        events = list(self.db.scalars(select(SourceProfileDeferredAssetEvent)))
+        self.assertEqual(result.deferred_changed_since_last_scan_count, 0)
+        self.assertEqual(
+            row.unsupported_reasons_json,
+            '["unsupported_raw_or_alternative","unsupported_remote_sidecar"]',
+        )
+        self.assertEqual(len(events), 1)
+
+    def test_deferred_ledger_reason_change_appends_event(self) -> None:
+        first_helper = _FakeHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-changing",
+                        "2026/06/24/IMG_RAW.DNG",
+                        unsupported_reasons=("unsupported_raw_or_alternative",),
+                    ),
+                )
+            )
+        )
+        second_helper = _FakeHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-changing",
+                        "2026/06/24/IMG_RAW.DNG",
+                        ambiguous=True,
+                        unsupported_reasons=("unsupported_adjusted_resource",),
+                    ),
+                )
+            )
+        )
+
+        run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=first_helper,  # type: ignore[arg-type]
+        )
+        result = run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=second_helper,  # type: ignore[arg-type]
+        )
+
+        rows = list(self.db.scalars(select(SourceProfileDeferredAsset)))
+        events = list(self.db.scalars(select(SourceProfileDeferredAssetEvent)))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(result.deferred_new_since_last_scan_count, 1)
+        self.assertIn("classification_changed", {event.event_type for event in events})
+        active = [row for row in rows if row.current_state == "active_deferred"]
+        closed = [row for row in rows if row.current_state == "no_longer_deferred"]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].deferred_category, "adjusted_resource_deferred")
+        self.assertEqual(len(closed), 1)
+
+    def test_deferred_ledger_marks_prior_deferral_no_longer_deferred_when_eligible(self) -> None:
+        first_helper = _FakeHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-now-eligible",
+                        "2026/06/24/IMG_EDIT.HEIC",
+                        ambiguous=True,
+                        unsupported_reasons=("unsupported_adjusted_resource",),
+                    ),
+                )
+            )
+        )
+        second_helper = _FakeHelper(
+            _listing((_item("remote-now-eligible", "2026/06/24/IMG_EDIT.HEIC"),))
+        )
+
+        run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=first_helper,  # type: ignore[arg-type]
+        )
+        run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=second_helper,  # type: ignore[arg-type]
+        )
+
+        row = self.db.scalars(select(SourceProfileDeferredAsset)).one()
+        events = list(self.db.scalars(select(SourceProfileDeferredAssetEvent).order_by(SourceProfileDeferredAssetEvent.id)))
+        self.assertEqual(row.current_state, "no_longer_deferred")
+        self.assertEqual([event.event_type for event in events], ["first_deferred", "classification_changed"])
+
     def test_no_downloads_staging_source_intake_or_vault_calls(self) -> None:
         helper = _FakeHelper(_listing((_item("remote-1", "2026/06/24/IMG_0001.HEIC"),)))
         with tempfile.TemporaryDirectory() as temp_root:
@@ -478,6 +727,13 @@ class IcloudBackfillInventoryApiTests(IcloudBackfillInventoryFixture):
             acquirable_pending_count=1,
             retryable_failed_count=0,
             ambiguous_or_unsupported_count=0,
+            deferred_current_count=0,
+            deferred_adjusted_resource_count=0,
+            deferred_ambiguous_count=0,
+            deferred_unsupported_count=0,
+            deferred_new_since_last_scan_count=0,
+            deferred_changed_since_last_scan_count=0,
+            deferred_report_path=None,
             source_exhausted=True,
             scan_limit_reached=False,
             stop_reason="source_exhausted",
@@ -495,6 +751,7 @@ class IcloudBackfillInventoryApiTests(IcloudBackfillInventoryFixture):
         self.assertEqual(payload["status"], "completed")
         self.assertEqual(payload["current"]["inventory_total_count"], 1)
         self.assertEqual(payload["current"]["unresolved_eligible_count"], 1)
+        self.assertEqual(payload["current"]["deferred_current_count"], 0)
         mocked_scan.assert_called_once()
 
     def test_post_inventory_scan_rejects_max_candidates_above_100000(self) -> None:
@@ -569,6 +826,67 @@ class IcloudBackfillInventoryApiTests(IcloudBackfillInventoryFixture):
         self.assertEqual(payload["current"]["source_id"], self.source.id)
         self.assertEqual(payload["current"]["inventory_total_count"], 2)
         self.assertEqual(payload["current"]["unsupported_or_ambiguous_count"], 1)
+        self.assertEqual(payload["current"]["deferred_current_count"], 0)
+
+    def test_deferred_assets_endpoint_returns_bounded_safe_rows(self) -> None:
+        observed_at = datetime.now(UTC)
+        asset = SourceProfileDeferredAsset(
+            source_profile_id=self.source.id,
+            inventory_id=123,
+            source_kind="icloud",
+            provider="icloud",
+            remote_identity_basis=REMOTE_IDENTITY_BASIS_HELPER_ITEM_ID,
+            remote_identity="remote-adjusted",
+            primary_relative_path="2026/06/24/IMG_0001.HEIC",
+            filename="IMG_0001.HEIC",
+            extension=".heic",
+            content_type="public.heic",
+            resource_count=1,
+            is_live_photo=False,
+            grouping="primary_asset_explicit",
+            eligibility_state=ELIGIBILITY_AMBIGUOUS_METADATA_ONLY,
+            known_state=KNOWN_STATE_PENDING_CHECK,
+            identity_ambiguous=True,
+            unsupported_reasons_json='["unsupported_adjusted_resource"]',
+            deferred_category="adjusted_resource_deferred",
+            deferred_reason_code="unsupported_adjusted_resource",
+            deferred_reason_human="Adjusted iCloud resource deferred pending product policy.",
+            policy_status="deferred_pending_policy",
+            current_state="active_deferred",
+            first_seen_at=observed_at,
+            last_seen_at=observed_at,
+            last_changed_at=observed_at,
+            observation_count=1,
+            safe_metadata_json="{}",
+        )
+        self.db.add(asset)
+        self.db.commit()
+
+        response = self.client.get(
+            f"/api/admin/source-profiles/{self.source.id}/deferred-assets",
+            params={"limit": 10, "category": "adjusted_resource_deferred"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["source_id"], self.source.id)
+        self.assertEqual(len(payload["items"]), 1)
+        item = payload["items"][0]
+        self.assertEqual(item["primary_relative_path"], "2026/06/24/IMG_0001.HEIC")
+        self.assertEqual(item["deferred_reason_code"], "unsupported_adjusted_resource")
+        self.assertNotIn("remote_identity", item)
+
+    def test_deferred_assets_endpoint_rejects_invalid_source_and_limit(self) -> None:
+        invalid_source = self.client.get("/api/admin/source-profiles/999999/deferred-assets")
+        invalid_limit = self.client.get(
+            f"/api/admin/source-profiles/{self.source.id}/deferred-assets",
+            params={"limit": 501},
+        )
+
+        self.assertEqual(invalid_source.status_code, 404)
+        self.assertEqual(invalid_source.json()["error_code"], "source_not_found")
+        self.assertEqual(invalid_limit.status_code, 422)
+        self.assertEqual(invalid_limit.json()["error_code"], "invalid_limit")
 
     def test_get_status_returns_404_when_no_state_exists(self) -> None:
         response = self.client.get(

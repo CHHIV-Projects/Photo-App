@@ -65,6 +65,8 @@ from app.schemas.admin import (
     IcloudBackfillInventoryScanResponse,
     IcloudBackfillInventoryStatus,
     IcloudBackfillStatusResponse,
+    SourceProfileDeferredAssetItem,
+    SourceProfileDeferredAssetsResponse,
     InternalIcloudRunRequest,
     InternalIcloudRunResponse,
     InternalIcloudRunStatusResponse,
@@ -156,6 +158,10 @@ from app.services.icloud_backfill_acquisition_preview_service import (
 from app.services.icloud_backfill_acquisition_execution_service import (
     IcloudBackfillAcquireResult,
     run_icloud_backfill_acquisition as run_icloud_backfill_acquisition_service,
+)
+from app.services.source_profile_deferred_asset_service import (
+    DeferredAssetListItem,
+    list_deferred_assets,
 )
 from app.services.admin.ingestion_operation_guardrail_service import (
     IngestionOperationGuardrailSnapshot,
@@ -535,6 +541,12 @@ def _to_icloud_backfill_inventory_status(
             acquirable_pending_count=snapshot.acquirable_pending_count,
             retryable_failed_count=snapshot.retryable_failed_count,
             ambiguous_or_unsupported_count=snapshot.ambiguous_or_unsupported_count,
+            deferred_current_count=snapshot.deferred_current_count,
+            deferred_adjusted_resource_count=snapshot.deferred_adjusted_resource_count,
+            deferred_ambiguous_count=snapshot.deferred_ambiguous_count,
+            deferred_unsupported_count=snapshot.deferred_unsupported_count,
+            deferred_new_since_last_scan_count=snapshot.deferred_new_since_last_scan_count,
+            deferred_changed_since_last_scan_count=snapshot.deferred_changed_since_last_scan_count,
             source_exhausted=snapshot.source_exhausted,
             scan_limit_reached=snapshot.scan_limit_reached,
             stop_reason=snapshot.stop_reason,
@@ -554,9 +566,38 @@ def _to_icloud_backfill_inventory_status(
         acquirable_pending_count=snapshot.acquirable_pending_count,
         retryable_failed_count=snapshot.retryable_failed_count,
         ambiguous_or_unsupported_count=snapshot.ambiguous_or_unsupported_count,
+        deferred_current_count=snapshot.deferred_current_count,
+        deferred_adjusted_resource_count=snapshot.deferred_adjusted_resource_count,
+        deferred_ambiguous_count=snapshot.deferred_ambiguous_count,
+        deferred_unsupported_count=snapshot.deferred_unsupported_count,
+        deferred_new_since_last_scan_count=snapshot.deferred_new_since_last_scan_count,
+        deferred_changed_since_last_scan_count=snapshot.deferred_changed_since_last_scan_count,
         source_exhausted=snapshot.source_exhausted,
         scan_limit_reached=snapshot.scan_limit_reached,
         stop_reason=snapshot.stop_reason,
+    )
+
+
+def _to_deferred_asset_item(item: DeferredAssetListItem) -> SourceProfileDeferredAssetItem:
+    return SourceProfileDeferredAssetItem(
+        id=item.id,
+        inventory_id=item.inventory_id,
+        source_profile_id=item.source_profile_id,
+        primary_relative_path=item.primary_relative_path,
+        filename=item.filename,
+        extension=item.extension,
+        content_type=item.content_type,
+        resource_count=item.resource_count,
+        is_live_photo=item.is_live_photo,
+        grouping=item.grouping,
+        deferred_category=item.deferred_category,
+        deferred_reason_code=item.deferred_reason_code,
+        deferred_reason_human=item.deferred_reason_human,
+        policy_status=item.policy_status,
+        current_state=item.current_state,
+        first_seen_at=item.first_seen_at,
+        last_seen_at=item.last_seen_at,
+        observation_count=item.observation_count,
     )
 
 
@@ -994,6 +1035,54 @@ def run_icloud_backfill_inventory_scan(
         status="completed",
         message="iCloud backfill inventory scan completed.",
         current=_to_icloud_backfill_inventory_status(result),
+    )
+
+
+@router.get(
+    "/source-profiles/{source_id}/deferred-assets",
+    response_model=SourceProfileDeferredAssetsResponse,
+)
+def list_source_profile_deferred_assets(
+    source_id: int,
+    limit: int = 100,
+    category: str | None = None,
+    reason_code: str | None = None,
+    state: str | None = None,
+    db: Session = Depends(get_db_session),
+) -> SourceProfileDeferredAssetsResponse | JSONResponse:
+    """Return bounded, safe deferred asset rows for one Source Profile."""
+
+    if limit < 1 or limit > 500:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "detail": "limit must be between 1 and 500.",
+                "error_code": "invalid_limit",
+            },
+        )
+    if db.get(IngestionSource, source_id) is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "detail": f"Source Profile {source_id} not found.",
+                "error_code": "source_not_found",
+            },
+        )
+    items = list_deferred_assets(
+        db,
+        source_profile_id=source_id,
+        limit=limit,
+        category=category,
+        reason_code=reason_code,
+        state=state,
+    )
+    return SourceProfileDeferredAssetsResponse(
+        source_id=source_id,
+        limit=limit,
+        category=category,
+        reason_code=reason_code,
+        state=state,
+        items=[_to_deferred_asset_item(item) for item in items],
     )
 
 

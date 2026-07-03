@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.models.icloud_backfill import IcloudBackfillState, IcloudRemoteAssetInventory
 from app.services.icloud_acquisition.schema import _timestamp_column_type
+from app.services.source_profile_deferred_asset_schema import (
+    ensure_source_profile_deferred_asset_schema,
+)
 
 
 @dataclass(frozen=True)
@@ -25,13 +28,14 @@ def _boolean_false_column_type(dialect_name: str) -> str:
 def ensure_icloud_backfill_schema(db_session: Session) -> IcloudBackfillSchemaSummary:
     """Ensure iCloud backfill metadata inventory tables exist."""
 
+    deferred_summary = ensure_source_profile_deferred_asset_schema(db_session)
     bind = db_session.connection()
     inspector = inspect(bind)
     existing_tables = set(inspector.get_table_names())
     if "ingestion_sources" not in existing_tables:
         raise RuntimeError("Expected 'ingestion_sources' table before iCloud backfill schema sync.")
 
-    created_tables: list[str] = []
+    created_tables: list[str] = list(deferred_summary.created_tables)
     for table in (IcloudRemoteAssetInventory.__table__, IcloudBackfillState.__table__):
         if table.name not in existing_tables:
             table.create(bind=bind, checkfirst=True)

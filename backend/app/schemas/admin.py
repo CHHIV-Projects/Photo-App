@@ -635,6 +635,12 @@ class IcloudBackfillInventoryStatus(BaseModel):
     acquirable_pending_count: int = 0
     retryable_failed_count: int = 0
     ambiguous_or_unsupported_count: int = 0
+    deferred_current_count: int = 0
+    deferred_adjusted_resource_count: int = 0
+    deferred_ambiguous_count: int = 0
+    deferred_unsupported_count: int = 0
+    deferred_new_since_last_scan_count: int = 0
+    deferred_changed_since_last_scan_count: int = 0
     source_exhausted: bool = False
     scan_limit_reached: bool = False
     stop_reason: str | None = None
@@ -735,6 +741,36 @@ class IcloudBackfillAcquireResponse(BaseModel):
     stop_reason: str
     next_safe_action: str
     items: list[IcloudBackfillAcquireItem] = Field(default_factory=list)
+
+
+class SourceProfileDeferredAssetItem(BaseModel):
+    id: int
+    inventory_id: int | None = None
+    source_profile_id: int
+    primary_relative_path: str | None = None
+    filename: str | None = None
+    extension: str | None = None
+    content_type: str | None = None
+    resource_count: int
+    is_live_photo: bool
+    grouping: str | None = None
+    deferred_category: str
+    deferred_reason_code: str
+    deferred_reason_human: str
+    policy_status: str
+    current_state: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    observation_count: int
+
+
+class SourceProfileDeferredAssetsResponse(BaseModel):
+    source_id: int
+    limit: int
+    category: str | None = None
+    reason_code: str | None = None
+    state: str | None = None
+    items: list[SourceProfileDeferredAssetItem] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

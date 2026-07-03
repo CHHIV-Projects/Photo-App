@@ -17,6 +17,14 @@ from app.services.icloud_acquisition.exact_selection_adapter import (
     ExactSelectionLogicalItem,
 )
 from app.services.icloud_backfill_schema import ensure_icloud_backfill_schema
+from app.services.source_profile_deferred_asset_service import (
+    DeferredAssetLedgerSummary,
+    DeferredAssetObservation,
+    classify_deferred_asset,
+    deferred_asset_counts,
+    mark_deferred_identity_no_longer_deferred,
+    upsert_deferred_asset_observations,
+)
 
 
 DEFAULT_INVENTORY_SCAN_LIMIT = 50_000
@@ -56,6 +64,13 @@ class IcloudInventoryScanResult:
     acquirable_pending_count: int
     retryable_failed_count: int
     ambiguous_or_unsupported_count: int
+    deferred_current_count: int
+    deferred_adjusted_resource_count: int
+    deferred_ambiguous_count: int
+    deferred_unsupported_count: int
+    deferred_new_since_last_scan_count: int
+    deferred_changed_since_last_scan_count: int
+    deferred_report_path: str | None
     source_exhausted: bool
     scan_limit_reached: bool
     stop_reason: str
@@ -78,6 +93,12 @@ class IcloudBackfillStatusSnapshot:
     acquirable_pending_count: int
     retryable_failed_count: int
     ambiguous_or_unsupported_count: int
+    deferred_current_count: int
+    deferred_adjusted_resource_count: int
+    deferred_ambiguous_count: int
+    deferred_unsupported_count: int
+    deferred_new_since_last_scan_count: int
+    deferred_changed_since_last_scan_count: int
     source_exhausted: bool
     scan_limit_reached: bool
     stop_reason: str | None
@@ -144,6 +165,44 @@ def _eligibility_state(item: ExactSelectionLogicalItem) -> str:
     if item.unsupported_reasons:
         return ELIGIBILITY_UNSUPPORTED_METADATA_ONLY
     return ELIGIBILITY_ELIGIBLE_METADATA_ONLY
+
+
+def _deferred_observation_from_row(
+    row: IcloudRemoteAssetInventory,
+) -> DeferredAssetObservation | None:
+    if not (row.remote_identity_basis or "").strip() or not (row.remote_identity or "").strip():
+        return None
+    classification = classify_deferred_asset(
+        eligibility_state=row.eligibility_state,
+        identity_ambiguous=bool(row.identity_ambiguous),
+        unsupported_reasons_json=row.unsupported_reasons_json,
+    )
+    if classification is None:
+        return None
+    category, reason_code, reason_human, policy_status = classification
+    return DeferredAssetObservation(
+        source_profile_id=row.source_profile_id,
+        inventory_id=row.id,
+        source_kind="icloud",
+        provider="icloud",
+        remote_identity_basis=row.remote_identity_basis,
+        remote_identity=row.remote_identity,
+        primary_relative_path=row.primary_relative_path,
+        content_type=row.primary_content_type,
+        created_remote_at=row.created_remote_at,
+        added_remote_at=row.added_remote_at,
+        resource_count=int(row.resource_count or 0),
+        is_live_photo=bool(row.is_live_photo),
+        grouping=row.grouping,
+        eligibility_state=row.eligibility_state,
+        known_state=row.known_state,
+        identity_ambiguous=bool(row.identity_ambiguous),
+        unsupported_reasons_json=row.unsupported_reasons_json,
+        deferred_category=category,
+        deferred_reason_code=reason_code,
+        deferred_reason_human=reason_human,
+        policy_status=policy_status,
+    )
 
 
 def _inventory_counts(db_session: Session, *, source_id: int) -> tuple[int, int, int, int, int, int, int, int]:
@@ -300,7 +359,10 @@ def run_icloud_backfill_inventory_scan(
 
     created_count = 0
     updated_count = 0
+    current_remote_identities: set[str] = set()
     for position, item in enumerate(listing.items, start=1):
+        if item.item_id.strip():
+            current_remote_identities.add(item.item_id.strip())
         if _upsert_inventory_row(
             db_session,
             source_id=source_id,
@@ -315,6 +377,47 @@ def run_icloud_backfill_inventory_scan(
     # Session autoflush is disabled in the app; flush so first-scan count snapshots
     # include rows added above before the final transaction commit.
     db_session.flush()
+    state = db_session.scalar(
+        select(IcloudBackfillState)
+        .where(IcloudBackfillState.source_profile_id == source_id)
+        .limit(1)
+    )
+    deferred_run_id = state.id if state is not None else None
+    inventory_rows = (
+        db_session.scalars(
+            select(IcloudRemoteAssetInventory).where(
+                IcloudRemoteAssetInventory.source_profile_id == source_id,
+                IcloudRemoteAssetInventory.remote_identity.in_(current_remote_identities),
+            )
+        )
+        .all()
+        if current_remote_identities
+        else []
+    )
+    deferred_observations: list[DeferredAssetObservation] = []
+    for row in inventory_rows:
+        observation = _deferred_observation_from_row(row)
+        if observation is not None:
+            deferred_observations.append(observation)
+        else:
+            mark_deferred_identity_no_longer_deferred(
+                db_session,
+                source_profile_id=row.source_profile_id,
+                remote_identity_basis=row.remote_identity_basis,
+                remote_identity=row.remote_identity,
+                inventory_id=row.id,
+                observed_at=scanned_at,
+                run_id=deferred_run_id,
+            )
+    deferred_summary: DeferredAssetLedgerSummary = upsert_deferred_asset_observations(
+        db_session,
+        source_profile_id=source_id,
+        observations=deferred_observations,
+        observed_at=scanned_at,
+        run_id=deferred_run_id,
+        write_report=True,
+    )
+    deferred_counts = deferred_asset_counts(db_session, source_profile_id=source_id)
     (
         inventory_total_count,
         eligible_count,
@@ -368,6 +471,13 @@ def run_icloud_backfill_inventory_scan(
         acquirable_pending_count=acquirable_pending_count,
         retryable_failed_count=retryable_failed_count,
         ambiguous_or_unsupported_count=ambiguous_or_unsupported_count,
+        deferred_current_count=deferred_counts.current_count,
+        deferred_adjusted_resource_count=deferred_counts.adjusted_resource_count,
+        deferred_ambiguous_count=deferred_counts.ambiguous_count,
+        deferred_unsupported_count=deferred_counts.unsupported_count,
+        deferred_new_since_last_scan_count=deferred_summary.new_deferred_count,
+        deferred_changed_since_last_scan_count=deferred_summary.changed_deferred_count,
+        deferred_report_path=deferred_summary.report_path,
         source_exhausted=listing.source_exhausted,
         scan_limit_reached=listing.scan_limit_reached,
         stop_reason=stop_reason,
@@ -398,6 +508,7 @@ def get_icloud_backfill_status(
         retryable_failed_count,
         ambiguous_or_unsupported_count,
     ) = _inventory_counts(db_session, source_id=source_id)
+    deferred_counts = deferred_asset_counts(db_session, source_profile_id=source_id)
     return IcloudBackfillStatusSnapshot(
         source_id=state.source_profile_id,
         status=state.status,
@@ -413,6 +524,12 @@ def get_icloud_backfill_status(
         acquirable_pending_count=acquirable_pending_count,
         retryable_failed_count=retryable_failed_count,
         ambiguous_or_unsupported_count=ambiguous_or_unsupported_count,
+        deferred_current_count=deferred_counts.current_count,
+        deferred_adjusted_resource_count=deferred_counts.adjusted_resource_count,
+        deferred_ambiguous_count=deferred_counts.ambiguous_count,
+        deferred_unsupported_count=deferred_counts.unsupported_count,
+        deferred_new_since_last_scan_count=deferred_counts.new_since_last_scan_count,
+        deferred_changed_since_last_scan_count=deferred_counts.changed_since_last_scan_count,
         source_exhausted=state.source_exhausted,
         scan_limit_reached=state.scan_limit_reached,
         stop_reason=state.stop_reason,
