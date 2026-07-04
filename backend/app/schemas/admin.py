@@ -557,6 +557,15 @@ class IcloudStagingCleanupExecuteRequest(BaseModel):
     explicit_confirmation: str
 
 
+class IcloudStagingCleanupEligibleFile(BaseModel):
+    relative_path: str
+    size_bytes: int | None = None
+    asset_sha256: str | None = None
+    staged_sha256: str | None = None
+    verification_state: str
+    asset_id: int | None = None
+
+
 class IcloudStagingCleanupRunStatus(BaseModel):
     run_id: int | None
     status: str
@@ -586,6 +595,7 @@ class IcloudStagingCleanupRunStatus(BaseModel):
     authorization_consumed_at: datetime | None = None
     skipped_reasons: dict[str, int]
     skipped_samples: dict[str, list[str]]
+    eligible_files: list[IcloudStagingCleanupEligibleFile] = Field(default_factory=list)
     report_path: str | None
     error_message: str | None
 
@@ -659,7 +669,7 @@ class IcloudBackfillStatusResponse(BaseModel):
 
 class IcloudBackfillAcquirePreviewRequest(BaseModel):
     source_id: int
-    acquire_limit: int = Field(default=500, ge=1, le=1000)
+    acquire_limit: int = Field(default=500, ge=1, le=10000)
     max_listing_candidates: int = Field(default=100000, ge=1, le=100000)
     include_items: bool = False
 
@@ -695,7 +705,7 @@ class IcloudBackfillAcquirePreviewResponse(BaseModel):
 
 class IcloudBackfillAcquireRequest(BaseModel):
     source_id: int
-    acquire_limit: int = Field(default=500, ge=1, le=1000)
+    acquire_limit: int = Field(default=500, ge=1, le=10000)
     max_listing_candidates: int = Field(default=100000, ge=1, le=100000)
     dry_run: bool = True
     auto_run_source_intake: bool = True
@@ -740,6 +750,7 @@ class IcloudBackfillAcquireResponse(BaseModel):
     failed_terminal_count: int
     stop_reason: str
     next_safe_action: str
+    acquired_resource_paths: list[str] = Field(default_factory=list)
     items: list[IcloudBackfillAcquireItem] = Field(default_factory=list)
 
 

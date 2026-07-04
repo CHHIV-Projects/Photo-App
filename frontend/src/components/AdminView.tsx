@@ -925,6 +925,13 @@ export default function AdminView() {
         Snapshot time: {summary?.generated_at ? new Date(summary.generated_at).toLocaleString() : "-"}
       </p>
 
+      <article className={`${styles.card} ${styles.placeholderCard}`.trim()}>
+        <h3 className={styles.cardTitle}>Legacy/Internal iCloud Controls</h3>
+        <p className={styles.placeholderText}>
+          Use Ingestion page for normal iCloud runs. These controls remain available for internal validation and recovery.
+        </p>
+      </article>
+
       <IcloudAcquisitionCard onPrepareSourceIntake={handlePrepareSourceIntake} />
       <IcloudInternalRunCard />
 
@@ -998,21 +1005,21 @@ export default function AdminView() {
                                 <p className={styles.meta}><strong>Source path:</strong> {(reportDetail.raw.source_path as string) ?? "-"}</p>
                                 <p className={styles.meta}><strong>Run ID:</strong> {(reportDetail.raw.ingestion_run_id as number) ?? "-"} &nbsp; <strong>Source ID:</strong> {(reportDetail.raw.ingestion_source_id as number) ?? "-"}</p>
                                 <p className={styles.meta}><strong>Limit:</strong> {((reportDetail.raw.config as Record<string, unknown>)?.ingest_source_limit as number) ?? "none"} &nbsp; <strong>Batch:</strong> {((reportDetail.raw.config as Record<string, unknown>)?.ingest_batch_size as number) ?? "-"}</p>
-                                {reportDetail.raw.counts && (
+                                {reportDetail.raw.counts !== null && typeof reportDetail.raw.counts === "object" ? (
                                   <div className={styles.detailCounts}>
                                     {Object.entries(reportDetail.raw.counts as Record<string, number>).map(([k, v]) => (
                                       <p key={k} className={styles.meta}>{k.replace(/_/g, " ")}: {v}</p>
                                     ))}
                                   </div>
-                                )}
-                                {reportDetail.raw.deferred_unready_reasons && (
+                                ) : null}
+                                {reportDetail.raw.deferred_unready_reasons !== null && typeof reportDetail.raw.deferred_unready_reasons === "object" ? (
                                   <div className={styles.detailCounts}>
                                     <p className={styles.meta}><strong>Deferred / Unready reasons</strong></p>
                                     {Object.entries(reportDetail.raw.deferred_unready_reasons as Record<string, number>).map(([k, v]) => (
                                       <p key={k} className={styles.meta}>{k.replace(/_/g, " ")}: {v}</p>
                                     ))}
                                   </div>
-                                )}
+                                ) : null}
                                 {Array.isArray(reportDetail.raw.deferred_unready_sample) && (reportDetail.raw.deferred_unready_sample as string[]).length > 0 ? (
                                   <details className={styles.fileSample}>
                                     <summary className={styles.meta}>

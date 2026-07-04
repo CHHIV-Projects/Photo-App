@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -53,6 +56,7 @@ from app.schemas.admin import (
     IcloudAcquisitionStopResponse,
     IcloudStagingCleanupRunRequest,
     IcloudStagingCleanupExecuteRequest,
+    IcloudStagingCleanupEligibleFile,
     IcloudStagingCleanupRunResponse,
     IcloudStagingCleanupRunStatus,
     IcloudStagingCleanupStatusResponse,
@@ -454,6 +458,38 @@ def _to_icloud_acquisition_run_status(snapshot: IcloudAcquisitionStatusSnapshot)
     )
 
 
+def _safe_cleanup_eligible_files(report_path: str | None) -> list[IcloudStagingCleanupEligibleFile]:
+    if not report_path:
+        return []
+    try:
+        report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    rows = report.get("eligible_files")
+    if not isinstance(rows, list):
+        return []
+
+    safe_rows: list[IcloudStagingCleanupEligibleFile] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        relative_path = row.get("relative_path")
+        if not isinstance(relative_path, str) or not relative_path.strip():
+            continue
+        safe_rows.append(
+            IcloudStagingCleanupEligibleFile(
+                relative_path=relative_path.replace("\\", "/").lstrip("/"),
+                size_bytes=row.get("size_bytes") if isinstance(row.get("size_bytes"), int) else None,
+                asset_sha256=row.get("asset_sha256") if isinstance(row.get("asset_sha256"), str) else None,
+                staged_sha256=row.get("staged_sha256") if isinstance(row.get("staged_sha256"), str) else None,
+                verification_state="verified",
+                asset_id=row.get("asset_id") if isinstance(row.get("asset_id"), int) else None,
+            )
+        )
+    return safe_rows
+
+
 def _to_icloud_cleanup_run_status(snapshot: CleanupRunSnapshot | None) -> IcloudStagingCleanupRunStatus:
     if snapshot is None:
         return IcloudStagingCleanupRunStatus(
@@ -469,22 +505,23 @@ def _to_icloud_cleanup_run_status(snapshot: CleanupRunSnapshot | None) -> Icloud
             eligible_count=0,
             deleted_count=0,
             skipped_count=0,
-        total_bytes_eligible=0,
-        total_bytes_deleted=0,
-        total_files=0,
-        processed_files=0,
-        current_stage=None,
-        protected_count=0,
-        verification_failed_count=0,
-        file_missing_count=0,
-        delete_failed_count=0,
-        manifest_fingerprint=None,
-        planner_version=None,
-        preview_expires_at=None,
-        authorized_dry_run_id=None,
-        authorization_consumed_at=None,
-        skipped_reasons={},
+            total_bytes_eligible=0,
+            total_bytes_deleted=0,
+            total_files=0,
+            processed_files=0,
+            current_stage=None,
+            protected_count=0,
+            verification_failed_count=0,
+            file_missing_count=0,
+            delete_failed_count=0,
+            manifest_fingerprint=None,
+            planner_version=None,
+            preview_expires_at=None,
+            authorized_dry_run_id=None,
+            authorization_consumed_at=None,
+            skipped_reasons={},
             skipped_samples={},
+            eligible_files=[],
             report_path=None,
             error_message=None,
         )
@@ -517,6 +554,7 @@ def _to_icloud_cleanup_run_status(snapshot: CleanupRunSnapshot | None) -> Icloud
         authorization_consumed_at=snapshot.authorization_consumed_at,
         skipped_reasons=snapshot.skipped_reasons,
         skipped_samples=snapshot.skipped_samples,
+        eligible_files=_safe_cleanup_eligible_files(snapshot.report_path),
         report_path=snapshot.report_path,
         error_message=snapshot.error_message,
     )
@@ -666,6 +704,7 @@ def _to_icloud_backfill_acquire_response(
         failed_terminal_count=snapshot.failed_terminal_count,
         stop_reason=snapshot.stop_reason,
         next_safe_action=snapshot.next_safe_action,
+        acquired_resource_paths=list(getattr(snapshot, "acquired_resource_paths", ())),
         items=[
             {
                 "inventory_id": item.inventory_id,

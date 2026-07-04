@@ -271,23 +271,33 @@ class IcloudBackfillPreviewSelectionTests(IcloudBackfillPreviewFixture):
         self.assertEqual(result.stop_reason, "limit_reached")
 
     def test_accepts_max_acquire_limit_and_rejects_above_max(self) -> None:
-        self.assertEqual(MAX_ACQUIRE_PREVIEW_LIMIT, 1000)
+        self.assertEqual(MAX_ACQUIRE_PREVIEW_LIMIT, 10000)
         self._add_inventory("safe")
         helper = _FakeHelper(_listing((_item("safe", "2026/06/24/safe.HEIC"),)))
 
         result = preview_icloud_backfill_acquisition(
             self.db,
             source_id=self.source.id,
-            acquire_limit=1000,
+            acquire_limit=10000,
             helper_client=helper,  # type: ignore[arg-type]
         )
-        self.assertEqual(result.acquire_limit, 1000)
+        self.assertEqual(result.acquire_limit, 10000)
+
+        result = preview_icloud_backfill_acquisition(
+            self.db,
+            source_id=self.source.id,
+            acquire_limit=2000,
+            max_listing_candidates=1000,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+        self.assertEqual(result.acquire_limit, 2000)
+        self.assertEqual(helper.list_kwargs["candidate_scan_limit"], 1000)
 
         with self.assertRaises(IcloudBackfillValidationError):
             preview_icloud_backfill_acquisition(
                 self.db,
                 source_id=self.source.id,
-                acquire_limit=1001,
+                acquire_limit=10001,
                 helper_client=helper,  # type: ignore[arg-type]
             )
 
@@ -510,10 +520,10 @@ class IcloudBackfillPreviewApiTests(IcloudBackfillPreviewFixture):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["error_code"], "source_not_found")
 
-    def test_post_acquire_preview_rejects_acquire_limit_above_1000(self) -> None:
+    def test_post_acquire_preview_rejects_acquire_limit_above_10000(self) -> None:
         response = self.client.post(
             "/api/admin/icloud-backfill/acquire-preview",
-            json={"source_id": self.source.id, "acquire_limit": 1001, "max_listing_candidates": 10},
+            json={"source_id": self.source.id, "acquire_limit": 10001, "max_listing_candidates": 10},
         )
 
         self.assertEqual(response.status_code, 422)

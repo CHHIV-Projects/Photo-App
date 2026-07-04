@@ -44,6 +44,14 @@ import type {
   IcloudStagingCleanupRunResponse,
   IcloudStagingCleanupReadinessResponse,
   IcloudStagingCleanupStatusResponse,
+  IcloudBackfillAcquirePreviewRequest,
+  IcloudBackfillAcquirePreviewResponse,
+  IcloudBackfillAcquireRequest,
+  IcloudBackfillAcquireResponse,
+  IcloudBackfillInventoryScanRequest,
+  IcloudBackfillInventoryScanResponse,
+  IcloudBackfillStatusResponse,
+  SourceProfileDeferredAssetsResponse,
   InternalIcloudRunRequest,
   InternalIcloudRunResponse,
   InternalIcloudRunStatusResponse,
@@ -1270,6 +1278,61 @@ export function getIcloudStagingCleanupStatus(sourceId?: number): Promise<Icloud
 
 export function getIcloudStagingCleanupReadiness(sourceId: number): Promise<IcloudStagingCleanupReadinessResponse> {
   return apiRequest<IcloudStagingCleanupReadinessResponse>(`/api/admin/icloud-staging-cleanup/readiness?source_id=${sourceId}`);
+}
+
+export function getIcloudBackfillStatus(sourceId: number): Promise<IcloudBackfillStatusResponse> {
+  return apiRequest<IcloudBackfillStatusResponse>(`/api/admin/icloud-backfill/status?source_id=${sourceId}`);
+}
+
+export function runIcloudBackfillInventoryScan(
+  req: IcloudBackfillInventoryScanRequest,
+): Promise<IcloudBackfillInventoryScanResponse> {
+  return apiRequest<IcloudBackfillInventoryScanResponse>("/api/admin/icloud-backfill/inventory-scan", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function previewIcloudBackfillAcquisition(
+  req: IcloudBackfillAcquirePreviewRequest,
+): Promise<IcloudBackfillAcquirePreviewResponse> {
+  return apiRequest<IcloudBackfillAcquirePreviewResponse>("/api/admin/icloud-backfill/acquire-preview", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function runIcloudBackfillAcquisition(
+  req: IcloudBackfillAcquireRequest,
+): Promise<IcloudBackfillAcquireResponse> {
+  return apiRequest<IcloudBackfillAcquireResponse>("/api/admin/icloud-backfill/acquire", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function getSourceProfileDeferredAssets(
+  sourceId: number,
+  options: { state?: string; category?: string; reasonCode?: string; limit?: number } = {},
+): Promise<SourceProfileDeferredAssetsResponse> {
+  const params = new URLSearchParams();
+  if (options.state) {
+    params.set("state", options.state);
+  }
+  if (options.category) {
+    params.set("category", options.category);
+  }
+  if (options.reasonCode) {
+    params.set("reason_code", options.reasonCode);
+  }
+  if (options.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+  const query = params.toString();
+  const path = query
+    ? `/api/admin/source-profiles/${sourceId}/deferred-assets?${query}`
+    : `/api/admin/source-profiles/${sourceId}/deferred-assets`;
+  return apiRequest<SourceProfileDeferredAssetsResponse>(path);
 }
 
 export function runIcloudStagingCleanup(

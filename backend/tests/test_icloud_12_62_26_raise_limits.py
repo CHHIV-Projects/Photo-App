@@ -28,9 +28,9 @@ class IcloudLimitsRaisedTest(unittest.TestCase):
         """Confirm MAX_CANDIDATE_SCAN_LIMIT constant is 1000."""
         self.assertEqual(MAX_CANDIDATE_SCAN_LIMIT, 1000)
 
-    def test_protocol_max_selected_item_count_is_1000(self) -> None:
-        """Confirm MAX_SELECTED_ITEM_COUNT constant is 1000."""
-        self.assertEqual(MAX_SELECTED_ITEM_COUNT, 1000)
+    def test_protocol_max_selected_item_count_is_10000(self) -> None:
+        """Confirm MAX_SELECTED_ITEM_COUNT constant supports bounded larger backfill limits."""
+        self.assertEqual(MAX_SELECTED_ITEM_COUNT, 10000)
 
     def test_schema_candidate_search_cap_default_is_1000(self) -> None:
         """Verify InternalIcloudRunRequest default candidate_search_cap is 1000."""
