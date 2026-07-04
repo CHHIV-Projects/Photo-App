@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 import tempfile
 import unittest
@@ -170,6 +171,18 @@ class IcloudStagingCleanupExecutionServiceTests(unittest.TestCase):
         self.assertEqual(first.issues, [])
         self.assertEqual(first.manifest_fingerprint, second.manifest_fingerprint)
         self.assertEqual(first.eligible[0].staged_sha256, first.eligible[0].vault_sha256)
+
+    def test_manifest_fingerprint_ignores_volatile_staged_mtime(self) -> None:
+        staged_path, _, _ = self._add_verified_file()
+        source = self._validated_source()
+
+        first = cleanup._build_cleanup_plan(self.db, source=source)
+        os.utime(staged_path, (staged_path.stat().st_atime + 5, staged_path.stat().st_mtime + 5))
+        second = cleanup._build_cleanup_plan(self.db, source=source)
+
+        self.assertNotEqual(first.eligible[0].staged_mtime_ns, second.eligible[0].staged_mtime_ns)
+        self.assertEqual(first.eligible[0].staged_sha256, second.eligible[0].staged_sha256)
+        self.assertEqual(first.manifest_fingerprint, second.manifest_fingerprint)
 
     def test_staged_replacement_is_verification_failure(self) -> None:
         staged_path, _, _ = self._add_verified_file()

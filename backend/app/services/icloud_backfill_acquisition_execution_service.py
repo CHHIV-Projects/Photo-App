@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.icloud_acquisition_run import IcloudAcquisitionBatch
+from app.models.icloud_acquisition_run import IcloudAcquisitionBatch, IcloudAcquisitionItem, IcloudAcquisitionResource
 from app.models.icloud_backfill import IcloudRemoteAssetInventory
 from app.services.icloud_acquisition.batch_source_intake_service import (
     STATUS_BATCH_INTAKE_COMPLETED,
@@ -134,6 +135,7 @@ class IcloudBackfillAcquireResult:
     failed_terminal_count: int
     stop_reason: str
     next_safe_action: str
+    acquired_resource_paths: tuple[str, ...] = field(default_factory=tuple)
     items: tuple[IcloudBackfillAcquireItem, ...] = field(default_factory=tuple)
 
 
@@ -359,6 +361,18 @@ def _safe_items(
         )
         for row in rows
     )
+
+
+def _resource_paths_for_batch(db_session: Session, batch_id: int | None) -> tuple[str, ...]:
+    if batch_id is None:
+        return ()
+    rows = db_session.scalars(
+        select(IcloudAcquisitionResource.relative_path)
+        .join(IcloudAcquisitionItem, IcloudAcquisitionResource.item_id == IcloudAcquisitionItem.id)
+        .where(IcloudAcquisitionItem.batch_id == batch_id)
+        .order_by(IcloudAcquisitionResource.relative_path)
+    ).all()
+    return tuple(str(path).replace("\\", "/").lstrip("/") for path in rows if str(path or "").strip())
 
 
 def run_icloud_backfill_acquisition(
@@ -619,6 +633,7 @@ def run_icloud_backfill_acquisition(
             failed_terminal_count=0,
             stop_reason=durable_result.stop_reason or STOP_REASON_ACQUISITION_FAILED,
             next_safe_action=durable_result.next_safe_action or NEXT_RETRY_ACQUISITION,
+            acquired_resource_paths=_resource_paths_for_batch(db_session, durable_result.batch_id),
             items=_safe_items(rows=prepared.selected_rows, include_items=include_items),
         )
 
@@ -654,6 +669,7 @@ def run_icloud_backfill_acquisition(
             failed_terminal_count=0,
             stop_reason=STOP_REASON_SOURCE_INTAKE_REQUIRED,
             next_safe_action=NEXT_RUN_SOURCE_INTAKE,
+            acquired_resource_paths=_resource_paths_for_batch(db_session, durable_result.batch_id),
             items=_safe_items(rows=prepared.selected_rows, include_items=include_items),
         )
 
@@ -713,5 +729,6 @@ def run_icloud_backfill_acquisition(
             if not intake_succeeded
             else intake_result.next_safe_action or "cleanup_review_required"
         ),
+        acquired_resource_paths=_resource_paths_for_batch(db_session, durable_result.batch_id),
         items=_safe_items(rows=prepared.selected_rows, include_items=include_items),
     )

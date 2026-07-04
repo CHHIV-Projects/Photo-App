@@ -363,6 +363,56 @@ class IcloudBackfillExecutionServiceTests(IcloudBackfillExecuteFixture):
         self.assertTrue(row.backfill_completed)
         self.assertEqual(row.backfill_resolution_state, "newly_imported")
         self.assertEqual(row.source_intake_run_id, 77)
+        self.assertEqual(result.acquired_resource_paths, ("2026/06/24/remote-1.HEIC",))
+
+    def test_acquire_result_exposes_all_resource_paths_for_live_photo_cleanup_match(self) -> None:
+        row = self._add_inventory("remote-live", is_live_photo=True, resource_count=2)
+        helper = _FakeHelper(
+            _listing(
+                (
+                    _item(
+                        "remote-live",
+                        "2026/06/24/remote-live.HEIC",
+                        resources=(
+                            _resource("2026/06/24/remote-live.HEIC"),
+                            _resource(
+                                "2026/06/24/remote-live_HEVC.MOV",
+                                resource_id="live_photo_original",
+                                content_type="video/quicktime",
+                            ),
+                        ),
+                    ),
+                )
+            )
+        )
+        batch_holder: dict[str, int] = {}
+
+        def _fake_durable(*_args, **kwargs):
+            result = self._create_batch_for_preparation(kwargs["preparation"])
+            batch_holder["batch_id"] = int(result.batch_id or 0)
+            return result
+
+        def _fake_intake(*_args, **_kwargs):
+            return self._source_intake_result(batch_id=batch_holder["batch_id"])
+
+        with patch("app.services.admin.ingestion_operation_guardrail_service.get_ingestion_operation_guardrail_snapshot", return_value=_Guardrail()):
+            with patch("app.services.icloud_backfill_acquisition_execution_service.run_durable_exact_selection_preparation", side_effect=_fake_durable):
+                with patch("app.services.icloud_backfill_acquisition_execution_service.run_batch_source_intake", side_effect=_fake_intake):
+                    result = run_icloud_backfill_acquisition(
+                        self.db,
+                        source_id=self.source.id,
+                        dry_run=False,
+                        helper_client=helper,  # type: ignore[arg-type]
+                    )
+
+        self.db.refresh(row)
+        self.assertTrue(row.backfill_completed)
+        self.assertEqual(result.backfill_completed_count, 1)
+        self.assertEqual(result.selected_resource_count, 2)
+        self.assertEqual(
+            result.acquired_resource_paths,
+            ("2026/06/24/remote-live.HEIC", "2026/06/24/remote-live_HEVC.MOV"),
+        )
 
     def test_source_intake_failure_does_not_mark_completed(self) -> None:
         row = self._add_inventory("remote-1")
@@ -551,10 +601,10 @@ class IcloudBackfillExecutionApiTests(IcloudBackfillExecuteFixture):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["error_code"], "source_not_found")
 
-    def test_post_acquire_rejects_limit_above_1000(self) -> None:
+    def test_post_acquire_rejects_limit_above_10000(self) -> None:
         response = self.client.post(
             "/api/admin/icloud-backfill/acquire",
-            json={"source_id": self.source.id, "acquire_limit": 1001},
+            json={"source_id": self.source.id, "acquire_limit": 10001},
         )
 
         self.assertEqual(response.status_code, 422)
