@@ -361,8 +361,11 @@ def run_icloud_backfill_inventory_scan(
     updated_count = 0
     current_remote_identities: set[str] = set()
     for position, item in enumerate(listing.items, start=1):
-        if item.item_id.strip():
-            current_remote_identities.add(item.item_id.strip())
+        remote_identity = item.item_id.strip()
+        if remote_identity:
+            if remote_identity in current_remote_identities:
+                continue
+            current_remote_identities.add(remote_identity)
         if _upsert_inventory_row(
             db_session,
             source_id=source_id,

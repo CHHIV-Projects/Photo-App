@@ -3,16 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
-  getIcloudHistoricalRoutineStatus,
+  advanceIcloudIntakeImport,
+  getIcloudIntakeImportStatus,
   getSourceProfileDeferredAssets,
   getSourceProfiles,
   refreshIcloudHistoricalInventory,
-  runIcloudHistoricalNextBatch,
+  resumeIcloudIntakeImport,
+  startIcloudIntakeImport,
 } from "@/lib/api";
 import type {
+  IcloudIntakeImportStatus,
   IcloudHistoricalRoutineRefreshResponse,
-  IcloudHistoricalRoutineRunResponse,
-  IcloudHistoricalRoutineStatus,
   SourceProfileDeferredAssetItem,
   SourceProfileSummary,
 } from "@/types/ui-api";
@@ -41,12 +42,21 @@ function availabilityLabel(value: "yes" | "no" | "unknown" | null | undefined): 
   return "Unknown";
 }
 
-function resultTitle(result: IcloudHistoricalRoutineRunResponse): string {
-  if (result.status === "stopped_needs_review") {
+function resultTitle(result: IcloudIntakeImportStatus): string {
+  if (result.import_status === "created") {
+    return "iCloud Intake Ready";
+  }
+  if (result.import_status === "running") {
+    return "iCloud Intake In Progress";
+  }
+  if (result.import_status === "stopped_needs_review") {
     return "Import stopped for review";
   }
-  if (result.status === "failed") {
+  if (result.import_status === "failed") {
     return "iCloud import did not run";
+  }
+  if (result.import_status === "resume_available" || result.import_status === "paused_interrupted") {
+    return "Import interrupted";
   }
   return "iCloud Intake Complete";
 }
@@ -63,9 +73,9 @@ function Metric({ label, value }: { label: string; value: string | number | null
 export default function IcloudRunWorkflowPanel(): JSX.Element {
   const [profiles, setProfiles] = useState<SourceProfileSummary[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<number | null>(null);
-  const [status, setStatus] = useState<IcloudHistoricalRoutineStatus | null>(null);
+  const [status, setStatus] = useState<IcloudIntakeImportStatus | null>(null);
   const [refreshResult, setRefreshResult] = useState<IcloudHistoricalRoutineRefreshResponse | null>(null);
-  const [runResult, setRunResult] = useState<IcloudHistoricalRoutineRunResponse | null>(null);
+  const [runResult, setRunResult] = useState<IcloudIntakeImportStatus | null>(null);
   const [deferredRows, setDeferredRows] = useState<SourceProfileDeferredAssetItem[]>([]);
   const [phase, setPhase] = useState<RunPhase>("idle");
   const [message, setMessage] = useState<string | null>(null);
@@ -79,10 +89,12 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
     [icloudProfiles, selectedSourceId],
   );
   const isBusy = phase === "refreshing" || phase === "running";
-  const hasPreparedCandidates = Boolean(status && status.logical_candidates_ready > 0 && status.prepare_status === "prepared");
+  const displayedResult = runResult ?? (status?.import_run_id ? status : null);
+  const hasPreparedCandidates = Boolean(status && (status.can_start_import || status.can_resume_import || status.can_advance_import || status.logical_candidates_ready > 0));
+  const canImportOrResume = Boolean(status && (status.can_start_import || status.can_resume_import || status.can_advance_import));
   const unavailableReason = !selectedProfile
     ? "Select an active iCloud Source Profile."
-    : !hasPreparedCandidates
+    : !hasPreparedCandidates && !status?.resume_available
       ? "Refresh / Prepare Next 1000 before importing."
       : status?.available_inventory === "no"
         ? "No eligible/acquirable iCloud inventory remains."
@@ -92,9 +104,8 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
   const canRunBackfill = Boolean(
     selectedSourceId
       && !isBusy
-      && hasPreparedCandidates
-      && status?.available_inventory === "yes"
-      && status.local_staging_file_count === 0,
+      && canImportOrResume
+      && status?.local_staging_file_count === 0,
   );
 
   const loadProfiles = useCallback(async () => {
@@ -113,7 +124,7 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
   }, []);
 
   const refreshStatus = useCallback(async (sourceId: number) => {
-    const response = await getIcloudHistoricalRoutineStatus(sourceId);
+    const response = await getIcloudIntakeImportStatus(sourceId);
     setStatus(response.current);
   }, []);
 
@@ -179,12 +190,31 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
     setMessage(null);
     setRunResult(null);
     try {
-      const response = await runIcloudHistoricalNextBatch({
-        source_id: selectedSourceId,
-        internal_batch_size: 100,
-      });
-      setRunResult(response);
-      setMessage(response.operator_message);
+      let current = status?.can_resume_import
+        ? (await resumeIcloudIntakeImport({ source_id: selectedSourceId, import_run_id: status.import_run_id })).current
+        : status?.can_advance_import
+          ? status
+          : (await startIcloudIntakeImport({
+              source_id: selectedSourceId,
+              internal_batch_size: 100,
+            })).current;
+
+      setStatus(current);
+      setRunResult(current);
+      setMessage(current.import_operator_message);
+
+      let advances = 0;
+      while (current.can_advance_import && advances < 100) {
+        const response = await advanceIcloudIntakeImport({
+          source_id: selectedSourceId,
+          import_run_id: current.import_run_id,
+        });
+        current = response.current;
+        setStatus(current);
+        setRunResult(current);
+        setMessage(current.import_operator_message);
+        advances += 1;
+      }
       await refreshStatus(selectedSourceId);
       await loadDeferredRows(selectedSourceId);
       setPhase("idle");
@@ -235,7 +265,7 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
           {phase === "refreshing" ? "Preparing..." : "Refresh / Prepare Next 1000"}
         </button>
         <button className={styles.primaryButton} type="button" disabled={!canRunBackfill} onClick={handleRunBackfill}>
-          {phase === "running" ? "Importing..." : "Import Next 1000"}
+          {phase === "running" ? "Importing..." : status?.can_resume_import ? "Resume Interrupted Import" : "Import Next 1000"}
         </button>
         {unavailableReason && <span className={styles.metaLine}>{unavailableReason}</span>}
       </div>
@@ -243,18 +273,18 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
       {message && <p className={styles.success}>{message}</p>}
       {error && <p className={styles.error}>{error}</p>}
 
-      {runResult && (
-        <div className={runResult.status === "stopped_needs_review" || runResult.status === "failed" ? styles.warning : styles.summaryBlock}>
-          <h4>{resultTitle(runResult)}</h4>
+      {displayedResult && (
+        <div className={displayedResult.import_status === "stopped_needs_review" || displayedResult.import_status === "failed" || displayedResult.resume_available ? styles.warning : styles.summaryBlock}>
+          <h4>{resultTitle(displayedResult)}</h4>
           <div className={styles.metricsGrid}>
-            <Metric label="Logical Candidates" value={runResult.logical_candidates} />
-            <Metric label="Logical Imported" value={runResult.logical_imported} />
-            <Metric label="Files/Resources Imported" value={runResult.files_resources_imported} />
-            <Metric label="Local Staging Files Cleaned" value={runResult.local_staging_files_cleaned} />
-            <Metric label="New Deferred / Needs Policy" value={runResult.new_deferred_this_run} />
-            <Metric label="Execution Failed / Retryable" value={runResult.execution_failed_this_run} />
+            <Metric label="Logical Candidates" value={displayedResult.logical_candidates_total} />
+            <Metric label="Logical Imported" value={displayedResult.logical_imported} />
+            <Metric label="Files/Resources Imported" value={displayedResult.files_resources_imported} />
+            <Metric label="Local Staging Files Cleaned" value={displayedResult.local_staging_files_cleaned} />
+            <Metric label="New Deferred / Needs Policy" value={displayedResult.new_deferred_this_run} />
+            <Metric label="Execution Failed / Retryable" value={displayedResult.execution_failed_retryable_count} />
           </div>
-          <p className={styles.metaLine}>{runResult.operator_message}</p>
+          <p className={styles.metaLine}>{displayedResult.import_operator_message}</p>
         </div>
       )}
 
@@ -265,22 +295,18 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
           <Metric label="Prepare Run" value={status?.latest_prepare_run_id} />
           <Metric label="Prepare Status" value={status?.prepare_status} />
           <Metric label="Prepare Expires" value={status?.prepare_expires_at ? toDisplayDate(status.prepare_expires_at) : "Not prepared"} />
-          <Metric label="Known Inventory" value={status ? `${status.inventory_total_logical} logical assets` : null} />
-          <Metric label="Imported / Accounted" value={status?.backfill_completed_logical} />
-          <Metric label="Eligible Remaining" value={status?.eligible_pending_logical} />
-          <Metric label="Total Deferred" value={status?.deferred_current_logical} />
-          <Metric label="New Deferred This Prepare" value={status?.new_deferred_this_prepare} />
-          <Metric label="Source Exhaustion" value={status?.source_exhaustion_state} />
-          <Metric label="Provider Records Scanned" value={status?.provider_records_scanned} />
-          <Metric label="Scan Depth Used" value={status?.scan_depth_used} />
-          <Metric label="Last Import Run" value={status?.last_historical_run_id} />
-          <Metric label="Last Cleanup Run" value={status?.last_cleanup_run_id} />
+          <Metric label="Import Run" value={status?.import_run_id} />
+          <Metric label="Import Status" value={status?.import_status} />
+          <Metric label="Chunks" value={status ? `${status.completed_chunk_count} / ${status.total_chunks}` : null} />
+          <Metric label="Current Phase" value={status?.current_phase} />
+          <Metric label="Remaining Logical" value={status?.remaining_logical_candidates} />
+          <Metric label="Report Path" value={status?.report_path} />
           <Metric label="Staging Files" value={status?.local_staging_file_count} />
           <Metric label=".partial Files" value={status?.partial_file_count} />
           <Metric label="backfill_execute Files" value={status?.backfill_execute_file_count} />
         </div>
         {refreshResult && <p className={styles.metaLine}>{refreshResult.scan_limit_note}</p>}
-        {runResult && (
+        {displayedResult && (
           <div className={styles.tableWrap}>
             <table className={styles.table}>
               <thead>
@@ -289,17 +315,19 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
                   <th>Imported</th>
                   <th>Resources</th>
                   <th>Cleaned</th>
+                  <th>Timing</th>
                   <th>Run IDs</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {runResult.chunks.map((chunk) => (
+                {displayedResult.chunks.map((chunk) => (
                   <tr key={chunk.chunk_index}>
                     <td>{chunk.chunk_index}</td>
-                    <td>{chunk.imported_logical_assets}</td>
-                    <td>{chunk.imported_resources}</td>
-                    <td>{chunk.cleaned_local_staging_files}</td>
+                    <td>{chunk.logical_imported}</td>
+                    <td>{chunk.files_resources_imported}</td>
+                    <td>{chunk.local_staging_files_cleaned}</td>
+                    <td>{chunk.chunk_total_seconds != null ? `${chunk.chunk_total_seconds.toFixed(1)}s` : "-"}</td>
                     <td>
                       acquisition {chunk.acquisition_run_id ?? "-"} / batch {chunk.acquisition_batch_id ?? "-"} / intake {chunk.source_intake_run_id ?? "-"} / cleanup {chunk.cleanup_execution_run_id ?? "-"}
                     </td>

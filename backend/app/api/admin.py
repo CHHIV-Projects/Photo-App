@@ -76,6 +76,12 @@ from app.schemas.admin import (
     IcloudHistoricalRoutineRunResponse,
     IcloudHistoricalRoutineStatus,
     IcloudHistoricalRoutineStatusResponse,
+    IcloudIntakeImportAdvanceRequest,
+    IcloudIntakeImportChunkStatus,
+    IcloudIntakeImportResumeRequest,
+    IcloudIntakeImportStartRequest,
+    IcloudIntakeImportStatus,
+    IcloudIntakeImportStatusResponse,
     SourceProfileDeferredAssetItem,
     SourceProfileDeferredAssetsResponse,
     InternalIcloudRunRequest,
@@ -174,9 +180,13 @@ from app.services.icloud_backfill_acquisition_execution_service import (
 )
 from app.services.icloud_historical_routine_service import (
     IcloudHistoricalRoutineError,
+    advance_icloud_intake_import as advance_icloud_intake_import_service,
+    get_icloud_intake_import_status as get_icloud_intake_import_status_service,
     get_historical_routine_status as get_historical_routine_status_service,
     refresh_historical_inventory as refresh_historical_inventory_service,
+    resume_icloud_intake_import as resume_icloud_intake_import_service,
     run_next_historical_batch as run_next_historical_batch_service,
+    start_icloud_intake_import as start_icloud_intake_import_service,
 )
 from app.services.source_profile_deferred_asset_service import (
     DeferredAssetListItem,
@@ -686,6 +696,113 @@ def _to_historical_routine_status(snapshot) -> IcloudHistoricalRoutineStatus:
         partial_file_count=snapshot.partial_file_count,
         backfill_execute_file_count=snapshot.backfill_execute_file_count,
         operator_message=snapshot.operator_message,
+    )
+
+
+def _to_intake_import_chunk_status(chunk) -> IcloudIntakeImportChunkStatus:
+    return IcloudIntakeImportChunkStatus(
+        id=chunk.id,
+        chunk_index=chunk.chunk_index,
+        status=chunk.status,
+        candidate_start_index=chunk.candidate_start_index,
+        candidate_end_index=chunk.candidate_end_index,
+        logical_candidates=chunk.logical_candidates,
+        logical_imported=chunk.logical_imported,
+        files_resources_imported=chunk.files_resources_imported,
+        local_staging_files_cleaned=chunk.local_staging_files_cleaned,
+        new_deferred_this_chunk=chunk.new_deferred_this_chunk,
+        execution_failed_retryable_count=chunk.execution_failed_retryable_count,
+        execution_failed_terminal_count=chunk.execution_failed_terminal_count,
+        source_intake_failed_count=chunk.source_intake_failed_count,
+        cleanup_failed_count=chunk.cleanup_failed_count,
+        acquisition_run_id=chunk.acquisition_run_id,
+        acquisition_batch_id=chunk.acquisition_batch_id,
+        source_intake_run_id=chunk.source_intake_run_id,
+        cleanup_dry_run_id=chunk.cleanup_dry_run_id,
+        cleanup_execution_run_id=chunk.cleanup_execution_run_id,
+        cleanup_report_path=chunk.cleanup_report_path,
+        cleanup_eligible_count=chunk.cleanup_eligible_count,
+        cleanup_skipped_count=chunk.cleanup_skipped_count,
+        cleanup_protected_count=chunk.cleanup_protected_count,
+        cleanup_verification_failed_count=chunk.cleanup_verification_failed_count,
+        cleanup_file_missing_count=chunk.cleanup_file_missing_count,
+        cleanup_delete_failed_count=chunk.cleanup_delete_failed_count,
+        chunk_total_seconds=chunk.chunk_total_seconds,
+        candidate_load_seconds=chunk.candidate_load_seconds,
+        fresh_resolution_seconds=chunk.fresh_resolution_seconds,
+        download_stage_seconds=chunk.download_stage_seconds,
+        source_intake_seconds=chunk.source_intake_seconds,
+        cleanup_dry_run_seconds=chunk.cleanup_dry_run_seconds,
+        cleanup_execute_seconds=chunk.cleanup_execute_seconds,
+        db_state_update_seconds=chunk.db_state_update_seconds,
+        inter_chunk_gap_seconds=chunk.inter_chunk_gap_seconds,
+        started_at=chunk.started_at,
+        completed_at=chunk.completed_at,
+        failed_at=chunk.failed_at,
+        operator_message=chunk.operator_message,
+        stop_reason=chunk.stop_reason,
+        timing_note=chunk.timing_note,
+    )
+
+
+def _to_intake_import_status(snapshot) -> IcloudIntakeImportStatus:
+    return IcloudIntakeImportStatus(
+        source_id=snapshot.source_id,
+        source_label=snapshot.source_label,
+        total_imported_from_source=snapshot.total_imported_from_source,
+        last_inventory_refresh_at=snapshot.last_inventory_refresh_at,
+        available_inventory=snapshot.available_inventory,
+        logical_candidates_ready=snapshot.logical_candidates_ready,
+        latest_prepare_run_id=snapshot.latest_prepare_run_id,
+        prepare_status=snapshot.prepare_status,
+        prepare_expires_at=snapshot.prepare_expires_at,
+        import_run_id=snapshot.import_run_id,
+        import_status=snapshot.import_status,
+        import_operator_message=snapshot.import_operator_message,
+        import_stop_reason=snapshot.import_stop_reason,
+        target_logical_candidates=snapshot.target_logical_candidates,
+        logical_candidates_total=snapshot.logical_candidates_total,
+        logical_imported=snapshot.logical_imported,
+        files_resources_imported=snapshot.files_resources_imported,
+        local_staging_files_cleaned=snapshot.local_staging_files_cleaned,
+        new_deferred_this_run=snapshot.new_deferred_this_run,
+        execution_failed_retryable_count=snapshot.execution_failed_retryable_count,
+        execution_failed_terminal_count=snapshot.execution_failed_terminal_count,
+        source_intake_failed_count=snapshot.source_intake_failed_count,
+        cleanup_failed_count=snapshot.cleanup_failed_count,
+        current_chunk_index=snapshot.current_chunk_index,
+        total_chunks=snapshot.total_chunks,
+        internal_batch_size=snapshot.internal_batch_size,
+        pending_chunk_count=snapshot.pending_chunk_count,
+        completed_chunk_count=snapshot.completed_chunk_count,
+        remaining_logical_candidates=snapshot.remaining_logical_candidates,
+        resume_available=snapshot.resume_available,
+        can_start_import=snapshot.can_start_import,
+        can_resume_import=snapshot.can_resume_import,
+        can_advance_import=snapshot.can_advance_import,
+        current_phase=snapshot.current_phase,
+        last_chunk_duration_seconds=snapshot.last_chunk_duration_seconds,
+        last_inter_chunk_gap_seconds=snapshot.last_inter_chunk_gap_seconds,
+        started_at=snapshot.started_at,
+        last_progress_at=snapshot.last_progress_at,
+        completed_at=snapshot.completed_at,
+        failed_at=snapshot.failed_at,
+        interrupted_at=snapshot.interrupted_at,
+        resumed_at=snapshot.resumed_at,
+        report_path=snapshot.report_path,
+        local_staging_file_count=snapshot.local_staging_file_count,
+        partial_file_count=snapshot.partial_file_count,
+        backfill_execute_file_count=snapshot.backfill_execute_file_count,
+        chunks=[_to_intake_import_chunk_status(chunk) for chunk in snapshot.chunks],
+    )
+
+
+def _intake_import_status_response(snapshot) -> IcloudIntakeImportStatusResponse:
+    from datetime import datetime, timezone
+
+    return IcloudIntakeImportStatusResponse(
+        generated_at=datetime.now(timezone.utc),
+        current=_to_intake_import_status(snapshot),
     )
 
 
@@ -1203,6 +1320,89 @@ def refresh_icloud_historical_inventory(
         scan_limit_note=result.scan_limit_note,
         operator_message=result.operator_message,
     )
+
+
+@router.get("/icloud-routine/intake/import/status", response_model=IcloudIntakeImportStatusResponse)
+def get_icloud_intake_import_status(
+    source_id: int,
+    db: Session = Depends(get_db_session),
+) -> IcloudIntakeImportStatusResponse | JSONResponse:
+    """Return durable iCloud Intake import run/resume status."""
+    try:
+        snapshot = get_icloud_intake_import_status_service(db, source_id=source_id)
+    except IcloudHistoricalRoutineError as exc:
+        status_code = status.HTTP_404_NOT_FOUND if exc.code == "source_not_found" else status.HTTP_400_BAD_REQUEST
+        return JSONResponse(status_code=status_code, content={"detail": str(exc), "error_code": exc.code})
+    return _intake_import_status_response(snapshot)
+
+
+@router.post("/icloud-routine/intake/import/start", response_model=IcloudIntakeImportStatusResponse)
+def start_icloud_intake_import(
+    body: IcloudIntakeImportStartRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudIntakeImportStatusResponse | JSONResponse:
+    """Create a durable iCloud Intake import run for the latest prepared candidate set."""
+    try:
+        snapshot = start_icloud_intake_import_service(
+            db,
+            source_id=body.source_id,
+            target_logical_assets=body.target_logical_assets,
+            internal_batch_size=body.internal_batch_size,
+        )
+    except (IcloudHistoricalRoutineError, IcloudBackfillValidationError) as exc:
+        code = getattr(exc, "code", "intake_import_start_failed")
+        status_code = status.HTTP_404_NOT_FOUND if code == "source_not_found" else status.HTTP_400_BAD_REQUEST
+        return JSONResponse(status_code=status_code, content={"detail": str(exc), "error_code": code})
+    return _intake_import_status_response(snapshot)
+
+
+@router.post("/icloud-routine/intake/import/resume", response_model=IcloudIntakeImportStatusResponse)
+def resume_icloud_intake_import(
+    body: IcloudIntakeImportResumeRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudIntakeImportStatusResponse | JSONResponse:
+    """Explicitly re-arm an interrupted iCloud Intake import run before advancing."""
+    try:
+        snapshot = resume_icloud_intake_import_service(
+            db,
+            source_id=body.source_id,
+            import_run_id=body.import_run_id,
+        )
+    except (IcloudHistoricalRoutineError, IcloudBackfillValidationError) as exc:
+        code = getattr(exc, "code", "intake_import_resume_failed")
+        status_code = status.HTTP_404_NOT_FOUND if code == "source_not_found" else status.HTTP_400_BAD_REQUEST
+        return JSONResponse(status_code=status_code, content={"detail": str(exc), "error_code": code})
+    return _intake_import_status_response(snapshot)
+
+
+@router.post("/icloud-routine/intake/import/advance", response_model=IcloudIntakeImportStatusResponse)
+def advance_icloud_intake_import(
+    body: IcloudIntakeImportAdvanceRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudIntakeImportStatusResponse | JSONResponse:
+    """Advance exactly one durable iCloud Intake import chunk."""
+    guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db, source_id=body.source_id)
+    if guardrail_snapshot.blocked:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=_guardrail_conflict_content(
+                guardrail_snapshot,
+                detail="Another ingestion-related operation is active.",
+                error_code="INGESTION_OPERATION_ACTIVE",
+            ),
+        )
+    with protected_ingestion_operation_start(db):
+        try:
+            snapshot = advance_icloud_intake_import_service(
+                db,
+                source_id=body.source_id,
+                import_run_id=body.import_run_id,
+            )
+        except (IcloudHistoricalRoutineError, IcloudBackfillValidationError) as exc:
+            code = getattr(exc, "code", "intake_import_advance_failed")
+            status_code = status.HTTP_404_NOT_FOUND if code == "source_not_found" else status.HTTP_400_BAD_REQUEST
+            return JSONResponse(status_code=status_code, content={"detail": str(exc), "error_code": code})
+    return _intake_import_status_response(snapshot)
 
 
 @router.post("/icloud-routine/historical/run-next-batch", response_model=IcloudHistoricalRoutineRunResponse)

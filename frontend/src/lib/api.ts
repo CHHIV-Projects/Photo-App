@@ -56,6 +56,10 @@ import type {
   IcloudHistoricalRoutineRunRequest,
   IcloudHistoricalRoutineRunResponse,
   IcloudHistoricalRoutineStatusResponse,
+  IcloudIntakeImportAdvanceRequest,
+  IcloudIntakeImportResumeRequest,
+  IcloudIntakeImportStartRequest,
+  IcloudIntakeImportStatusResponse,
   SourceProfileDeferredAssetsResponse,
   InternalIcloudRunRequest,
   InternalIcloudRunResponse,
@@ -1306,6 +1310,37 @@ export function runIcloudHistoricalNextBatch(
   req: IcloudHistoricalRoutineRunRequest,
 ): Promise<IcloudHistoricalRoutineRunResponse> {
   return apiRequest<IcloudHistoricalRoutineRunResponse>("/api/admin/icloud-routine/historical/run-next-batch", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function getIcloudIntakeImportStatus(sourceId: number): Promise<IcloudIntakeImportStatusResponse> {
+  return apiRequest<IcloudIntakeImportStatusResponse>(`/api/admin/icloud-routine/intake/import/status?source_id=${sourceId}`);
+}
+
+export function startIcloudIntakeImport(
+  req: IcloudIntakeImportStartRequest,
+): Promise<IcloudIntakeImportStatusResponse> {
+  return apiRequest<IcloudIntakeImportStatusResponse>("/api/admin/icloud-routine/intake/import/start", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function resumeIcloudIntakeImport(
+  req: IcloudIntakeImportResumeRequest,
+): Promise<IcloudIntakeImportStatusResponse> {
+  return apiRequest<IcloudIntakeImportStatusResponse>("/api/admin/icloud-routine/intake/import/resume", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function advanceIcloudIntakeImport(
+  req: IcloudIntakeImportAdvanceRequest,
+): Promise<IcloudIntakeImportStatusResponse> {
+  return apiRequest<IcloudIntakeImportStatusResponse>("/api/admin/icloud-routine/intake/import/advance", {
     method: "POST",
     body: JSON.stringify(req),
   });

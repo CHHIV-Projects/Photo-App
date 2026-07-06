@@ -1883,6 +1883,121 @@ export interface IcloudHistoricalRoutineRunResponse {
   chunks: IcloudHistoricalRoutineChunk[];
 }
 
+export interface IcloudIntakeImportStartRequest {
+  source_id: number;
+  target_logical_assets?: number;
+  internal_batch_size?: number;
+}
+
+export interface IcloudIntakeImportAdvanceRequest {
+  source_id: number;
+  import_run_id?: number | null;
+}
+
+export interface IcloudIntakeImportResumeRequest {
+  source_id: number;
+  import_run_id?: number | null;
+}
+
+export interface IcloudIntakeImportChunkStatus {
+  id: number;
+  chunk_index: number;
+  status: string;
+  candidate_start_index: number;
+  candidate_end_index: number;
+  logical_candidates: number;
+  logical_imported: number;
+  files_resources_imported: number;
+  local_staging_files_cleaned: number;
+  new_deferred_this_chunk: number;
+  execution_failed_retryable_count: number;
+  execution_failed_terminal_count: number;
+  source_intake_failed_count: number;
+  cleanup_failed_count: number;
+  acquisition_run_id: number | null;
+  acquisition_batch_id: number | null;
+  source_intake_run_id: number | null;
+  cleanup_dry_run_id: number | null;
+  cleanup_execution_run_id: number | null;
+  cleanup_report_path: string | null;
+  cleanup_eligible_count: number;
+  cleanup_skipped_count: number;
+  cleanup_protected_count: number;
+  cleanup_verification_failed_count: number;
+  cleanup_file_missing_count: number;
+  cleanup_delete_failed_count: number;
+  chunk_total_seconds: number | null;
+  candidate_load_seconds: number | null;
+  fresh_resolution_seconds: number | null;
+  download_stage_seconds: number | null;
+  source_intake_seconds: number | null;
+  cleanup_dry_run_seconds: number | null;
+  cleanup_execute_seconds: number | null;
+  db_state_update_seconds: number | null;
+  inter_chunk_gap_seconds: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  failed_at: string | null;
+  operator_message: string | null;
+  stop_reason: string | null;
+  timing_note: string | null;
+}
+
+export interface IcloudIntakeImportStatus {
+  source_id: number;
+  source_label: string | null;
+  total_imported_from_source: number;
+  last_inventory_refresh_at: string | null;
+  available_inventory: "yes" | "no" | "unknown";
+  logical_candidates_ready: number;
+  latest_prepare_run_id: number | null;
+  prepare_status: string | null;
+  prepare_expires_at: string | null;
+  import_run_id: number | null;
+  import_status: string | null;
+  import_operator_message: string;
+  import_stop_reason: string | null;
+  target_logical_candidates: number;
+  logical_candidates_total: number;
+  logical_imported: number;
+  files_resources_imported: number;
+  local_staging_files_cleaned: number;
+  new_deferred_this_run: number;
+  execution_failed_retryable_count: number;
+  execution_failed_terminal_count: number;
+  source_intake_failed_count: number;
+  cleanup_failed_count: number;
+  current_chunk_index: number;
+  total_chunks: number;
+  internal_batch_size: number;
+  pending_chunk_count: number;
+  completed_chunk_count: number;
+  remaining_logical_candidates: number;
+  resume_available: boolean;
+  can_start_import: boolean;
+  can_resume_import: boolean;
+  can_advance_import: boolean;
+  current_phase: string | null;
+  last_chunk_duration_seconds: number | null;
+  last_inter_chunk_gap_seconds: number | null;
+  started_at: string | null;
+  last_progress_at: string | null;
+  completed_at: string | null;
+  failed_at: string | null;
+  interrupted_at: string | null;
+  resumed_at: string | null;
+  report_path: string | null;
+  local_staging_file_count: number;
+  partial_file_count: number;
+  backfill_execute_file_count: number;
+  chunks: IcloudIntakeImportChunkStatus[];
+}
+
+export interface IcloudIntakeImportStatusResponse {
+  generated_at: string;
+  current: IcloudIntakeImportStatus;
+}
+
 export type InternalIcloudMediaScope =
   | "ordinary_stills"
   | "stills_with_live_photo_pairs"

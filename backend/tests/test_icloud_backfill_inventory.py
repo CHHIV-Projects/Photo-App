@@ -316,6 +316,31 @@ class IcloudBackfillInventoryServiceTests(IcloudBackfillInventoryFixture):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].primary_relative_path, "2026/06/25/IMG_0001.HEIC")
 
+    def test_scan_dedupes_duplicate_identity_within_single_listing(self) -> None:
+        helper = _FakeHelper(
+            _listing(
+                (
+                    _item("remote-duplicate", "2026/06/24/IMG_0001.HEIC"),
+                    _item("remote-duplicate", "2026/06/24/IMG_0001_DUPLICATE.HEIC"),
+                )
+            )
+        )
+
+        result = run_icloud_backfill_inventory_scan(
+            self.db,
+            source_id=self.source.id,
+            max_candidates=10,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+
+        rows = list(self.db.scalars(select(IcloudRemoteAssetInventory)))
+        self.assertEqual(result.created_count, 1)
+        self.assertEqual(result.updated_count, 0)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].remote_identity, "remote-duplicate")
+        self.assertEqual(rows[0].primary_relative_path, "2026/06/24/IMG_0001.HEIC")
+        self.assertEqual(rows[0].observed_remote_position, 1)
+
     def test_max_candidates_validation(self) -> None:
         self.assertEqual(DEFAULT_INVENTORY_SCAN_LIMIT, 50000)
         self.assertEqual(MAX_INVENTORY_SCAN_LIMIT, 100000)

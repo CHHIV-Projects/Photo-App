@@ -8,14 +8,16 @@ import json
 from pathlib import Path
 import time
 
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import Session
 
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.icloud_backfill import IcloudRemoteAssetInventory
+from app.models.icloud_intake_import import IcloudIntakeImportChunk, IcloudIntakeImportRun
 from app.models.icloud_intake_prepare import IcloudIntakePreparedCandidate, IcloudIntakePrepareRun
 from app.models.icloud_staging_cleanup_run import IcloudStagingCleanupRun
 from app.models.ingestion_source import IngestionSource
+from app.models.source_intake_run import SourceIntakeRun
 from app.services.admin.icloud_staging_cleanup_execution_service import (
     EXECUTION_CONFIRMATION_PHRASE,
     CleanupAuthorizationError,
@@ -43,6 +45,7 @@ from app.services.icloud_backfill_inventory_service import (
     run_icloud_backfill_inventory_scan,
 )
 from app.services.icloud_backfill_schema import ensure_icloud_backfill_schema
+from app.services.icloud_intake_import_schema import ensure_icloud_intake_import_schema
 from app.services.icloud_intake_prepare_schema import ensure_icloud_intake_prepare_schema
 from app.services.icloud_path_service import resolve_icloud_staging_path
 
@@ -55,6 +58,8 @@ DEFAULT_MAX_LISTING_CANDIDATES = DEFAULT_PREPARE_SCAN_CEILING
 DEFAULT_PREPARE_EXPIRY_MINUTES = 60
 DEFAULT_CLEANUP_WAIT_SECONDS = 120.0
 DEFAULT_CLEANUP_POLL_SECONDS = 0.2
+DEFAULT_IMPORT_STALE_SECONDS = 30.0
+INTAKE_IMPORT_REPORT_DIR = Path("storage") / "logs" / "icloud_intake_import_reports"
 
 AVAILABLE_YES = "yes"
 AVAILABLE_NO = "no"
@@ -79,6 +84,42 @@ RUN_COMPLETED_EXHAUSTED = "completed_exhausted"
 RUN_COMPLETED_PARTIAL_SCAN_BOUND = "completed_partial_scan_bound"
 RUN_STOPPED_NEEDS_REVIEW = "stopped_needs_review"
 RUN_FAILED = "failed"
+
+IMPORT_STATUS_CREATED = "created"
+IMPORT_STATUS_RUNNING = "running"
+IMPORT_STATUS_RESUME_AVAILABLE = "resume_available"
+IMPORT_STATUS_PAUSED_INTERRUPTED = "paused_interrupted"
+IMPORT_STATUS_COMPLETED = "completed"
+IMPORT_STATUS_COMPLETED_PARTIAL = "completed_partial"
+IMPORT_STATUS_STOPPED_NEEDS_REVIEW = "stopped_needs_review"
+IMPORT_STATUS_FAILED = "failed"
+IMPORT_STATUS_CANCELLED = "cancelled"
+
+IMPORT_INCOMPLETE_STATUSES = {
+    IMPORT_STATUS_CREATED,
+    IMPORT_STATUS_RUNNING,
+    IMPORT_STATUS_RESUME_AVAILABLE,
+    IMPORT_STATUS_PAUSED_INTERRUPTED,
+    IMPORT_STATUS_STOPPED_NEEDS_REVIEW,
+}
+IMPORT_TERMINAL_STATUSES = {
+    IMPORT_STATUS_COMPLETED,
+    IMPORT_STATUS_COMPLETED_PARTIAL,
+    IMPORT_STATUS_FAILED,
+    IMPORT_STATUS_CANCELLED,
+}
+
+CHUNK_STATUS_PENDING = "pending"
+CHUNK_STATUS_RUNNING = "running"
+CHUNK_STATUS_COMPLETED = "completed"
+CHUNK_STATUS_STOPPED_NEEDS_REVIEW = "stopped_needs_review"
+CHUNK_STATUS_FAILED = "failed"
+CHUNK_STATUS_RETRYABLE_FAILED = "retryable_failed"
+CHUNK_STATUS_SKIPPED = "skipped"
+
+_ACQUISITION_RUNNING_STATUSES = {"running", "stop_requested"}
+_SOURCE_INTAKE_RUNNING_STATUSES = {"running", "stop_requested"}
+_CLEANUP_RUNNING_STATUSES = {"pending", "running", "stop_requested"}
 
 _SELECTABLE_KNOWN_STATES = {KNOWN_STATE_PENDING_CHECK, "unknown"}
 
@@ -192,6 +233,102 @@ class IcloudHistoricalRunResult:
     chunks: tuple[IcloudHistoricalRoutineChunk, ...] = field(default_factory=tuple)
 
 
+@dataclass(frozen=True)
+class IcloudIntakeImportChunkStatus:
+    id: int
+    chunk_index: int
+    status: str
+    candidate_start_index: int
+    candidate_end_index: int
+    logical_candidates: int
+    logical_imported: int
+    files_resources_imported: int
+    local_staging_files_cleaned: int
+    new_deferred_this_chunk: int
+    execution_failed_retryable_count: int
+    execution_failed_terminal_count: int
+    source_intake_failed_count: int
+    cleanup_failed_count: int
+    acquisition_run_id: int | None
+    acquisition_batch_id: int | None
+    source_intake_run_id: int | None
+    cleanup_dry_run_id: int | None
+    cleanup_execution_run_id: int | None
+    cleanup_report_path: str | None
+    cleanup_eligible_count: int
+    cleanup_skipped_count: int
+    cleanup_protected_count: int
+    cleanup_verification_failed_count: int
+    cleanup_file_missing_count: int
+    cleanup_delete_failed_count: int
+    chunk_total_seconds: float | None
+    candidate_load_seconds: float | None
+    fresh_resolution_seconds: float | None
+    download_stage_seconds: float | None
+    source_intake_seconds: float | None
+    cleanup_dry_run_seconds: float | None
+    cleanup_execute_seconds: float | None
+    db_state_update_seconds: float | None
+    inter_chunk_gap_seconds: float | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    failed_at: datetime | None
+    operator_message: str | None
+    stop_reason: str | None
+    timing_note: str | None
+
+
+@dataclass(frozen=True)
+class IcloudIntakeImportStatus:
+    source_id: int
+    source_label: str | None
+    total_imported_from_source: int
+    last_inventory_refresh_at: datetime | None
+    available_inventory: str
+    logical_candidates_ready: int
+    latest_prepare_run_id: int | None
+    prepare_status: str | None
+    prepare_expires_at: datetime | None
+    import_run_id: int | None
+    import_status: str | None
+    import_operator_message: str
+    import_stop_reason: str | None
+    target_logical_candidates: int
+    logical_candidates_total: int
+    logical_imported: int
+    files_resources_imported: int
+    local_staging_files_cleaned: int
+    new_deferred_this_run: int
+    execution_failed_retryable_count: int
+    execution_failed_terminal_count: int
+    source_intake_failed_count: int
+    cleanup_failed_count: int
+    current_chunk_index: int
+    total_chunks: int
+    internal_batch_size: int
+    pending_chunk_count: int
+    completed_chunk_count: int
+    remaining_logical_candidates: int
+    resume_available: bool
+    can_start_import: bool
+    can_resume_import: bool
+    can_advance_import: bool
+    current_phase: str | None
+    last_chunk_duration_seconds: float | None
+    last_inter_chunk_gap_seconds: float | None
+    started_at: datetime | None
+    last_progress_at: datetime | None
+    completed_at: datetime | None
+    failed_at: datetime | None
+    interrupted_at: datetime | None
+    resumed_at: datetime | None
+    report_path: str | None
+    local_staging_file_count: int
+    partial_file_count: int
+    backfill_execute_file_count: int
+    chunks: tuple[IcloudIntakeImportChunkStatus, ...] = field(default_factory=tuple)
+
+
 def _now_utc() -> datetime:
     return datetime.now(UTC)
 
@@ -218,6 +355,7 @@ def _validate_source(db_session: Session, *, source_id: int) -> IngestionSource:
 def _ensure_schema(db_session: Session) -> None:
     ensure_icloud_backfill_schema(db_session)
     ensure_icloud_intake_prepare_schema(db_session)
+    ensure_icloud_intake_import_schema(db_session)
 
 
 def _file_count(root: Path) -> int:
@@ -259,6 +397,320 @@ def _latest_prepare_run(db_session: Session, *, source_id: int) -> IcloudIntakeP
         .order_by(IcloudIntakePrepareRun.id.desc())
         .limit(1)
     )
+
+
+def _table_exists(db_session: Session, table_name: str) -> bool:
+    bind = db_session.get_bind()
+    return table_name in set(inspect(bind).get_table_names())
+
+
+def _active_child_operation_exists(db_session: Session) -> bool:
+    if _table_exists(db_session, "icloud_acquisition_runs"):
+        active_acquisition = db_session.scalar(
+            select(IcloudAcquisitionRun.id)
+            .where(IcloudAcquisitionRun.status.in_(tuple(_ACQUISITION_RUNNING_STATUSES)))
+            .limit(1)
+        )
+        if active_acquisition is not None:
+            return True
+    if _table_exists(db_session, "source_intake_runs"):
+        active_intake = db_session.scalar(
+            select(SourceIntakeRun.id)
+            .where(SourceIntakeRun.status.in_(tuple(_SOURCE_INTAKE_RUNNING_STATUSES)))
+            .limit(1)
+        )
+        if active_intake is not None:
+            return True
+    if _table_exists(db_session, "icloud_staging_cleanup_runs"):
+        active_cleanup = db_session.scalar(
+            select(IcloudStagingCleanupRun.id)
+            .where(IcloudStagingCleanupRun.status.in_(tuple(_CLEANUP_RUNNING_STATUSES)))
+            .limit(1)
+        )
+        if active_cleanup is not None:
+            return True
+    return False
+
+
+def _latest_import_run(db_session: Session, *, source_id: int) -> IcloudIntakeImportRun | None:
+    if not _table_exists(db_session, "icloud_intake_import_runs"):
+        return None
+    return db_session.scalar(
+        select(IcloudIntakeImportRun)
+        .where(IcloudIntakeImportRun.source_profile_id == source_id)
+        .order_by(IcloudIntakeImportRun.id.desc())
+        .limit(1)
+    )
+
+
+def _latest_incomplete_import_run(db_session: Session, *, source_id: int) -> IcloudIntakeImportRun | None:
+    if not _table_exists(db_session, "icloud_intake_import_runs"):
+        return None
+    return db_session.scalar(
+        select(IcloudIntakeImportRun)
+        .where(
+            IcloudIntakeImportRun.source_profile_id == source_id,
+            IcloudIntakeImportRun.status.in_(tuple(IMPORT_INCOMPLETE_STATUSES)),
+        )
+        .order_by(IcloudIntakeImportRun.id.desc())
+        .limit(1)
+    )
+
+
+def _import_chunks(db_session: Session, *, import_run_id: int) -> tuple[IcloudIntakeImportChunk, ...]:
+    rows = db_session.scalars(
+        select(IcloudIntakeImportChunk)
+        .where(IcloudIntakeImportChunk.import_run_id == import_run_id)
+        .order_by(IcloudIntakeImportChunk.chunk_index.asc())
+    ).all()
+    return tuple(rows)
+
+
+def _chunk_to_status(chunk: IcloudIntakeImportChunk) -> IcloudIntakeImportChunkStatus:
+    return IcloudIntakeImportChunkStatus(
+        id=chunk.id,
+        chunk_index=chunk.chunk_index,
+        status=chunk.status,
+        candidate_start_index=chunk.candidate_start_index,
+        candidate_end_index=chunk.candidate_end_index,
+        logical_candidates=chunk.logical_candidates,
+        logical_imported=chunk.logical_imported,
+        files_resources_imported=chunk.files_resources_imported,
+        local_staging_files_cleaned=chunk.local_staging_files_cleaned,
+        new_deferred_this_chunk=chunk.new_deferred_this_chunk,
+        execution_failed_retryable_count=chunk.execution_failed_retryable_count,
+        execution_failed_terminal_count=chunk.execution_failed_terminal_count,
+        source_intake_failed_count=chunk.source_intake_failed_count,
+        cleanup_failed_count=chunk.cleanup_failed_count,
+        acquisition_run_id=chunk.acquisition_run_id,
+        acquisition_batch_id=chunk.acquisition_batch_id,
+        source_intake_run_id=chunk.source_intake_run_id,
+        cleanup_dry_run_id=chunk.cleanup_dry_run_id,
+        cleanup_execution_run_id=chunk.cleanup_execution_run_id,
+        cleanup_report_path=chunk.cleanup_report_path,
+        cleanup_eligible_count=chunk.cleanup_eligible_count,
+        cleanup_skipped_count=chunk.cleanup_skipped_count,
+        cleanup_protected_count=chunk.cleanup_protected_count,
+        cleanup_verification_failed_count=chunk.cleanup_verification_failed_count,
+        cleanup_file_missing_count=chunk.cleanup_file_missing_count,
+        cleanup_delete_failed_count=chunk.cleanup_delete_failed_count,
+        chunk_total_seconds=chunk.chunk_total_seconds,
+        candidate_load_seconds=chunk.candidate_load_seconds,
+        fresh_resolution_seconds=chunk.fresh_resolution_seconds,
+        download_stage_seconds=chunk.download_stage_seconds,
+        source_intake_seconds=chunk.source_intake_seconds,
+        cleanup_dry_run_seconds=chunk.cleanup_dry_run_seconds,
+        cleanup_execute_seconds=chunk.cleanup_execute_seconds,
+        db_state_update_seconds=chunk.db_state_update_seconds,
+        inter_chunk_gap_seconds=chunk.inter_chunk_gap_seconds,
+        started_at=chunk.started_at,
+        completed_at=chunk.completed_at,
+        failed_at=chunk.failed_at,
+        operator_message=chunk.operator_message,
+        stop_reason=chunk.stop_reason,
+        timing_note=chunk.timing_note,
+    )
+
+
+def _refresh_import_run_aggregates(db_session: Session, import_run: IcloudIntakeImportRun) -> None:
+    chunks = _import_chunks(db_session, import_run_id=import_run.id)
+    import_run.logical_imported = sum(int(chunk.logical_imported or 0) for chunk in chunks)
+    import_run.files_resources_imported = sum(int(chunk.files_resources_imported or 0) for chunk in chunks)
+    import_run.local_staging_files_cleaned = sum(int(chunk.local_staging_files_cleaned or 0) for chunk in chunks)
+    import_run.new_deferred_this_run = sum(int(chunk.new_deferred_this_chunk or 0) for chunk in chunks)
+    import_run.execution_failed_retryable_count = sum(int(chunk.execution_failed_retryable_count or 0) for chunk in chunks)
+    import_run.execution_failed_terminal_count = sum(int(chunk.execution_failed_terminal_count or 0) for chunk in chunks)
+    import_run.source_intake_failed_count = sum(int(chunk.source_intake_failed_count or 0) for chunk in chunks)
+    import_run.cleanup_failed_count = sum(int(chunk.cleanup_failed_count or 0) for chunk in chunks)
+    progressed = [
+        chunk.chunk_index
+        for chunk in chunks
+        if chunk.status != CHUNK_STATUS_PENDING
+    ]
+    import_run.current_chunk_index = max(progressed, default=0)
+    import_run.updated_at = _now_utc()
+
+
+def _pending_import_chunks(db_session: Session, *, import_run_id: int) -> tuple[IcloudIntakeImportChunk, ...]:
+    rows = db_session.scalars(
+        select(IcloudIntakeImportChunk)
+        .where(
+            IcloudIntakeImportChunk.import_run_id == import_run_id,
+            IcloudIntakeImportChunk.status.in_(
+                (
+                    CHUNK_STATUS_PENDING,
+                    CHUNK_STATUS_RETRYABLE_FAILED,
+                )
+            ),
+        )
+        .order_by(IcloudIntakeImportChunk.chunk_index.asc())
+    ).all()
+    return tuple(rows)
+
+
+def _previous_completed_chunk(
+    db_session: Session,
+    *,
+    import_run_id: int,
+    chunk_index: int,
+) -> IcloudIntakeImportChunk | None:
+    return db_session.scalar(
+        select(IcloudIntakeImportChunk)
+        .where(
+            IcloudIntakeImportChunk.import_run_id == import_run_id,
+            IcloudIntakeImportChunk.chunk_index < chunk_index,
+            IcloudIntakeImportChunk.completed_at.is_not(None),
+        )
+        .order_by(IcloudIntakeImportChunk.chunk_index.desc())
+        .limit(1)
+    )
+
+
+def _write_import_report(db_session: Session, import_run: IcloudIntakeImportRun) -> None:
+    INTAKE_IMPORT_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = INTAKE_IMPORT_REPORT_DIR / f"icloud_intake_import_run_{import_run.id}.json"
+    chunks = _import_chunks(db_session, import_run_id=import_run.id)
+    report = {
+        "source_profile_id": import_run.source_profile_id,
+        "prepare_run_id": import_run.prepare_run_id,
+        "import_run_id": import_run.id,
+        "status": import_run.status,
+        "logical_candidates_total": import_run.logical_candidates_total,
+        "logical_imported": import_run.logical_imported,
+        "files_resources_imported": import_run.files_resources_imported,
+        "local_staging_files_cleaned": import_run.local_staging_files_cleaned,
+        "new_deferred_this_run": import_run.new_deferred_this_run,
+        "retryable_execution_failures": import_run.execution_failed_retryable_count,
+        "terminal_execution_failures": import_run.execution_failed_terminal_count,
+        "source_intake_failures": import_run.source_intake_failed_count,
+        "cleanup_failures": import_run.cleanup_failed_count,
+        "operator_message": import_run.operator_message,
+        "stop_reason": import_run.stop_reason,
+        "remaining_logical_candidates": max(
+            0,
+            int(import_run.logical_candidates_total or 0) - int(import_run.logical_imported or 0),
+        ),
+        "manual_db_repair_required": False,
+        "chunks": [
+            {
+                "chunk_id": chunk.id,
+                "chunk_index": chunk.chunk_index,
+                "status": chunk.status,
+                "candidate_start_index": chunk.candidate_start_index,
+                "candidate_end_index": chunk.candidate_end_index,
+                "logical_candidates": chunk.logical_candidates,
+                "logical_imported": chunk.logical_imported,
+                "files_resources_imported": chunk.files_resources_imported,
+                "local_staging_files_cleaned": chunk.local_staging_files_cleaned,
+                "new_deferred_this_chunk": chunk.new_deferred_this_chunk,
+                "retryable_execution_failures": chunk.execution_failed_retryable_count,
+                "terminal_execution_failures": chunk.execution_failed_terminal_count,
+                "source_intake_failures": chunk.source_intake_failed_count,
+                "cleanup_failures": chunk.cleanup_failed_count,
+                "acquisition_run_id": chunk.acquisition_run_id,
+                "acquisition_batch_id": chunk.acquisition_batch_id,
+                "source_intake_run_id": chunk.source_intake_run_id,
+                "cleanup_dry_run_id": chunk.cleanup_dry_run_id,
+                "cleanup_execution_run_id": chunk.cleanup_execution_run_id,
+                "cleanup_safety_counters": {
+                    "eligible_count": chunk.cleanup_eligible_count,
+                    "skipped_count": chunk.cleanup_skipped_count,
+                    "protected_count": chunk.cleanup_protected_count,
+                    "verification_failed_count": chunk.cleanup_verification_failed_count,
+                    "file_missing_count": chunk.cleanup_file_missing_count,
+                    "delete_failed_count": chunk.cleanup_delete_failed_count,
+                },
+                "timings": {
+                    "chunk_total_seconds": chunk.chunk_total_seconds,
+                    "candidate_load_seconds": chunk.candidate_load_seconds,
+                    "fresh_resolution_seconds": chunk.fresh_resolution_seconds,
+                    "download_stage_seconds": chunk.download_stage_seconds,
+                    "source_intake_seconds": chunk.source_intake_seconds,
+                    "cleanup_dry_run_seconds": chunk.cleanup_dry_run_seconds,
+                    "cleanup_execute_seconds": chunk.cleanup_execute_seconds,
+                    "db_state_update_seconds": chunk.db_state_update_seconds,
+                    "inter_chunk_gap_seconds": chunk.inter_chunk_gap_seconds,
+                    "timing_note": chunk.timing_note,
+                },
+                "operator_message": chunk.operator_message,
+                "stop_reason": chunk.stop_reason,
+            }
+            for chunk in chunks
+        ],
+    }
+    try:
+        with open(report_path, "w") as handle:
+            json.dump(report, handle, indent=2, default=str)
+    except OSError:
+        return
+    import_run.report_path = str(report_path)
+
+
+def _recover_stale_legacy_prepare_run(db_session: Session, *, source_id: int, now: datetime) -> None:
+    if _active_child_operation_exists(db_session):
+        return
+    latest_prepare = _latest_prepare_run(db_session, source_id=source_id)
+    if latest_prepare is None or latest_prepare.status != PREPARE_STATUS_RUNNING:
+        return
+    if _latest_incomplete_import_run(db_session, source_id=source_id) is not None:
+        return
+    latest_prepare.status = PREPARE_STATUS_PREPARED
+    latest_prepare.operator_message = "Interrupted import detected. The prepared set is available to resume."
+    latest_prepare.updated_at = now
+    db_session.commit()
+
+
+def _recover_stale_import_runs(db_session: Session, *, source_id: int, now: datetime | None = None) -> None:
+    now = now or _now_utc()
+    run = _latest_incomplete_import_run(db_session, source_id=source_id)
+    if run is None or run.status != IMPORT_STATUS_RUNNING:
+        _recover_stale_legacy_prepare_run(db_session, source_id=source_id, now=now)
+        return
+    if _active_child_operation_exists(db_session):
+        return
+    last_progress = _as_utc(run.last_progress_at or run.started_at or run.created_at)
+    if last_progress is not None and (now - last_progress).total_seconds() < DEFAULT_IMPORT_STALE_SECONDS:
+        return
+
+    running_chunks = [
+        chunk
+        for chunk in _import_chunks(db_session, import_run_id=run.id)
+        if chunk.status == CHUNK_STATUS_RUNNING
+    ]
+    needs_review = False
+    for chunk in running_chunks:
+        if int(chunk.files_resources_imported or 0) > int(chunk.local_staging_files_cleaned or 0):
+            needs_review = True
+            chunk.status = CHUNK_STATUS_STOPPED_NEEDS_REVIEW
+            chunk.stop_reason = "interrupted_after_import_before_cleanup"
+            chunk.operator_message = "Interrupted after files/resources were imported but before verified cleanup completed."
+            chunk.failed_at = now
+            chunk.cleanup_failed_count = max(int(chunk.cleanup_failed_count or 0), 1)
+        else:
+            chunk.status = CHUNK_STATUS_RETRYABLE_FAILED
+            chunk.stop_reason = "interrupted_chunk"
+            chunk.operator_message = "Interrupted while this chunk was active; it can be retried by resuming."
+            chunk.failed_at = now
+
+    prepare_run = db_session.get(IcloudIntakePrepareRun, run.prepare_run_id)
+    if needs_review:
+        run.status = IMPORT_STATUS_STOPPED_NEEDS_REVIEW
+        run.stop_reason = "interrupted_chunk_needs_review"
+        run.operator_message = "Import interrupted during a chunk. Review cleanup/staging state before resuming."
+        run.failed_at = now
+    else:
+        run.status = IMPORT_STATUS_RESUME_AVAILABLE
+        run.stop_reason = "interrupted_between_chunks"
+        run.operator_message = "Import interrupted. Resume is available; no manual DB repair is required."
+        run.interrupted_at = now
+        if prepare_run is not None:
+            prepare_run.status = PREPARE_STATUS_PREPARED
+            prepare_run.operator_message = run.operator_message
+            prepare_run.updated_at = now
+    run.last_progress_at = now
+    _refresh_import_run_aggregates(db_session, run)
+    _write_import_report(db_session, run)
+    db_session.commit()
 
 
 def _expire_stale_prepare_runs(db_session: Session, *, source_id: int, now: datetime | None = None) -> None:
@@ -464,6 +916,136 @@ def get_historical_routine_status(
         )
         return _status_from_snapshot(nowless, source=source, db_session=db_session)
     return _status_from_snapshot(snapshot, source=source, db_session=db_session)
+
+
+def get_icloud_intake_import_status(
+    db_session: Session,
+    *,
+    source_id: int,
+) -> IcloudIntakeImportStatus:
+    _ensure_schema(db_session)
+    now = _now_utc()
+    _validate_source(db_session, source_id=source_id)
+    _recover_stale_import_runs(db_session, source_id=source_id, now=now)
+    base = get_historical_routine_status(db_session, source_id=source_id)
+    import_run = _latest_import_run(db_session, source_id=source_id)
+
+    chunks: tuple[IcloudIntakeImportChunk, ...] = ()
+    chunk_statuses: tuple[IcloudIntakeImportChunkStatus, ...] = ()
+    pending_chunk_count = 0
+    completed_chunk_count = 0
+    resume_available = False
+    can_resume = False
+    can_advance = False
+    current_phase: str | None = None
+    last_duration: float | None = None
+    last_gap: float | None = None
+    import_operator_message = base.operator_message
+    import_stop_reason: str | None = None
+
+    if import_run is not None:
+        chunks = _import_chunks(db_session, import_run_id=import_run.id)
+        chunk_statuses = tuple(_chunk_to_status(chunk) for chunk in chunks)
+        pending_chunk_count = sum(
+            1
+            for chunk in chunks
+            if chunk.status in {CHUNK_STATUS_PENDING, CHUNK_STATUS_RETRYABLE_FAILED}
+        )
+        completed_chunk_count = sum(1 for chunk in chunks if chunk.status == CHUNK_STATUS_COMPLETED)
+        resume_available = import_run.status in {
+            IMPORT_STATUS_RESUME_AVAILABLE,
+            IMPORT_STATUS_PAUSED_INTERRUPTED,
+        }
+        can_resume = resume_available and pending_chunk_count > 0
+        can_advance = import_run.status in {IMPORT_STATUS_CREATED, IMPORT_STATUS_RUNNING} and pending_chunk_count > 0
+        running_chunk = next((chunk for chunk in chunks if chunk.status == CHUNK_STATUS_RUNNING), None)
+        if running_chunk is not None:
+            current_phase = f"chunk_{running_chunk.chunk_index}_running"
+        elif can_advance:
+            current_phase = "waiting_for_next_chunk"
+        elif can_resume:
+            current_phase = "resume_available"
+        elif import_run.status in IMPORT_TERMINAL_STATUSES:
+            current_phase = "complete"
+        else:
+            current_phase = import_run.status
+        last_progressed = next(
+            (
+                chunk
+                for chunk in reversed(chunks)
+                if chunk.status != CHUNK_STATUS_PENDING
+            ),
+            None,
+        )
+        if last_progressed is not None:
+            last_duration = last_progressed.chunk_total_seconds
+            last_gap = last_progressed.inter_chunk_gap_seconds
+        import_operator_message = import_run.operator_message or import_operator_message
+        import_stop_reason = import_run.stop_reason
+
+    has_incomplete = import_run is not None and import_run.status in IMPORT_INCOMPLETE_STATUSES
+    logical_candidates_ready = base.logical_candidates_ready
+    if has_incomplete and import_run is not None:
+        logical_candidates_ready = max(
+            0,
+            int(import_run.logical_candidates_total or 0) - int(import_run.logical_imported or 0),
+        )
+    can_start = (
+        not has_incomplete
+        and base.prepare_status == PREPARE_STATUS_PREPARED
+        and base.logical_candidates_ready > 0
+        and base.local_staging_file_count == 0
+    )
+
+    return IcloudIntakeImportStatus(
+        source_id=base.source_id,
+        source_label=base.source_label,
+        total_imported_from_source=base.total_imported_from_source,
+        last_inventory_refresh_at=base.last_inventory_refresh_at,
+        available_inventory=base.available_inventory,
+        logical_candidates_ready=logical_candidates_ready,
+        latest_prepare_run_id=base.latest_prepare_run_id,
+        prepare_status=base.prepare_status,
+        prepare_expires_at=base.prepare_expires_at,
+        import_run_id=None if import_run is None else import_run.id,
+        import_status=None if import_run is None else import_run.status,
+        import_operator_message=import_operator_message,
+        import_stop_reason=import_stop_reason,
+        target_logical_candidates=base.target_logical_candidates,
+        logical_candidates_total=0 if import_run is None else import_run.logical_candidates_total,
+        logical_imported=0 if import_run is None else import_run.logical_imported,
+        files_resources_imported=0 if import_run is None else import_run.files_resources_imported,
+        local_staging_files_cleaned=0 if import_run is None else import_run.local_staging_files_cleaned,
+        new_deferred_this_run=0 if import_run is None else import_run.new_deferred_this_run,
+        execution_failed_retryable_count=0 if import_run is None else import_run.execution_failed_retryable_count,
+        execution_failed_terminal_count=0 if import_run is None else import_run.execution_failed_terminal_count,
+        source_intake_failed_count=0 if import_run is None else import_run.source_intake_failed_count,
+        cleanup_failed_count=0 if import_run is None else import_run.cleanup_failed_count,
+        current_chunk_index=0 if import_run is None else import_run.current_chunk_index,
+        total_chunks=0 if import_run is None else import_run.total_chunks,
+        internal_batch_size=DEFAULT_INTERNAL_BATCH_SIZE if import_run is None else import_run.internal_batch_size,
+        pending_chunk_count=pending_chunk_count,
+        completed_chunk_count=completed_chunk_count,
+        remaining_logical_candidates=logical_candidates_ready,
+        resume_available=resume_available,
+        can_start_import=can_start,
+        can_resume_import=can_resume,
+        can_advance_import=can_advance,
+        current_phase=current_phase,
+        last_chunk_duration_seconds=last_duration,
+        last_inter_chunk_gap_seconds=last_gap,
+        started_at=None if import_run is None else import_run.started_at,
+        last_progress_at=None if import_run is None else import_run.last_progress_at,
+        completed_at=None if import_run is None else import_run.completed_at,
+        failed_at=None if import_run is None else import_run.failed_at,
+        interrupted_at=None if import_run is None else import_run.interrupted_at,
+        resumed_at=None if import_run is None else import_run.resumed_at,
+        report_path=None if import_run is None else import_run.report_path,
+        local_staging_file_count=base.local_staging_file_count,
+        partial_file_count=base.partial_file_count,
+        backfill_execute_file_count=base.backfill_execute_file_count,
+        chunks=chunk_statuses,
+    )
 
 
 def _scan_depths(max_candidates: int) -> tuple[int, ...]:
@@ -715,6 +1297,124 @@ def _cleanup_chunk(
     return dry, executed, reason
 
 
+@dataclass(frozen=True)
+class _TimedCleanupResult:
+    dry_run: CleanupRunSnapshot
+    execution: CleanupRunSnapshot
+    reason: str
+    dry_run_seconds: float
+    execute_seconds: float
+
+
+class _DurableCleanupError(IcloudHistoricalRoutineError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        dry_run: CleanupRunSnapshot | None = None,
+        execution: CleanupRunSnapshot | None = None,
+        dry_run_seconds: float | None = None,
+        execute_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message, code=code)
+        self.dry_run = dry_run
+        self.execution = execution
+        self.dry_run_seconds = dry_run_seconds
+        self.execute_seconds = execute_seconds
+
+
+def _cleanup_chunk_timed(
+    db_session: Session,
+    *,
+    source_id: int,
+    acquired_paths: tuple[str, ...],
+) -> _TimedCleanupResult:
+    dry_start_clock = time.perf_counter()
+    try:
+        dry_start = start_cleanup_run(db_session, source_id=source_id, dry_run=True, created_by="icloud_intake_import")
+    except (CleanupBusyError, CleanupValidationError, SourceIntakeActiveError) as exc:
+        raise _DurableCleanupError(str(exc), code=getattr(exc, "code", "cleanup_dry_run_start_failed")) from exc
+
+    dry = _wait_for_cleanup(db_session, source_id=source_id, run_id=dry_start.run_id)
+    dry_seconds = time.perf_counter() - dry_start_clock
+    if dry.status != "completed":
+        raise _DurableCleanupError(
+            "Cleanup dry run did not complete.",
+            code="cleanup_dry_run_failed",
+            dry_run=dry,
+            dry_run_seconds=dry_seconds,
+        )
+    if any(
+        count != 0
+        for count in (
+            dry.skipped_count,
+            dry.protected_count,
+            dry.verification_failed_count,
+            dry.file_missing_count,
+            dry.delete_failed_count,
+        )
+    ):
+        raise _DurableCleanupError(
+            "Cleanup dry run had non-zero safety counters.",
+            code="cleanup_safety_counters",
+            dry_run=dry,
+            dry_run_seconds=dry_seconds,
+        )
+    ok, reason = _paths_match(dry, acquired_paths)
+    if not ok:
+        raise _DurableCleanupError(
+            reason,
+            code="cleanup_exact_match_failed",
+            dry_run=dry,
+            dry_run_seconds=dry_seconds,
+        )
+
+    exec_start_clock = time.perf_counter()
+    try:
+        exec_start = start_cleanup_execution(
+            db_session,
+            source_id=source_id,
+            dry_run_run_id=dry.run_id,
+            explicit_confirmation=EXECUTION_CONFIRMATION_PHRASE,
+            created_by="icloud_intake_import",
+        )
+    except (CleanupBusyError, CleanupValidationError, SourceIntakeActiveError, CleanupAuthorizationError) as exc:
+        raise _DurableCleanupError(
+            str(exc),
+            code=getattr(exc, "code", "cleanup_execution_start_failed"),
+            dry_run=dry,
+            dry_run_seconds=dry_seconds,
+        ) from exc
+    executed = _wait_for_cleanup(db_session, source_id=source_id, run_id=exec_start.run_id)
+    exec_seconds = time.perf_counter() - exec_start_clock
+    if executed.status != "completed":
+        raise _DurableCleanupError(
+            "Guarded cleanup execution did not complete.",
+            code="cleanup_execution_failed",
+            dry_run=dry,
+            execution=executed,
+            dry_run_seconds=dry_seconds,
+            execute_seconds=exec_seconds,
+        )
+    if executed.deleted_count != len(set(acquired_paths)):
+        raise _DurableCleanupError(
+            "Cleanup deleted count did not match acquired resources.",
+            code="cleanup_deleted_count_mismatch",
+            dry_run=dry,
+            execution=executed,
+            dry_run_seconds=dry_seconds,
+            execute_seconds=exec_seconds,
+        )
+    return _TimedCleanupResult(
+        dry_run=dry,
+        execution=executed,
+        reason=reason,
+        dry_run_seconds=dry_seconds,
+        execute_seconds=exec_seconds,
+    )
+
+
 def _active_prepare_run(db_session: Session, *, source_id: int) -> IcloudIntakePrepareRun | None:
     now = _now_utc()
     _expire_stale_prepare_runs(db_session, source_id=source_id, now=now)
@@ -889,6 +1589,386 @@ def _failed_run_result(
         operator_message=operator_message,
         stop_reason=stop_reason,
     )
+
+
+def _prepared_candidates_for_chunk(
+    db_session: Session,
+    *,
+    prepare_run_id: int,
+    start_index: int,
+    end_index: int,
+) -> tuple[IcloudIntakePreparedCandidate, ...]:
+    rows = db_session.scalars(
+        select(IcloudIntakePreparedCandidate)
+        .where(
+            IcloudIntakePreparedCandidate.prepare_run_id == prepare_run_id,
+            IcloudIntakePreparedCandidate.candidate_index >= start_index,
+            IcloudIntakePreparedCandidate.candidate_index <= end_index,
+            IcloudIntakePreparedCandidate.candidate_state.in_(
+                (
+                    CANDIDATE_STATE_PREPARED,
+                    CANDIDATE_STATE_EXECUTION_FAILED_RETRYABLE,
+                )
+            ),
+        )
+        .order_by(IcloudIntakePreparedCandidate.candidate_index.asc())
+    ).all()
+    return tuple(rows)
+
+
+def _apply_cleanup_snapshot_to_chunk(chunk: IcloudIntakeImportChunk, cleanup: CleanupRunSnapshot | None) -> None:
+    if cleanup is None:
+        return
+    chunk.cleanup_eligible_count = int(cleanup.eligible_count or 0)
+    chunk.cleanup_skipped_count = int(cleanup.skipped_count or 0)
+    chunk.cleanup_protected_count = int(cleanup.protected_count or 0)
+    chunk.cleanup_verification_failed_count = int(cleanup.verification_failed_count or 0)
+    chunk.cleanup_file_missing_count = int(cleanup.file_missing_count or 0)
+    chunk.cleanup_delete_failed_count = int(cleanup.delete_failed_count or 0)
+    chunk.cleanup_report_path = cleanup.report_path
+
+
+def _finalize_import_run_if_done(db_session: Session, import_run: IcloudIntakeImportRun) -> None:
+    pending = _pending_import_chunks(db_session, import_run_id=import_run.id)
+    if pending:
+        return
+    now = _now_utc()
+    if import_run.logical_imported >= import_run.logical_candidates_total:
+        import_run.status = IMPORT_STATUS_COMPLETED
+        import_run.operator_message = "iCloud Intake import completed."
+    else:
+        import_run.status = IMPORT_STATUS_COMPLETED_PARTIAL
+        import_run.operator_message = "iCloud Intake import completed partially; see retryable/deferred counts."
+    import_run.completed_at = now
+    import_run.last_progress_at = now
+    prepare_run = db_session.get(IcloudIntakePrepareRun, import_run.prepare_run_id)
+    if prepare_run is not None:
+        prepare_run.status = PREPARE_STATUS_CONSUMED
+        prepare_run.consumed_at = now
+        prepare_run.updated_at = now
+
+
+def _terminal_status_for_chunk_stop(import_run: IcloudIntakeImportRun, *, retryable: bool = False) -> str:
+    if retryable:
+        return IMPORT_STATUS_RESUME_AVAILABLE
+    return IMPORT_STATUS_STOPPED_NEEDS_REVIEW
+
+
+def start_icloud_intake_import(
+    db_session: Session,
+    *,
+    source_id: int,
+    target_logical_assets: int = DEFAULT_TARGET_LOGICAL_ASSETS,
+    internal_batch_size: int = DEFAULT_INTERNAL_BATCH_SIZE,
+) -> IcloudIntakeImportStatus:
+    _ensure_schema(db_session)
+    _validate_source(db_session, source_id=source_id)
+    if target_logical_assets < 1 or target_logical_assets > DEFAULT_TARGET_LOGICAL_ASSETS:
+        raise IcloudHistoricalRoutineError("target_logical_assets must be between 1 and 1000.", code="invalid_target_logical_assets")
+    if internal_batch_size < 1 or internal_batch_size > DEFAULT_INTERNAL_BATCH_SIZE:
+        raise IcloudHistoricalRoutineError("internal_batch_size must be between 1 and 100.", code="invalid_internal_batch_size")
+
+    existing = _latest_incomplete_import_run(db_session, source_id=source_id)
+    if existing is not None:
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    prepare_run = _active_prepare_run(db_session, source_id=source_id)
+    if prepare_run is None:
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    candidates = _prepared_candidates(db_session, prepare_run_id=prepare_run.id)
+    if not candidates:
+        prepare_run.operator_message = "No prepared candidates are available to import. Refresh / Prepare Next 1000 again before importing."
+        prepare_run.updated_at = _now_utc()
+        db_session.commit()
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    valid, invalid_reason = _validate_prepared_candidates(
+        db_session,
+        source_id=source_id,
+        candidates=candidates,
+    )
+    if not valid:
+        prepare_run.status = PREPARE_STATUS_STALE
+        prepare_run.operator_message = f"{invalid_reason} Refresh / Prepare Next 1000 again before importing."
+        prepare_run.updated_at = _now_utc()
+        db_session.commit()
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    now = _now_utc()
+    selected = candidates[:target_logical_assets]
+    total_chunks = (len(selected) + internal_batch_size - 1) // internal_batch_size
+    import_run = IcloudIntakeImportRun(
+        source_profile_id=source_id,
+        prepare_run_id=prepare_run.id,
+        status=IMPORT_STATUS_CREATED,
+        target_logical_candidates=target_logical_assets,
+        logical_candidates_total=len(selected),
+        current_chunk_index=0,
+        total_chunks=total_chunks,
+        internal_batch_size=internal_batch_size,
+        started_at=now,
+        last_progress_at=now,
+        operator_message=f"Import run created for {len(selected)} prepared logical candidates.",
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(import_run)
+    db_session.flush()
+    for offset in range(0, len(selected), internal_batch_size):
+        chunk_candidates = selected[offset : offset + internal_batch_size]
+        db_session.add(
+            IcloudIntakeImportChunk(
+                import_run_id=import_run.id,
+                source_profile_id=source_id,
+                prepare_run_id=prepare_run.id,
+                chunk_index=(offset // internal_batch_size) + 1,
+                status=CHUNK_STATUS_PENDING,
+                candidate_start_index=chunk_candidates[0].candidate_index,
+                candidate_end_index=chunk_candidates[-1].candidate_index,
+                logical_candidates=len(chunk_candidates),
+                operator_message="Pending.",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    prepare_run.status = PREPARE_STATUS_RUNNING
+    prepare_run.updated_at = now
+    prepare_run.operator_message = "Import run started for the prepared candidate set."
+    _write_import_report(db_session, import_run)
+    db_session.commit()
+    return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+
+def resume_icloud_intake_import(
+    db_session: Session,
+    *,
+    source_id: int,
+    import_run_id: int | None = None,
+) -> IcloudIntakeImportStatus:
+    _ensure_schema(db_session)
+    _validate_source(db_session, source_id=source_id)
+    run = db_session.get(IcloudIntakeImportRun, import_run_id) if import_run_id is not None else _latest_incomplete_import_run(db_session, source_id=source_id)
+    if run is None or run.source_profile_id != source_id:
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+    if run.status not in {IMPORT_STATUS_RESUME_AVAILABLE, IMPORT_STATUS_PAUSED_INTERRUPTED, IMPORT_STATUS_CREATED}:
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+    now = _now_utc()
+    run.status = IMPORT_STATUS_RUNNING
+    run.resumed_at = now
+    run.last_progress_at = now
+    run.operator_message = "Resume confirmed. Ready to advance the next pending chunk."
+    run.stop_reason = None
+    prepare_run = db_session.get(IcloudIntakePrepareRun, run.prepare_run_id)
+    if prepare_run is not None:
+        prepare_run.status = PREPARE_STATUS_RUNNING
+        prepare_run.updated_at = now
+    _write_import_report(db_session, run)
+    db_session.commit()
+    return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+
+def advance_icloud_intake_import(
+    db_session: Session,
+    *,
+    source_id: int,
+    import_run_id: int | None = None,
+    max_listing_candidates: int = DEFAULT_MAX_LISTING_CANDIDATES,
+) -> IcloudIntakeImportStatus:
+    _ensure_schema(db_session)
+    _validate_source(db_session, source_id=source_id)
+    import_run = db_session.get(IcloudIntakeImportRun, import_run_id) if import_run_id is not None else _latest_incomplete_import_run(db_session, source_id=source_id)
+    if import_run is None or import_run.source_profile_id != source_id:
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+    if import_run.status == IMPORT_STATUS_CREATED:
+        import_run.status = IMPORT_STATUS_RUNNING
+    if import_run.status != IMPORT_STATUS_RUNNING:
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    pending = _pending_import_chunks(db_session, import_run_id=import_run.id)
+    if not pending:
+        _refresh_import_run_aggregates(db_session, import_run)
+        _finalize_import_run_if_done(db_session, import_run)
+        _write_import_report(db_session, import_run)
+        db_session.commit()
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    chunk = pending[0]
+    chunk_start_clock = time.perf_counter()
+    now = _now_utc()
+    previous = _previous_completed_chunk(db_session, import_run_id=import_run.id, chunk_index=chunk.chunk_index)
+    if previous is not None and previous.completed_at is not None:
+        previous_completed_at = _as_utc(previous.completed_at)
+        if previous_completed_at is not None:
+            chunk.inter_chunk_gap_seconds = max(0.0, (now - previous_completed_at).total_seconds())
+    chunk.status = CHUNK_STATUS_RUNNING
+    chunk.started_at = now
+    chunk.failed_at = None
+    chunk.stop_reason = None
+    chunk.operator_message = "Chunk running."
+    import_run.status = IMPORT_STATUS_RUNNING
+    import_run.current_chunk_index = chunk.chunk_index
+    import_run.last_progress_at = now
+    prepare_run = db_session.get(IcloudIntakePrepareRun, import_run.prepare_run_id)
+    if prepare_run is not None:
+        prepare_run.status = PREPARE_STATUS_RUNNING
+        prepare_run.updated_at = now
+    db_session.commit()
+
+    candidate_clock = time.perf_counter()
+    candidates = _prepared_candidates_for_chunk(
+        db_session,
+        prepare_run_id=chunk.prepare_run_id,
+        start_index=chunk.candidate_start_index,
+        end_index=chunk.candidate_end_index,
+    )
+    chunk.candidate_load_seconds = time.perf_counter() - candidate_clock
+    inventory_ids = tuple(int(candidate.inventory_id) for candidate in candidates)
+    if not inventory_ids:
+        finished = _now_utc()
+        chunk.status = CHUNK_STATUS_SKIPPED
+        chunk.completed_at = finished
+        chunk.chunk_total_seconds = time.perf_counter() - chunk_start_clock
+        chunk.operator_message = "No pending prepared candidates remained for this chunk."
+        import_run.last_progress_at = finished
+        _refresh_import_run_aggregates(db_session, import_run)
+        _finalize_import_run_if_done(db_session, import_run)
+        _write_import_report(db_session, import_run)
+        db_session.commit()
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    acquisition_clock = time.perf_counter()
+    acquisition: IcloudBackfillAcquireResult = run_icloud_backfill_acquisition(
+        db_session,
+        source_id=source_id,
+        acquire_limit=len(inventory_ids),
+        max_listing_candidates=max_listing_candidates,
+        dry_run=False,
+        auto_run_source_intake=True,
+        include_items=True,
+        inventory_ids=inventory_ids,
+    )
+    acquisition_seconds = time.perf_counter() - acquisition_clock
+    chunk.fresh_resolution_seconds = acquisition_seconds
+    chunk.download_stage_seconds = acquisition_seconds
+    chunk.source_intake_seconds = 0.0
+    chunk.timing_note = (
+        "Acquisition service does not yet expose separate fresh-resolution, download, "
+        "and Source Intake phase timings; acquisition elapsed time is recorded as an approximation."
+    )
+    chunk.acquisition_run_id = acquisition.acquisition_run_id
+    chunk.acquisition_batch_id = acquisition.acquisition_batch_id
+    chunk.source_intake_run_id = acquisition.source_intake_run_id
+
+    db_update_clock = time.perf_counter()
+    candidate_summary = _mark_candidate_states_for_chunk(
+        db_session,
+        source_id=source_id,
+        prepare_run_id=chunk.prepare_run_id,
+        inventory_ids=inventory_ids,
+    )
+    chunk.new_deferred_this_chunk = candidate_summary.new_deferred_count
+    chunk.execution_failed_retryable_count = candidate_summary.execution_failed_retryable_count
+    chunk.execution_failed_terminal_count = int(acquisition.failed_terminal_count or 0)
+    chunk.logical_imported = int(acquisition.backfill_completed_count or 0)
+    chunk.files_resources_imported = int(acquisition.downloaded_resource_count or 0)
+    chunk.db_state_update_seconds = time.perf_counter() - db_update_clock
+
+    if acquisition.backfill_completed_count <= 0:
+        finished = _now_utc()
+        retryable = candidate_summary.execution_failed_retryable_count > 0 and int(acquisition.failed_terminal_count or 0) == 0
+        chunk.status = CHUNK_STATUS_RETRYABLE_FAILED if retryable else CHUNK_STATUS_FAILED
+        chunk.failed_at = finished
+        chunk.chunk_total_seconds = time.perf_counter() - chunk_start_clock
+        chunk.stop_reason = acquisition.stop_reason
+        chunk.operator_message = "No candidates in this chunk were imported."
+        import_run.status = _terminal_status_for_chunk_stop(import_run, retryable=retryable)
+        import_run.stop_reason = acquisition.stop_reason
+        import_run.operator_message = (
+            "Retryable execution failure recorded; resume can retry the prepared chunk."
+            if retryable
+            else "Import stopped before completing the prepared set."
+        )
+        if retryable:
+            import_run.interrupted_at = finished
+            if prepare_run is not None:
+                prepare_run.status = PREPARE_STATUS_PREPARED
+                prepare_run.updated_at = finished
+        else:
+            import_run.failed_at = finished
+        import_run.last_progress_at = finished
+        _refresh_import_run_aggregates(db_session, import_run)
+        _write_import_report(db_session, import_run)
+        db_session.commit()
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    if not acquisition.source_intake_succeeded:
+        finished = _now_utc()
+        chunk.status = CHUNK_STATUS_STOPPED_NEEDS_REVIEW
+        chunk.failed_at = finished
+        chunk.source_intake_failed_count = 1
+        chunk.chunk_total_seconds = time.perf_counter() - chunk_start_clock
+        chunk.stop_reason = acquisition.stop_reason
+        chunk.operator_message = "Source Intake did not complete successfully."
+        import_run.status = IMPORT_STATUS_STOPPED_NEEDS_REVIEW
+        import_run.stop_reason = acquisition.stop_reason
+        import_run.operator_message = "Import stopped for review. Reason: Source Intake did not complete successfully."
+        import_run.failed_at = finished
+        import_run.last_progress_at = finished
+        _refresh_import_run_aggregates(db_session, import_run)
+        _write_import_report(db_session, import_run)
+        db_session.commit()
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    try:
+        cleanup = _cleanup_chunk_timed(
+            db_session,
+            source_id=source_id,
+            acquired_paths=acquisition.acquired_resource_paths,
+        )
+    except _DurableCleanupError as exc:
+        finished = _now_utc()
+        chunk.status = CHUNK_STATUS_STOPPED_NEEDS_REVIEW
+        chunk.failed_at = finished
+        chunk.cleanup_failed_count = 1
+        chunk.cleanup_dry_run_id = None if exc.dry_run is None else exc.dry_run.run_id
+        chunk.cleanup_execution_run_id = None if exc.execution is None else exc.execution.run_id
+        chunk.cleanup_dry_run_seconds = exc.dry_run_seconds
+        chunk.cleanup_execute_seconds = exc.execute_seconds
+        _apply_cleanup_snapshot_to_chunk(chunk, exc.execution or exc.dry_run)
+        chunk.chunk_total_seconds = time.perf_counter() - chunk_start_clock
+        chunk.stop_reason = exc.code
+        chunk.operator_message = str(exc)
+        import_run.status = IMPORT_STATUS_STOPPED_NEEDS_REVIEW
+        import_run.stop_reason = exc.code
+        import_run.operator_message = f"Import stopped for review. Reason: {exc}"
+        import_run.failed_at = finished
+        import_run.last_progress_at = finished
+        _refresh_import_run_aggregates(db_session, import_run)
+        _write_import_report(db_session, import_run)
+        db_session.commit()
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+    finished = _now_utc()
+    chunk.status = CHUNK_STATUS_COMPLETED
+    chunk.completed_at = finished
+    chunk.cleanup_dry_run_id = cleanup.dry_run.run_id
+    chunk.cleanup_execution_run_id = cleanup.execution.run_id
+    chunk.local_staging_files_cleaned = int(cleanup.execution.deleted_count or 0)
+    chunk.cleanup_dry_run_seconds = cleanup.dry_run_seconds
+    chunk.cleanup_execute_seconds = cleanup.execute_seconds
+    _apply_cleanup_snapshot_to_chunk(chunk, cleanup.dry_run)
+    chunk.cleanup_report_path = cleanup.execution.report_path
+    chunk.chunk_total_seconds = time.perf_counter() - chunk_start_clock
+    chunk.operator_message = cleanup.reason or "Chunk completed."
+    chunk.stop_reason = None
+    import_run.last_progress_at = finished
+    import_run.operator_message = f"Chunk {chunk.chunk_index} of {import_run.total_chunks} completed."
+    _refresh_import_run_aggregates(db_session, import_run)
+    _finalize_import_run_if_done(db_session, import_run)
+    _write_import_report(db_session, import_run)
+    db_session.commit()
+    return get_icloud_intake_import_status(db_session, source_id=source_id)
 
 
 def run_next_historical_batch(
