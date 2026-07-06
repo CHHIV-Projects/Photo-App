@@ -44,6 +44,23 @@ import type {
   IcloudStagingCleanupRunResponse,
   IcloudStagingCleanupReadinessResponse,
   IcloudStagingCleanupStatusResponse,
+  IcloudBackfillAcquirePreviewRequest,
+  IcloudBackfillAcquirePreviewResponse,
+  IcloudBackfillAcquireRequest,
+  IcloudBackfillAcquireResponse,
+  IcloudBackfillInventoryScanRequest,
+  IcloudBackfillInventoryScanResponse,
+  IcloudBackfillStatusResponse,
+  IcloudHistoricalRoutineRefreshRequest,
+  IcloudHistoricalRoutineRefreshResponse,
+  IcloudHistoricalRoutineRunRequest,
+  IcloudHistoricalRoutineRunResponse,
+  IcloudHistoricalRoutineStatusResponse,
+  IcloudIntakeImportAdvanceRequest,
+  IcloudIntakeImportResumeRequest,
+  IcloudIntakeImportStartRequest,
+  IcloudIntakeImportStatusResponse,
+  SourceProfileDeferredAssetsResponse,
   InternalIcloudRunRequest,
   InternalIcloudRunResponse,
   InternalIcloudRunStatusResponse,
@@ -1270,6 +1287,114 @@ export function getIcloudStagingCleanupStatus(sourceId?: number): Promise<Icloud
 
 export function getIcloudStagingCleanupReadiness(sourceId: number): Promise<IcloudStagingCleanupReadinessResponse> {
   return apiRequest<IcloudStagingCleanupReadinessResponse>(`/api/admin/icloud-staging-cleanup/readiness?source_id=${sourceId}`);
+}
+
+export function getIcloudBackfillStatus(sourceId: number): Promise<IcloudBackfillStatusResponse> {
+  return apiRequest<IcloudBackfillStatusResponse>(`/api/admin/icloud-backfill/status?source_id=${sourceId}`);
+}
+
+export function getIcloudHistoricalRoutineStatus(sourceId: number): Promise<IcloudHistoricalRoutineStatusResponse> {
+  return apiRequest<IcloudHistoricalRoutineStatusResponse>(`/api/admin/icloud-routine/historical/status?source_id=${sourceId}`);
+}
+
+export function refreshIcloudHistoricalInventory(
+  req: IcloudHistoricalRoutineRefreshRequest,
+): Promise<IcloudHistoricalRoutineRefreshResponse> {
+  return apiRequest<IcloudHistoricalRoutineRefreshResponse>("/api/admin/icloud-routine/historical/refresh-inventory", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function runIcloudHistoricalNextBatch(
+  req: IcloudHistoricalRoutineRunRequest,
+): Promise<IcloudHistoricalRoutineRunResponse> {
+  return apiRequest<IcloudHistoricalRoutineRunResponse>("/api/admin/icloud-routine/historical/run-next-batch", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function getIcloudIntakeImportStatus(sourceId: number): Promise<IcloudIntakeImportStatusResponse> {
+  return apiRequest<IcloudIntakeImportStatusResponse>(`/api/admin/icloud-routine/intake/import/status?source_id=${sourceId}`);
+}
+
+export function startIcloudIntakeImport(
+  req: IcloudIntakeImportStartRequest,
+): Promise<IcloudIntakeImportStatusResponse> {
+  return apiRequest<IcloudIntakeImportStatusResponse>("/api/admin/icloud-routine/intake/import/start", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function resumeIcloudIntakeImport(
+  req: IcloudIntakeImportResumeRequest,
+): Promise<IcloudIntakeImportStatusResponse> {
+  return apiRequest<IcloudIntakeImportStatusResponse>("/api/admin/icloud-routine/intake/import/resume", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function advanceIcloudIntakeImport(
+  req: IcloudIntakeImportAdvanceRequest,
+): Promise<IcloudIntakeImportStatusResponse> {
+  return apiRequest<IcloudIntakeImportStatusResponse>("/api/admin/icloud-routine/intake/import/advance", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function runIcloudBackfillInventoryScan(
+  req: IcloudBackfillInventoryScanRequest,
+): Promise<IcloudBackfillInventoryScanResponse> {
+  return apiRequest<IcloudBackfillInventoryScanResponse>("/api/admin/icloud-backfill/inventory-scan", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function previewIcloudBackfillAcquisition(
+  req: IcloudBackfillAcquirePreviewRequest,
+): Promise<IcloudBackfillAcquirePreviewResponse> {
+  return apiRequest<IcloudBackfillAcquirePreviewResponse>("/api/admin/icloud-backfill/acquire-preview", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function runIcloudBackfillAcquisition(
+  req: IcloudBackfillAcquireRequest,
+): Promise<IcloudBackfillAcquireResponse> {
+  return apiRequest<IcloudBackfillAcquireResponse>("/api/admin/icloud-backfill/acquire", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function getSourceProfileDeferredAssets(
+  sourceId: number,
+  options: { state?: string; category?: string; reasonCode?: string; limit?: number } = {},
+): Promise<SourceProfileDeferredAssetsResponse> {
+  const params = new URLSearchParams();
+  if (options.state) {
+    params.set("state", options.state);
+  }
+  if (options.category) {
+    params.set("category", options.category);
+  }
+  if (options.reasonCode) {
+    params.set("reason_code", options.reasonCode);
+  }
+  if (options.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+  const query = params.toString();
+  const path = query
+    ? `/api/admin/source-profiles/${sourceId}/deferred-assets?${query}`
+    : `/api/admin/source-profiles/${sourceId}/deferred-assets`;
+  return apiRequest<SourceProfileDeferredAssetsResponse>(path);
 }
 
 export function runIcloudStagingCleanup(

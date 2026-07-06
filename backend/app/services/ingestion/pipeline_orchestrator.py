@@ -72,6 +72,7 @@ class PipelineContext:
     ingest_source_limit: int | None
     source_label: str | None
     source_type: str | None
+    minimum_file_size_bytes: int | None = None
     explicit_source_records: list[FileScanRecord] = field(default_factory=list)
     source_intake_context: dict[str, Any] = field(default_factory=dict)
     source_scan_result: ScanResult | None = None
@@ -415,6 +416,11 @@ def _select_next_batch(ctx: PipelineContext) -> IngestionBatch | None:
     if not ctx.processing_records:
         return None
 
+    min_size_bytes = (
+        int(ctx.minimum_file_size_bytes)
+        if ctx.minimum_file_size_bytes is not None
+        else settings.minimum_file_size_bytes
+    )
     batch_records = list(ctx.processing_records[: ctx.ingest_batch_size])
     accepted: list[FileScanRecord] = []
     rejected = []
@@ -429,7 +435,7 @@ def _select_next_batch(ctx: PipelineContext) -> IngestionBatch | None:
         single_filter_result = filter_records(
             [record],
             approved_extensions=settings.approved_extensions,
-            min_size_bytes=settings.minimum_file_size_bytes,
+            min_size_bytes=min_size_bytes,
         )
         accepted.extend(single_filter_result.accepted)
         rejected.extend(single_filter_result.rejected)
@@ -543,13 +549,18 @@ def _filter_records_stage(ctx: PipelineContext) -> dict[str, Any]:
     if ctx.filter_result is None:
         raise RuntimeError("Batch filter result missing.")
     result = ctx.filter_result
+    min_size_bytes = (
+        int(ctx.minimum_file_size_bytes)
+        if ctx.minimum_file_size_bytes is not None
+        else settings.minimum_file_size_bytes
+    )
     return {
         "scope": "batch",
         "records_considered": len(ctx.current_batch_records),
         "accepted": len(result.accepted),
         "rejected": len(result.rejected),
         "approved_extensions": len(settings.approved_extensions),
-        "minimum_size_bytes": settings.minimum_file_size_bytes,
+        "minimum_size_bytes": min_size_bytes,
     }
 
 
@@ -901,6 +912,11 @@ def _write_source_intake_report(ctx: PipelineContext) -> Path | None:
         "config": {
             "ingest_source_limit": ctx.ingest_source_limit,
             "ingest_batch_size": ctx.ingest_batch_size,
+            "minimum_file_size_bytes": (
+                int(ctx.minimum_file_size_bytes)
+                if ctx.minimum_file_size_bytes is not None
+                else settings.minimum_file_size_bytes
+            ),
         },
         "counts": {
             "total_files_scanned": ctx.source_files_scanned_total,

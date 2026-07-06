@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from app.api.admin import router as admin_router
 from app.db.session import get_db_session
 from app.schemas.admin import IcloudReadinessOperationConflicts, IcloudReadinessReason
 from app.services.admin.ingestion_operation_guardrail_service import IngestionOperationGuardrailSnapshot
+from app.services.admin.icloud_staging_cleanup_execution_service import CleanupRunSnapshot
 from app.services.admin.source_intake_execution_service import SourceIntakeStatusSnapshot
 
 
@@ -243,6 +246,95 @@ class AdminIngestionGuardrailsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error_code"], "CONFIRMATION_REQUIRED")
+
+    def test_cleanup_status_projects_safe_eligible_file_rows(self) -> None:
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "cleanup-report.json"
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "eligible_files": [
+                            {
+                                "relative_path": "\\2026\\06\\24\\IMG_0001.HEIC",
+                                "size_bytes": 12345,
+                                "asset_sha256": "asset-hash",
+                                "staged_sha256": "staged-hash",
+                                "vault_path": "C:/absolute/vault/path/IMG_0001.HEIC",
+                                "absolute_path": "C:/absolute/staging/path/IMG_0001.HEIC",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            snapshot = CleanupRunSnapshot(
+                run_id=45,
+                status="completed",
+                source_id=12,
+                source_label="Chuck iCloud",
+                source_root_path="storage/exports/icloud/chuck",
+                dry_run=True,
+                started_at=None,
+                finished_at=None,
+                elapsed_seconds=1.2,
+                eligible_count=1,
+                deleted_count=0,
+                skipped_count=0,
+                total_bytes_eligible=12345,
+                total_bytes_deleted=0,
+                total_files=1,
+                processed_files=1,
+                current_stage="completed",
+                protected_count=0,
+                verification_failed_count=0,
+                file_missing_count=0,
+                delete_failed_count=0,
+                manifest_fingerprint="fingerprint",
+                planner_version="test",
+                preview_expires_at=None,
+                authorized_dry_run_id=45,
+                authorization_consumed_at=None,
+                skipped_reasons={},
+                skipped_samples={},
+                report_path=str(report_path),
+                error_message=None,
+            )
+
+            with patch("app.api.admin.get_cleanup_status", return_value=snapshot):
+                response = self.client.get("/api/admin/icloud-staging-cleanup/status?source_id=12")
+
+        self.assertEqual(response.status_code, 200)
+        current = response.json()["current"]
+        self.assertEqual(current["eligible_files"][0]["relative_path"], "2026/06/24/IMG_0001.HEIC")
+        self.assertEqual(current["eligible_files"][0]["size_bytes"], 12345)
+        self.assertEqual(current["eligible_files"][0]["asset_sha256"], "asset-hash")
+        self.assertEqual(current["eligible_files"][0]["staged_sha256"], "staged-hash")
+        self.assertEqual(current["eligible_files"][0]["verification_state"], "verified")
+        self.assertNotIn("vault_path", current["eligible_files"][0])
+        self.assertNotIn("absolute_path", current["eligible_files"][0])
+
+    def test_historical_refresh_returns_json_error_for_helper_failure(self) -> None:
+        from unittest.mock import patch
+        from app.services.icloud_acquisition.exact_selection_adapter import ExactSelectionPrototypeError
+
+        with patch(
+            "app.api.admin.refresh_historical_inventory_service",
+            side_effect=ExactSelectionPrototypeError(
+                "The exact-selection helper timed out.",
+                code="helper_timeout",
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/icloud-routine/historical/refresh-inventory",
+                json={"source_id": 66, "max_candidates": 1000},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.json()
+        self.assertEqual(payload["error_code"], "helper_timeout")
+        self.assertEqual(payload["detail"], "The exact-selection helper timed out.")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pillow_heif
 from PIL import Image
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -104,7 +104,10 @@ def load_assets_for_incremental_face_detection(db_session: Session) -> list[Asse
     return list(
         db_session.scalars(
             select(Asset)
-            .where(Asset.face_detection_completed_at.is_(None))
+            .where(
+                Asset.face_detection_completed_at.is_(None),
+                func.lower(Asset.extension).in_(tuple(sorted(IMAGE_EXTENSIONS))),
+            )
             .order_by(Asset.created_at_utc.asc(), Asset.sha256.asc())
         ).all()
     )

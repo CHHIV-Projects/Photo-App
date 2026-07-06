@@ -28,15 +28,6 @@ from app.models.icloud_acquisition_run import (
 from app.models.ingestion_source import IngestionSource
 from app.models.provenance import Provenance
 from app.models.source_intake_run import SourceIntakeRun
-from app.services.admin.ingestion_operation_guardrail_service import (
-    get_ingestion_operation_guardrail_snapshot,
-)
-from app.services.admin.source_intake_execution_service import (
-    STATUS_COMPLETED as SOURCE_INTAKE_STATUS_COMPLETED,
-    STATUS_FAILED as SOURCE_INTAKE_STATUS_FAILED,
-    STATUS_RUNNING as SOURCE_INTAKE_STATUS_RUNNING,
-)
-from app.services.admin.source_intake_schema import ensure_source_intake_schema
 from app.services.icloud_acquisition.durable_exact_service import (
     STATUS_RESOURCE_PUBLISHED,
 )
@@ -54,6 +45,7 @@ from app.services.ingestion.scanner import FileScanRecord
 
 
 INTAKE_MODE_ICLOUD_ACQUISITION_BATCH = "icloud_acquisition_batch"
+ICLOUD_BATCH_MINIMUM_FILE_SIZE_BYTES = 1
 
 STATUS_BATCH_INTAKE_RUNNING = "intake_running"
 STATUS_BATCH_INTAKE_COMPLETED = "intake_completed"
@@ -61,6 +53,10 @@ STATUS_BATCH_INTAKE_COMPLETED_WITH_ERRORS = "intake_completed_with_errors"
 STATUS_BATCH_INTAKE_FAILED = "intake_failed"
 STATUS_BATCH_INTAKE_BLOCKED = "intake_blocked"
 STATUS_BATCH_READY_FOR_CLEANUP_DRY_RUN = "ready_for_cleanup_dry_run"
+
+SOURCE_INTAKE_STATUS_RUNNING = "running"
+SOURCE_INTAKE_STATUS_COMPLETED = "completed"
+SOURCE_INTAKE_STATUS_FAILED = "failed"
 
 STATUS_ITEM_INTAKE_COMPLETED = "intake_completed"
 STATUS_ITEM_INTAKE_COMPLETED_WITH_ERRORS = "intake_completed_with_errors"
@@ -761,9 +757,15 @@ def run_batch_source_intake(
     """Run Source Intake for exactly one durable iCloud acquisition batch."""
 
     ensure_icloud_acquisition_schema(db_session)
+    from app.services.admin.source_intake_schema import ensure_source_intake_schema
+
     ensure_source_intake_schema(db_session)
 
     batch, run, source, staging_root = _load_batch_context(db_session, batch_id=batch_id, source_id=source_id)
+
+    from app.services.admin.ingestion_operation_guardrail_service import (
+        get_ingestion_operation_guardrail_snapshot,
+    )
 
     guardrail = get_ingestion_operation_guardrail_snapshot(db_session, source_id=source.id)
     if guardrail.blocked:
@@ -883,6 +885,7 @@ def run_batch_source_intake(
         ingest_source_limit=None,
         source_label=source.source_label,
         source_type=source.source_type,
+        minimum_file_size_bytes=ICLOUD_BATCH_MINIMUM_FILE_SIZE_BYTES,
         explicit_source_records=[item.file_record for item in verified_resources],
         source_intake_context={
             "mode": INTAKE_MODE_ICLOUD_ACQUISITION_BATCH,
@@ -890,6 +893,7 @@ def run_batch_source_intake(
             "acquisition_batch_id": batch.id,
             "source_profile_id": source.id,
             "resource_count": len(verified_resources),
+            "minimum_file_size_bytes": ICLOUD_BATCH_MINIMUM_FILE_SIZE_BYTES,
         },
     )
     args = RuntimeArgs(

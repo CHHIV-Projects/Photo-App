@@ -1,9 +1,10 @@
 """Background face processing controls and execution.
 
 Stages (incremental only, in order):
-  1. Face detection   — assets where face_detection_completed_at IS NULL
+  1. Face detection   — supported image assets where face_detection_completed_at IS NULL
   2. Face embedding   — faces where embedding_json IS NULL
-  3. Face clustering  — faces where cluster_id IS NULL AND embedding_json IS NOT NULL (incremental)
+  3. Face clustering  — faces where cluster_id IS NULL, embedding_json IS NOT NULL,
+                         and is_manually_unassigned is false (incremental)
   4. Crop generation  — faces whose crop file is missing from storage/review/
 
 Safety guarantees:
@@ -24,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -32,7 +33,7 @@ from app.models.asset import Asset
 from app.models.face import Face
 from app.models.face_processing_run import FaceProcessingRun
 from app.services.face.face_processing_schema import ensure_face_processing_schema
-from app.services.vision.face_detector import load_image_for_cv2
+from app.services.vision.face_detector import IMAGE_EXTENSIONS, load_image_for_cv2
 
 # Reports written to storage/logs/face_processing_reports/ relative to project root.
 _BACKEND_ROOT = Path(__file__).resolve().parents[4]
@@ -51,6 +52,7 @@ RUNNING_STATUSES = (STATUS_RUNNING, STATUS_STOP_REQUESTED)
 
 _runner_lock = threading.Lock()
 _runner_thread: threading.Thread | None = None
+_FACE_DETECTION_IMAGE_EXTENSIONS = tuple(sorted(IMAGE_EXTENSIONS))
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +170,10 @@ def _count_pending(db: Session) -> tuple[int, int, int]:
     """Return (pending_detection, pending_embedding, pending_clustering) counts."""
     pending_detection = (
         db.query(Asset)
-        .filter(Asset.face_detection_completed_at.is_(None))
+        .filter(
+            Asset.face_detection_completed_at.is_(None),
+            func.lower(Asset.extension).in_(_FACE_DETECTION_IMAGE_EXTENSIONS),
+        )
         .count()
     )
     pending_embedding = (
@@ -178,7 +183,11 @@ def _count_pending(db: Session) -> tuple[int, int, int]:
     )
     pending_clustering = (
         db.query(Face)
-        .filter(Face.cluster_id.is_(None), Face.embedding_json.is_not(None))
+        .filter(
+            Face.cluster_id.is_(None),
+            Face.embedding_json.is_not(None),
+            Face.is_manually_unassigned.is_(False),
+        )
         .count()
     )
     return pending_detection, pending_embedding, pending_clustering

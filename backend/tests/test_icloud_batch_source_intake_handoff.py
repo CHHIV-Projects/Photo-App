@@ -221,6 +221,26 @@ class IcloudBatchSourceIntakeHandoffTests(unittest.TestCase):
         self.assertNotIn("UNRELATED", provenance_rows[0].source_path)
         self.assertTrue(Path(result.report_path or "").exists())
 
+    def test_icloud_batch_accepts_small_jpg_below_generic_source_intake_threshold(self) -> None:
+        content = b"tiny-but-valid-icloud-export-jpg"
+        self.assertLess(len(content), settings.minimum_file_size_bytes)
+        batch, resource, _ = self._create_ready_batch(
+            relative_path="2026/02/07/IMG_5244.JPG",
+            content=content,
+        )
+
+        result = handoff.run_batch_source_intake(self.db, batch_id=batch.id, source_id=self.source.id)
+
+        self.assertEqual(result.status, handoff.STATUS_BATCH_INTAKE_COMPLETED)
+        self.assertEqual(result.resources_processed, 1)
+        self.assertEqual(result.resources_failed, 0)
+        self.assertTrue(result.batch_ready_for_cleanup_dry_run)
+        refreshed = self.db.get(IcloudAcquisitionResource, resource.id)
+        self.assertEqual(refreshed.source_intake_status, handoff.STATUS_RESOURCE_INTAKE_PROCESSED)
+        source_run = self.db.get(SourceIntakeRun, result.source_intake_run_id)
+        self.assertEqual(source_run.failed_or_rejected, 0)
+        self.assertEqual(source_run.processed_new_unique, 1)
+
     def test_existing_asset_is_duplicate_linked_with_selected_source_provenance(self) -> None:
         content = _bytes(b"duplicate-existing")
         sha256 = hashlib.sha256(content).hexdigest()

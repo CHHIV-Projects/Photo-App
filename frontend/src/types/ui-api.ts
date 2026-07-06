@@ -1545,6 +1545,15 @@ export interface IcloudStagingCleanupExecuteRequest {
   explicit_confirmation: string;
 }
 
+export interface IcloudStagingCleanupEligibleFile {
+  relative_path: string;
+  size_bytes: number | null;
+  asset_sha256: string | null;
+  staged_sha256: string | null;
+  verification_state: string;
+  asset_id: number | null;
+}
+
 export interface IcloudStagingCleanupRunStatus {
   run_id: number | null;
   status: string;
@@ -1574,6 +1583,7 @@ export interface IcloudStagingCleanupRunStatus {
   authorization_consumed_at: string | null;
   skipped_reasons: Record<string, number>;
   skipped_samples: Record<string, string[]>;
+  eligible_files: IcloudStagingCleanupEligibleFile[];
   report_path: string | null;
   error_message: string | null;
 }
@@ -1596,6 +1606,396 @@ export interface IcloudStagingCleanupReadinessResponse {
   canonical_staging_path: string | null;
   blocking_reasons: IcloudReadinessReason[];
   latest_dry_run: IcloudStagingCleanupRunStatus;
+}
+
+export interface IcloudBackfillInventoryScanRequest {
+  source_id: number;
+  max_candidates: number;
+}
+
+export interface IcloudBackfillInventoryStatus {
+  source_id: number;
+  status: string;
+  last_inventory_scan_at: string | null;
+  last_scan_candidate_count: number;
+  last_scan_created_count: number;
+  last_scan_updated_count: number;
+  inventory_total_count: number;
+  eligible_metadata_count: number;
+  unsupported_or_ambiguous_count: number;
+  backfill_completed_count: number;
+  unresolved_eligible_count: number;
+  acquirable_pending_count: number;
+  retryable_failed_count: number;
+  ambiguous_or_unsupported_count: number;
+  deferred_current_count: number;
+  deferred_adjusted_resource_count: number;
+  deferred_ambiguous_count: number;
+  deferred_unsupported_count: number;
+  deferred_new_since_last_scan_count: number;
+  deferred_changed_since_last_scan_count: number;
+  source_exhausted: boolean;
+  scan_limit_reached: boolean;
+  stop_reason: string | null;
+}
+
+export interface IcloudBackfillInventoryScanResponse {
+  status: string;
+  message: string;
+  current: IcloudBackfillInventoryStatus;
+}
+
+export interface IcloudBackfillStatusResponse {
+  generated_at: string;
+  current: IcloudBackfillInventoryStatus;
+}
+
+export interface IcloudBackfillAcquirePreviewRequest {
+  source_id: number;
+  acquire_limit: number;
+  max_listing_candidates: number;
+  include_items: boolean;
+}
+
+export interface IcloudBackfillAcquirePreviewItem {
+  inventory_id: number;
+  logical_resource_count: number;
+  is_live_photo: boolean;
+  primary_relative_path: string | null;
+}
+
+export interface IcloudBackfillAcquirePreviewResponse {
+  source_id: number;
+  status: string;
+  selected_inventory_count: number;
+  matched_listing_count: number;
+  preview_selected_logical_count: number;
+  preview_selected_resource_count: number;
+  skipped_stale_count: number;
+  skipped_known_count: number;
+  skipped_unsupported_count: number;
+  skipped_ambiguous_count: number;
+  skipped_missing_identity_count: number;
+  skipped_pending_classification_count: number;
+  skipped_completed_count: number;
+  unsafe_manifest_count: number;
+  acquire_limit: number;
+  max_listing_candidates: number;
+  stop_reason: string;
+  next_safe_action: string;
+  preview_items: IcloudBackfillAcquirePreviewItem[];
+}
+
+export interface IcloudBackfillAcquireRequest {
+  source_id: number;
+  acquire_limit: number;
+  max_listing_candidates: number;
+  dry_run: boolean;
+  auto_run_source_intake: boolean;
+  include_items: boolean;
+}
+
+export interface IcloudBackfillAcquireItem {
+  inventory_id: number;
+  acquisition_state: string | null;
+  backfill_completed: boolean;
+  backfill_resolution_state: string | null;
+  logical_resource_count: number | null;
+  is_live_photo: boolean | null;
+  primary_relative_path: string | null;
+}
+
+export interface IcloudBackfillAcquireResponse {
+  source_id: number;
+  status: string;
+  dry_run: boolean;
+  auto_run_source_intake: boolean;
+  selected_inventory_count: number;
+  matched_listing_count: number;
+  selected_logical_count: number;
+  selected_resource_count: number;
+  downloaded_logical_count: number;
+  downloaded_resource_count: number;
+  source_intake_attempted: boolean;
+  source_intake_succeeded: boolean;
+  source_intake_run_id: number | null;
+  acquisition_run_id: number | null;
+  acquisition_batch_id: number | null;
+  backfill_completed_count: number;
+  skipped_stale_count: number;
+  skipped_known_count: number;
+  skipped_unsupported_count: number;
+  skipped_ambiguous_count: number;
+  skipped_missing_identity_count: number;
+  skipped_pending_classification_count: number;
+  skipped_completed_count: number;
+  failed_retryable_count: number;
+  failed_terminal_count: number;
+  stop_reason: string;
+  next_safe_action: string;
+  acquired_resource_paths: string[];
+  items: IcloudBackfillAcquireItem[];
+}
+
+export interface SourceProfileDeferredAssetItem {
+  id: number;
+  inventory_id: number | null;
+  source_profile_id: number;
+  primary_relative_path: string | null;
+  filename: string | null;
+  extension: string | null;
+  content_type: string | null;
+  resource_count: number;
+  is_live_photo: boolean;
+  grouping: string | null;
+  deferred_category: string;
+  deferred_reason_code: string;
+  deferred_reason_human: string;
+  policy_status: string;
+  current_state: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  observation_count: number;
+}
+
+export interface SourceProfileDeferredAssetsResponse {
+  source_id: number;
+  limit: number;
+  category: string | null;
+  reason_code: string | null;
+  state: string | null;
+  items: SourceProfileDeferredAssetItem[];
+}
+
+export interface IcloudHistoricalRoutineStatus {
+  source_id: number;
+  source_label: string | null;
+  total_imported_from_source: number;
+  inventory_total_logical: number;
+  backfill_completed_logical: number;
+  eligible_pending_logical: number;
+  available_inventory: "yes" | "no" | "unknown";
+  logical_candidates_ready: number;
+  latest_prepare_run_id: number | null;
+  prepare_status: string | null;
+  prepare_expires_at: string | null;
+  target_logical_candidates: number;
+  new_deferred_this_prepare: number;
+  source_exhaustion_state: string;
+  provider_records_scanned: number;
+  scan_depth_used: number;
+  deferred_current_logical: number;
+  deferred_adjusted_resource_logical: number;
+  deferred_ambiguous_logical: number;
+  deferred_unsupported_logical: number;
+  retryable_failed_logical: number;
+  last_inventory_scan_at: string | null;
+  last_inventory_refresh_at: string | null;
+  last_historical_run_at: string | null;
+  last_historical_run_id: number | null;
+  last_cleanup_run_id: number | null;
+  local_staging_file_count: number;
+  partial_file_count: number;
+  backfill_execute_file_count: number;
+  operator_message: string;
+}
+
+export interface IcloudHistoricalRoutineStatusResponse {
+  generated_at: string;
+  current: IcloudHistoricalRoutineStatus;
+}
+
+export interface IcloudHistoricalRoutineRefreshRequest {
+  source_id: number;
+  max_candidates?: number;
+}
+
+export interface IcloudHistoricalRoutineRefreshResponse {
+  status: string;
+  message: string;
+  source_id: number;
+  prepare_run_id: number;
+  inventory_total_logical: number;
+  created_logical: number;
+  updated_logical: number;
+  eligible_pending_logical: number;
+  available_inventory: "yes" | "no" | "unknown";
+  target_logical_candidates: number;
+  logical_candidates_ready: number;
+  new_deferred_this_prepare: number;
+  deferred_current_logical: number;
+  deferred_adjusted_resource_logical: number;
+  source_exhausted: boolean;
+  scan_limit_reached: boolean;
+  source_exhaustion_state: string;
+  provider_records_scanned: number;
+  scan_depth_used: number;
+  expires_at: string;
+  scanned_at: string;
+  scan_limit_note: string;
+  operator_message: string;
+}
+
+export interface IcloudHistoricalRoutineRunRequest {
+  source_id: number;
+  target_logical_assets?: number;
+  internal_batch_size?: number;
+}
+
+export interface IcloudHistoricalRoutineChunk {
+  chunk_index: number;
+  requested_logical_assets: number;
+  imported_logical_assets: number;
+  imported_resources: number;
+  cleaned_local_staging_files: number;
+  acquisition_run_id: number | null;
+  acquisition_batch_id: number | null;
+  source_intake_run_id: number | null;
+  cleanup_dry_run_id: number | null;
+  cleanup_execution_run_id: number | null;
+  cleanup_report_path: string | null;
+  status: string;
+  stop_reason: string | null;
+  operator_message: string;
+}
+
+export interface IcloudHistoricalRoutineRunResponse {
+  status: string;
+  source_id: number;
+  prepare_run_id: number | null;
+  requested_logical_assets: number;
+  logical_candidates: number;
+  internal_batch_size: number;
+  imported_logical_assets: number;
+  logical_imported: number;
+  imported_resources: number;
+  files_resources_imported: number;
+  cleaned_local_staging_files: number;
+  local_staging_files_cleaned: number;
+  new_deferred_this_run: number;
+  execution_failed_this_run: number;
+  eligible_remaining_logical: number;
+  deferred_current_logical: number;
+  deferred_adjusted_resource_logical: number;
+  available_inventory: "yes" | "no" | "unknown";
+  operator_message: string;
+  stop_reason: string | null;
+  chunks: IcloudHistoricalRoutineChunk[];
+}
+
+export interface IcloudIntakeImportStartRequest {
+  source_id: number;
+  target_logical_assets?: number;
+  internal_batch_size?: number;
+}
+
+export interface IcloudIntakeImportAdvanceRequest {
+  source_id: number;
+  import_run_id?: number | null;
+}
+
+export interface IcloudIntakeImportResumeRequest {
+  source_id: number;
+  import_run_id?: number | null;
+}
+
+export interface IcloudIntakeImportChunkStatus {
+  id: number;
+  chunk_index: number;
+  status: string;
+  candidate_start_index: number;
+  candidate_end_index: number;
+  logical_candidates: number;
+  logical_imported: number;
+  files_resources_imported: number;
+  local_staging_files_cleaned: number;
+  new_deferred_this_chunk: number;
+  execution_failed_retryable_count: number;
+  execution_failed_terminal_count: number;
+  source_intake_failed_count: number;
+  cleanup_failed_count: number;
+  acquisition_run_id: number | null;
+  acquisition_batch_id: number | null;
+  source_intake_run_id: number | null;
+  cleanup_dry_run_id: number | null;
+  cleanup_execution_run_id: number | null;
+  cleanup_report_path: string | null;
+  cleanup_eligible_count: number;
+  cleanup_skipped_count: number;
+  cleanup_protected_count: number;
+  cleanup_verification_failed_count: number;
+  cleanup_file_missing_count: number;
+  cleanup_delete_failed_count: number;
+  chunk_total_seconds: number | null;
+  candidate_load_seconds: number | null;
+  fresh_resolution_seconds: number | null;
+  download_stage_seconds: number | null;
+  source_intake_seconds: number | null;
+  cleanup_dry_run_seconds: number | null;
+  cleanup_execute_seconds: number | null;
+  db_state_update_seconds: number | null;
+  inter_chunk_gap_seconds: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  failed_at: string | null;
+  operator_message: string | null;
+  stop_reason: string | null;
+  timing_note: string | null;
+}
+
+export interface IcloudIntakeImportStatus {
+  source_id: number;
+  source_label: string | null;
+  total_imported_from_source: number;
+  last_inventory_refresh_at: string | null;
+  available_inventory: "yes" | "no" | "unknown";
+  logical_candidates_ready: number;
+  latest_prepare_run_id: number | null;
+  prepare_status: string | null;
+  prepare_expires_at: string | null;
+  import_run_id: number | null;
+  import_status: string | null;
+  import_operator_message: string;
+  import_stop_reason: string | null;
+  target_logical_candidates: number;
+  logical_candidates_total: number;
+  logical_imported: number;
+  files_resources_imported: number;
+  local_staging_files_cleaned: number;
+  new_deferred_this_run: number;
+  execution_failed_retryable_count: number;
+  execution_failed_terminal_count: number;
+  source_intake_failed_count: number;
+  cleanup_failed_count: number;
+  current_chunk_index: number;
+  total_chunks: number;
+  internal_batch_size: number;
+  pending_chunk_count: number;
+  completed_chunk_count: number;
+  remaining_logical_candidates: number;
+  resume_available: boolean;
+  can_start_import: boolean;
+  can_resume_import: boolean;
+  can_advance_import: boolean;
+  current_phase: string | null;
+  last_chunk_duration_seconds: number | null;
+  last_inter_chunk_gap_seconds: number | null;
+  started_at: string | null;
+  last_progress_at: string | null;
+  completed_at: string | null;
+  failed_at: string | null;
+  interrupted_at: string | null;
+  resumed_at: string | null;
+  report_path: string | null;
+  local_staging_file_count: number;
+  partial_file_count: number;
+  backfill_execute_file_count: number;
+  chunks: IcloudIntakeImportChunkStatus[];
+}
+
+export interface IcloudIntakeImportStatusResponse {
+  generated_at: string;
+  current: IcloudIntakeImportStatus;
 }
 
 export type InternalIcloudMediaScope =

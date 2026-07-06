@@ -44,6 +44,7 @@ import type {
   IcloudStagingCleanupReadinessResponse,
 } from "@/types/ui-api";
 
+import IcloudRunWorkflowPanel from "./IcloudRunWorkflowPanel";
 import styles from "./ingestion-view.module.css";
 
 type StatusFilter = SourceProfileStatus | "all";
@@ -2365,6 +2366,8 @@ export default function IngestionView() {
       <p className={styles.subtitle}>
         Active shown: {countsSummary.active} | Archived/Test/Deprecated shown: {countsSummary.nonActive}
       </p>
+
+      <IcloudRunWorkflowPanel />
 
       {sourceIntakeStatus && isSourceIntakeActive && (
         <section className={styles.runPanel}>

@@ -490,8 +490,15 @@ def _issue_for_path(
 
 
 def _compute_manifest_fingerprint(plan: CleanupPlan) -> str:
-    rows = [item.manifest_row() for item in plan.eligible]
-    rows.extend(item.manifest_row() for item in plan.issues)
+    rows = []
+    for item in plan.eligible:
+        row = item.manifest_row()
+        row.pop("staged_mtime_ns", None)
+        rows.append(row)
+    for item in plan.issues:
+        row = item.manifest_row()
+        row.pop("mtime_ns", None)
+        rows.append(row)
     rows.sort(key=lambda item: (str(item.get("relative_path")), str(item.get("category")), str(item.get("reason", ""))))
     encoded = json.dumps(
         {"planner_version": PLANNER_VERSION, "files": rows},

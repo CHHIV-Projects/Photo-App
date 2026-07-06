@@ -557,6 +557,15 @@ class IcloudStagingCleanupExecuteRequest(BaseModel):
     explicit_confirmation: str
 
 
+class IcloudStagingCleanupEligibleFile(BaseModel):
+    relative_path: str
+    size_bytes: int | None = None
+    asset_sha256: str | None = None
+    staged_sha256: str | None = None
+    verification_state: str
+    asset_id: int | None = None
+
+
 class IcloudStagingCleanupRunStatus(BaseModel):
     run_id: int | None
     status: str
@@ -586,6 +595,7 @@ class IcloudStagingCleanupRunStatus(BaseModel):
     authorization_consumed_at: datetime | None = None
     skipped_reasons: dict[str, int]
     skipped_samples: dict[str, list[str]]
+    eligible_files: list[IcloudStagingCleanupEligibleFile] = Field(default_factory=list)
     report_path: str | None
     error_message: str | None
 
@@ -611,6 +621,406 @@ class IcloudStagingCleanupReadinessResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# iCloud historical backfill inventory scan (12.62.27)
+# ---------------------------------------------------------------------------
+
+
+class IcloudBackfillInventoryScanRequest(BaseModel):
+    source_id: int
+    max_candidates: int = Field(default=50000, ge=1, le=100000)
+
+
+class IcloudBackfillInventoryStatus(BaseModel):
+    source_id: int
+    status: str
+    last_inventory_scan_at: datetime | None = None
+    last_scan_candidate_count: int = 0
+    last_scan_created_count: int = 0
+    last_scan_updated_count: int = 0
+    inventory_total_count: int = 0
+    eligible_metadata_count: int = 0
+    unsupported_or_ambiguous_count: int = 0
+    backfill_completed_count: int = 0
+    unresolved_eligible_count: int = 0
+    acquirable_pending_count: int = 0
+    retryable_failed_count: int = 0
+    ambiguous_or_unsupported_count: int = 0
+    deferred_current_count: int = 0
+    deferred_adjusted_resource_count: int = 0
+    deferred_ambiguous_count: int = 0
+    deferred_unsupported_count: int = 0
+    deferred_new_since_last_scan_count: int = 0
+    deferred_changed_since_last_scan_count: int = 0
+    source_exhausted: bool = False
+    scan_limit_reached: bool = False
+    stop_reason: str | None = None
+
+
+class IcloudBackfillInventoryScanResponse(BaseModel):
+    status: str
+    message: str
+    current: IcloudBackfillInventoryStatus
+
+
+class IcloudBackfillStatusResponse(BaseModel):
+    generated_at: datetime
+    current: IcloudBackfillInventoryStatus
+
+
+class IcloudBackfillAcquirePreviewRequest(BaseModel):
+    source_id: int
+    acquire_limit: int = Field(default=500, ge=1, le=10000)
+    max_listing_candidates: int = Field(default=100000, ge=1, le=100000)
+    include_items: bool = False
+
+
+class IcloudBackfillAcquirePreviewItem(BaseModel):
+    inventory_id: int
+    logical_resource_count: int
+    is_live_photo: bool
+    primary_relative_path: str | None = None
+
+
+class IcloudBackfillAcquirePreviewResponse(BaseModel):
+    source_id: int
+    status: str
+    selected_inventory_count: int
+    matched_listing_count: int
+    preview_selected_logical_count: int
+    preview_selected_resource_count: int
+    skipped_stale_count: int
+    skipped_known_count: int
+    skipped_unsupported_count: int
+    skipped_ambiguous_count: int
+    skipped_missing_identity_count: int
+    skipped_pending_classification_count: int = 0
+    skipped_completed_count: int = 0
+    unsafe_manifest_count: int = 0
+    acquire_limit: int
+    max_listing_candidates: int
+    stop_reason: str
+    next_safe_action: str
+    preview_items: list[IcloudBackfillAcquirePreviewItem] = Field(default_factory=list)
+
+
+class IcloudBackfillAcquireRequest(BaseModel):
+    source_id: int
+    acquire_limit: int = Field(default=500, ge=1, le=10000)
+    max_listing_candidates: int = Field(default=100000, ge=1, le=100000)
+    dry_run: bool = True
+    auto_run_source_intake: bool = True
+    include_items: bool = False
+
+
+class IcloudBackfillAcquireItem(BaseModel):
+    inventory_id: int
+    acquisition_state: str | None = None
+    backfill_completed: bool
+    backfill_resolution_state: str | None = None
+    logical_resource_count: int | None = None
+    is_live_photo: bool | None = None
+    primary_relative_path: str | None = None
+
+
+class IcloudBackfillAcquireResponse(BaseModel):
+    source_id: int
+    status: str
+    dry_run: bool
+    auto_run_source_intake: bool
+    selected_inventory_count: int
+    matched_listing_count: int
+    selected_logical_count: int
+    selected_resource_count: int
+    downloaded_logical_count: int
+    downloaded_resource_count: int
+    source_intake_attempted: bool
+    source_intake_succeeded: bool
+    source_intake_run_id: int | None = None
+    acquisition_run_id: int | None = None
+    acquisition_batch_id: int | None = None
+    backfill_completed_count: int
+    skipped_stale_count: int
+    skipped_known_count: int
+    skipped_unsupported_count: int
+    skipped_ambiguous_count: int
+    skipped_missing_identity_count: int
+    skipped_pending_classification_count: int = 0
+    skipped_completed_count: int = 0
+    failed_retryable_count: int
+    failed_terminal_count: int
+    stop_reason: str
+    next_safe_action: str
+    acquired_resource_paths: list[str] = Field(default_factory=list)
+    items: list[IcloudBackfillAcquireItem] = Field(default_factory=list)
+
+
+class SourceProfileDeferredAssetItem(BaseModel):
+    id: int
+    inventory_id: int | None = None
+    source_profile_id: int
+    primary_relative_path: str | None = None
+    filename: str | None = None
+    extension: str | None = None
+    content_type: str | None = None
+    resource_count: int
+    is_live_photo: bool
+    grouping: str | None = None
+    deferred_category: str
+    deferred_reason_code: str
+    deferred_reason_human: str
+    policy_status: str
+    current_state: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    observation_count: int
+
+
+class SourceProfileDeferredAssetsResponse(BaseModel):
+    source_id: int
+    limit: int
+    category: str | None = None
+    reason_code: str | None = None
+    state: str | None = None
+    items: list[SourceProfileDeferredAssetItem] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# iCloud historical operator routine (12.62.29.2)
+# ---------------------------------------------------------------------------
+
+
+class IcloudHistoricalRoutineStatus(BaseModel):
+    source_id: int
+    source_label: str | None = None
+    total_imported_from_source: int = 0
+    inventory_total_logical: int = 0
+    backfill_completed_logical: int = 0
+    eligible_pending_logical: int = 0
+    available_inventory: Literal["yes", "no", "unknown"] = "unknown"
+    logical_candidates_ready: int = 0
+    latest_prepare_run_id: int | None = None
+    prepare_status: str | None = None
+    prepare_expires_at: datetime | None = None
+    target_logical_candidates: int = 1000
+    new_deferred_this_prepare: int = 0
+    source_exhaustion_state: str = "unknown"
+    provider_records_scanned: int = 0
+    scan_depth_used: int = 0
+    deferred_current_logical: int = 0
+    deferred_adjusted_resource_logical: int = 0
+    deferred_ambiguous_logical: int = 0
+    deferred_unsupported_logical: int = 0
+    retryable_failed_logical: int = 0
+    last_inventory_scan_at: datetime | None = None
+    last_inventory_refresh_at: datetime | None = None
+    last_historical_run_at: datetime | None = None
+    last_historical_run_id: int | None = None
+    last_cleanup_run_id: int | None = None
+    local_staging_file_count: int = 0
+    partial_file_count: int = 0
+    backfill_execute_file_count: int = 0
+    operator_message: str
+
+
+class IcloudHistoricalRoutineStatusResponse(BaseModel):
+    generated_at: datetime
+    current: IcloudHistoricalRoutineStatus
+
+
+class IcloudHistoricalRoutineRefreshRequest(BaseModel):
+    source_id: int
+    max_candidates: int = Field(default=10000, ge=1, le=10000)
+
+
+class IcloudHistoricalRoutineRefreshResponse(BaseModel):
+    status: str
+    message: str
+    source_id: int
+    prepare_run_id: int
+    inventory_total_logical: int
+    created_logical: int
+    updated_logical: int
+    eligible_pending_logical: int
+    available_inventory: Literal["yes", "no", "unknown"]
+    target_logical_candidates: int
+    logical_candidates_ready: int
+    new_deferred_this_prepare: int
+    deferred_current_logical: int
+    deferred_adjusted_resource_logical: int
+    source_exhausted: bool
+    scan_limit_reached: bool
+    source_exhaustion_state: str
+    provider_records_scanned: int
+    scan_depth_used: int
+    expires_at: datetime
+    scanned_at: datetime
+    scan_limit_note: str
+    operator_message: str
+
+
+class IcloudHistoricalRoutineRunRequest(BaseModel):
+    source_id: int
+    target_logical_assets: int = Field(default=1000, ge=1, le=1000)
+    internal_batch_size: int = Field(default=100, ge=1, le=100)
+
+
+class IcloudHistoricalRoutineChunk(BaseModel):
+    chunk_index: int
+    requested_logical_assets: int
+    imported_logical_assets: int
+    imported_resources: int
+    cleaned_local_staging_files: int
+    acquisition_run_id: int | None = None
+    acquisition_batch_id: int | None = None
+    source_intake_run_id: int | None = None
+    cleanup_dry_run_id: int | None = None
+    cleanup_execution_run_id: int | None = None
+    cleanup_report_path: str | None = None
+    status: str
+    stop_reason: str | None = None
+    operator_message: str
+
+
+class IcloudHistoricalRoutineRunResponse(BaseModel):
+    status: str
+    source_id: int
+    prepare_run_id: int | None = None
+    requested_logical_assets: int
+    logical_candidates: int
+    internal_batch_size: int
+    imported_logical_assets: int
+    logical_imported: int
+    imported_resources: int
+    files_resources_imported: int
+    cleaned_local_staging_files: int
+    local_staging_files_cleaned: int
+    new_deferred_this_run: int
+    execution_failed_this_run: int = 0
+    eligible_remaining_logical: int
+    deferred_current_logical: int
+    deferred_adjusted_resource_logical: int
+    available_inventory: Literal["yes", "no", "unknown"]
+    operator_message: str
+    stop_reason: str | None = None
+    chunks: list[IcloudHistoricalRoutineChunk] = Field(default_factory=list)
+
+
+class IcloudIntakeImportStartRequest(BaseModel):
+    source_id: int
+    target_logical_assets: int = Field(default=1000, ge=1, le=1000)
+    internal_batch_size: int = Field(default=100, ge=1, le=100)
+
+
+class IcloudIntakeImportAdvanceRequest(BaseModel):
+    source_id: int
+    import_run_id: int | None = None
+
+
+class IcloudIntakeImportResumeRequest(BaseModel):
+    source_id: int
+    import_run_id: int | None = None
+
+
+class IcloudIntakeImportChunkStatus(BaseModel):
+    id: int
+    chunk_index: int
+    status: str
+    candidate_start_index: int
+    candidate_end_index: int
+    logical_candidates: int
+    logical_imported: int
+    files_resources_imported: int
+    local_staging_files_cleaned: int
+    new_deferred_this_chunk: int
+    execution_failed_retryable_count: int
+    execution_failed_terminal_count: int
+    source_intake_failed_count: int
+    cleanup_failed_count: int
+    acquisition_run_id: int | None = None
+    acquisition_batch_id: int | None = None
+    source_intake_run_id: int | None = None
+    cleanup_dry_run_id: int | None = None
+    cleanup_execution_run_id: int | None = None
+    cleanup_report_path: str | None = None
+    cleanup_eligible_count: int = 0
+    cleanup_skipped_count: int = 0
+    cleanup_protected_count: int = 0
+    cleanup_verification_failed_count: int = 0
+    cleanup_file_missing_count: int = 0
+    cleanup_delete_failed_count: int = 0
+    chunk_total_seconds: float | None = None
+    candidate_load_seconds: float | None = None
+    fresh_resolution_seconds: float | None = None
+    download_stage_seconds: float | None = None
+    source_intake_seconds: float | None = None
+    cleanup_dry_run_seconds: float | None = None
+    cleanup_execute_seconds: float | None = None
+    db_state_update_seconds: float | None = None
+    inter_chunk_gap_seconds: float | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+    operator_message: str | None = None
+    stop_reason: str | None = None
+    timing_note: str | None = None
+
+
+class IcloudIntakeImportStatus(BaseModel):
+    source_id: int
+    source_label: str | None = None
+    total_imported_from_source: int = 0
+    last_inventory_refresh_at: datetime | None = None
+    available_inventory: Literal["yes", "no", "unknown"] = "unknown"
+    logical_candidates_ready: int = 0
+    latest_prepare_run_id: int | None = None
+    prepare_status: str | None = None
+    prepare_expires_at: datetime | None = None
+    import_run_id: int | None = None
+    import_status: str | None = None
+    import_operator_message: str
+    import_stop_reason: str | None = None
+    target_logical_candidates: int = 1000
+    logical_candidates_total: int = 0
+    logical_imported: int = 0
+    files_resources_imported: int = 0
+    local_staging_files_cleaned: int = 0
+    new_deferred_this_run: int = 0
+    execution_failed_retryable_count: int = 0
+    execution_failed_terminal_count: int = 0
+    source_intake_failed_count: int = 0
+    cleanup_failed_count: int = 0
+    current_chunk_index: int = 0
+    total_chunks: int = 0
+    internal_batch_size: int = 100
+    pending_chunk_count: int = 0
+    completed_chunk_count: int = 0
+    remaining_logical_candidates: int = 0
+    resume_available: bool = False
+    can_start_import: bool = False
+    can_resume_import: bool = False
+    can_advance_import: bool = False
+    current_phase: str | None = None
+    last_chunk_duration_seconds: float | None = None
+    last_inter_chunk_gap_seconds: float | None = None
+    started_at: datetime | None = None
+    last_progress_at: datetime | None = None
+    completed_at: datetime | None = None
+    failed_at: datetime | None = None
+    interrupted_at: datetime | None = None
+    resumed_at: datetime | None = None
+    report_path: str | None = None
+    local_staging_file_count: int = 0
+    partial_file_count: int = 0
+    backfill_execute_file_count: int = 0
+    chunks: list[IcloudIntakeImportChunkStatus] = Field(default_factory=list)
+
+
+class IcloudIntakeImportStatusResponse(BaseModel):
+    generated_at: datetime
+    current: IcloudIntakeImportStatus
+
+
+# ---------------------------------------------------------------------------
 # Internal single-flow iCloud run (12.62.22)
 # ---------------------------------------------------------------------------
 
@@ -628,8 +1038,8 @@ CountOrStatusValue = int | Literal["not_available", "deferred", "not_applicable"
 class InternalIcloudRunRequest(BaseModel):
     source_id: int
     batch_size: int = Field(default=5, ge=1, le=500)
-    total_limit: int = Field(default=10, ge=1, le=500)
-    candidate_search_cap: int = Field(default=50, ge=1, le=500)
+    total_limit: int = Field(default=500, ge=1, le=1000)
+    candidate_search_cap: int = Field(default=1000, ge=1, le=1000)
     media_scope: MediaScopeValue = "ordinary_stills"
     auto_cleanup_if_safe: bool = True
 
