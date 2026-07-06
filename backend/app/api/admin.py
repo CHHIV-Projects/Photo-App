@@ -69,6 +69,13 @@ from app.schemas.admin import (
     IcloudBackfillInventoryScanResponse,
     IcloudBackfillInventoryStatus,
     IcloudBackfillStatusResponse,
+    IcloudHistoricalRoutineChunk,
+    IcloudHistoricalRoutineRefreshRequest,
+    IcloudHistoricalRoutineRefreshResponse,
+    IcloudHistoricalRoutineRunRequest,
+    IcloudHistoricalRoutineRunResponse,
+    IcloudHistoricalRoutineStatus,
+    IcloudHistoricalRoutineStatusResponse,
     SourceProfileDeferredAssetItem,
     SourceProfileDeferredAssetsResponse,
     InternalIcloudRunRequest,
@@ -135,6 +142,8 @@ from app.services.icloud_acquisition.execution_service import (
     request_icloud_acquisition_stop,
     start_icloud_acquisition_background,
 )
+from app.services.icloud_acquisition.exact_selection_adapter import ExactSelectionPrototypeError
+from app.services.icloud_acquisition.exact_selection_protocol import ExactSelectionProtocolError
 from app.services.admin.icloud_staging_cleanup_execution_service import (
     CleanupBusyError,
     CleanupAuthorizationError,
@@ -162,6 +171,12 @@ from app.services.icloud_backfill_acquisition_preview_service import (
 from app.services.icloud_backfill_acquisition_execution_service import (
     IcloudBackfillAcquireResult,
     run_icloud_backfill_acquisition as run_icloud_backfill_acquisition_service,
+)
+from app.services.icloud_historical_routine_service import (
+    IcloudHistoricalRoutineError,
+    get_historical_routine_status as get_historical_routine_status_service,
+    refresh_historical_inventory as refresh_historical_inventory_service,
+    run_next_historical_batch as run_next_historical_batch_service,
 )
 from app.services.source_profile_deferred_asset_service import (
     DeferredAssetListItem,
@@ -639,6 +654,41 @@ def _to_deferred_asset_item(item: DeferredAssetListItem) -> SourceProfileDeferre
     )
 
 
+def _to_historical_routine_status(snapshot) -> IcloudHistoricalRoutineStatus:
+    return IcloudHistoricalRoutineStatus(
+        source_id=snapshot.source_id,
+        source_label=snapshot.source_label,
+        total_imported_from_source=snapshot.total_imported_from_source,
+        inventory_total_logical=snapshot.inventory_total_logical,
+        backfill_completed_logical=snapshot.backfill_completed_logical,
+        eligible_pending_logical=snapshot.eligible_pending_logical,
+        available_inventory=snapshot.available_inventory,
+        logical_candidates_ready=snapshot.logical_candidates_ready,
+        latest_prepare_run_id=snapshot.latest_prepare_run_id,
+        prepare_status=snapshot.prepare_status,
+        prepare_expires_at=snapshot.prepare_expires_at,
+        target_logical_candidates=snapshot.target_logical_candidates,
+        new_deferred_this_prepare=snapshot.new_deferred_this_prepare,
+        source_exhaustion_state=snapshot.source_exhaustion_state,
+        provider_records_scanned=snapshot.provider_records_scanned,
+        scan_depth_used=snapshot.scan_depth_used,
+        deferred_current_logical=snapshot.deferred_current_logical,
+        deferred_adjusted_resource_logical=snapshot.deferred_adjusted_resource_logical,
+        deferred_ambiguous_logical=snapshot.deferred_ambiguous_logical,
+        deferred_unsupported_logical=snapshot.deferred_unsupported_logical,
+        retryable_failed_logical=snapshot.retryable_failed_logical,
+        last_inventory_scan_at=snapshot.last_inventory_scan_at,
+        last_inventory_refresh_at=snapshot.last_inventory_refresh_at,
+        last_historical_run_at=snapshot.last_historical_run_at,
+        last_historical_run_id=snapshot.last_historical_run_id,
+        last_cleanup_run_id=snapshot.last_cleanup_run_id,
+        local_staging_file_count=snapshot.local_staging_file_count,
+        partial_file_count=snapshot.partial_file_count,
+        backfill_execute_file_count=snapshot.backfill_execute_file_count,
+        operator_message=snapshot.operator_message,
+    )
+
+
 def _to_icloud_backfill_acquire_preview_response(
     snapshot: IcloudBackfillAcquisitionPreviewResult,
 ) -> IcloudBackfillAcquirePreviewResponse:
@@ -1069,11 +1119,161 @@ def run_icloud_backfill_inventory_scan(
             status_code=status_code,
             content={"detail": str(exc), "error_code": exc.code},
         )
+    except (ExactSelectionPrototypeError, ExactSelectionProtocolError) as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "error_code": getattr(exc, "code", "icloud_helper_error"),
+            },
+        )
 
     return IcloudBackfillInventoryScanResponse(
         status="completed",
         message="iCloud backfill inventory scan completed.",
         current=_to_icloud_backfill_inventory_status(result),
+    )
+
+
+@router.get("/icloud-routine/historical/status", response_model=IcloudHistoricalRoutineStatusResponse)
+def get_icloud_historical_routine_status(
+    source_id: int,
+    db: Session = Depends(get_db_session),
+) -> IcloudHistoricalRoutineStatusResponse | JSONResponse:
+    """Return operator-level historical iCloud backfill routine status."""
+    from datetime import datetime, timezone
+
+    try:
+        snapshot = get_historical_routine_status_service(db, source_id=source_id)
+    except IcloudHistoricalRoutineError as exc:
+        status_code = status.HTTP_404_NOT_FOUND if exc.code == "source_not_found" else status.HTTP_400_BAD_REQUEST
+        return JSONResponse(status_code=status_code, content={"detail": str(exc), "error_code": exc.code})
+    return IcloudHistoricalRoutineStatusResponse(
+        generated_at=datetime.now(timezone.utc),
+        current=_to_historical_routine_status(snapshot),
+    )
+
+
+@router.post("/icloud-routine/historical/refresh-inventory", response_model=IcloudHistoricalRoutineRefreshResponse)
+def refresh_icloud_historical_inventory(
+    body: IcloudHistoricalRoutineRefreshRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudHistoricalRoutineRefreshResponse | JSONResponse:
+    """Run metadata-only inventory refresh for the historical iCloud routine."""
+    try:
+        result = refresh_historical_inventory_service(
+            db,
+            source_id=body.source_id,
+            max_candidates=body.max_candidates,
+        )
+    except (IcloudHistoricalRoutineError, IcloudBackfillValidationError) as exc:
+        code = getattr(exc, "code", "invalid_historical_refresh")
+        status_code = status.HTTP_404_NOT_FOUND if code == "source_not_found" else status.HTTP_400_BAD_REQUEST
+        return JSONResponse(status_code=status_code, content={"detail": str(exc), "error_code": code})
+    except (ExactSelectionPrototypeError, ExactSelectionProtocolError) as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "detail": str(exc),
+                "error_code": getattr(exc, "code", "icloud_helper_error"),
+            },
+        )
+    return IcloudHistoricalRoutineRefreshResponse(
+        status=result.status,
+        message=result.operator_message,
+        source_id=result.source_id,
+        prepare_run_id=result.prepare_run_id,
+        inventory_total_logical=result.inventory_total_logical,
+        created_logical=result.created_logical,
+        updated_logical=result.updated_logical,
+        eligible_pending_logical=result.eligible_pending_logical,
+        available_inventory=result.available_inventory,
+        target_logical_candidates=result.target_logical_candidates,
+        logical_candidates_ready=result.logical_candidates_ready,
+        new_deferred_this_prepare=result.new_deferred_this_prepare,
+        deferred_current_logical=result.deferred_current_logical,
+        deferred_adjusted_resource_logical=result.deferred_adjusted_resource_logical,
+        source_exhausted=result.source_exhausted,
+        scan_limit_reached=result.scan_limit_reached,
+        source_exhaustion_state=result.source_exhaustion_state,
+        provider_records_scanned=result.provider_records_scanned,
+        scan_depth_used=result.scan_depth_used,
+        expires_at=result.expires_at,
+        scanned_at=result.scanned_at,
+        scan_limit_note=result.scan_limit_note,
+        operator_message=result.operator_message,
+    )
+
+
+@router.post("/icloud-routine/historical/run-next-batch", response_model=IcloudHistoricalRoutineRunResponse)
+def run_icloud_historical_next_batch(
+    body: IcloudHistoricalRoutineRunRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudHistoricalRoutineRunResponse | JSONResponse:
+    """Run the operator-level Backfill Next 1000 historical routine."""
+    guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db, source_id=body.source_id)
+    if guardrail_snapshot.blocked:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=_guardrail_conflict_content(
+                guardrail_snapshot,
+                detail="Another ingestion-related operation is active.",
+                error_code="INGESTION_OPERATION_ACTIVE",
+            ),
+        )
+    with protected_ingestion_operation_start(db):
+        try:
+            result = run_next_historical_batch_service(
+                db,
+                source_id=body.source_id,
+                target_logical_assets=body.target_logical_assets,
+                internal_batch_size=body.internal_batch_size,
+            )
+        except (IcloudHistoricalRoutineError, IcloudBackfillValidationError) as exc:
+            code = getattr(exc, "code", "historical_routine_failed")
+            status_code = status.HTTP_404_NOT_FOUND if code == "source_not_found" else status.HTTP_400_BAD_REQUEST
+            return JSONResponse(status_code=status_code, content={"detail": str(exc), "error_code": code})
+
+    return IcloudHistoricalRoutineRunResponse(
+        status=result.status,
+        source_id=result.source_id,
+        prepare_run_id=result.prepare_run_id,
+        requested_logical_assets=result.requested_logical_assets,
+        logical_candidates=result.logical_candidates,
+        internal_batch_size=result.internal_batch_size,
+        imported_logical_assets=result.imported_logical_assets,
+        logical_imported=result.logical_imported,
+        imported_resources=result.imported_resources,
+        files_resources_imported=result.files_resources_imported,
+        cleaned_local_staging_files=result.cleaned_local_staging_files,
+        local_staging_files_cleaned=result.local_staging_files_cleaned,
+        new_deferred_this_run=result.new_deferred_this_run,
+        execution_failed_this_run=result.execution_failed_this_run,
+        eligible_remaining_logical=result.eligible_remaining_logical,
+        deferred_current_logical=result.deferred_current_logical,
+        deferred_adjusted_resource_logical=result.deferred_adjusted_resource_logical,
+        available_inventory=result.available_inventory,
+        operator_message=result.operator_message,
+        stop_reason=result.stop_reason,
+        chunks=[
+            IcloudHistoricalRoutineChunk(
+                chunk_index=chunk.chunk_index,
+                requested_logical_assets=chunk.requested_logical_assets,
+                imported_logical_assets=chunk.imported_logical_assets,
+                imported_resources=chunk.imported_resources,
+                cleaned_local_staging_files=chunk.cleaned_local_staging_files,
+                acquisition_run_id=chunk.acquisition_run_id,
+                acquisition_batch_id=chunk.acquisition_batch_id,
+                source_intake_run_id=chunk.source_intake_run_id,
+                cleanup_dry_run_id=chunk.cleanup_dry_run_id,
+                cleanup_execution_run_id=chunk.cleanup_execution_run_id,
+                cleanup_report_path=chunk.cleanup_report_path,
+                status=chunk.status,
+                stop_reason=chunk.stop_reason,
+                operator_message=chunk.operator_message,
+            )
+            for chunk in result.chunks
+        ],
     )
 
 

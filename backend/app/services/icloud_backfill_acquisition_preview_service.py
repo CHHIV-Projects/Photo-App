@@ -166,31 +166,65 @@ def _select_inventory_rows(
 ) -> _SelectionAccumulator:
     selected = _SelectionAccumulator()
     for row in _ordered_inventory_rows(db_session, source_id=source_id):
-        eligibility = (row.eligibility_state or "").strip()
-        known_state = (row.known_state or "").strip()
+        _consider_inventory_row_for_selection(selected, row=row, acquire_limit=acquire_limit)
+    return selected
 
-        if bool(getattr(row, "backfill_completed", False)):
-            selected.skipped_completed_count += 1
-            continue
-        if not _has_required_identity(row):
+
+def _consider_inventory_row_for_selection(
+    selected: _SelectionAccumulator,
+    *,
+    row: IcloudRemoteAssetInventory,
+    acquire_limit: int,
+) -> None:
+    eligibility = (row.eligibility_state or "").strip()
+    known_state = (row.known_state or "").strip()
+
+    if bool(getattr(row, "backfill_completed", False)):
+        selected.skipped_completed_count += 1
+        return
+    if not _has_required_identity(row):
+        selected.skipped_missing_identity_count += 1
+        return
+    if known_state not in _SELECTABLE_KNOWN_STATES:
+        selected.skipped_known_count += 1
+        return
+    if row.identity_ambiguous or eligibility == ELIGIBILITY_AMBIGUOUS_METADATA_ONLY:
+        selected.skipped_ambiguous_count += 1
+        return
+    if eligibility == ELIGIBILITY_UNSUPPORTED_METADATA_ONLY:
+        selected.skipped_unsupported_count += 1
+        return
+    if eligibility != ELIGIBILITY_ELIGIBLE_METADATA_ONLY:
+        selected.skipped_pending_classification_count += 1
+        return
+
+    selected.selectable_total_count += 1
+    if len(selected.selected_rows) < acquire_limit:
+        selected.selected_rows.append(row)
+
+
+def _select_inventory_rows_by_ids(
+    db_session: Session,
+    *,
+    source_id: int,
+    inventory_ids: tuple[int, ...],
+) -> _SelectionAccumulator:
+    selected = _SelectionAccumulator()
+    if not inventory_ids:
+        return selected
+    rows = db_session.scalars(
+        select(IcloudRemoteAssetInventory).where(
+            IcloudRemoteAssetInventory.source_profile_id == source_id,
+            IcloudRemoteAssetInventory.id.in_(inventory_ids),
+        )
+    ).all()
+    rows_by_id = {int(row.id): row for row in rows}
+    for inventory_id in inventory_ids:
+        row = rows_by_id.get(int(inventory_id))
+        if row is None:
             selected.skipped_missing_identity_count += 1
             continue
-        if known_state not in _SELECTABLE_KNOWN_STATES:
-            selected.skipped_known_count += 1
-            continue
-        if row.identity_ambiguous or eligibility == ELIGIBILITY_AMBIGUOUS_METADATA_ONLY:
-            selected.skipped_ambiguous_count += 1
-            continue
-        if eligibility == ELIGIBILITY_UNSUPPORTED_METADATA_ONLY:
-            selected.skipped_unsupported_count += 1
-            continue
-        if eligibility != ELIGIBILITY_ELIGIBLE_METADATA_ONLY:
-            selected.skipped_pending_classification_count += 1
-            continue
-
-        selected.selectable_total_count += 1
-        if len(selected.selected_rows) < acquire_limit:
-            selected.selected_rows.append(row)
+        _consider_inventory_row_for_selection(selected, row=row, acquire_limit=len(inventory_ids))
     return selected
 
 

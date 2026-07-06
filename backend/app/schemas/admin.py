@@ -785,6 +785,127 @@ class SourceProfileDeferredAssetsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# iCloud historical operator routine (12.62.29.2)
+# ---------------------------------------------------------------------------
+
+
+class IcloudHistoricalRoutineStatus(BaseModel):
+    source_id: int
+    source_label: str | None = None
+    total_imported_from_source: int = 0
+    inventory_total_logical: int = 0
+    backfill_completed_logical: int = 0
+    eligible_pending_logical: int = 0
+    available_inventory: Literal["yes", "no", "unknown"] = "unknown"
+    logical_candidates_ready: int = 0
+    latest_prepare_run_id: int | None = None
+    prepare_status: str | None = None
+    prepare_expires_at: datetime | None = None
+    target_logical_candidates: int = 1000
+    new_deferred_this_prepare: int = 0
+    source_exhaustion_state: str = "unknown"
+    provider_records_scanned: int = 0
+    scan_depth_used: int = 0
+    deferred_current_logical: int = 0
+    deferred_adjusted_resource_logical: int = 0
+    deferred_ambiguous_logical: int = 0
+    deferred_unsupported_logical: int = 0
+    retryable_failed_logical: int = 0
+    last_inventory_scan_at: datetime | None = None
+    last_inventory_refresh_at: datetime | None = None
+    last_historical_run_at: datetime | None = None
+    last_historical_run_id: int | None = None
+    last_cleanup_run_id: int | None = None
+    local_staging_file_count: int = 0
+    partial_file_count: int = 0
+    backfill_execute_file_count: int = 0
+    operator_message: str
+
+
+class IcloudHistoricalRoutineStatusResponse(BaseModel):
+    generated_at: datetime
+    current: IcloudHistoricalRoutineStatus
+
+
+class IcloudHistoricalRoutineRefreshRequest(BaseModel):
+    source_id: int
+    max_candidates: int = Field(default=10000, ge=1, le=10000)
+
+
+class IcloudHistoricalRoutineRefreshResponse(BaseModel):
+    status: str
+    message: str
+    source_id: int
+    prepare_run_id: int
+    inventory_total_logical: int
+    created_logical: int
+    updated_logical: int
+    eligible_pending_logical: int
+    available_inventory: Literal["yes", "no", "unknown"]
+    target_logical_candidates: int
+    logical_candidates_ready: int
+    new_deferred_this_prepare: int
+    deferred_current_logical: int
+    deferred_adjusted_resource_logical: int
+    source_exhausted: bool
+    scan_limit_reached: bool
+    source_exhaustion_state: str
+    provider_records_scanned: int
+    scan_depth_used: int
+    expires_at: datetime
+    scanned_at: datetime
+    scan_limit_note: str
+    operator_message: str
+
+
+class IcloudHistoricalRoutineRunRequest(BaseModel):
+    source_id: int
+    target_logical_assets: int = Field(default=1000, ge=1, le=1000)
+    internal_batch_size: int = Field(default=100, ge=1, le=100)
+
+
+class IcloudHistoricalRoutineChunk(BaseModel):
+    chunk_index: int
+    requested_logical_assets: int
+    imported_logical_assets: int
+    imported_resources: int
+    cleaned_local_staging_files: int
+    acquisition_run_id: int | None = None
+    acquisition_batch_id: int | None = None
+    source_intake_run_id: int | None = None
+    cleanup_dry_run_id: int | None = None
+    cleanup_execution_run_id: int | None = None
+    cleanup_report_path: str | None = None
+    status: str
+    stop_reason: str | None = None
+    operator_message: str
+
+
+class IcloudHistoricalRoutineRunResponse(BaseModel):
+    status: str
+    source_id: int
+    prepare_run_id: int | None = None
+    requested_logical_assets: int
+    logical_candidates: int
+    internal_batch_size: int
+    imported_logical_assets: int
+    logical_imported: int
+    imported_resources: int
+    files_resources_imported: int
+    cleaned_local_staging_files: int
+    local_staging_files_cleaned: int
+    new_deferred_this_run: int
+    execution_failed_this_run: int = 0
+    eligible_remaining_logical: int
+    deferred_current_logical: int
+    deferred_adjusted_resource_logical: int
+    available_inventory: Literal["yes", "no", "unknown"]
+    operator_message: str
+    stop_reason: str | None = None
+    chunks: list[IcloudHistoricalRoutineChunk] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Internal single-flow iCloud run (12.62.22)
 # ---------------------------------------------------------------------------
 

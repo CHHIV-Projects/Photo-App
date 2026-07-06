@@ -43,6 +43,7 @@ from app.services.icloud_backfill_acquisition_preview_service import (
     _listing_by_remote_identity,
     _manifest_unsafe,
     _select_inventory_rows,
+    _select_inventory_rows_by_ids,
     _validate_acquire_limit,
     _validate_listing_limit,
     _validate_source_profile,
@@ -209,12 +210,21 @@ def _prepare_selection(
     acquire_limit: int,
     max_listing_candidates: int,
     helper_client: ExactSelectionHelperClient,
+    inventory_ids: tuple[int, ...] | None = None,
 ) -> _PreparedSelection:
     source = _validate_source_profile(db_session, source_id=source_id)
-    selection = _select_inventory_rows(
-        db_session,
-        source_id=source_id,
-        acquire_limit=acquire_limit,
+    selection = (
+        _select_inventory_rows_by_ids(
+            db_session,
+            source_id=source_id,
+            inventory_ids=inventory_ids,
+        )
+        if inventory_ids is not None
+        else _select_inventory_rows(
+            db_session,
+            source_id=source_id,
+            acquire_limit=acquire_limit,
+        )
     )
     if not selection.selected_rows:
         return _PreparedSelection((), (), 0, 0, 0, 0, selection)
@@ -385,6 +395,7 @@ def run_icloud_backfill_acquisition(
     auto_run_source_intake: bool = True,
     include_items: bool = False,
     helper_client: ExactSelectionHelperClient | None = None,
+    inventory_ids: tuple[int, ...] | None = None,
 ) -> IcloudBackfillAcquireResult:
     """Run dry-run preview or real inventory-driven acquisition with Source Intake handoff."""
 
@@ -410,6 +421,7 @@ def run_icloud_backfill_acquisition(
         acquire_limit=acquire_limit,
         max_listing_candidates=max_listing_candidates,
         helper_client=helper,
+        inventory_ids=inventory_ids,
     )
     skips = prepared.selection_skips
     if not prepared.selected_rows:

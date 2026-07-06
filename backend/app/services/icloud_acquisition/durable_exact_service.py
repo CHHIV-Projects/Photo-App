@@ -132,6 +132,31 @@ _FORBIDDEN_MANIFEST_TERMS = (
     "item_id",
 )
 
+_MANIFEST_TOP_LEVEL_KEYS = {
+    "manifest_version",
+    "run_id",
+    "batch_index",
+    "source_profile_id",
+    "target_new_item_count",
+    "candidate_scan_limit",
+    "planner_stop_reason",
+    "items",
+}
+_MANIFEST_ITEM_KEYS = {
+    "item_ordinal",
+    "remote_item_digest",
+    "grouping",
+    "resources",
+}
+_MANIFEST_RESOURCE_KEYS = {
+    "resource_ordinal",
+    "role",
+    "relative_path",
+    "expected_size",
+    "provider_checksum_kind",
+    "selected_for_download",
+}
+
 
 @dataclass(frozen=True)
 class DurableExactRunResult:
@@ -305,14 +330,60 @@ def _finalize_run(
     db_session.commit()
 
 
+def _raise_unsafe_manifest(message: str = "The durable exact-selection manifest contained unsafe fields.") -> None:
+    raise DurableExactAcquisitionError("unsafe_manifest", message)
+
+
+def _assert_allowed_manifest_keys(payload: dict[str, Any], *, allowed_keys: set[str], context: str) -> None:
+    unexpected = sorted(set(payload) - allowed_keys)
+    if unexpected:
+        _raise_unsafe_manifest(f"The durable exact-selection manifest contained unexpected {context} fields.")
+    for key in payload:
+        lowered = key.casefold()
+        if any(term in lowered for term in _FORBIDDEN_MANIFEST_TERMS):
+            _raise_unsafe_manifest(f"The durable exact-selection manifest contained unsafe {context} fields.")
+
+
+def _assert_safe_manifest_relative_path(value: Any) -> None:
+    relative_path = str(value or "").strip()
+    if not relative_path:
+        _raise_unsafe_manifest("The durable exact-selection manifest contained an empty relative path.")
+    normalized = relative_path.replace("\\", "/")
+    first_part = normalized.split("/", 1)[0]
+    if (
+        "://" in normalized
+        or normalized.startswith("/")
+        or normalized.startswith("../")
+        or "/../" in normalized
+        or first_part.endswith(":")
+    ):
+        _raise_unsafe_manifest("The durable exact-selection manifest contained an unsafe relative path.")
+
+
+def _assert_secret_free_manifest_shape(manifest: dict[str, Any]) -> None:
+    _assert_allowed_manifest_keys(manifest, allowed_keys=_MANIFEST_TOP_LEVEL_KEYS, context="top-level")
+    items = manifest.get("items")
+    if not isinstance(items, list):
+        _raise_unsafe_manifest("The durable exact-selection manifest contained an invalid item list.")
+    for item in items:
+        if not isinstance(item, dict):
+            _raise_unsafe_manifest("The durable exact-selection manifest contained an invalid item.")
+        _assert_allowed_manifest_keys(item, allowed_keys=_MANIFEST_ITEM_KEYS, context="item")
+        digest = str(item.get("remote_item_digest") or "")
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest.casefold()):
+            _raise_unsafe_manifest("The durable exact-selection manifest contained an invalid remote digest.")
+        resources = item.get("resources")
+        if not isinstance(resources, list):
+            _raise_unsafe_manifest("The durable exact-selection manifest contained an invalid resource list.")
+        for resource in resources:
+            if not isinstance(resource, dict):
+                _raise_unsafe_manifest("The durable exact-selection manifest contained an invalid resource.")
+            _assert_allowed_manifest_keys(resource, allowed_keys=_MANIFEST_RESOURCE_KEYS, context="resource")
+            _assert_safe_manifest_relative_path(resource.get("relative_path"))
+
+
 def _secret_free_manifest_text(manifest: dict[str, Any]) -> str:
-    encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
-    lowered = encoded.casefold()
-    if any(term in lowered for term in _FORBIDDEN_MANIFEST_TERMS):
-        raise DurableExactAcquisitionError(
-            "unsafe_manifest",
-            "The durable exact-selection manifest contained a forbidden term.",
-        )
+    _assert_secret_free_manifest_shape(manifest)
     return json.dumps(manifest, indent=2, sort_keys=True)
 
 
@@ -696,6 +767,78 @@ def _apply_download_response(
     db_session.commit()
 
 
+def _mark_batch_failed_for_exception(
+    db_session: Session,
+    *,
+    batch: IcloudAcquisitionBatch,
+    reason: str,
+) -> None:
+    now = _utc_now()
+    batch.status = STATUS_BATCH_FAILED
+    batch.failure_reason = reason
+    batch.next_safe_action = _next_safe_action(reason)
+    batch.batch_ready_for_source_intake = False
+    batch.ready_for_cleanup_dry_run = False
+    batch.finished_at = batch.finished_at or now
+    for item in batch.items:
+        if item.status in {STATUS_ITEM_PLANNED, STATUS_ITEM_DOWNLOADING, STATUS_ITEM_NEEDS_RETRY}:
+            item.status = STATUS_ITEM_FAILED
+            item.failure_reason = reason
+            item.finished_at = item.finished_at or now
+        for resource in item.resources:
+            if resource.status in {STATUS_RESOURCE_PLANNED, STATUS_RESOURCE_NEEDS_RETRY}:
+                resource.status = STATUS_RESOURCE_FAILED
+                resource.failure_reason = reason
+    db_session.commit()
+
+
+def _exception_result(
+    db_session: Session,
+    *,
+    run: IcloudAcquisitionRun,
+    batch: IcloudAcquisitionBatch | None,
+    reason: str,
+) -> DurableExactRunResult:
+    if batch is None:
+        batch = db_session.scalar(
+            select(IcloudAcquisitionBatch)
+            .where(IcloudAcquisitionBatch.run_id == run.id)
+            .order_by(IcloudAcquisitionBatch.id.desc())
+            .limit(1)
+        )
+    effective_reason = reason
+    if batch is not None:
+        if batch.status == STATUS_BATCH_DOWNLOADING:
+            batch = reconcile_batch_filesystem(db_session, batch_id=batch.id)
+            effective_reason = batch.failure_reason or reason
+        if not batch.batch_ready_for_source_intake:
+            if batch.status not in {STATUS_BATCH_BLOCKED, STATUS_BATCH_NEEDS_RETRY}:
+                _mark_batch_failed_for_exception(db_session, batch=batch, reason=effective_reason)
+                db_session.refresh(batch)
+            else:
+                batch.next_safe_action = batch.next_safe_action or _next_safe_action(effective_reason)
+                db_session.commit()
+    ready = bool(batch and batch.batch_ready_for_source_intake)
+    _finalize_run(
+        db_session,
+        run,
+        status=STATUS_COMPLETED if ready else STATUS_FAILED,
+        stop_reason="lost_response_reconciled" if ready else effective_reason,
+        failure_reason=None if ready else effective_reason,
+        next_safe_action=NEXT_RUN_SOURCE_INTAKE if ready else _next_safe_action(effective_reason),
+        downloaded_count=batch.downloaded_resource_count if batch else 0,
+        failed_count=batch.failed_resource_count if batch else 0,
+    )
+    return DurableExactRunResult(
+        run_id=run.id,
+        batch_id=batch.id if batch is not None else None,
+        status=run.status,
+        stop_reason=run.stop_reason,
+        next_safe_action=run.next_safe_action,
+        batch_ready_for_source_intake=ready,
+    )
+
+
 def _download_request_from_batch(
     *,
     run: IcloudAcquisitionRun,
@@ -896,40 +1039,9 @@ def run_durable_exact_selection_batch(
             next_safe_action=run.next_safe_action,
             batch_ready_for_source_intake=ready,
         )
-    except ExactSelectionPrototypeError as exc:
+    except (ExactSelectionPrototypeError, DurableExactAcquisitionError) as exc:
         reason = exc.code
-        if batch is not None:
-            batch = reconcile_batch_filesystem(db_session, batch_id=batch.id)
-            if not batch.batch_ready_for_source_intake:
-                batch.failure_reason = batch.failure_reason or reason
-                batch.next_safe_action = _next_safe_action(batch.failure_reason)
-                db_session.commit()
-        _finalize_run(
-            db_session,
-            run,
-            status=STATUS_COMPLETED if batch and batch.batch_ready_for_source_intake else STATUS_FAILED,
-            stop_reason=(
-                "lost_response_reconciled"
-                if batch and batch.batch_ready_for_source_intake
-                else reason
-            ),
-            failure_reason=None if batch and batch.batch_ready_for_source_intake else reason,
-            next_safe_action=(
-                NEXT_RUN_SOURCE_INTAKE
-                if batch and batch.batch_ready_for_source_intake
-                else _next_safe_action(reason)
-            ),
-            downloaded_count=batch.downloaded_resource_count if batch else 0,
-            failed_count=batch.failed_resource_count if batch else 0,
-        )
-        return DurableExactRunResult(
-            run_id=run.id,
-            batch_id=batch.id if batch is not None else None,
-            status=run.status,
-            stop_reason=run.stop_reason,
-            next_safe_action=run.next_safe_action,
-            batch_ready_for_source_intake=bool(batch and batch.batch_ready_for_source_intake),
-        )
+        return _exception_result(db_session, run=run, batch=batch, reason=reason)
     finally:
         _restore_helper_callbacks(helper_client, callbacks)
 
@@ -1032,40 +1144,9 @@ def run_durable_exact_selection_preparation(
             next_safe_action=run.next_safe_action,
             batch_ready_for_source_intake=ready,
         )
-    except ExactSelectionPrototypeError as exc:
+    except (ExactSelectionPrototypeError, DurableExactAcquisitionError) as exc:
         reason = exc.code
-        if batch is not None:
-            batch = reconcile_batch_filesystem(db_session, batch_id=batch.id)
-            if not batch.batch_ready_for_source_intake:
-                batch.failure_reason = batch.failure_reason or reason
-                batch.next_safe_action = _next_safe_action(batch.failure_reason)
-                db_session.commit()
-        _finalize_run(
-            db_session,
-            run,
-            status=STATUS_COMPLETED if batch and batch.batch_ready_for_source_intake else STATUS_FAILED,
-            stop_reason=(
-                "lost_response_reconciled"
-                if batch and batch.batch_ready_for_source_intake
-                else reason
-            ),
-            failure_reason=None if batch and batch.batch_ready_for_source_intake else reason,
-            next_safe_action=(
-                NEXT_RUN_SOURCE_INTAKE
-                if batch and batch.batch_ready_for_source_intake
-                else _next_safe_action(reason)
-            ),
-            downloaded_count=batch.downloaded_resource_count if batch else 0,
-            failed_count=batch.failed_resource_count if batch else 0,
-        )
-        return DurableExactRunResult(
-            run_id=run.id,
-            batch_id=batch.id if batch is not None else None,
-            status=run.status,
-            stop_reason=run.stop_reason,
-            next_safe_action=run.next_safe_action,
-            batch_ready_for_source_intake=bool(batch and batch.batch_ready_for_source_intake),
-        )
+        return _exception_result(db_session, run=run, batch=batch, reason=reason)
     finally:
         _restore_helper_callbacks(helper_client, callbacks)
 

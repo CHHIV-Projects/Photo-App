@@ -315,6 +315,27 @@ class AdminIngestionGuardrailsApiTests(unittest.TestCase):
         self.assertNotIn("vault_path", current["eligible_files"][0])
         self.assertNotIn("absolute_path", current["eligible_files"][0])
 
+    def test_historical_refresh_returns_json_error_for_helper_failure(self) -> None:
+        from unittest.mock import patch
+        from app.services.icloud_acquisition.exact_selection_adapter import ExactSelectionPrototypeError
+
+        with patch(
+            "app.api.admin.refresh_historical_inventory_service",
+            side_effect=ExactSelectionPrototypeError(
+                "The exact-selection helper timed out.",
+                code="helper_timeout",
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/icloud-routine/historical/refresh-inventory",
+                json={"source_id": 66, "max_candidates": 1000},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.json()
+        self.assertEqual(payload["error_code"], "helper_timeout")
+        self.assertEqual(payload["detail"], "The exact-selection helper timed out.")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,6 +51,11 @@ import type {
   IcloudBackfillInventoryScanRequest,
   IcloudBackfillInventoryScanResponse,
   IcloudBackfillStatusResponse,
+  IcloudHistoricalRoutineRefreshRequest,
+  IcloudHistoricalRoutineRefreshResponse,
+  IcloudHistoricalRoutineRunRequest,
+  IcloudHistoricalRoutineRunResponse,
+  IcloudHistoricalRoutineStatusResponse,
   SourceProfileDeferredAssetsResponse,
   InternalIcloudRunRequest,
   InternalIcloudRunResponse,
@@ -1282,6 +1287,28 @@ export function getIcloudStagingCleanupReadiness(sourceId: number): Promise<Iclo
 
 export function getIcloudBackfillStatus(sourceId: number): Promise<IcloudBackfillStatusResponse> {
   return apiRequest<IcloudBackfillStatusResponse>(`/api/admin/icloud-backfill/status?source_id=${sourceId}`);
+}
+
+export function getIcloudHistoricalRoutineStatus(sourceId: number): Promise<IcloudHistoricalRoutineStatusResponse> {
+  return apiRequest<IcloudHistoricalRoutineStatusResponse>(`/api/admin/icloud-routine/historical/status?source_id=${sourceId}`);
+}
+
+export function refreshIcloudHistoricalInventory(
+  req: IcloudHistoricalRoutineRefreshRequest,
+): Promise<IcloudHistoricalRoutineRefreshResponse> {
+  return apiRequest<IcloudHistoricalRoutineRefreshResponse>("/api/admin/icloud-routine/historical/refresh-inventory", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+export function runIcloudHistoricalNextBatch(
+  req: IcloudHistoricalRoutineRunRequest,
+): Promise<IcloudHistoricalRoutineRunResponse> {
+  return apiRequest<IcloudHistoricalRoutineRunResponse>("/api/admin/icloud-routine/historical/run-next-batch", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 }
 
 export function runIcloudBackfillInventoryScan(

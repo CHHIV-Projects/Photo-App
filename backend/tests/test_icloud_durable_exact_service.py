@@ -287,6 +287,61 @@ class IcloudDurableExactServiceTests(unittest.TestCase):
         self.assertTrue(handoff["batch_ready_for_source_intake"])
         self.assertEqual(handoff["ready_resources"][0]["local_sha256"], resource.local_sha256)
 
+    def test_manifest_allows_session_word_in_safe_relative_path(self) -> None:
+        content = b"ordinary filename content"
+        relative_path = "2026/07/04/ANDRZEJ_AUDREY_ENGAGEMENT_SESSION-373.JPG"
+        helper = _DurableFixtureHelper(
+            _listing((_item("remote-session-filename", (_resource("primary_original", relative_path, content),)),)),
+            content_by_relative_path={relative_path: content},
+        )
+
+        result = durable.run_durable_exact_selection_batch(
+            self.db,
+            source_id=self.source.id,
+            target_new_item_count=1,
+            candidate_scan_limit=1,
+            helper_client=helper,  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(result.status, "completed")
+        self.assertTrue(result.batch_ready_for_source_intake)
+        batch = self.db.get(IcloudAcquisitionBatch, result.batch_id)
+        self.assertIsNotNone(batch)
+        self.assertIn("ENGAGEMENT_SESSION", batch.manifest_json or "")
+
+    def test_manifest_error_finalizes_run_and_batch_without_active_lease(self) -> None:
+        content = b"manifest error content"
+        relative_path = "2026/06/24/IMG_899.JPG"
+        helper = _DurableFixtureHelper(
+            _listing((_item("remote-manifest-error", (_resource("primary_original", relative_path, content),)),)),
+            content_by_relative_path={relative_path: content},
+        )
+
+        with patch.object(
+            durable,
+            "_secret_free_manifest_text",
+            side_effect=durable.DurableExactAcquisitionError("unsafe_manifest", "manifest rejected"),
+        ):
+            result = durable.run_durable_exact_selection_batch(
+                self.db,
+                source_id=self.source.id,
+                target_new_item_count=1,
+                candidate_scan_limit=1,
+                helper_client=helper,  # type: ignore[arg-type]
+            )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.stop_reason, "unsafe_manifest")
+        self.assertEqual(helper.download_calls, 0)
+        run = self.db.get(IcloudAcquisitionRun, result.run_id)
+        batch = self.db.get(IcloudAcquisitionBatch, result.batch_id)
+        self.assertIsNotNone(run)
+        self.assertIsNotNone(batch)
+        self.assertEqual(run.status, acquisition.STATUS_FAILED)
+        self.assertEqual(batch.status, durable.STATUS_BATCH_FAILED)
+        self.assertEqual(batch.failure_reason, "unsafe_manifest")
+        self.assertIsNone(self.db.scalar(acquisition._active_run_stmt()))  # noqa: SLF001
+
     def test_lost_response_reconciliation_marks_complete_without_blind_retry(self) -> None:
         content = b"lost response content"
         relative_path = "2026/06/24/IMG_801.JPG"
