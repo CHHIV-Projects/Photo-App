@@ -45,6 +45,7 @@ from app.services.ingestion.scanner import FileScanRecord
 
 
 INTAKE_MODE_ICLOUD_ACQUISITION_BATCH = "icloud_acquisition_batch"
+ICLOUD_BATCH_MINIMUM_FILE_SIZE_BYTES = 1
 
 STATUS_BATCH_INTAKE_RUNNING = "intake_running"
 STATUS_BATCH_INTAKE_COMPLETED = "intake_completed"
@@ -884,6 +885,7 @@ def run_batch_source_intake(
         ingest_source_limit=None,
         source_label=source.source_label,
         source_type=source.source_type,
+        minimum_file_size_bytes=ICLOUD_BATCH_MINIMUM_FILE_SIZE_BYTES,
         explicit_source_records=[item.file_record for item in verified_resources],
         source_intake_context={
             "mode": INTAKE_MODE_ICLOUD_ACQUISITION_BATCH,
@@ -891,6 +893,7 @@ def run_batch_source_intake(
             "acquisition_batch_id": batch.id,
             "source_profile_id": source.id,
             "resource_count": len(verified_resources),
+            "minimum_file_size_bytes": ICLOUD_BATCH_MINIMUM_FILE_SIZE_BYTES,
         },
     )
     args = RuntimeArgs(
