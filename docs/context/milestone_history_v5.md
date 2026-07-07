@@ -1,4 +1,4 @@
-# MILESTONE_HISTORY.md
+﻿# MILESTONE_HISTORY.md
 
 ## Project Onboarding
 
@@ -1922,11 +1922,344 @@
 
 ---
 
+## Milestone 12.62.11A–12.62.24 — Guarded iCloud Cleanup, Exact Selection, and Single-Flow Validation
+
+### 12.62.11A — Verified iCloud Staging Cleanup Execution Reconnaissance
+
+- Reconnoitered cleanup execution requirements after dry-run readiness.
+
+- Defined path/root/protected-file safety gates for local staging deletion.
+
+- Preserved no-remote-deletion and operator-confirmed cleanup boundaries.
+
+---
+
+### 12.62.11B — Verified iCloud Staging Cleanup Execution Implementation
+
+- Implemented guarded cleanup execution from verified dry-run results.
+
+- Required confirmation phrase, source-root validation, and protected-count checks.
+
+- Added execution reporting for deleted, skipped, protected, and error counts.
+
+---
+
+### 12.62.12 — Cleanup/Reacquire Non-Repeat Validation Loop
+
+- Validated acquire, intake, cleanup, and reacquire behavior in a controlled loop.
+
+- Confirmed cleaned staging files did not cause already-known iCloud assets to redownload.
+
+- Reinforced provenance-aware known-state behavior for non-repeat acquisition.
+
+---
+
+### 12.62.13 — iCloud New Count Acquisition Semantics
+
+- Clarified "new" acquisition counts versus selected, downloaded, and already-known assets.
+
+- Improved acquisition status language to reduce operator confusion.
+
+- Strengthened repeated-run summary consistency.
+
+---
+
+### 12.62.14 — iCloud Exact Selection Adapter Feasibility and Prototype
+
+- Prototyped an exact-selection adapter using stable remote identities.
+
+- Assessed feasibility of selecting specific iCloud logical items.
+
+- Established a safer alternative to broad list-and-download loops.
+
+---
+
+### 12.62.15 — iCloud Helper Runtime and Exact Selection Adapter Prototype
+
+- Added helper runtime/protocol prototype for exact selection.
+
+- Validated selection manifest and staged-output behavior.
+
+- Kept helper boundaries explicit without exposing credentials or raw account details.
+
+---
+
+### 12.62.16 — Durable iCloud Acquisition Run State, Manifests, Retry/Resume
+
+- Added durable acquisition run/batch state and manifest tracking.
+
+- Improved retry/resume visibility for interrupted iCloud acquisition work.
+
+- Hardened status and reporting around partial execution and cleanup handoff.
+
+---
+
+### 12.62.17 — iCloud Acquisition Batch Source Intake Handoff
+
+- Connected acquisition batches to Source Intake handoff.
+
+- Preserved per-batch provenance and acquired-resource path reporting.
+
+- Improved transition from staged iCloud resources into vault intake.
+
+---
+
+### 12.62.18 — Bounded Internal iCloud End-to-End Loop Validation
+
+- Validated bounded internal loop behavior across acquisition, Source Intake, and cleanup.
+
+- Confirmed safe behavior under small test limits.
+
+- Identified multi-batch orchestration hardening needs.
+
+---
+
+### 12.62.19 — Internal iCloud Multi-Batch Loop Orchestration
+
+- Implemented internal multi-batch iCloud loop orchestration.
+
+- Added cumulative status and continuation behavior across batches.
+
+- Preserved guarded cleanup and Source Intake gates per batch.
+
+---
+
+### 12.62.20 — Internal Loop Hardening, Candidate Search Semantics, and Larger Bounded Validation
+
+- Hardened candidate search semantics for larger bounded runs.
+
+- Improved loop behavior when known, unsupported, or stale candidates are encountered.
+
+- Validated expanded selection while preserving safety gates.
+
+---
+
+### 12.62.20.1 — Internal Loop Cleanup Continuation Recovery Hardening
+
+- Hardened cleanup continuation/recovery after partial loop progress.
+
+- Improved recovery when cleanup completed but orchestration continuation was interrupted.
+
+- Reduced risk of stranded staging or stale loop state.
+
+---
+
+### 12.62.21 — Bounded Live iCloud Recovery Verification
+
+- Ran bounded live recovery validation against the iCloud flow.
+
+- Confirmed recovery paths after prior interrupted or partial operations.
+
+- Preserved no-broad-delete and no-remote-delete safety boundaries.
+
+---
+
+### 12.62.22 — Single-Flow iCloud Run UI/API
+
+- Added single-flow iCloud run API/UI surface.
+
+- Consolidated operator launch, status, and summary around one guided action.
+
+- Preserved backend guardrails while reducing tile-level workflow complexity.
+
+---
+
+### 12.62.23 — Enable All Supported iCloud Assets in Single-Flow Ingestion
+
+- Expanded single-flow ingestion to all supported iCloud assets.
+
+- Preserved deferred handling for unsupported, ambiguous, and adjusted resources.
+
+- Improved supported-media coverage without changing policy exclusions.
+
+---
+
+### 12.62.24 — Bounded All-Supported iCloud Assets Live Validation
+
+- Validated all-supported-assets flow with a bounded live run.
+
+- Confirmed Source Intake and cleanup behavior across a broader asset set.
+
+- Identified remaining final-routine design decisions for historical/backfill scope.
+
+---
+
+## Milestone 12.62.25–12.62.29.3 — Final iCloud Intake and Historical Backfill Hardening
+
+### 12.62.25 — iCloud Final Routine Design Lock and Recon
+
+- Locked final iCloud routine direction around historical inventory, backfill, and policy deferrals.
+
+- Reconciled single-flow lessons with the Source Profile operational model.
+
+- Defined sequencing for inventory, acquisition preview/execution, cleanup, and UI polish.
+
+---
+
+### 12.62.26 — Raise Candidate Scan and Acquire Limits for Recent Sync
+
+- Raised scan/acquire planning limits for recent-sync validation.
+
+- Improved candidate discovery depth for realistic iCloud libraries.
+
+- Preserved bounded execution and guardrails.
+
+---
+
+### 12.62.26.1 — Planner Limit Alignment
+
+- Aligned planner/UI/API limits with backend candidate/acquire boundaries.
+
+- Reduced mismatch between displayed controls and actual execution caps.
+
+- Kept broader operations explicit and bounded.
+
+---
+
+### 12.62.27 — Historical Backfill Inventory Model Metadata-Only Scan Restart
+
+- Added metadata-only historical backfill inventory model.
+
+- Restarted inventory scan approach around durable remote asset state.
+
+- Avoided downloads, staging, Source Intake, and Vault writes while classifying eligible/deferred assets.
+
+---
+
+### 12.62.28.1 — Historical Backfill Acquisition from Inventory Pre-Code Plan Only
+
+- Planned acquisition from durable inventory rather than live listing selection.
+
+- Defined exact candidate identity, safety gates, and no-code implementation sequence.
+
+- Preserved adjusted-resource exclusion pending policy decisions.
+
+---
+
+### 12.62.28.2 — Historical Backfill Inventory Acquisition Preview
+
+- Implemented preview of inventory-backed acquisition selections.
+
+- Reported selected, skipped, and unsafe counts before download.
+
+- Added bounded safe preview rows without staging or Vault writes.
+
+---
+
+### 12.62.28.3 — Historical Backfill Acquisition Execution and Source Intake Handoff
+
+- Implemented inventory-backed acquisition execution and Source Intake handoff.
+
+- Preserved exact selection, manifest safety, and acquired-path reporting.
+
+- Added dry-run/default safeguards and bounded execution tests.
+
+---
+
+### 12.62.28.4 — Historical Backfill Execution Operator Validation Runbook
+
+- Documented operator runbook for bounded historical backfill validation.
+
+- Captured approved commands, safety boundaries, and expected reports.
+
+- Established repeatable validation checklist.
+
+---
+
+### 12.62.28.5 — Backfill Cleanup Readiness Ambiguous Inventory Investigation
+
+- Investigated ambiguous inventory and cleanup-readiness blockers.
+
+- Clarified unsupported/ambiguous adjusted-resource categories.
+
+- Recommended deferred-policy handling before broader import.
+
+---
+
+### 12.62.28.6 — Adjusted iCloud Resource Raw Metadata Investigation
+
+- Examined raw metadata for adjusted iCloud resources.
+
+- Confirmed adjusted-resource ambiguity and policy risks.
+
+- Kept adjusted resources excluded from eligible import.
+
+---
+
+### 12.62.28.7 — Source Profile Deferred Asset Ledger
+
+- Implemented generic deferred asset ledger for source profiles.
+
+- Recorded adjusted, ambiguous, and unsupported deferred assets with safe reports and status counts.
+
+- Avoided duplicate event spam on unchanged repeat observations.
+
+---
+
+### 12.62.28.8 — Guarded Cleanup Execution for Tiny Backfill Validation
+
+- Validated tiny bounded backfill cleanup path with guarded execution.
+
+- Confirmed exact-path matching and protected/skipped counter behavior.
+
+- Preserved local-only staging deletion boundaries.
+
+---
+
+### 12.62.28.9 — Bounded Acquire Limit Backfill Validation with Guarded Cleanup
+
+- Validated acquire-limit bounded backfill with guarded cleanup.
+
+- Confirmed Source Intake, Vault/provenance, and cleanup safety handoff.
+
+- Identified next UI workflow simplification needs.
+
+---
+
+### 12.62.29.1 — Ingestion Page iCloud Run Workflow
+
+- Built iCloud Intake workflow tile on the Ingestion page.
+
+- Connected refresh/prepare, import, cleanup summary, and deferred visibility.
+
+- Exposed cleanup review path when auto-cleanup could not be proven safe.
+
+---
+
+### 12.62.29.2 — Simplified Historical iCloud Backfill Routine
+
+- Reworked flow so Refresh/Prepare creates an exact candidate set and Import consumes it.
+
+- Added durable prepared-candidate snapshot and chunked exact-set import.
+
+- Fixed live-discovered manifest and small-iCloud-JPG Source Intake issues.
+
+---
+
+### 12.62.29.3 — Durable iCloud Intake Run Resume Timing
+
+- Added durable import run/chunk ledger and explicit `/intake/` endpoints.
+
+- Made chunk advancement resumable after interruptions without manual DB repair.
+
+- Recorded cleanup safety counters/timing and validated a full 1000-logical-asset UI run.
+
+### Current iCloud Intake Status
+
+- iCloud Intake is considered good enough for v1.0.
+- Performance optimization and fine-grained phase timing are parked.
+- Next major direction is external/local/NAS source identity and intake workflow redesign.
+
+---
+
 ## Forward-Looking Areas
 
 The following areas remain candidates for future milestones:
 
-- Acquisition lifecycle observability and richer operator diagnostics
+-- External/local/NAS source identity independent of drive letter, mapped path, or user nickname
+- Unified source/device/endpoint provenance model
+- Unified local/external/NAS intake workflow using lessons from iCloud Intake where appropriate
+ Acquisition lifecycle observability and richer operator diagnostics
 - Connector reliability hardening and long-lived session resilience
 - Landmark/context intelligence expansion beyond current enrichment workflows
 - Video-aware review and playback-centered UX improvements

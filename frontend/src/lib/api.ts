@@ -882,10 +882,27 @@ export function getFaceProcessingStatus(): Promise<AdminFaceProcessingStatusResp
   return apiRequest<AdminFaceProcessingStatusResponse>("/api/admin/face-processing/status");
 }
 
-export function runFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {
-  return apiRequest<AdminFaceProcessingActionResponse>("/api/admin/face-processing/run", {
-    method: "POST"
+export async function runFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/admin/face-processing/run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    cache: "no-store"
   });
+
+  if (response.ok || response.status === 409) {
+    return (await response.json()) as AdminFaceProcessingActionResponse;
+  }
+
+  let message = `Request failed with status ${response.status}`;
+  try {
+    const errorPayload = (await response.json()) as { detail?: string; message?: string };
+    message = errorPayload.detail ?? errorPayload.message ?? message;
+  } catch {
+    // Fall back to generic message when no JSON payload is returned.
+  }
+  throw new Error(message);
 }
 
 export function stopFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {

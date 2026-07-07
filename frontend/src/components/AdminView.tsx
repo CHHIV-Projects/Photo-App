@@ -248,17 +248,24 @@ export default function AdminView() {
   }, []);
 
   const runFaceProcessingJob = useCallback(async () => {
+    if (!faceProcessingStatus || ["running", "stop_requested"].includes(faceProcessingStatus.current.status)) {
+      await loadFaceProcessingStatus();
+      return;
+    }
     setIsFaceProcessingActionLoading(true);
     setErrorMessage("");
     try {
-      await runFaceProcessing();
+      const response = await runFaceProcessing();
+      if (!response.accepted) {
+        setErrorMessage(response.message);
+      }
       await loadFaceProcessingStatus();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to start face processing.");
     } finally {
       setIsFaceProcessingActionLoading(false);
     }
-  }, [loadFaceProcessingStatus]);
+  }, [faceProcessingStatus, loadFaceProcessingStatus]);
 
   const stopFaceProcessingJob = useCallback(async () => {
     setIsFaceProcessingActionLoading(true);
@@ -656,6 +663,7 @@ export default function AdminView() {
   const isPlaceGeocodingRunActive = placeGeocodingRunState === "running" || placeGeocodingRunState === "stop_requested";
 
   const faceProcessingRunState = faceProcessingStatus?.current.status ?? "idle";
+  const isFaceProcessingStatusKnown = faceProcessingStatus !== null;
   const isFaceProcessingRunActive = faceProcessingRunState === "running" || faceProcessingRunState === "stop_requested";
 
   const heicPreviewRunState = heicPreviewStatus?.current.status ?? "idle";
@@ -790,7 +798,7 @@ export default function AdminView() {
 
         <article className={`${styles.card} ${styles.duplicateCard}`.trim()}>
           <h3 className={styles.cardTitle}>Face Processing</h3>
-          <p className={styles.meta}>Status: {faceProcessingStatus?.current.status ?? "idle"}</p>
+          <p className={styles.meta}>Status: {faceProcessingStatus?.current.status ?? "loading"}</p>
           <p className={styles.meta}>Stage: {faceProcessingStatus?.current.current_stage ?? "-"}</p>
           <p className={styles.meta}>Pending detection: {faceProcessingStatus?.pending_detection ?? 0}</p>
           <p className={styles.meta}>Pending embedding: {faceProcessingStatus?.pending_embedding ?? 0}</p>
@@ -819,7 +827,7 @@ export default function AdminView() {
               type="button"
               className={styles.actionButton}
               onClick={() => void runFaceProcessingJob()}
-              disabled={isFaceProcessingActionLoading || isFaceProcessingRunActive}
+              disabled={isFaceProcessingActionLoading || !isFaceProcessingStatusKnown || isFaceProcessingRunActive}
             >
               {isFaceProcessingActionLoading && !isFaceProcessingRunActive ? "Starting..." : "Run"}
             </button>
