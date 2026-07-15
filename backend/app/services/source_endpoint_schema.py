@@ -22,14 +22,14 @@ class SourceEndpointSchemaSummary:
 
 
 def _table_names(db_session: Session) -> set[str]:
-    return set(inspect(db_session.get_bind()).get_table_names())
+    return set(inspect(db_session.connection()).get_table_names())
 
 
 def ensure_source_endpoint_schema(db_session: Session) -> SourceEndpointSchemaSummary:
     """Ensure additive source endpoint/access-node schema exists."""
 
-    bind = db_session.get_bind()
-    inspector = inspect(bind)
+    connection = db_session.connection()
+    inspector = inspect(connection)
     existing_tables = set(inspector.get_table_names())
     if "ingestion_sources" not in existing_tables:
         raise RuntimeError("Expected 'ingestion_sources' table before source endpoint schema sync.")
@@ -46,19 +46,19 @@ def ensure_source_endpoint_schema(db_session: Session) -> SourceEndpointSchemaSu
         SourceEndpointObservedPath.__table__,
     ):
         if table.name not in existing_tables:
-            table.create(bind=bind, checkfirst=True)
+            table.create(bind=connection, checkfirst=True)
             created_tables.append(table.name)
         else:
-            table.create(bind=bind, checkfirst=True)
+            table.create(bind=connection, checkfirst=True)
         existing_tables.add(table.name)
 
-    inspector = inspect(bind)
+    inspector = inspect(connection)
     ingestion_source_columns = {column["name"] for column in inspector.get_columns("ingestion_sources")}
     if "endpoint_id" not in ingestion_source_columns:
         db_session.execute(text("ALTER TABLE ingestion_sources ADD COLUMN endpoint_id INTEGER NULL"))
         added_columns.append("ingestion_sources.endpoint_id")
 
-    inspector = inspect(bind)
+    inspector = inspect(connection)
     ingestion_source_columns = {column["name"] for column in inspector.get_columns("ingestion_sources")}
     if "endpoint_id" in ingestion_source_columns:
         index_names = {index["name"] for index in inspector.get_indexes("ingestion_sources") if index.get("name")}
@@ -74,7 +74,7 @@ def ensure_source_endpoint_schema(db_session: Session) -> SourceEndpointSchemaSu
             if foreign_key.get("name")
         }
         if "fk_ingestion_sources_endpoint_id" not in foreign_key_names:
-            if bind.dialect.name == "postgresql":
+            if connection.dialect.name == "postgresql":
                 db_session.execute(
                     text(
                         "ALTER TABLE ingestion_sources "
