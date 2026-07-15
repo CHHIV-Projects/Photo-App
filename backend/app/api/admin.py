@@ -192,6 +192,12 @@ from app.services.source_profile_deferred_asset_service import (
     DeferredAssetListItem,
     list_deferred_assets,
 )
+from app.services.source_identity import (
+    SourceIdentityCapabilitiesResponse,
+    SourceIdentityProbeRequest,
+    SourceIdentityProbeResponse,
+    SourceIdentityProbeService,
+)
 from app.services.admin.ingestion_operation_guardrail_service import (
     IngestionOperationGuardrailSnapshot,
     get_ingestion_operation_guardrail_snapshot,
@@ -206,6 +212,11 @@ from app.services.previews.heic_preview_processing_service import (
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def get_source_identity_probe_service() -> SourceIdentityProbeService:
+    """Return a read-only source identity probe service."""
+    return SourceIdentityProbeService()
 
 
 def _to_run_status(snapshot: DuplicateProcessingStatusSnapshot) -> DuplicateProcessingRunStatus:
@@ -1669,6 +1680,20 @@ def get_internal_icloud_single_flow_run_status(
 # ---------------------------------------------------------------------------
 # Source Intake visibility routes (12.24 — read-only)
 # ---------------------------------------------------------------------------
+
+
+@router.post("/source-identity/probe", response_model=SourceIdentityProbeResponse)
+def post_source_identity_probe(
+    body: SourceIdentityProbeRequest,
+) -> SourceIdentityProbeResponse:
+    """Run a read-only source identity probe."""
+    return get_source_identity_probe_service().probe(body)
+
+
+@router.get("/source-identity/capabilities", response_model=SourceIdentityCapabilitiesResponse)
+def get_source_identity_capabilities() -> SourceIdentityCapabilitiesResponse:
+    """Return read-only source identity probe provider capabilities."""
+    return get_source_identity_probe_service().capabilities()
 
 
 @router.get("/source-intake/sources", response_model=SourceIntakeSourcesResponse)
