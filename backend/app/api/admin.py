@@ -193,6 +193,11 @@ from app.services.source_profile_deferred_asset_service import (
     list_deferred_assets,
 )
 from app.services.source_identity import (
+    SourceEndpointEnrollmentConfirmRequest,
+    SourceEndpointEnrollmentConfirmResponse,
+    SourceEndpointEnrollmentPlanRequest,
+    SourceEndpointEnrollmentPlanResponse,
+    SourceEndpointEnrollmentService,
     SourceIdentityCapabilitiesResponse,
     SourceIdentityProbeRequest,
     SourceIdentityProbeResponse,
@@ -217,6 +222,14 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 def get_source_identity_probe_service() -> SourceIdentityProbeService:
     """Return a read-only source identity probe service."""
     return SourceIdentityProbeService()
+
+
+def get_source_endpoint_enrollment_service(db: Session) -> SourceEndpointEnrollmentService:
+    """Return a stateless source endpoint enrollment service."""
+    return SourceEndpointEnrollmentService(
+        db_session=db,
+        probe_service=get_source_identity_probe_service(),
+    )
 
 
 def _to_run_status(snapshot: DuplicateProcessingStatusSnapshot) -> DuplicateProcessingRunStatus:
@@ -1694,6 +1707,24 @@ def post_source_identity_probe(
 def get_source_identity_capabilities() -> SourceIdentityCapabilitiesResponse:
     """Return read-only source identity probe provider capabilities."""
     return get_source_identity_probe_service().capabilities()
+
+
+@router.post("/source-endpoints/enrollment/plan", response_model=SourceEndpointEnrollmentPlanResponse)
+def post_source_endpoint_enrollment_plan(
+    body: SourceEndpointEnrollmentPlanRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceEndpointEnrollmentPlanResponse:
+    """Build a read-only source endpoint enrollment plan."""
+    return get_source_endpoint_enrollment_service(db).plan(body)
+
+
+@router.post("/source-endpoints/enrollment/confirm", response_model=SourceEndpointEnrollmentConfirmResponse)
+def post_source_endpoint_enrollment_confirm(
+    body: SourceEndpointEnrollmentConfirmRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceEndpointEnrollmentConfirmResponse:
+    """Confirm a stateless source endpoint enrollment plan."""
+    return get_source_endpoint_enrollment_service(db).confirm(body)
 
 
 @router.get("/source-intake/sources", response_model=SourceIntakeSourcesResponse)
