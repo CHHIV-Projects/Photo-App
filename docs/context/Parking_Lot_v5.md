@@ -1576,6 +1576,58 @@ Medium.
 
 ---
 
+## FACE-007 - Multi-Prototype Person / Cluster Consolidation
+
+Large manually merged face clusters can contain the same person across different ages, lighting, poses, hairstyles, and image qualities. A single averaged cluster centroid can become a poor matcher for any one appearance period, causing later face-processing runs to create new similar-looking fragment clusters instead of assigning them to the established reviewed/person cluster.
+
+Future improvement: add a post-run consolidation/review pass that compares new or unreviewed clusters against existing clusters and person-linked appearance prototypes. For a reviewed person or heavily merged cluster, preserve multiple internal prototype centroids rather than relying only on one blended centroid.
+
+### Desired
+
+```text
+Person identity can have multiple appearance prototypes.
+New/unreviewed clusters are compared to each prototype.
+High-confidence, non-ambiguous matches can be suggested for merge/consolidation.
+Reviewed/person-linked clusters are preferred as consolidation targets.
+Blind transitive merges are avoided unless the group is internally coherent.
+```
+
+### Triggering Observation
+
+During face review, cluster `225` appeared visually similar to established merged cluster `661`, but the current single-centroid comparison scored below the assignment threshold. The same cluster was much closer to several smaller unreviewed fragments, suggesting a missing post-run cluster-fragment consolidation step rather than simple first-pass assignment failure.
+
+### Importance
+
+Medium-high for family archives with the same people across many life stages.
+
+---
+
+## FACE-008 - Face Modal Full-Image Context Preview Contract
+
+In Face Clusters and Unassigned Faces, clicking a face thumbnail can open a modal that hangs on `Loading full image context...` for some HEIC-backed assets. The same asset may have a working face thumbnail, a working Photo Review full-image display, and a working Photo Detail response, which suggests the issue is specific to the face workflow/modal display path rather than missing media or missing photo detail data.
+
+Future improvement: make the face full-context modal follow the same centralized display URL contract used by Photo Review and Photo Detail. The modal should prefer `display_url` / `image_url` from `PhotoDetail`, avoid raw original HEIC/HEIF/TIFF image fallbacks in browser `<img>` elements, and show a clear unavailable/error state instead of an indefinite loading message.
+
+### Desired
+
+```text
+Face modal uses generated display previews for non-browser-safe originals.
+Face modal does not attempt raw HEIC/HEIF/TIFF fallback as a full-image source.
+If no display preview is available, show the face crop and a clear full-image-unavailable message.
+Apply the behavior consistently in FaceGrid and UnassignedFacesView.
+Keep face highlight overlay when a display preview and matching face bbox are available.
+```
+
+### Triggering Observation
+
+An HEIC-backed face example was reported as hanging in the Face Clusters full-context modal while thumbnail, Photo Review full-image display, and Photo Detail were otherwise available.
+
+### Importance
+
+Medium for face review usability.
+
+---
+
 # 6. Location / Places / Non-Geolocated Assets
 
 ---
