@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, String, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+from app.models import source_endpoint as _source_endpoint_model
+
+if TYPE_CHECKING:
+    from app.models.source_endpoint import SourceEndpoint
 
 
 class IngestionSource(Base):
@@ -34,4 +39,11 @@ class IngestionSource(Base):
     acquisition_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
     managed_staging_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     account_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    endpoint_id: Mapped[int | None] = mapped_column(
+        ForeignKey("source_endpoints.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    source_endpoint: Mapped["SourceEndpoint | None"] = relationship()
