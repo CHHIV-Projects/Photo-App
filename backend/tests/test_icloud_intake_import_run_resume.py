@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -325,6 +326,110 @@ class IcloudIntakeImportRunResumeTests(IcloudHistoricalRoutineFixture):
         self.assertEqual(recovered_chunk.local_staging_files_cleaned, 2)
         self.assertEqual(recovered_chunk.cleanup_dry_run_id, 11)
         self.assertEqual(recovered_chunk.cleanup_execution_run_id, 12)
+
+    def test_resume_discards_exact_failed_acquisition_staging_before_retry(self) -> None:
+        self._prepared_rows(1)
+        start = start_icloud_intake_import(self.db, source_id=self.source.id, internal_batch_size=1)
+        run = self.db.get(IcloudIntakeImportRun, start.import_run_id)
+        chunk = self.db.scalars(
+            select(IcloudIntakeImportChunk).where(IcloudIntakeImportChunk.import_run_id == run.id)
+        ).one()
+        root = Path(self.source.managed_staging_path)
+        published_paths = ("2026/06/24/item-1.MP4", "2026/06/24/item-2.MP4")
+        for index, relative_path in enumerate(published_paths, start=1):
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(f"video-{index}".encode("ascii"))
+
+        acquisition_run = IcloudAcquisitionRun(
+            status="failed",
+            source_profile_id=self.source.id,
+            source_label=self.source.source_label,
+            source_type=self.source.source_type,
+            source_root_path=self.source.source_root_path,
+            acquisition_mode="backfill_execute",
+            target_new_item_count=1,
+            stop_reason="partial_item_failed",
+            failure_reason="partial_item_failed",
+        )
+        self.db.add(acquisition_run)
+        self.db.flush()
+        batch = IcloudAcquisitionBatch(
+            run_id=acquisition_run.id,
+            batch_index=1,
+            status="blocked",
+            target_new_item_count=1,
+            selected_new_item_count=1,
+            selected_new_resource_count=3,
+            downloaded_item_count=0,
+            downloaded_resource_count=2,
+            failed_item_count=1,
+            failed_resource_count=1,
+            failure_reason="local_file_error",
+            batch_ready_for_source_intake=False,
+            ready_for_cleanup_dry_run=False,
+        )
+        self.db.add(batch)
+        self.db.flush()
+        item = IcloudAcquisitionItem(
+            batch_id=batch.id,
+            item_index=1,
+            remote_item_digest="partial-digest",
+            status="blocked",
+            expected_resource_count=3,
+            selected_resource_count=3,
+            published_resource_count=2,
+            failure_reason="local_file_error",
+        )
+        self.db.add(item)
+        self.db.flush()
+        for index, relative_path in enumerate(published_paths, start=1):
+            self.db.add(
+                IcloudAcquisitionResource(
+                    item_id=item.id,
+                    resource_index=index,
+                    resource_role="primary",
+                    relative_path=relative_path,
+                    status="published",
+                    selected_for_download=True,
+                    byte_count=7,
+                )
+            )
+        self.db.add(
+            IcloudAcquisitionResource(
+                item_id=item.id,
+                resource_index=3,
+                resource_role="primary",
+                relative_path="2026/06/24/item-3.MP4",
+                status="failed",
+                selected_for_download=True,
+                failure_reason="local_file_error",
+            )
+        )
+        now = datetime.now(UTC)
+        run.status = IMPORT_STATUS_RESUME_AVAILABLE
+        run.stop_reason = "partial_item_failed"
+        run.interrupted_at = now
+        run.last_progress_at = now
+        chunk.status = "retryable_failed"
+        chunk.failed_at = now
+        chunk.files_resources_imported = 2
+        chunk.local_staging_files_cleaned = 0
+        chunk.execution_failed_retryable_count = 1
+        chunk.acquisition_run_id = acquisition_run.id
+        chunk.acquisition_batch_id = batch.id
+        chunk.stop_reason = "partial_item_failed"
+        self.db.commit()
+
+        resumed = resume_icloud_intake_import(self.db, source_id=self.source.id, import_run_id=run.id)
+
+        self.assertEqual(resumed.import_status, IMPORT_STATUS_RUNNING)
+        self.assertTrue(resumed.can_advance_import)
+        self.assertEqual(resumed.local_staging_file_count, 0)
+        self.assertFalse(any((root / relative_path).exists() for relative_path in published_paths))
+        recovered_chunk = self.db.get(IcloudIntakeImportChunk, chunk.id)
+        self.assertEqual(recovered_chunk.local_staging_files_cleaned, 2)
+        self.assertIn("Discarded 2 local staging files", resumed.import_operator_message)
 
 
 if __name__ == "__main__":

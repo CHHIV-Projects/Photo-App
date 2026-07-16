@@ -11,7 +11,7 @@ import time
 from sqlalchemy import func, inspect, select, update
 from sqlalchemy.orm import Session
 
-from app.models.icloud_acquisition_run import IcloudAcquisitionItem, IcloudAcquisitionResource
+from app.models.icloud_acquisition_run import IcloudAcquisitionBatch, IcloudAcquisitionItem, IcloudAcquisitionResource
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.icloud_backfill import IcloudRemoteAssetInventory
 from app.models.icloud_intake_import import IcloudIntakeImportChunk, IcloudIntakeImportRun
@@ -369,6 +369,47 @@ def _file_count(root: Path) -> int:
 def _source_staging_root(source: IngestionSource) -> Path:
     raw = (source.managed_staging_path or source.source_root_path or "").strip()
     return Path(raw) if raw else resolve_icloud_staging_path(source.source_label or f"source_{source.id}")
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _safe_relative_files(root: Path) -> tuple[str, ...]:
+    if not root.exists() or not root.is_dir():
+        return ()
+    paths: list[str] = []
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise IcloudHistoricalRoutineError("Staging folder contains a symlink; cleanup review is required.", code="staging_symlink_blocked")
+        if path.is_file():
+            relative = path.relative_to(root).as_posix()
+            paths.append(relative)
+    return tuple(sorted(paths))
+
+
+def _remove_empty_subdirectories(root: Path) -> None:
+    if not root.exists() or not root.is_dir():
+        return
+    directories = sorted(
+        [path for path in root.rglob("*") if path.is_dir() and not path.is_symlink() and path != root],
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in directories:
+        try:
+            next(directory.iterdir())
+        except StopIteration:
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        except OSError:
+            pass
 
 
 def _latest_historical_run(db_session: Session, *, source_id: int) -> IcloudAcquisitionRun | None:
@@ -966,6 +1007,7 @@ def get_icloud_intake_import_status(
             and pending_chunk_count > 0
             and running_chunk is None
             and not active_child_exists
+            and base.local_staging_file_count == 0
         )
         if running_chunk is not None:
             current_phase = f"chunk_{running_chunk.chunk_index}_running"
@@ -1329,6 +1371,14 @@ class IcloudIntakeCleanupRecoveryResult:
     status: IcloudIntakeImportStatus
 
 
+@dataclass(frozen=True)
+class _FailedAcquisitionStagingDiscard:
+    chunk_index: int
+    acquisition_batch_id: int
+    discarded_count: int
+    discarded_bytes: int
+
+
 class _DurableCleanupError(IcloudHistoricalRoutineError):
     def __init__(
         self,
@@ -1656,6 +1706,125 @@ def _acquired_resource_paths_for_batch(
     return tuple(str(path).replace("\\", "/").lstrip("/") for path in rows if str(path).strip())
 
 
+def _resource_paths_for_batch_status(
+    db_session: Session,
+    *,
+    acquisition_batch_id: int,
+    status: str,
+) -> tuple[str, ...]:
+    rows = db_session.scalars(
+        select(IcloudAcquisitionResource.relative_path)
+        .join(IcloudAcquisitionItem, IcloudAcquisitionItem.id == IcloudAcquisitionResource.item_id)
+        .where(
+            IcloudAcquisitionItem.batch_id == acquisition_batch_id,
+            IcloudAcquisitionResource.selected_for_download.is_(True),
+            IcloudAcquisitionResource.status == status,
+        )
+        .order_by(IcloudAcquisitionResource.relative_path.asc())
+    ).all()
+    return tuple(str(path).replace("\\", "/").lstrip("/") for path in rows if str(path).strip())
+
+
+def _discard_failed_acquisition_staging_for_resume(
+    db_session: Session,
+    *,
+    source: IngestionSource,
+    import_run: IcloudIntakeImportRun,
+) -> _FailedAcquisitionStagingDiscard | None:
+    chunks = [
+        chunk
+        for chunk in _import_chunks(db_session, import_run_id=import_run.id)
+        if chunk.status == CHUNK_STATUS_RETRYABLE_FAILED
+        and int(chunk.files_resources_imported or 0) > int(chunk.local_staging_files_cleaned or 0)
+        and chunk.source_intake_run_id is None
+        and chunk.cleanup_dry_run_id is None
+        and chunk.cleanup_execution_run_id is None
+    ]
+    if not chunks:
+        return None
+    if len(chunks) != 1:
+        raise IcloudHistoricalRoutineError(
+            "Multiple retryable failed chunks have local staging files; cleanup review is required.",
+            code="failed_acquisition_staging_not_unique",
+        )
+    chunk = chunks[0]
+    if chunk.acquisition_batch_id is None:
+        raise IcloudHistoricalRoutineError(
+            "Retryable failed chunk is missing acquisition batch evidence.",
+            code="failed_acquisition_batch_missing",
+        )
+    batch = db_session.get(IcloudAcquisitionBatch, chunk.acquisition_batch_id)
+    if batch is None or batch.status != "blocked" or batch.source_intake_run_id is not None or batch.batch_ready_for_source_intake:
+        raise IcloudHistoricalRoutineError(
+            "Retryable failed chunk is not a pre-Source Intake partial acquisition failure.",
+            code="failed_acquisition_state_mismatch",
+        )
+    if (batch.failure_reason or "") != "local_file_error":
+        raise IcloudHistoricalRoutineError(
+            "Retryable failed chunk has an unsupported failure reason for automatic staging discard.",
+            code="failed_acquisition_reason_unsupported",
+        )
+
+    published_paths = sorted(set(_resource_paths_for_batch_status(db_session, acquisition_batch_id=batch.id, status="published")))
+    failed_paths = sorted(set(_resource_paths_for_batch_status(db_session, acquisition_batch_id=batch.id, status="failed")))
+    if not published_paths or len(published_paths) != int(batch.downloaded_resource_count or 0):
+        raise IcloudHistoricalRoutineError(
+            "Published acquisition resource evidence is incomplete.",
+            code="published_resource_evidence_incomplete",
+        )
+
+    root = _source_staging_root(source).resolve()
+    folder_paths = list(_safe_relative_files(root))
+    protected = [path for path in folder_paths if ".partial" in path.casefold() or "backfill_execute" in path.casefold()]
+    if protected:
+        raise IcloudHistoricalRoutineError(
+            "Staging contains protected partial/backfill_execute files; cleanup review is required.",
+            code="protected_staging_files_present",
+        )
+    if folder_paths != published_paths:
+        unexpected = len([path for path in folder_paths if path not in set(published_paths)])
+        missing = len([path for path in published_paths if path not in set(folder_paths)])
+        raise IcloudHistoricalRoutineError(
+            f"Staging files do not exactly match failed acquisition published resources ({unexpected} unexpected, {missing} missing).",
+            code="failed_acquisition_staging_mismatch",
+        )
+    if any(path in set(folder_paths) for path in failed_paths):
+        raise IcloudHistoricalRoutineError(
+            "Failed acquisition resource is present in staging; cleanup review is required.",
+            code="failed_resource_present",
+        )
+
+    targets: list[Path] = []
+    discarded_bytes = 0
+    for relative in published_paths:
+        target = (root / relative).resolve()
+        if not _is_within(target, root) or target.is_symlink() or not target.is_file():
+            raise IcloudHistoricalRoutineError(
+                "Staging discard target failed final path verification.",
+                code="failed_acquisition_discard_path_unsafe",
+            )
+        discarded_bytes += int(target.stat().st_size)
+        targets.append(target)
+
+    for target in targets:
+        target.unlink()
+    _remove_empty_subdirectories(root)
+
+    chunk.local_staging_files_cleaned = max(int(chunk.local_staging_files_cleaned or 0), len(targets))
+    chunk.operator_message = (
+        f"Discarded {len(targets)} local staging files from a failed acquisition attempt; retry is available."
+    )
+    import_run.operator_message = chunk.operator_message
+    _refresh_import_run_aggregates(db_session, import_run)
+    db_session.commit()
+    return _FailedAcquisitionStagingDiscard(
+        chunk_index=chunk.chunk_index,
+        acquisition_batch_id=batch.id,
+        discarded_count=len(targets),
+        discarded_bytes=discarded_bytes,
+    )
+
+
 def _apply_cleanup_snapshot_to_chunk(chunk: IcloudIntakeImportChunk, cleanup: CleanupRunSnapshot | None) -> None:
     if cleanup is None:
         return
@@ -1787,17 +1956,23 @@ def resume_icloud_intake_import(
     import_run_id: int | None = None,
 ) -> IcloudIntakeImportStatus:
     _ensure_schema(db_session)
-    _validate_source(db_session, source_id=source_id)
+    source = _validate_source(db_session, source_id=source_id)
     run = db_session.get(IcloudIntakeImportRun, import_run_id) if import_run_id is not None else _latest_incomplete_import_run(db_session, source_id=source_id)
     if run is None or run.source_profile_id != source_id:
         return get_icloud_intake_import_status(db_session, source_id=source_id)
     if run.status not in {IMPORT_STATUS_RESUME_AVAILABLE, IMPORT_STATUS_PAUSED_INTERRUPTED, IMPORT_STATUS_CREATED}:
         return get_icloud_intake_import_status(db_session, source_id=source_id)
+    discard = _discard_failed_acquisition_staging_for_resume(db_session, source=source, import_run=run)
     now = _now_utc()
     run.status = IMPORT_STATUS_RUNNING
     run.resumed_at = now
     run.last_progress_at = now
-    run.operator_message = "Resume confirmed. Ready to advance the next pending chunk."
+    run.operator_message = (
+        f"Discarded {discard.discarded_count} local staging files from failed acquisition batch {discard.acquisition_batch_id}. "
+        "Resume confirmed. Ready to advance the next pending chunk."
+        if discard is not None
+        else "Resume confirmed. Ready to advance the next pending chunk."
+    )
     run.stop_reason = None
     prepare_run = db_session.get(IcloudIntakePrepareRun, run.prepare_run_id)
     if prepare_run is not None:
@@ -1816,7 +1991,7 @@ def advance_icloud_intake_import(
     max_listing_candidates: int = DEFAULT_MAX_LISTING_CANDIDATES,
 ) -> IcloudIntakeImportStatus:
     _ensure_schema(db_session)
-    _validate_source(db_session, source_id=source_id)
+    source = _validate_source(db_session, source_id=source_id)
     import_run = db_session.get(IcloudIntakeImportRun, import_run_id) if import_run_id is not None else _latest_incomplete_import_run(db_session, source_id=source_id)
     if import_run is None or import_run.source_profile_id != source_id:
         return get_icloud_intake_import_status(db_session, source_id=source_id)
@@ -1833,6 +2008,8 @@ def advance_icloud_intake_import(
     if any(chunk.status == CHUNK_STATUS_RUNNING for chunk in _import_chunks(db_session, import_run_id=import_run.id)):
         return get_icloud_intake_import_status(db_session, source_id=source_id)
     if _active_child_operation_exists(db_session):
+        return get_icloud_intake_import_status(db_session, source_id=source_id)
+    if _file_count(_source_staging_root(source)) > 0:
         return get_icloud_intake_import_status(db_session, source_id=source_id)
 
     pending = _pending_import_chunks(db_session, import_run_id=import_run.id)

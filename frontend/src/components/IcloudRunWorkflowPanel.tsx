@@ -92,20 +92,25 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
   const displayedResult = runResult ?? (status?.import_run_id ? status : null);
   const hasPreparedCandidates = Boolean(status && (status.can_start_import || status.can_resume_import || status.can_advance_import || status.logical_candidates_ready > 0));
   const canImportOrResume = Boolean(status && (status.can_start_import || status.can_resume_import || status.can_advance_import));
+  const canResumePartialAcquisition = Boolean(
+    status?.can_resume_import
+      && status.import_stop_reason === "partial_item_failed"
+      && status.local_staging_file_count > 0,
+  );
   const unavailableReason = !selectedProfile
     ? "Select an active iCloud Source Profile."
     : !hasPreparedCandidates && !status?.resume_available
       ? "Refresh / Prepare Next 1000 before importing."
       : status?.available_inventory === "no"
         ? "No eligible/acquirable iCloud inventory remains."
-        : status && status.local_staging_file_count > 0
+        : status && status.local_staging_file_count > 0 && !canResumePartialAcquisition
           ? "Local staging has files from a prior run; review cleanup before continuing."
           : null;
   const canRunBackfill = Boolean(
     selectedSourceId
       && !isBusy
       && canImportOrResume
-      && status?.local_staging_file_count === 0,
+      && (status?.local_staging_file_count === 0 || canResumePartialAcquisition),
   );
 
   const loadProfiles = useCallback(async () => {
@@ -268,6 +273,7 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
           {phase === "running" ? "Importing..." : status?.can_resume_import ? "Resume Interrupted Import" : "Import Next 1000"}
         </button>
         {unavailableReason && <span className={styles.metaLine}>{unavailableReason}</span>}
+        {canResumePartialAcquisition && <span className={styles.metaLine}>Resume will first discard verified partial-acquisition staging files.</span>}
       </div>
 
       {message && <p className={styles.success}>{message}</p>}

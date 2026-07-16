@@ -839,6 +839,131 @@ Parked. Not required for v1 unless performance becomes a blocker.
 
 ---
 
+## ICL-HARDEN-001 -- iCloud Intake Long-Running Chunk and Partial Failure Hardening
+
+### Summary
+
+Harden iCloud Intake around long-running chunks, video-heavy batches, partial acquisition failures, and operator-visible resume/status behavior.
+
+This item is informed by the live run issues documented in:
+
+```text
+docs/bug_fixes/bug_fix_001_icloud_intake_stale_cleanup_recovery.md
+docs/bug_fixes/bug_fix_002_icloud_intake_partial_acquisition_staging_discard.md
+```
+
+### Triggering Observations
+
+During a 1000-logical-asset iCloud Intake run for source profile `66` (`Chuck iCloud E2E Test v3`), chunks 6 and 7 exposed separate durability and operator-experience edge cases.
+
+Chunk 6:
+
+- acquisition completed
+- Source Intake completed
+- cleanup report evidence existed
+- cleanup database state became stranded/stale
+- 100 local staging files required guarded cleanup recovery
+
+Chunk 7:
+
+- acquisition run `105` / batch `81` partially failed before Source Intake
+- 99 resources were downloaded into local staging
+- 1 resource failed with `partial_item_failed` / `local_file_error`
+- the failed resource path observed was an `.mp4`
+- no Source Intake run existed for the failed attempt
+- no cleanup run existed for the failed attempt
+- recovery needed a safe discard path for pre-Source Intake staging leftovers
+- retry acquisition `106` / batch `82` later completed successfully
+
+The operator also observed that the affected area of inventory appeared to include many `.mp4` files. Video-heavy chunks likely increase runtime, helper fragility, local file error exposure, and UI/status ambiguity.
+
+### Desired
+
+Improve the iCloud Intake routine so long-running and partial-failure chunks are easier to understand, retry, and diagnose without manual database inspection.
+
+Desired behavior:
+
+```text
+active child acquisition/intake/cleanup is always visible in status
+chunk attempt state is durable before long-running acquisition begins
+resume status does not appear while a child operation is actually running
+partial acquisition leftovers have explicit safe recovery states
+video-heavy chunks are identifiable in reports/status
+operator messages distinguish "retry acquisition running" from "resume available"
+```
+
+### Candidate Improvements
+
+- Persist a chunk-attempt row or attempt number before starting each long-running acquisition.
+
+- Attach the current child acquisition run to the chunk as soon as it exists, not only after the acquisition call returns.
+
+- Make stale recovery aware of recently-started or still-running child acquisition rows so it does not mark the import run `resume_available` during a legitimate active retry.
+
+- Add status fields for:
+
+```text
+current_child_operation_type
+current_child_operation_id
+current_child_operation_status
+current_chunk_attempt
+last_retry_reason
+last_failed_resource_extension
+asset_type_mix for prepared chunk / completed chunk
+```
+
+- Add report fields summarizing media mix:
+
+```text
+image_count
+video_count
+heic_count
+jpg_count
+mp4_count
+other_count
+largest_resource_bytes
+total_staged_bytes
+```
+
+- Improve UI copy and controls for states such as:
+
+```text
+Retry acquisition running
+Partial acquisition recovered; retry ready
+Cleanup recovery available
+Cleanup recovery running
+Resume available between chunks
+Stopped for review because staging evidence did not match
+```
+
+- Preserve the existing safety gates:
+
+```text
+no remote iCloud deletion
+no manual filesystem deletion
+no Source Intake replay without verified state
+no cleanup execution unless eligible paths exactly match acquired/imported resources
+no discard of partial-acquisition staging unless folder paths exactly match published resource evidence
+```
+
+### Open Questions
+
+- Should video-heavy chunks use a smaller internal batch size, or should the current 100-logical chunk size remain fixed with better progress reporting?
+
+- Should partial acquisition failures retry the exact same prepared candidates first, or skip the failed item after a bounded retry count?
+
+- Should the iCloud Intake UI expose the failed file extension/path category when safe, without exposing credentials, Apple account identifiers, or raw helper payloads?
+
+- Should status polling treat a running child acquisition as authoritative even if the import-run row still appears resumable?
+
+### Importance
+
+Medium-high if additional full iCloud Intake runs keep exposing partial acquisition or stale-status issues.
+
+Not an immediate v1 blocker if the current guarded recovery paths are sufficient, but this should be promoted before relying on unattended, scheduled, or much larger iCloud intake runs.
+
+---
+
 ## ICL-COMPLETE-001 — iCloud Provider Cursor / Exhaustion Completeness
 
 ### Summary
