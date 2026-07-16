@@ -8,8 +8,15 @@ from unittest.mock import patch
 from sqlalchemy import select
 
 from app.models.icloud_backfill import IcloudRemoteAssetInventory
+from app.models.icloud_acquisition_run import (
+    IcloudAcquisitionBatch,
+    IcloudAcquisitionItem,
+    IcloudAcquisitionResource,
+    IcloudAcquisitionRun,
+)
 from app.models.icloud_intake_import import IcloudIntakeImportChunk, IcloudIntakeImportRun
 from app.models.icloud_intake_prepare import IcloudIntakePreparedCandidate
+from app.models.source_intake_run import SourceIntakeRun
 from app.services.icloud_backfill_acquisition_execution_service import IcloudBackfillAcquireResult
 from app.services.icloud_historical_routine_service import (
     CHUNK_STATUS_COMPLETED,
@@ -22,6 +29,7 @@ from app.services.icloud_historical_routine_service import (
     _TimedCleanupResult,
     advance_icloud_intake_import,
     get_icloud_intake_import_status,
+    recover_icloud_intake_import_cleanup,
     resume_icloud_intake_import,
     start_icloud_intake_import,
 )
@@ -116,6 +124,34 @@ class IcloudIntakeImportRunResumeTests(IcloudHistoricalRoutineFixture):
         self.assertIsNotNone(chunks[0].chunk_total_seconds)
         self.assertEqual(chunks[0].cleanup_eligible_count, 2)
 
+    def test_running_chunk_blocks_status_and_advance(self) -> None:
+        self._prepared_rows(3)
+        start = start_icloud_intake_import(self.db, source_id=self.source.id, internal_batch_size=2)
+        run = self.db.get(IcloudIntakeImportRun, start.import_run_id)
+        chunk = self.db.scalars(
+            select(IcloudIntakeImportChunk)
+            .where(IcloudIntakeImportChunk.import_run_id == run.id)
+            .order_by(IcloudIntakeImportChunk.chunk_index)
+        ).first()
+        now = datetime.now(UTC)
+        run.status = IMPORT_STATUS_RUNNING
+        run.last_progress_at = now
+        chunk.status = "running"
+        chunk.started_at = now
+        self.db.commit()
+
+        status = get_icloud_intake_import_status(self.db, source_id=self.source.id)
+
+        self.assertFalse(status.can_advance_import)
+        self.assertEqual(status.current_phase, "chunk_1_running")
+
+        with patch("app.services.icloud_historical_routine_service.run_icloud_backfill_acquisition") as acquire:
+            advanced = advance_icloud_intake_import(self.db, source_id=self.source.id, import_run_id=start.import_run_id)
+
+        acquire.assert_not_called()
+        self.assertFalse(advanced.can_advance_import)
+        self.assertEqual(advanced.current_phase, "chunk_1_running")
+
     def test_stale_running_run_becomes_resume_available_and_resumes_pending_only(self) -> None:
         _, rows = self._prepared_rows(3)
         observed_batches: list[tuple[int, ...]] = []
@@ -192,6 +228,103 @@ class IcloudIntakeImportRunResumeTests(IcloudHistoricalRoutineFixture):
         self.assertEqual(status.chunks[0].cleanup_dry_run_id, 11)
         self.assertEqual(status.chunks[0].cleanup_skipped_count, 1)
         self.assertEqual(status.chunks[0].cleanup_failed_count, 1)
+
+    def test_recover_interrupted_cleanup_completes_running_chunk(self) -> None:
+        self._prepared_rows(1)
+        SourceIntakeRun.__table__.create(self.engine, checkfirst=True)
+        start = start_icloud_intake_import(self.db, source_id=self.source.id, internal_batch_size=1)
+        run = self.db.get(IcloudIntakeImportRun, start.import_run_id)
+        chunk = self.db.scalars(
+            select(IcloudIntakeImportChunk).where(IcloudIntakeImportChunk.import_run_id == run.id)
+        ).one()
+        now = datetime.now(UTC)
+        acquisition_run = IcloudAcquisitionRun(
+            status="completed",
+            source_profile_id=self.source.id,
+            source_label=self.source.source_label,
+            source_type=self.source.source_type,
+            source_root_path=self.source.source_root_path,
+            acquisition_mode="backfill_execute",
+            target_new_item_count=1,
+        )
+        self.db.add(acquisition_run)
+        self.db.flush()
+        batch = IcloudAcquisitionBatch(
+            run_id=acquisition_run.id,
+            batch_index=1,
+            status="ready_for_cleanup_dry_run",
+            target_new_item_count=1,
+            selected_new_item_count=1,
+            selected_new_resource_count=2,
+            downloaded_item_count=1,
+            downloaded_resource_count=2,
+            batch_ready_for_source_intake=True,
+            ready_for_cleanup_dry_run=True,
+            cleanup_readiness_reason="source_intake_verified",
+        )
+        self.db.add(batch)
+        self.db.flush()
+        item = IcloudAcquisitionItem(
+            batch_id=batch.id,
+            item_index=1,
+            remote_item_digest="digest",
+            status="downloaded",
+            expected_resource_count=2,
+            selected_resource_count=2,
+            published_resource_count=2,
+        )
+        self.db.add(item)
+        self.db.flush()
+        for index, relative_path in enumerate(("2026/06/24/item-0.HEIC", "2026/06/24/item-1.HEIC"), start=1):
+            self.db.add(
+                IcloudAcquisitionResource(
+                    item_id=item.id,
+                    resource_index=index,
+                    resource_role="primary",
+                    relative_path=relative_path,
+                    status="resource_intake_processed",
+                    selected_for_download=True,
+                    asset_sha256=f"{index}" * 64,
+                )
+            )
+        self.db.add(
+            SourceIntakeRun(
+                id=321,
+                status="completed",
+                ingestion_source_id=self.source.id,
+                source_label=self.source.source_label,
+                source_type=self.source.source_type,
+                source_root_path=self.source.source_root_path,
+                files_scanned=2,
+                selected=2,
+                staged=2,
+                processed_new_unique=2,
+            )
+        )
+        chunk.status = "running"
+        chunk.started_at = now
+        chunk.logical_imported = 1
+        chunk.files_resources_imported = 2
+        chunk.acquisition_run_id = acquisition_run.id
+        chunk.acquisition_batch_id = batch.id
+        chunk.source_intake_run_id = 321
+        run.status = IMPORT_STATUS_RUNNING
+        run.last_progress_at = now
+        self.db.commit()
+
+        with patch("app.services.icloud_historical_routine_service.reconcile_completed_cleanup_reports", return_value=1):
+            with patch("app.services.icloud_historical_routine_service._cleanup_chunk_timed", return_value=_timed_cleanup(2)) as cleanup:
+                result = recover_icloud_intake_import_cleanup(self.db, source_id=self.source.id, import_run_id=run.id)
+
+        cleanup.assert_called_once()
+        self.assertEqual(result.deleted_count, 2)
+        self.assertEqual(result.reconciled_cleanup_report_count, 1)
+        self.assertEqual(result.status.import_status, IMPORT_STATUS_COMPLETED)
+        recovered_chunk = self.db.get(IcloudIntakeImportChunk, chunk.id)
+        self.assertEqual(recovered_chunk.status, CHUNK_STATUS_COMPLETED)
+        self.assertEqual(recovered_chunk.local_staging_files_cleaned, 2)
+        self.assertEqual(recovered_chunk.cleanup_dry_run_id, 11)
+        self.assertEqual(recovered_chunk.cleanup_execution_run_id, 12)
 
 
 if __name__ == "__main__":

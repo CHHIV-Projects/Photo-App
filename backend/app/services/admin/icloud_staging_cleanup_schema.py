@@ -42,6 +42,14 @@ def ensure_icloud_staging_cleanup_schema(db_session: Session) -> IcloudStagingCl
                     default_clause = f" DEFAULT {col.default.arg}"
                 sql = f"ALTER TABLE icloud_staging_cleanup_runs ADD COLUMN {col_name} {col_type} {nullable}{default_clause}"
                 db_session.execute(text(sql))
+        if bind.dialect.name == "postgresql":
+            for col_name in ("total_bytes_eligible", "total_bytes_deleted"):
+                db_session.execute(
+                    text(
+                        f"ALTER TABLE icloud_staging_cleanup_runs "
+                        f"ALTER COLUMN {col_name} TYPE BIGINT"
+                    )
+                )
 
     db_session.commit()
     return IcloudStagingCleanupSchemaSummary(created_tables=created_tables)
