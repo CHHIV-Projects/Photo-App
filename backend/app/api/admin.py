@@ -198,6 +198,8 @@ from app.services.source_identity import (
     SourceEndpointEnrollmentPlanRequest,
     SourceEndpointEnrollmentPlanResponse,
     SourceEndpointEnrollmentService,
+    SourceProfileReadinessResponse,
+    SourceProfileReadinessService,
     SourceIdentityCapabilitiesResponse,
     SourceIdentityProbeRequest,
     SourceIdentityProbeResponse,
@@ -227,6 +229,14 @@ def get_source_identity_probe_service() -> SourceIdentityProbeService:
 def get_source_endpoint_enrollment_service(db: Session) -> SourceEndpointEnrollmentService:
     """Return a stateless source endpoint enrollment service."""
     return SourceEndpointEnrollmentService(
+        db_session=db,
+        probe_service=get_source_identity_probe_service(),
+    )
+
+
+def get_source_profile_readiness_service(db: Session) -> SourceProfileReadinessService:
+    """Return a read-only Source Profile readiness service."""
+    return SourceProfileReadinessService(
         db_session=db,
         probe_service=get_source_identity_probe_service(),
     )
@@ -1895,6 +1905,21 @@ def post_source_profile_verify_path(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"detail": str(exc)},
         )
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
+
+
+@router.post("/source-profiles/{source_id}/check-readiness", response_model=SourceProfileReadinessResponse)
+def post_source_profile_check_readiness(
+    source_id: int,
+    db: Session = Depends(get_db_session),
+) -> SourceProfileReadinessResponse | JSONResponse:
+    """Run a read-only Source Profile readiness check."""
+    try:
+        return get_source_profile_readiness_service(db).check_readiness(source_id)
     except LookupError:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,

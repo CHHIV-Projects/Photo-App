@@ -13,12 +13,16 @@ from app.services.source_identity.probe_schema import (
     SourceIdentityProbeResponse,
 )
 from app.services.source_identity.probe_service import SourceIdentityProbeService
+from app.services.source_identity.readiness_schema import SourceProfileReadinessResponse
+from app.services.source_identity.readiness_service import SourceProfileReadinessService
 
 __all__ = [
     "SourceIdentityCapabilitiesResponse",
     "SourceIdentityProbeRequest",
     "SourceIdentityProbeResponse",
     "SourceIdentityProbeService",
+    "SourceProfileReadinessResponse",
+    "SourceProfileReadinessService",
     "SourceEndpointEnrollmentConfirmRequest",
     "SourceEndpointEnrollmentConfirmResponse",
     "SourceEndpointEnrollmentPlanRequest",

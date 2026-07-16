@@ -23,17 +23,16 @@ from app.services.source_identity.enrollment_schema import (
     SourceEndpointEnrollmentPlanRequest,
     SourceEndpointEnrollmentPlanResponse,
 )
-from app.services.source_identity.probe_schema import (
-    SourceIdentityEvidenceItem,
-    SourceIdentityProbeResponse,
+from app.services.source_identity.identity_fingerprint import (
+    STRONG_FINGERPRINT_STRENGTHS,
+    fingerprint_from_probe,
+    stable_hash,
 )
+from app.services.source_identity.probe_schema import SourceIdentityProbeResponse
 from app.services.source_identity.probe_service import SourceIdentityProbeService
 
 
-FINGERPRINT_VERSION = "source_endpoint_identity_v1"
-FINGERPRINT_HASH_PREFIX = "sha256:"
 _ALIAS_MAX_LENGTH = 255
-_STRONG_FINGERPRINT_STRENGTHS = {"strong"}
 
 
 @dataclass(frozen=True)
@@ -41,13 +40,6 @@ class _AliasResult:
     alias: str | None
     alias_normalized: str | None
     blockers: tuple[EnrollmentMessage, ...] = ()
-
-
-@dataclass(frozen=True)
-class _FingerprintResult:
-    hash_value: str | None
-    strength: str
-    version: str | None
 
 
 class SourceEndpointEnrollmentService:
@@ -318,7 +310,7 @@ class SourceEndpointEnrollmentService:
         )
 
     def _build_candidate(self, probe: SourceIdentityProbeResponse) -> SourceEndpointEnrollmentCandidate:
-        fingerprint = _fingerprint_from_probe(probe)
+        fingerprint = fingerprint_from_probe(probe)
         safe_to_run = probe.safe_to_run if isinstance(probe.safe_to_run, str) else str(probe.safe_to_run).lower()
         return SourceEndpointEnrollmentCandidate(
             source_type=probe.source_type,
@@ -439,7 +431,7 @@ class SourceEndpointEnrollmentService:
     ) -> list[SourceEndpointEnrollmentMatch]:
         if (
             candidate.identity_fingerprint_hash is None
-            or candidate.identity_fingerprint_strength not in _STRONG_FINGERPRINT_STRENGTHS
+            or candidate.identity_fingerprint_strength not in STRONG_FINGERPRINT_STRENGTHS
         ):
             return []
         endpoints = self._db.scalars(
@@ -743,95 +735,6 @@ def _normalize_alias(alias: str | None) -> _AliasResult:
     )
 
 
-def _fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> _FingerprintResult:
-    if probe.source_type == "nas":
-        server_share = _parse_unc_server_share(
-            probe.normalized_observed_path or probe.observed_path or probe.source_root_candidate.path
-        )
-        if server_share is not None:
-            server, share = server_share
-            return _FingerprintResult(
-                hash_value=_versioned_hash(["nas", server.casefold(), share.casefold()]),
-                strength="strong",
-                version=FINGERPRINT_VERSION,
-            )
-
-    evidence_parts: list[str] = []
-    durable_found = False
-    supporting_found = False
-    for item in probe.evidence_items:
-        if _is_fingerprint_evidence(item):
-            value = item.masked_value or item.display_value
-            if not value:
-                continue
-            evidence_parts.append(
-                "|".join(
-                    [
-                        item.category,
-                        item.code,
-                        item.durability,
-                        value.casefold(),
-                    ]
-                )
-            )
-            durable_found = durable_found or item.durability == "durable"
-            supporting_found = supporting_found or item.durability == "supporting"
-
-    if evidence_parts:
-        strength = "strong" if durable_found else "medium" if supporting_found else "weak"
-        return _FingerprintResult(
-            hash_value=_versioned_hash([probe.source_type, *sorted(evidence_parts)]),
-            strength=strength,
-            version=FINGERPRINT_VERSION,
-        )
-
-    fallback_path = probe.normalized_observed_path or probe.observed_path or probe.source_root_candidate.path
-    if fallback_path:
-        return _FingerprintResult(
-            hash_value=_versioned_hash(
-                [
-                    probe.source_type,
-                    probe.source_root_candidate.filesystem_boundary_type,
-                    _normalize_path_for_hash(fallback_path),
-                ]
-            ),
-            strength="weak",
-            version=FINGERPRINT_VERSION,
-        )
-
-    return _FingerprintResult(hash_value=None, strength="unavailable", version=None)
-
-
-def _is_fingerprint_evidence(item: SourceIdentityEvidenceItem) -> bool:
-    if item.status != "present":
-        return False
-    if item.category == "path_evidence":
-        return False
-    return item.durability in {"durable", "supporting"}
-
-
-def _parse_unc_server_share(path: str | None) -> tuple[str, str] | None:
-    if not path:
-        return None
-    normalized = path.replace("/", "\\")
-    if not normalized.startswith("\\\\"):
-        return None
-    parts = [part for part in normalized.strip("\\").split("\\") if part]
-    if len(parts) < 2:
-        return None
-    return parts[0], parts[1]
-
-
-def _normalize_path_for_hash(path: str) -> str:
-    return path.replace("/", "\\").strip().casefold()
-
-
-def _versioned_hash(parts: list[str]) -> str:
-    return FINGERPRINT_HASH_PREFIX + hashlib.sha256(
-        _safe_json({"version": FINGERPRINT_VERSION, "parts": parts}).encode("utf-8")
-    ).hexdigest()
-
-
 def _access_node_uuid(candidate: SourceEndpointEnrollmentCandidate) -> str:
     return (
         "access-node:"
@@ -893,7 +796,7 @@ def _plan_fingerprint(
 
 
 def _stable_hash(payload: dict[str, Any]) -> str:
-    return FINGERPRINT_HASH_PREFIX + hashlib.sha256(_safe_json(payload).encode("utf-8")).hexdigest()
+    return stable_hash(payload)
 
 
 def _safe_json(payload: Any) -> str:
