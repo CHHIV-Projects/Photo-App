@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createSourceProfile,
   createSourceProfileStagingFolder,
+  confirmSourceEndpointEnrollment,
   getIcloudAcquisitionStatus,
   getIcloudStagingCleanupStatus,
   getIcloudStagingCleanupReadiness,
@@ -16,6 +17,7 @@ import {
   getSourceIntakeReports,
   getSourceIntakeRunStatus,
   getSourceProfiles,
+  planSourceEndpointEnrollment,
   runIcloudAcquisitionWithDetails,
   runIcloudStagingCleanupDryRun,
   startSourceIntake,
@@ -29,6 +31,10 @@ import type {
   SourceAcquisitionMethod,
   SourceCloudProvider,
   IcloudSourceReadiness,
+  SourceEndpointEnrollmentConfirmResponse,
+  SourceEndpointEnrollmentPlanResponse,
+  SourceIdentityProbeRequest,
+  SourceIdentityProbeSourceType,
   SourceProfileCreateRequest,
   SourceProfileDetail,
   SourceProfileMetadataUpdateRequest,
@@ -82,6 +88,15 @@ type EditorFormState = {
   accountUsername: string;
   acquisitionMethod: SourceAcquisitionMethod;
   managedStagingPath: string;
+};
+
+type SourceIdentityEnrollmentPhase = "idle" | "planning" | "review" | "confirming" | "complete";
+
+type SourceIdentityEnrollmentSupport = {
+  supported: boolean;
+  probeSourceType: SourceIdentityProbeSourceType | null;
+  reason: string | null;
+  note: string;
 };
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
@@ -288,6 +303,94 @@ function delay(ms: number): Promise<void> {
 
 function isLocalOrExternalSource(sourceType: SourceProfileType): boolean {
   return sourceType === "local_folder" || sourceType === "external_drive";
+}
+
+function isUncPath(pathValue: string | null | undefined): boolean {
+  const normalized = (pathValue ?? "").trim().replace(/\//g, "\\");
+  return normalized.startsWith("\\\\");
+}
+
+function getSourceIdentityEnrollmentSupport(
+  sourceType: SourceProfileType,
+  pathValue: string | null | undefined,
+): SourceIdentityEnrollmentSupport {
+  if (sourceType === "cloud_export") {
+    return {
+      supported: false,
+      probeSourceType: null,
+      reason: "Cloud sources use provider-specific identity and staging. Generic filesystem endpoint enrollment is not available for this source type yet.",
+      note: "Cloud sources use provider-specific identity and staging.",
+    };
+  }
+  if (sourceType === "scan_batch") {
+    return {
+      supported: false,
+      probeSourceType: null,
+      reason: "Endpoint enrollment is not available for scan batch profiles yet.",
+      note: "Endpoint enrollment is not available for scan batch profiles yet.",
+    };
+  }
+  if (sourceType === "other") {
+    return {
+      supported: false,
+      probeSourceType: null,
+      reason: "Endpoint enrollment is not available for this source type yet.",
+      note: "Endpoint enrollment is not available for this source type yet.",
+    };
+  }
+  if (sourceType === "external_drive") {
+    return {
+      supported: true,
+      probeSourceType: "external_device",
+      reason: null,
+      note: "External source identity can be enrolled after the profile is created.",
+    };
+  }
+  if (sourceType === "local_folder" && isUncPath(pathValue)) {
+    return {
+      supported: true,
+      probeSourceType: "nas",
+      reason: null,
+      note: "UNC paths are treated as NAS source identity for enrollment.",
+    };
+  }
+  return {
+    supported: true,
+    probeSourceType: "local",
+    reason: null,
+    note: "Local source identity can be enrolled after the profile is created.",
+  };
+}
+
+function buildSourceIdentityProbeRequest(profile: SourceProfileSummary): SourceIdentityProbeRequest | null {
+  const support = getSourceIdentityEnrollmentSupport(profile.source_type, profile.source_root_path);
+  if (!support.supported || !support.probeSourceType || !profile.source_root_path) {
+    return null;
+  }
+  return {
+    source_type: support.probeSourceType,
+    observed_path: profile.source_root_path,
+    probe_mode: "setup_probe",
+    intended_use: "source_profile_endpoint_enrollment",
+    os_family: "windows",
+  };
+}
+
+function formatEnrollmentAction(value: string): string {
+  if (value === "create_new_endpoint") {
+    return "Create new endpoint";
+  }
+  if (value === "link_existing_endpoint") {
+    return "Link existing endpoint";
+  }
+  return "No endpoint change";
+}
+
+function formatPlanStatus(value: string): string {
+  return value
+    .split("_")
+    .map((piece) => piece.charAt(0).toUpperCase() + piece.slice(1))
+    .join(" ");
 }
 
 function getRunDisabledReason(profile: SourceProfileSummary): string | null {
@@ -614,6 +717,14 @@ export default function IngestionView() {
   const [editorForm, setEditorForm] = useState<EditorFormState>(initialFormState());
   const [editorError, setEditorError] = useState<string | null>(null);
   const [isSavingEditor, setIsSavingEditor] = useState(false);
+  const [sourceIdentityEnrollRequested, setSourceIdentityEnrollRequested] = useState(false);
+  const [sourceIdentityAlias, setSourceIdentityAlias] = useState("");
+  const [sourceIdentityPhase, setSourceIdentityPhase] = useState<SourceIdentityEnrollmentPhase>("idle");
+  const [sourceIdentityCreatedProfile, setSourceIdentityCreatedProfile] = useState<SourceProfileSummary | null>(null);
+  const [sourceIdentityPlan, setSourceIdentityPlan] = useState<SourceEndpointEnrollmentPlanResponse | null>(null);
+  const [sourceIdentityConfirmResult, setSourceIdentityConfirmResult] = useState<SourceEndpointEnrollmentConfirmResponse | null>(null);
+  const [sourceIdentityReviewAcknowledged, setSourceIdentityReviewAcknowledged] = useState(false);
+  const [sourceIdentitySelectedEndpointId, setSourceIdentitySelectedEndpointId] = useState<number | null>(null);
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [detailSourceId, setDetailSourceId] = useState<number | null>(null);
@@ -1025,6 +1136,46 @@ export default function IngestionView() {
     return computeManagedStagingPreview(editorForm.sourceLabel);
   }, [editorForm.sourceLabel]);
 
+  const editorSourceIdentitySupport = useMemo(() => (
+    getSourceIdentityEnrollmentSupport(editorForm.sourceType, editorForm.sourceRootPath)
+  ), [editorForm.sourceRootPath, editorForm.sourceType]);
+
+  const sourceIdentityConfirmDisabledReason = useMemo(() => {
+    if (!sourceIdentityPlan) {
+      return "Plan enrollment before confirming.";
+    }
+    if (sourceIdentityPlan.blockers.length > 0) {
+      return "Resolve plan blockers before confirming.";
+    }
+    if (
+      sourceIdentityPlan.plan_status !== "ready"
+      && sourceIdentityPlan.plan_status !== "source_profile_already_linked"
+      && sourceIdentityPlan.plan_status !== "needs_review"
+    ) {
+      return "The enrollment plan is not ready to confirm.";
+    }
+    if (sourceIdentityPlan.endpoint_action === "create_new_endpoint") {
+      if (!sourceIdentityAlias.trim()) {
+        return "Endpoint alias is required.";
+      }
+      if ((sourceIdentityPlan.proposed_alias ?? "") !== sourceIdentityAlias.trim()) {
+        return "Run the plan again after changing the endpoint alias.";
+      }
+    }
+    if (sourceIdentityPlan.endpoint_action === "link_existing_endpoint" && sourceIdentitySelectedEndpointId == null) {
+      return "Select the existing endpoint before confirming.";
+    }
+    if (sourceIdentityPlan.required_confirmations.length > 0 && !sourceIdentityReviewAcknowledged) {
+      return "Review acknowledgment is required.";
+    }
+    return null;
+  }, [
+    sourceIdentityAlias,
+    sourceIdentityPlan,
+    sourceIdentityReviewAcknowledged,
+    sourceIdentitySelectedEndpointId,
+  ]);
+
   const editingProfileIsReferenced = useMemo(() => {
     return editingProfile ? hasHistoricalReferences(editingProfile) : false;
   }, [editingProfile]);
@@ -1234,20 +1385,33 @@ export default function IngestionView() {
     }
   }, []);
 
+  const resetSourceIdentityEnrollmentState = useCallback(() => {
+    setSourceIdentityEnrollRequested(false);
+    setSourceIdentityAlias("");
+    setSourceIdentityPhase("idle");
+    setSourceIdentityCreatedProfile(null);
+    setSourceIdentityPlan(null);
+    setSourceIdentityConfirmResult(null);
+    setSourceIdentityReviewAcknowledged(false);
+    setSourceIdentitySelectedEndpointId(null);
+  }, []);
+
   const openCreateDrawer = useCallback(() => {
     setIsDetailsOpen(false);
     setEditorMode("create");
     setEditingProfile(null);
     setEditorError(null);
     setEditorForm(initialFormState());
+    resetSourceIdentityEnrollmentState();
     setIsEditorOpen(true);
-  }, []);
+  }, [resetSourceIdentityEnrollmentState]);
 
   const openEditDrawer = useCallback((profile: SourceProfileSummary) => {
     setIsDetailsOpen(false);
     setEditorMode("edit");
     setEditingProfile(profile);
     setEditorError(null);
+    resetSourceIdentityEnrollmentState();
     setEditorForm({
       sourceLabel: profile.source_label,
       sourceType: profile.source_type,
@@ -1259,7 +1423,7 @@ export default function IngestionView() {
       managedStagingPath: profile.managed_staging_path ?? "",
     });
     setIsEditorOpen(true);
-  }, []);
+  }, [resetSourceIdentityEnrollmentState]);
 
   const openDetailsDrawer = useCallback((profile: SourceProfileSummary) => {
     setIsEditorOpen(false);
@@ -1298,7 +1462,8 @@ export default function IngestionView() {
   const closeEditor = useCallback(() => {
     setIsEditorOpen(false);
     setEditorError(null);
-  }, []);
+    resetSourceIdentityEnrollmentState();
+  }, [resetSourceIdentityEnrollmentState]);
 
   const closeDetails = useCallback(() => {
     detailLoadRequestSeqRef.current += 1;
@@ -1382,6 +1547,103 @@ export default function IngestionView() {
     }
   }, [detailProfile, detailSourceId, loadDetail, loadIcloudReadiness, loadProfiles]);
 
+  const runSourceIdentityEnrollmentPlan = useCallback(async (
+    profile: SourceProfileSummary,
+    selectedExistingEndpointId: number | null = sourceIdentitySelectedEndpointId,
+  ) => {
+    const probeRequest = buildSourceIdentityProbeRequest(profile);
+    if (!probeRequest) {
+      setEditorError("Endpoint enrollment is not available for this Source Profile.");
+      return null;
+    }
+
+    setSourceIdentityPhase("planning");
+    setEditorError(null);
+    setSourceIdentityPlan(null);
+    setSourceIdentityConfirmResult(null);
+
+    try {
+      const plan = await planSourceEndpointEnrollment({
+        source_profile_id: profile.source_id,
+        probe_request: probeRequest,
+        proposed_alias: sourceIdentityAlias.trim() || null,
+        selected_existing_endpoint_id: selectedExistingEndpointId,
+        operator_review_acknowledged: sourceIdentityReviewAcknowledged,
+      });
+      setSourceIdentityPlan(plan);
+      setSourceIdentityPhase("review");
+      return plan;
+    } catch (error) {
+      setSourceIdentityPhase("review");
+      setEditorError(error instanceof Error ? error.message : "Failed to plan endpoint enrollment.");
+      return null;
+    }
+  }, [sourceIdentityAlias, sourceIdentityReviewAcknowledged, sourceIdentitySelectedEndpointId]);
+
+  const confirmSourceIdentityEnrollment = useCallback(async () => {
+    if (!sourceIdentityCreatedProfile || !sourceIdentityPlan) {
+      setEditorError("Create and plan enrollment before confirming.");
+      return;
+    }
+
+    const probeRequest = buildSourceIdentityProbeRequest(sourceIdentityCreatedProfile);
+    if (!probeRequest) {
+      setEditorError("Endpoint enrollment is not available for this Source Profile.");
+      return;
+    }
+
+    const confirmedAlias = sourceIdentityAlias.trim();
+    if (sourceIdentityPlan.endpoint_action === "create_new_endpoint" && !confirmedAlias) {
+      setEditorError("Endpoint alias is required before confirming enrollment.");
+      return;
+    }
+
+    if (sourceIdentityPlan.required_confirmations.length > 0 && !sourceIdentityReviewAcknowledged) {
+      setEditorError("Review acknowledgment is required before confirming enrollment.");
+      return;
+    }
+
+    if (sourceIdentityPlan.endpoint_action === "link_existing_endpoint" && sourceIdentitySelectedEndpointId == null) {
+      setEditorError("Select the existing endpoint before confirming enrollment.");
+      return;
+    }
+
+    setSourceIdentityPhase("confirming");
+    setEditorError(null);
+    setSourceIdentityConfirmResult(null);
+
+    try {
+      const response = await confirmSourceEndpointEnrollment({
+        source_profile_id: sourceIdentityCreatedProfile.source_id,
+        probe_request: probeRequest,
+        plan_fingerprint: sourceIdentityPlan.plan_fingerprint,
+        confirmed_alias: sourceIdentityPlan.endpoint_action === "create_new_endpoint" ? confirmedAlias : null,
+        selected_existing_endpoint_id: sourceIdentitySelectedEndpointId,
+        operator_confirmed: true,
+        operator_review_acknowledged: sourceIdentityReviewAcknowledged || sourceIdentityPlan.required_confirmations.length === 0,
+      });
+      setSourceIdentityConfirmResult(response);
+      setSourceIdentityPhase("complete");
+      await loadProfiles({ refreshOnly: true });
+      setBanner({
+        kind: response.enrollment_status === "completed" ? "success" : "error",
+        message: response.enrollment_status === "completed"
+          ? "Endpoint enrolled. Source Intake behavior is unchanged."
+          : "Endpoint enrollment did not complete.",
+      });
+    } catch (error) {
+      setSourceIdentityPhase("review");
+      setEditorError(error instanceof Error ? error.message : "Failed to confirm endpoint enrollment.");
+    }
+  }, [
+    loadProfiles,
+    sourceIdentityAlias,
+    sourceIdentityCreatedProfile,
+    sourceIdentityPlan,
+    sourceIdentityReviewAcknowledged,
+    sourceIdentitySelectedEndpointId,
+  ]);
+
   const saveEditor = useCallback(async () => {
     setEditorError(null);
     const trimmedLabel = editorForm.sourceLabel.trim();
@@ -1400,6 +1662,17 @@ export default function IngestionView() {
       if (isIcloudCloudExport(editorForm) && !editorForm.accountUsername.trim()) {
         setEditorError("Account username is required for iCloud source profiles.");
         return;
+      }
+
+      if (sourceIdentityEnrollRequested) {
+        if (!editorSourceIdentitySupport.supported) {
+          setEditorError(editorSourceIdentitySupport.reason ?? "Endpoint enrollment is not available for this source type.");
+          return;
+        }
+        if (!sourceIdentityAlias.trim()) {
+          setEditorError("Endpoint alias is required when enrolling a new source identity.");
+          return;
+        }
       }
     }
 
@@ -1423,6 +1696,18 @@ export default function IngestionView() {
 
         const response = await createSourceProfile(payload);
         await loadProfiles({ refreshOnly: true });
+        if (sourceIdentityEnrollRequested) {
+          setSourceIdentityCreatedProfile(response.profile);
+          setSourceIdentityAlias((current) => current.trim() || response.profile.source_label);
+          await runSourceIdentityEnrollmentPlan(response.profile, null);
+          setBanner({
+            kind: "success",
+            message: response.already_exists
+              ? `Source profile already exists: ${response.profile.source_label}`
+              : `Source profile created: ${response.profile.source_label}`,
+          });
+          return;
+        }
         closeEditor();
         setBanner({
           kind: "success",
@@ -1463,12 +1748,16 @@ export default function IngestionView() {
     }
   }, [
     closeEditor,
+    editorSourceIdentitySupport,
     editorForm,
     editorMode,
     editingProfile,
     loadProfiles,
     managedStagingPreview,
+    runSourceIdentityEnrollmentPlan,
     statusFilter,
+    sourceIdentityAlias,
+    sourceIdentityEnrollRequested,
   ]);
 
   const detailPathLabel = detailProfile && isIcloudProfile(detailProfile) ? "Staging status" : "Path status";
@@ -2674,7 +2963,12 @@ export default function IngestionView() {
                     : "Manage lifecycle status while preserving historical source identity."}
                 </p>
               </div>
-              <button type="button" className={styles.closeButton} onClick={closeEditor} disabled={isSavingEditor}>
+              <button
+                type="button"
+                className={styles.closeButton}
+                onClick={closeEditor}
+                disabled={isSavingEditor || sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming"}
+              >
                 Close
               </button>
             </div>
@@ -2697,6 +2991,7 @@ export default function IngestionView() {
                   <input
                     className={styles.formInput}
                     value={editorForm.sourceLabel}
+                    disabled={sourceIdentityPhase !== "idle"}
                     onChange={(event) => setEditorForm((prev) => ({ ...prev, sourceLabel: event.target.value }))}
                     placeholder="Chuck PC"
                   />
@@ -2711,8 +3006,10 @@ export default function IngestionView() {
                   <select
                     className={styles.formInput}
                     value={editorForm.sourceType}
+                    disabled={sourceIdentityPhase !== "idle"}
                     onChange={(event) => {
                       const sourceType = event.target.value as SourceProfileType;
+                      resetSourceIdentityEnrollmentState();
                       setEditorForm((prev) => ({
                         ...prev,
                         sourceType,
@@ -2737,6 +3034,7 @@ export default function IngestionView() {
                 <select
                   className={styles.formInput}
                   value={editorForm.profileStatus}
+                  disabled={editorMode === "create" && sourceIdentityPhase !== "idle"}
                   onChange={(event) => setEditorForm((prev) => ({
                     ...prev,
                     profileStatus: event.target.value as SourceProfileStatus,
@@ -2757,10 +3055,18 @@ export default function IngestionView() {
                     <input
                       className={styles.formInput}
                       value={editorForm.sourceRootPath}
+                      disabled={sourceIdentityPhase !== "idle"}
                       onChange={(event) => setEditorForm((prev) => ({
                         ...prev,
                         sourceRootPath: event.target.value,
                       }))}
+                      onBlur={() => {
+                        setSourceIdentityPlan(null);
+                        setSourceIdentityConfirmResult(null);
+                        setSourceIdentityPhase("idle");
+                        setSourceIdentitySelectedEndpointId(null);
+                        setSourceIdentityReviewAcknowledged(false);
+                      }}
                       placeholder="C:\\Users\\chhen\\Pictures"
                     />
                   ) : (
@@ -2777,6 +3083,7 @@ export default function IngestionView() {
                       <select
                         className={styles.formInput}
                         value={editorForm.cloudProvider}
+                        disabled={sourceIdentityPhase !== "idle"}
                         onChange={(event) => setEditorForm((prev) => ({
                           ...prev,
                           cloudProvider: event.target.value as SourceCloudProvider,
@@ -2799,6 +3106,7 @@ export default function IngestionView() {
                       <select
                         className={styles.formInput}
                         value={editorForm.acquisitionMethod}
+                        disabled={sourceIdentityPhase !== "idle"}
                         onChange={(event) => setEditorForm((prev) => ({
                           ...prev,
                           acquisitionMethod: event.target.value as SourceAcquisitionMethod,
@@ -2821,6 +3129,7 @@ export default function IngestionView() {
                       <input
                         className={styles.formInput}
                         value={editorForm.accountUsername}
+                        disabled={sourceIdentityPhase !== "idle"}
                         onChange={(event) => setEditorForm((prev) => ({
                           ...prev,
                           accountUsername: event.target.value,
@@ -2838,6 +3147,7 @@ export default function IngestionView() {
                       <input
                         className={styles.formInput}
                         value={editorForm.managedStagingPath || managedStagingPreview}
+                        disabled={sourceIdentityPhase !== "idle"}
                         onChange={(event) => setEditorForm((prev) => ({
                           ...prev,
                           managedStagingPath: event.target.value,
@@ -2876,6 +3186,229 @@ export default function IngestionView() {
               </div>
             ) : null}
 
+            {editorMode === "create" && (
+              <section className={styles.detailSection}>
+                <h4 className={styles.detailHeading}>Source Identity</h4>
+                {editorSourceIdentitySupport.supported ? (
+                  <>
+                    <label className={styles.checkboxLabel}>
+                      <input
+                        type="checkbox"
+                        checked={sourceIdentityEnrollRequested}
+                        disabled={sourceIdentityPhase !== "idle"}
+                        onChange={(event) => {
+                          const checked = event.target.checked;
+                          setSourceIdentityEnrollRequested(checked);
+                          setSourceIdentityPlan(null);
+                          setSourceIdentityConfirmResult(null);
+                          setSourceIdentityPhase("idle");
+                          setSourceIdentityReviewAcknowledged(false);
+                          setSourceIdentitySelectedEndpointId(null);
+                          if (checked && !sourceIdentityAlias.trim()) {
+                            setSourceIdentityAlias(editorForm.sourceLabel.trim());
+                          }
+                        }}
+                      />
+                      Enroll durable source identity after creating this profile
+                    </label>
+                    <p className={styles.helperText}>{editorSourceIdentitySupport.note}</p>
+
+                    {sourceIdentityEnrollRequested && (
+                      <>
+                        <label className={styles.formLabel}>
+                          Endpoint Alias
+                          <input
+                            className={styles.formInput}
+                            value={sourceIdentityAlias}
+                            disabled={sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming" || sourceIdentityPhase === "complete"}
+                            onChange={(event) => setSourceIdentityAlias(event.target.value)}
+                            placeholder={editorForm.sourceLabel.trim() || "Chuck PC Pictures"}
+                          />
+                        </label>
+                        <p className={styles.helperText}>
+                          Source Intake behavior is unchanged. Enrollment only records durable source identity after you review and confirm the plan.
+                        </p>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <p className={styles.inlineWarning}>{editorSourceIdentitySupport.reason}</p>
+                )}
+
+                {sourceIdentityPhase === "planning" && (
+                  <p className={styles.note}>Creating profile and planning endpoint enrollment...</p>
+                )}
+
+                {sourceIdentityPlan && (
+                  <div className={styles.readOnlyBlock}>
+                    <div className={styles.runPanelHeader}>
+                      <div>
+                        <h5 className={styles.runOptionsTitle}>Enrollment Plan</h5>
+                        <p className={styles.runOptionsSummary}>
+                          {formatPlanStatus(sourceIdentityPlan.plan_status)} | {formatEnrollmentAction(sourceIdentityPlan.endpoint_action)}
+                        </p>
+                      </div>
+                      <span className={styles.statusBadge}>{formatPlanStatus(sourceIdentityPlan.plan_status)}</span>
+                    </div>
+
+                    <div className={styles.detailGrid}>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Candidate Type</span>
+                        <span>{sourceIdentityPlan.candidate?.source_type ?? "-"}</span>
+                        <span className={styles.detailMeta}>
+                          Boundary: {sourceIdentityPlan.candidate?.filesystem_boundary_type ?? "-"}
+                        </span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Observed Path</span>
+                        <span>{sourceIdentityPlan.candidate?.observed_path ?? "-"}</span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Identity Confidence</span>
+                        <span>{sourceIdentityPlan.candidate?.confidence_tier ?? "-"}</span>
+                        <span className={styles.detailMeta}>
+                          Fingerprint evidence: {sourceIdentityPlan.candidate?.identity_fingerprint_strength ?? "-"}
+                        </span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Alias</span>
+                        <span>{sourceIdentityPlan.proposed_alias ?? (sourceIdentityAlias.trim() || "-")}</span>
+                        <span className={styles.detailMeta}>Normalized: {sourceIdentityPlan.alias_normalized ?? "-"}</span>
+                      </div>
+                    </div>
+
+                    {sourceIdentityPlan.candidate?.source_type === "nas" && (
+                      <p className={styles.helperText}>
+                        NAS endpoint identity is server + share. The full configured folder remains this Source Profile root.
+                      </p>
+                    )}
+
+                    {sourceIdentityPlan.possible_matches.length > 0 && (
+                      <label className={styles.formLabel}>
+                        Existing Endpoint Match
+                        <select
+                          className={styles.formInput}
+                          value={sourceIdentitySelectedEndpointId ?? ""}
+                          onChange={(event) => {
+                            const parsed = Number(event.target.value);
+                            setSourceIdentitySelectedEndpointId(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+                          }}
+                        >
+                          <option value="">Select endpoint...</option>
+                          {sourceIdentityPlan.possible_matches.map((match) => (
+                            <option key={match.source_endpoint_id} value={match.source_endpoint_id}>
+                              {match.alias} (#{match.source_endpoint_id}, {match.match_strength})
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          disabled={!sourceIdentityCreatedProfile || sourceIdentitySelectedEndpointId == null || sourceIdentityPhase === "planning"}
+                          onClick={() => {
+                            if (sourceIdentityCreatedProfile) {
+                              void runSourceIdentityEnrollmentPlan(sourceIdentityCreatedProfile, sourceIdentitySelectedEndpointId);
+                            }
+                          }}
+                        >
+                          Plan Selected Endpoint
+                        </button>
+                      </label>
+                    )}
+
+                    {sourceIdentityPlan.blockers.length > 0 && (
+                      <div className={styles.warningList}>
+                        {sourceIdentityPlan.blockers.map((blocker) => (
+                          <p className={styles.bannerError} key={blocker.code}>
+                            {blocker.code}: {blocker.message}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+
+                    {sourceIdentityPlan.warnings.length > 0 && (
+                      <div className={styles.warningList}>
+                        {sourceIdentityPlan.warnings.map((warning) => (
+                          <p className={styles.inlineWarning} key={warning.code}>
+                            {warning.code}: {warning.message}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+
+                    {sourceIdentityPlan.required_confirmations.length > 0 && (
+                      <>
+                        <div className={styles.warningList}>
+                          {sourceIdentityPlan.required_confirmations.map((confirmation) => (
+                            <p className={styles.inlineWarning} key={confirmation.code}>
+                              {confirmation.code}: {confirmation.message}
+                            </p>
+                          ))}
+                        </div>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={sourceIdentityReviewAcknowledged}
+                            onChange={(event) => setSourceIdentityReviewAcknowledged(event.target.checked)}
+                          />
+                          I reviewed the warnings and want to enroll this source endpoint.
+                        </label>
+                      </>
+                    )}
+
+                    {sourceIdentityConfirmResult && (
+                      <p className={sourceIdentityConfirmResult.enrollment_status === "completed" ? styles.bannerSuccess : styles.bannerError}>
+                        {sourceIdentityConfirmResult.enrollment_status === "completed"
+                          ? `Endpoint enrolled. Endpoint ID: ${sourceIdentityConfirmResult.source_endpoint_id ?? "-"}; observed path ID: ${sourceIdentityConfirmResult.observed_path_id ?? "-"}. Source Intake behavior is unchanged.`
+                          : "Endpoint enrollment did not complete."}
+                      </p>
+                    )}
+
+                    <details className={styles.errorDetails}>
+                      <summary>Advanced Details</summary>
+                      <p className={styles.errorDetailsText}>
+                        Plan fingerprint: {sourceIdentityPlan.plan_fingerprint}
+                        {"\n"}Provider: {sourceIdentityPlan.candidate?.provider_name ?? "-"} {sourceIdentityPlan.candidate?.provider_version ?? ""}
+                        {"\n"}Blocker codes: {sourceIdentityPlan.blockers.map((item) => item.code).join(", ") || "-"}
+                        {"\n"}Warning codes: {sourceIdentityPlan.warnings.map((item) => item.code).join(", ") || "-"}
+                      </p>
+                    </details>
+
+                    <div className={styles.drawerActions}>
+                      {sourceIdentityConfirmDisabledReason && sourceIdentityPhase !== "complete" && (
+                        <span className={styles.disabledReason}>{sourceIdentityConfirmDisabledReason}</span>
+                      )}
+                      <button
+                        type="button"
+                        className={styles.button}
+                        disabled={!sourceIdentityCreatedProfile || sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming" || sourceIdentityPhase === "complete"}
+                        onClick={() => {
+                          if (sourceIdentityCreatedProfile) {
+                            void runSourceIdentityEnrollmentPlan(sourceIdentityCreatedProfile, sourceIdentitySelectedEndpointId);
+                          }
+                        }}
+                      >
+                        Refresh Plan
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.updateButton}
+                        disabled={Boolean(sourceIdentityConfirmDisabledReason) || sourceIdentityPhase === "confirming" || sourceIdentityPhase === "complete"}
+                        onClick={() => void confirmSourceIdentityEnrollment()}
+                      >
+                        {sourceIdentityPhase === "confirming" ? "Confirming..." : "Confirm Enrollment"}
+                      </button>
+                      {sourceIdentityPhase === "complete" && (
+                        <button type="button" className={styles.button} onClick={closeEditor}>
+                          Done
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+
             {editorError && <p className={styles.bannerError}>{editorError}</p>}
 
             <div className={styles.drawerActions}>
@@ -2883,11 +3416,22 @@ export default function IngestionView() {
                 type="button"
                 className={styles.updateButton}
                 onClick={() => void saveEditor()}
-                disabled={isSavingEditor}
+                disabled={isSavingEditor || sourceIdentityPhase !== "idle"}
               >
-                {isSavingEditor ? "Saving..." : editorMode === "create" ? "Create Profile" : "Save Status"}
+                {isSavingEditor || sourceIdentityPhase === "planning"
+                  ? "Saving..."
+                  : editorMode === "create"
+                    ? sourceIdentityEnrollRequested
+                      ? "Create Profile and Plan Enrollment"
+                      : "Create Profile"
+                    : "Save Status"}
               </button>
-              <button type="button" className={styles.button} onClick={closeEditor} disabled={isSavingEditor}>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={closeEditor}
+                disabled={isSavingEditor || sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming"}
+              >
                 Cancel
               </button>
             </div>
@@ -3373,6 +3917,15 @@ export default function IngestionView() {
                     <div className={styles.detailCard}>
                       <span className={styles.detailLabel}>Lifecycle Status</span>
                       <span className={styles.statusBadge}>{detailProfile.profile_status}</span>
+                    </div>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Durable Source Identity</span>
+                      <span className={detailProfile.endpoint_id ? styles.okBadge : styles.pendingBadge}>
+                        {detailProfile.endpoint_id ? "Enrolled" : "Not enrolled"}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        {detailProfile.endpoint_id ? `Endpoint ID: ${detailProfile.endpoint_id}` : "Path-only profiles remain valid."}
+                      </span>
                     </div>
                     <div className={styles.detailCard}>
                       <span className={styles.detailLabel}>Effective Path</span>

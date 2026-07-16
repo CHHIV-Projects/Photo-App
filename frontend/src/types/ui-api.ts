@@ -1253,6 +1253,7 @@ export interface SourceProfileSummary {
   source_label: string;
   source_type: SourceProfileType;
   source_root_path: string | null;
+  endpoint_id: number | null;
   profile_status: SourceProfileStatus;
   cloud_provider: SourceCloudProvider | null;
   acquisition_method: SourceAcquisitionMethod | null;
@@ -1369,6 +1370,114 @@ export interface SourceProfileCreateRequest {
 export interface SourceProfileCreateResponse {
   already_exists: boolean;
   profile: SourceProfileSummary;
+}
+
+export type SourceIdentityProbeSourceType =
+  | "local"
+  | "external_device"
+  | "removable_media"
+  | "nas"
+  | "cloud";
+
+export interface SourceIdentityProbeRequest {
+  source_type: SourceIdentityProbeSourceType;
+  observed_path?: string | null;
+  probe_mode?: "setup_probe" | "readiness_probe" | "run_launch_verification" | "diagnostic_probe";
+  intended_use?: string | null;
+  os_family?: "windows" | "linux" | "macos" | "unknown";
+}
+
+export interface EnrollmentMessage {
+  code: string;
+  message: string;
+}
+
+export interface SourceEndpointEnrollmentCandidate {
+  source_type: string;
+  observed_path: string | null;
+  normalized_observed_path: string | null;
+  source_root_candidate_path: string | null;
+  filesystem_boundary_type: string;
+  is_valid_source_root_candidate: boolean;
+  probe_status: string;
+  confidence_tier: string;
+  safe_to_run: string;
+  provider_name: string;
+  provider_version: string;
+  access_node_label: string;
+  access_node_os_family: string;
+  identity_fingerprint_hash: string | null;
+  identity_fingerprint_version: string | null;
+  identity_fingerprint_strength: "strong" | "medium" | "weak" | "unavailable";
+}
+
+export interface SourceEndpointEnrollmentMatch {
+  source_endpoint_id: number;
+  alias: string;
+  source_type: string;
+  match_strength: string;
+  match_reason: string;
+  identity_confidence: string;
+}
+
+export interface SourceEndpointEnrollmentPlanRequest {
+  source_profile_id: number;
+  probe_request: SourceIdentityProbeRequest;
+  proposed_alias?: string | null;
+  selected_existing_endpoint_id?: number | null;
+  operator_review_acknowledged?: boolean;
+}
+
+export interface SourceEndpointEnrollmentPlanResponse {
+  generated_at: string;
+  plan_status:
+    | "ready"
+    | "needs_review"
+    | "blocked"
+    | "alias_conflict"
+    | "duplicate_match"
+    | "source_profile_already_linked";
+  source_profile_id: number;
+  source_profile_label: string | null;
+  existing_source_endpoint_id: number | null;
+  endpoint_action: "create_new_endpoint" | "link_existing_endpoint" | "none";
+  source_profile_action: "link_existing_profile" | "none";
+  proposed_alias: string | null;
+  alias_normalized: string | null;
+  plan_fingerprint: string;
+  candidate: SourceEndpointEnrollmentCandidate | null;
+  possible_matches: SourceEndpointEnrollmentMatch[];
+  blockers: EnrollmentMessage[];
+  warnings: EnrollmentMessage[];
+  required_confirmations: EnrollmentMessage[];
+}
+
+export interface SourceEndpointEnrollmentConfirmRequest {
+  source_profile_id: number;
+  probe_request: SourceIdentityProbeRequest;
+  confirmed_alias?: string | null;
+  selected_existing_endpoint_id?: number | null;
+  plan_fingerprint?: string | null;
+  operator_confirmed: boolean;
+  operator_review_acknowledged?: boolean;
+}
+
+export interface SourceEndpointEnrollmentConfirmResponse {
+  generated_at: string;
+  enrollment_status: "completed" | "blocked" | "failed";
+  source_profile_id: number;
+  source_endpoint_id: number | null;
+  source_profile_endpoint_id: number | null;
+  endpoint_action: "create_new_endpoint" | "link_existing_endpoint" | "none";
+  source_profile_action: "link_existing_profile" | "none";
+  already_linked: boolean;
+  created_endpoint: boolean;
+  created_access_node: boolean;
+  created_observed_path: boolean;
+  observed_path_id: number | null;
+  plan_fingerprint: string | null;
+  blockers: EnrollmentMessage[];
+  warnings: EnrollmentMessage[];
 }
 
 export interface SourceProfileMetadataUpdateRequest {

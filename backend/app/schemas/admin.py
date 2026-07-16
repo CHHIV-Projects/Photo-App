@@ -281,6 +281,7 @@ class SourceProfileSummary(BaseModel):
     source_label: str
     source_type: str
     source_root_path: str | None = None
+    endpoint_id: int | None = None
     profile_status: str
     cloud_provider: str | None = None
     acquisition_method: str | None = None

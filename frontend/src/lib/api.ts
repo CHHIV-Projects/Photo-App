@@ -13,6 +13,10 @@ import type {
   SourceProfileCreateRequest,
   SourceProfileCreateResponse,
   SourceProfileDetail,
+  SourceEndpointEnrollmentConfirmRequest,
+  SourceEndpointEnrollmentConfirmResponse,
+  SourceEndpointEnrollmentPlanRequest,
+  SourceEndpointEnrollmentPlanResponse,
   IcloudSourceReadiness,
   IcloudReadinessOperationConflicts,
   IcloudReadinessReason,
@@ -1005,6 +1009,24 @@ export function createSourceProfile(
     ? `/api/admin/source-profiles?${query}`
     : "/api/admin/source-profiles";
   return apiRequest<SourceProfileCreateResponse>(path, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function planSourceEndpointEnrollment(
+  payload: SourceEndpointEnrollmentPlanRequest,
+): Promise<SourceEndpointEnrollmentPlanResponse> {
+  return apiRequest<SourceEndpointEnrollmentPlanResponse>("/api/admin/source-endpoints/enrollment/plan", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmSourceEndpointEnrollment(
+  payload: SourceEndpointEnrollmentConfirmRequest,
+): Promise<SourceEndpointEnrollmentConfirmResponse> {
+  return apiRequest<SourceEndpointEnrollmentConfirmResponse>("/api/admin/source-endpoints/enrollment/confirm", {
     method: "POST",
     body: JSON.stringify(payload),
   });

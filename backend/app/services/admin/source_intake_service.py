@@ -193,6 +193,7 @@ def _to_source_profile_summary(
         source_label=source.source_label,
         source_type=source.source_type,
         source_root_path=source.source_root_path,
+        endpoint_id=source.endpoint_id,
         profile_status=source.profile_status,
         cloud_provider=source.cloud_provider,
         acquisition_method=source.acquisition_method,
