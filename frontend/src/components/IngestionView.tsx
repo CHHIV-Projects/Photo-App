@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  checkSourceProfileReadiness,
   createSourceProfile,
   createSourceProfileStagingFolder,
   confirmSourceEndpointEnrollment,
@@ -39,6 +40,8 @@ import type {
   SourceProfileDetail,
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
+  SourceProfileReadinessResponse,
+  SourceProfileReadinessStatus,
   SourceIntakeReportDetail,
   SourceIntakeReportSummary,
   SourceProfileStagingFolderCreateResponse,
@@ -193,6 +196,52 @@ function toIcloudReadinessLabel(value: IcloudReadinessState): string {
     return "Not Ready";
   }
   return "Unknown";
+}
+
+function toSourceProfileReadinessLabel(value: SourceProfileReadinessStatus | null | undefined): string {
+  if (value === "ready") {
+    return "Ready";
+  }
+  if (value === "path_only") {
+    return "Path-only";
+  }
+  if (value === "needs_review") {
+    return "Needs Review";
+  }
+  if (value === "blocked") {
+    return "Blocked";
+  }
+  if (value === "provider_specific") {
+    return "Provider-specific";
+  }
+  return "Unknown";
+}
+
+function sourceProfileReadinessBadgeClassName(value: SourceProfileReadinessStatus | null | undefined): string {
+  if (value === "ready") {
+    return styles.readinessBadgeReady;
+  }
+  if (value === "blocked") {
+    return styles.readinessBadgeNotReady;
+  }
+  if (value === "path_only" || value === "needs_review") {
+    return styles.readinessBadgeWarning;
+  }
+  return styles.readinessBadgeUnknown;
+}
+
+function buildSourceReadinessAdvancedDetails(result: SourceProfileReadinessResponse): Record<string, unknown> {
+  return {
+    identity_match_status: result.identity_match_status,
+    endpoint_id: result.endpoint_id,
+    endpoint_alias: result.endpoint_alias,
+    endpoint_source_type: result.endpoint_source_type,
+    checked_at: result.checked_at,
+    probe_summary: result.probe_summary,
+    observed_path_summary: result.observed_path_summary,
+    access_node_summary: result.access_node_summary,
+    advanced_details: result.advanced_details,
+  };
 }
 
 function toAuthStatusLabel(value: IcloudAuthState): string {
@@ -734,6 +783,9 @@ export default function IngestionView() {
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [isVerifyingPath, setIsVerifyingPath] = useState(false);
   const [pathCheckResult, setPathCheckResult] = useState<SourceProfilePathCheckResponse | null>(null);
+  const [sourceReadinessResult, setSourceReadinessResult] = useState<SourceProfileReadinessResponse | null>(null);
+  const [isCheckingSourceReadiness, setIsCheckingSourceReadiness] = useState(false);
+  const [sourceReadinessError, setSourceReadinessError] = useState<string | null>(null);
   const [stagingCreateResult, setStagingCreateResult] = useState<SourceProfileStagingFolderCreateResponse | null>(null);
   const [isCreatingStagingFolder, setIsCreatingStagingFolder] = useState(false);
   const [icloudReadinessSnapshot, setIcloudReadinessSnapshot] = useState<IcloudSourceReadiness | null>(null);
@@ -781,6 +833,7 @@ export default function IngestionView() {
   const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
   const [reportDetailError, setReportDetailError] = useState<string | null>(null);
   const detailLoadRequestSeqRef = useRef(0);
+  const sourceReadinessRequestSeqRef = useRef(0);
 
   const normalizedRunLimitInput = useMemo(() => runLimitInput.trim(), [runLimitInput]);
   const normalizedRunBatchSizeInput = useMemo(() => runBatchSizeInput.trim(), [runBatchSizeInput]);
@@ -1426,6 +1479,7 @@ export default function IngestionView() {
   }, [resetSourceIdentityEnrollmentState]);
 
   const openDetailsDrawer = useCallback((profile: SourceProfileSummary) => {
+    sourceReadinessRequestSeqRef.current += 1;
     setIsEditorOpen(false);
     setIsDetailsOpen(true);
     setDetailSourceId(profile.source_id);
@@ -1433,6 +1487,9 @@ export default function IngestionView() {
     setDetailError(null);
     setDetailBanner(null);
     setPathCheckResult(null);
+    setSourceReadinessResult(null);
+    setSourceReadinessError(null);
+    setIsCheckingSourceReadiness(false);
     setStagingCreateResult(null);
     setIcloudReadinessSnapshot(null);
     setIcloudReadinessError(null);
@@ -1516,6 +1573,31 @@ export default function IngestionView() {
       setIsVerifyingPath(false);
     }
   }, [detailProfile, detailSourceId, loadIcloudReadiness]);
+
+  const handleCheckSourceReadiness = useCallback(async () => {
+    if (!detailSourceId) {
+      return;
+    }
+    const sourceId = detailSourceId;
+    const requestSeq = sourceReadinessRequestSeqRef.current + 1;
+    sourceReadinessRequestSeqRef.current = requestSeq;
+    setIsCheckingSourceReadiness(true);
+    setSourceReadinessError(null);
+    try {
+      const result = await checkSourceProfileReadiness(sourceId);
+      if (sourceReadinessRequestSeqRef.current === requestSeq && result.source_profile_id === sourceId) {
+        setSourceReadinessResult(result);
+      }
+    } catch (error) {
+      if (sourceReadinessRequestSeqRef.current === requestSeq) {
+        setSourceReadinessError(error instanceof Error ? error.message : "Failed to check Source Profile readiness.");
+      }
+    } finally {
+      if (sourceReadinessRequestSeqRef.current === requestSeq) {
+        setIsCheckingSourceReadiness(false);
+      }
+    }
+  }, [detailSourceId]);
 
   const handleCreateStagingFolder = useCallback(async () => {
     if (!detailSourceId) {
@@ -1864,6 +1946,15 @@ export default function IngestionView() {
 
   const readinessBlockingReasons = useMemo(() => icloudReadinessSnapshot?.blocking_reasons ?? [], [icloudReadinessSnapshot?.blocking_reasons]);
   const readinessWarnings = useMemo(() => icloudReadinessSnapshot?.warnings ?? [], [icloudReadinessSnapshot?.warnings]);
+
+  const sourceReadinessStatus = sourceReadinessResult?.readiness_status ?? "unknown";
+  const sourceReadinessBadgeClassName = sourceProfileReadinessBadgeClassName(sourceReadinessStatus);
+  const sourceReadinessWarnings = sourceReadinessResult?.warnings ?? [];
+  const sourceReadinessBlockers = sourceReadinessResult?.blockers ?? [];
+  const sourceReadinessAdvancedDetails = useMemo(
+    () => sourceReadinessResult ? buildSourceReadinessAdvancedDetails(sourceReadinessResult) : null,
+    [sourceReadinessResult],
+  );
 
   const activeRunReport = useMemo(() => {
     if (!sourceIntakeStatus) {
@@ -3941,6 +4032,100 @@ export default function IngestionView() {
                         {detailProfile.is_referenced ? "Referenced" : "Unreferenced"}
                       </span>
                     </div>
+                  </div>
+                </section>
+
+                <section className={styles.detailSection}>
+                  <h4 className={styles.detailHeading}>Source Readiness</h4>
+                  <p className={styles.helperText}>
+                    Manual read-only check. Source Intake launch behavior is unchanged.
+                  </p>
+                  <div className={styles.detailGrid}>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Status</span>
+                      <span className={`${styles.readinessBadge} ${sourceReadinessBadgeClassName}`}>
+                        {toSourceProfileReadinessLabel(sourceReadinessStatus)}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        Identity match: {sourceReadinessResult ? toStatusLabel(sourceReadinessResult.identity_match_status) : "Not checked"}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        Checked: {sourceReadinessResult ? toDisplayDate(sourceReadinessResult.checked_at) : "Not checked"}
+                      </span>
+                    </div>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Message</span>
+                      <span>{sourceReadinessResult?.operator_message ?? "Readiness has not been checked."}</span>
+                      <span className={styles.detailMeta}>
+                        Recommended next action: {sourceReadinessResult?.recommended_next_action ?? "Check readiness before running intake."}
+                      </span>
+                      {sourceReadinessResult?.readiness_status === "provider_specific" && (
+                        <span className={styles.detailMeta}>
+                          Use iCloud Intake or the provider-specific workflow for this source.
+                        </span>
+                      )}
+                    </div>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Source Intake</span>
+                      <span className={sourceReadinessResult?.can_run_source_intake ? styles.okBadge : styles.pendingBadge}>
+                        Can run: {sourceReadinessResult ? (sourceReadinessResult.can_run_source_intake ? "Yes" : "No") : "Unknown"}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        Run acknowledgment needed later: {sourceReadinessResult ? (sourceReadinessResult.requires_operator_acknowledgment ? "Yes" : "No") : "Unknown"}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        Hard block: {sourceReadinessResult ? (sourceReadinessResult.hard_block ? "Yes" : "No") : "Unknown"}
+                      </span>
+                    </div>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Endpoint</span>
+                      <span>{sourceReadinessResult?.endpoint_alias ?? (sourceReadinessResult?.endpoint_id ? `Endpoint ID ${sourceReadinessResult.endpoint_id}` : "No endpoint linked")}</span>
+                      <span className={styles.detailMeta}>Endpoint ID: {sourceReadinessResult?.endpoint_id ?? "-"}</span>
+                      <span className={styles.detailMeta}>Endpoint type: {sourceReadinessResult?.endpoint_source_type ?? "-"}</span>
+                    </div>
+                  </div>
+                  {sourceReadinessError && (
+                    <p className={styles.bannerError}>{sourceReadinessError}</p>
+                  )}
+                  {sourceReadinessBlockers.length > 0 && (
+                    <div className={styles.warningList}>
+                      {sourceReadinessBlockers.map((message) => (
+                        <p key={`blocker:${message.code}:${message.message}`} className={styles.inlineWarning}>
+                          Blocker - {message.code}: {message.message}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {sourceReadinessWarnings.length > 0 && (
+                    <div className={styles.warningList}>
+                      {sourceReadinessWarnings.map((message) => (
+                        <p key={`warning:${message.code}:${message.message}`} className={styles.inlineWarning}>
+                          Warning - {message.code}: {message.message}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {sourceReadinessAdvancedDetails && (
+                    <details className={styles.advancedDetails}>
+                      <summary>Advanced Details</summary>
+                      <pre className={styles.advancedDetailsText}>
+                        {JSON.stringify(sourceReadinessAdvancedDetails, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                  <div className={styles.drawerActions}>
+                    <button
+                      type="button"
+                      className={styles.updateButton}
+                      onClick={() => void handleCheckSourceReadiness()}
+                      disabled={isCheckingSourceReadiness || !detailSourceId}
+                    >
+                      {isCheckingSourceReadiness
+                        ? "Checking readiness..."
+                        : sourceReadinessResult
+                          ? "Recheck Readiness"
+                          : "Check Readiness"}
+                    </button>
                   </div>
                 </section>
 

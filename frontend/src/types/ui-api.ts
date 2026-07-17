@@ -1351,6 +1351,55 @@ export interface SourceProfileStagingFolderCreateResponse {
   checked_at: string;
 }
 
+export type SourceProfileReadinessStatus =
+  | "ready"
+  | "path_only"
+  | "needs_review"
+  | "blocked"
+  | "provider_specific"
+  | "unknown";
+
+export type SourceProfileIdentityMatchStatus =
+  | "not_enrolled"
+  | "matched"
+  | "needs_review"
+  | "mismatch"
+  | "unavailable"
+  | "unsupported"
+  | "provider_specific"
+  | "ambiguous"
+  | "unknown";
+
+export interface ReadinessMessage {
+  code: string;
+  message: string;
+}
+
+export interface SourceProfileReadinessResponse {
+  source_profile_id: number;
+  source_label: string | null;
+  source_type: string | null;
+  profile_status: string | null;
+  cloud_provider: string | null;
+  endpoint_id: number | null;
+  endpoint_alias: string | null;
+  endpoint_source_type: string | null;
+  readiness_status: SourceProfileReadinessStatus;
+  identity_match_status: SourceProfileIdentityMatchStatus;
+  can_run_source_intake: boolean;
+  requires_operator_acknowledgment: boolean;
+  hard_block: boolean;
+  operator_message: string;
+  recommended_next_action: string;
+  warnings: ReadinessMessage[];
+  blockers: ReadinessMessage[];
+  checked_at: string;
+  probe_summary: Record<string, unknown>;
+  observed_path_summary: Record<string, unknown>;
+  access_node_summary: Record<string, unknown>;
+  advanced_details: Record<string, unknown>;
+}
+
 export interface SourceProfilesResponse {
   generated_at: string;
   profiles: SourceProfileSummary[];

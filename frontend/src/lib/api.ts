@@ -22,6 +22,7 @@ import type {
   IcloudReadinessReason,
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
+  SourceProfileReadinessResponse,
   SourceProfileStatus,
   SourceProfilesResponse,
   SourceProfileStagingFolderCreateResponse,
@@ -1053,6 +1054,12 @@ export function updateSourceProfileMetadata(
 
 export function verifySourceProfilePath(sourceId: number): Promise<SourceProfilePathCheckResponse> {
   return apiRequest<SourceProfilePathCheckResponse>(`/api/admin/source-profiles/${sourceId}/verify-path`, {
+    method: "POST",
+  });
+}
+
+export function checkSourceProfileReadiness(sourceId: number): Promise<SourceProfileReadinessResponse> {
+  return apiRequest<SourceProfileReadinessResponse>(`/api/admin/source-profiles/${sourceId}/check-readiness`, {
     method: "POST",
   });
 }

@@ -243,6 +243,33 @@
   font-size: 0.82rem;
 }
 
+.advancedDetails {
+  border: 1px solid #d7e1ea;
+  border-radius: 10px;
+  background: #f9fbfd;
+  padding: 10px 12px;
+}
+
+.advancedDetails summary {
+  cursor: pointer;
+  color: #103d60;
+  font-weight: 700;
+}
+
+.advancedDetailsText {
+  margin: 8px 0 0;
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #314152;
+  padding: 10px;
+  font-size: 0.78rem;
+}
+
 .tableWrap {
   overflow-x: auto;
   border: 1px solid #d7e1ea;
