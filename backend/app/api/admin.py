@@ -111,6 +111,7 @@ from app.services.admin import (
 from app.services.ingestion.ingestion_context_service import normalize_source_label
 from app.services.admin.source_intake_execution_service import (
     SourceIntakeAlreadyRunningError,
+    SourceIntakeReadinessBlockedError,
 )
 from app.services.duplicates.processing_service import (
     DuplicateProcessingAlreadyRunningError,
@@ -934,6 +935,46 @@ def _guardrail_conflict_content(
         "error_code": error_code,
         "blocking_reasons": [reason.model_dump(mode="json") for reason in snapshot.blocking_reasons],
         "operation_conflicts": snapshot.operation_conflicts.model_dump(mode="json"),
+    }
+    if current is not None:
+        if hasattr(current, "model_dump"):
+            content["current"] = current.model_dump(mode="json")
+        else:
+            content["current"] = current
+    return content
+
+
+def _source_intake_readiness_conflict_content(
+    exc: SourceIntakeReadinessBlockedError,
+    *,
+    current: object | None = None,
+) -> dict[str, object]:
+    readiness = exc.readiness
+    readiness_summary: dict[str, object] = {
+        "source_profile_id": readiness.source_profile_id,
+        "source_label": readiness.source_label,
+        "source_type": readiness.source_type,
+        "profile_status": readiness.profile_status,
+        "cloud_provider": readiness.cloud_provider,
+        "endpoint_id": readiness.endpoint_id,
+        "endpoint_alias": readiness.endpoint_alias,
+        "endpoint_source_type": readiness.endpoint_source_type,
+        "readiness_status": readiness.readiness_status,
+        "identity_match_status": readiness.identity_match_status,
+        "can_run_source_intake": readiness.can_run_source_intake,
+        "requires_operator_acknowledgment": readiness.requires_operator_acknowledgment,
+        "hard_block": readiness.hard_block,
+        "operator_message": readiness.operator_message,
+        "recommended_next_action": readiness.recommended_next_action,
+        "warnings": [warning.model_dump(mode="json") for warning in readiness.warnings],
+        "blockers": [blocker.model_dump(mode="json") for blocker in readiness.blockers],
+        "checked_at": readiness.checked_at.isoformat(),
+    }
+    content: dict[str, object] = {
+        "detail": exc.detail,
+        "error_code": exc.error_code,
+        **readiness_summary,
+        "readiness": readiness_summary,
     }
     if current is not None:
         if hasattr(current, "model_dump"):
@@ -2089,6 +2130,13 @@ def _launch_source_intake_locked(
             ingestion_source_id=body.ingestion_source_id,
             source_intake_limit=body.source_intake_limit,
             ingest_batch_size=body.ingest_batch_size,
+            readiness_acknowledged=body.readiness_acknowledged,
+        )
+    except SourceIntakeReadinessBlockedError as exc:
+        current_snapshot = _snapshot_to_schema(get_source_intake_status(db))
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=_source_intake_readiness_conflict_content(exc, current=current_snapshot),
         )
     except SourceIntakeAlreadyRunningError as exc:
         return JSONResponse(

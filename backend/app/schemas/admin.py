@@ -504,6 +504,7 @@ class SourceIntakeRunRequest(BaseModel):
     ingestion_source_id: int
     source_intake_limit: int | None = None
     ingest_batch_size: int = 500
+    readiness_acknowledged: bool = False
 
 
 class SourceIntakeStatusSchema(BaseModel):

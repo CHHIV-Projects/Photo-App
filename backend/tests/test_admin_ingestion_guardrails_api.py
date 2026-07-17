@@ -16,7 +16,14 @@ from app.db.session import get_db_session
 from app.schemas.admin import IcloudReadinessOperationConflicts, IcloudReadinessReason
 from app.services.admin.ingestion_operation_guardrail_service import IngestionOperationGuardrailSnapshot
 from app.services.admin.icloud_staging_cleanup_execution_service import CleanupRunSnapshot
-from app.services.admin.source_intake_execution_service import SourceIntakeStatusSnapshot
+from app.services.admin.source_intake_execution_service import (
+    SourceIntakeReadinessBlockedError,
+    SourceIntakeStatusSnapshot,
+)
+from app.services.source_identity.readiness_schema import (
+    SourceProfileReadinessMessage,
+    SourceProfileReadinessResponse,
+)
 
 
 class _DummySession:
@@ -146,6 +153,85 @@ class AdminIngestionGuardrailsApiTests(unittest.TestCase):
         self.assertIn("current", payload)
         self.assertEqual(payload["current"]["status"], "idle")
         mocked_start.assert_not_called()
+
+    def test_source_intake_run_returns_structured_readiness_conflict(self) -> None:
+        from unittest.mock import patch
+
+        guardrail_snapshot = self._guardrail_snapshot(
+            acquisition_active=False,
+            intake_active=False,
+            cleanup_active=False,
+        )
+        current_snapshot = SourceIntakeStatusSnapshot(
+            run_id=None,
+            status="idle",
+            ingestion_run_id=None,
+            source_label=None,
+            source_type=None,
+            source_root_path=None,
+            source_intake_limit=None,
+            ingest_batch_size=None,
+            started_at=None,
+            finished_at=None,
+            elapsed_seconds=None,
+            files_scanned=0,
+            skipped_known=0,
+            selected=0,
+            staged=0,
+            processed_new_unique=0,
+            failed_or_rejected=0,
+            remaining_unknown=0,
+            report_path=None,
+            error_message=None,
+            stop_requested=False,
+        )
+        readiness = SourceProfileReadinessResponse(
+            source_profile_id=7,
+            source_label="Blocked Source",
+            source_type="local_folder",
+            profile_status="active",
+            cloud_provider=None,
+            endpoint_id=None,
+            endpoint_alias=None,
+            endpoint_source_type=None,
+            readiness_status="blocked",
+            identity_match_status="unavailable",
+            can_run_source_intake=False,
+            requires_operator_acknowledgment=False,
+            hard_block=True,
+            operator_message="Source path was not found.",
+            recommended_next_action="Reconnect the source path.",
+            blockers=[SourceProfileReadinessMessage(code="path_not_found", message="Source path was not found.")],
+        )
+
+        with patch("app.api.admin.get_ingestion_operation_guardrail_snapshot", return_value=guardrail_snapshot), patch(
+            "app.api.admin.get_source_intake_status",
+            return_value=current_snapshot,
+        ), patch(
+            "app.api.admin.start_source_intake",
+            side_effect=SourceIntakeReadinessBlockedError(
+                readiness,
+                detail="Source path was not found.",
+                error_code="SOURCE_READINESS_BLOCKED",
+            ),
+        ) as mocked_start:
+            response = self.client.post(
+                "/api/admin/source-intake/run",
+                json={"ingestion_source_id": 7, "ingest_batch_size": 200, "readiness_acknowledged": True},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        payload = response.json()
+        self.assertEqual(payload["error_code"], "SOURCE_READINESS_BLOCKED")
+        self.assertEqual(payload["readiness_status"], "blocked")
+        self.assertEqual(payload["identity_match_status"], "unavailable")
+        self.assertEqual(payload["operator_message"], "Source path was not found.")
+        self.assertEqual(payload["recommended_next_action"], "Reconnect the source path.")
+        self.assertEqual(payload["blockers"][0]["code"], "path_not_found")
+        self.assertEqual(payload["readiness"]["readiness_status"], "blocked")
+        self.assertEqual(payload["current"]["status"], "idle")
+        mocked_start.assert_called_once()
+        self.assertTrue(mocked_start.call_args.kwargs["readiness_acknowledged"])
 
     def test_cleanup_run_keeps_source_intake_active_error_for_same_source(self) -> None:
         from unittest.mock import patch

@@ -32,6 +32,7 @@ import type {
   SourceIntakeSourcesResponse,
   SourceCreateRequest,
   SourceCreateResponse,
+  SourceIntakeReadinessRejectionPayload,
   SourceIntakeRunRequest,
   SourceIntakeRunResponse,
   SourceIntakeStatusSnapshot,
@@ -191,6 +192,18 @@ export class IcloudAcquisitionStartError extends Error {
   constructor(message: string, status: number, payload: IcloudAcquisitionStartErrorPayload | null) {
     super(message);
     this.name = "IcloudAcquisitionStartError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+export class SourceIntakeStartError extends Error {
+  status: number;
+  payload: SourceIntakeReadinessRejectionPayload | null;
+
+  constructor(message: string, status: number, payload: SourceIntakeReadinessRejectionPayload | null) {
+    super(message);
+    this.name = "SourceIntakeStartError";
     this.status = status;
     this.payload = payload;
   }
@@ -1310,10 +1323,32 @@ export function createOrGetIntakeSource(req: SourceCreateRequest): Promise<Sourc
 // ---------------------------------------------------------------------------
 
 export function startSourceIntake(req: SourceIntakeRunRequest): Promise<SourceIntakeRunResponse> {
-  return apiRequest<SourceIntakeRunResponse>("/api/admin/source-intake/run", {
+  return startSourceIntakeWithDetails(req);
+}
+
+export async function startSourceIntakeWithDetails(req: SourceIntakeRunRequest): Promise<SourceIntakeRunResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/admin/source-intake/run`, {
     method: "POST",
-    body: JSON.stringify(req)
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    cache: "no-store",
   });
+
+  if (!response.ok) {
+    let payload: SourceIntakeReadinessRejectionPayload | null = null;
+    try {
+      payload = (await response.json()) as SourceIntakeReadinessRejectionPayload;
+    } catch {
+      payload = null;
+    }
+
+    const message = payload?.detail || `Request failed with status ${response.status}`;
+    throw new SourceIntakeStartError(message, response.status, payload);
+  }
+
+  return (await response.json()) as SourceIntakeRunResponse;
 }
 
 export function getSourceIntakeRunStatus(): Promise<SourceIntakeStatusSnapshot> {

@@ -17,6 +17,7 @@ from app.services.ingestion.ingestion_context_service import create_or_get_inges
 from app.services.admin.source_intake_execution_service import (
     get_source_intake_status,
     request_source_intake_stop,
+    SourceIntakeReadinessBlockedError,
     start_source_intake,
 )
 from app.services.admin.icloud_readiness_service import get_icloud_source_readiness
@@ -40,6 +41,7 @@ __all__ = [
     "update_source_profile_status",
     "verify_source_profile_path",
     "request_source_intake_stop",
+    "SourceIntakeReadinessBlockedError",
     "start_source_intake",
     "get_icloud_source_readiness",
     "start_internal_single_flow_run",

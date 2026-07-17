@@ -21,6 +21,7 @@ import {
   planSourceEndpointEnrollment,
   runIcloudAcquisitionWithDetails,
   runIcloudStagingCleanupDryRun,
+  SourceIntakeStartError,
   startSourceIntake,
   stopIcloudAcquisition,
   stopSourceIntake,
@@ -44,6 +45,7 @@ import type {
   SourceProfileReadinessStatus,
   SourceIntakeReportDetail,
   SourceIntakeReportSummary,
+  SourceIntakeReadinessRejectionPayload,
   SourceProfileStagingFolderCreateResponse,
   SourceProfileStatus,
   SourceProfileSummary,
@@ -242,6 +244,28 @@ function buildSourceReadinessAdvancedDetails(result: SourceProfileReadinessRespo
     access_node_summary: result.access_node_summary,
     advanced_details: result.advanced_details,
   };
+}
+
+function sourceReadinessObservedPath(result: SourceProfileReadinessResponse | null, fallbackPath: string | null | undefined): string {
+  const observedPath = result?.observed_path_summary?.observed_path;
+  if (typeof observedPath === "string" && observedPath.trim()) {
+    return observedPath;
+  }
+  const sourceRootCandidatePath = result?.observed_path_summary?.source_root_candidate_path;
+  if (typeof sourceRootCandidatePath === "string" && sourceRootCandidatePath.trim()) {
+    return sourceRootCandidatePath;
+  }
+  return fallbackPath || "-";
+}
+
+function sourceReadinessLaunchBlockMessage(result: SourceProfileReadinessResponse): string {
+  if (result.readiness_status === "provider_specific") {
+    return "This source uses a provider-specific workflow. Use iCloud Intake.";
+  }
+  if (result.readiness_status === "unknown") {
+    return "Readiness could not be determined. Check readiness again before running intake.";
+  }
+  return result.operator_message || "Source Profile readiness blocks Source Intake launch.";
 }
 
 function toAuthStatusLabel(value: IcloudAuthState): string {
@@ -465,7 +489,35 @@ function extractReportFilename(reportPath: string | null): string | null {
   return pieces.length > 0 ? pieces[pieces.length - 1] : null;
 }
 
+function formatSourceIntakeReadinessRejection(payload: SourceIntakeReadinessRejectionPayload): string {
+  const lines: string[] = [];
+  if (payload.readiness_status) {
+    lines.push(`Readiness: ${toSourceProfileReadinessLabel(payload.readiness_status)}`);
+  }
+  if (payload.identity_match_status) {
+    lines.push(`Identity match: ${toStatusLabel(payload.identity_match_status)}`);
+  }
+  if (payload.recommended_next_action) {
+    lines.push(`Recommended next action: ${payload.recommended_next_action}`);
+  }
+  for (const blocker of payload.blockers ?? []) {
+    lines.push(`Blocker - ${blocker.code}: ${blocker.message}`);
+  }
+  for (const warning of payload.warnings ?? []) {
+    lines.push(`Warning - ${warning.code}: ${warning.message}`);
+  }
+  return lines.join("\n");
+}
+
 function mapRunStartError(error: unknown): { message: string; raw: string | null } {
+  if (error instanceof SourceIntakeStartError && error.payload) {
+    const payload = error.payload;
+    return {
+      message: payload.operator_message || payload.detail || error.message,
+      raw: formatSourceIntakeReadinessRejection(payload) || error.message,
+    };
+  }
+
   const raw = error instanceof Error ? error.message : "";
   const normalized = raw.toLowerCase();
 
@@ -602,6 +654,10 @@ function getIcloudAcquireDisabledReason(snapshot: IcloudSourceReadiness | null):
 }
 
 function getIcloudSourceIntakeDisabledReason(snapshot: IcloudSourceReadiness | null, profile: SourceProfileDetail | null): string | null {
+  if (profile && isIcloudProfile(profile)) {
+    return "Legacy guided Source Intake handoff is retired. Use the iCloud Intake workflow for this source.";
+  }
+
   if (!snapshot) {
     return "Readiness snapshot unavailable. Refresh readiness before preparing Source Intake.";
   }
@@ -823,7 +879,8 @@ export default function IngestionView() {
   const [runErrorDetails, setRunErrorDetails] = useState<string | null>(null);
   const [isRunConfirmOpen, setIsRunConfirmOpen] = useState(false);
   const [runCandidateProfile, setRunCandidateProfile] = useState<SourceProfileSummary | null>(null);
-  const [runCandidatePathCheck, setRunCandidatePathCheck] = useState<SourceProfilePathCheckResponse | null>(null);
+  const [runCandidateReadiness, setRunCandidateReadiness] = useState<SourceProfileReadinessResponse | null>(null);
+  const [runReadinessAcknowledged, setRunReadinessAcknowledged] = useState(false);
   const [runLimitInput, setRunLimitInput] = useState("");
   const [runBatchSizeInput, setRunBatchSizeInput] = useState("500");
   const [runOptionsError, setRunOptionsError] = useState<string | null>(null);
@@ -1847,6 +1904,11 @@ export default function IngestionView() {
 
   const isDetailIcloudProfile = detailProfile ? isIcloudProfile(detailProfile) : false;
   const isGuidedIcloudRunCandidate = runCandidateProfile ? isIcloudProfile(runCandidateProfile) : false;
+  const runReadinessRequiresAcknowledgment = Boolean(
+    runCandidateReadiness?.requires_operator_acknowledgment
+      && (runCandidateReadiness.readiness_status === "path_only" || runCandidateReadiness.readiness_status === "needs_review"),
+  );
+  const canConfirmRunIntake = !isRunActionLoading && (!runReadinessRequiresAcknowledgment || runReadinessAcknowledged);
 
   const expectedAcquisitionPath = useMemo(() => {
     if (!detailProfile || !isDetailIcloudProfile) {
@@ -2515,7 +2577,8 @@ export default function IngestionView() {
   const closeRunConfirmation = useCallback(() => {
     setIsRunConfirmOpen(false);
     setRunCandidateProfile(null);
-    setRunCandidatePathCheck(null);
+    setRunCandidateReadiness(null);
+    setRunReadinessAcknowledged(false);
     setRunLimitInput("");
     setRunBatchSizeInput("500");
     setRunOptionsError(null);
@@ -2553,16 +2616,26 @@ export default function IngestionView() {
 
     setRunPreflightSourceId(profile.source_id);
     try {
-      const pathCheck = await verifySourceProfilePath(profile.source_id);
-      if (!pathCheck.exists || !pathCheck.is_directory) {
-        const message = "Cannot run intake. Source path does not exist or is not a directory.";
+      const readiness = await checkSourceProfileReadiness(profile.source_id);
+      if (detailSourceId === profile.source_id) {
+        setSourceReadinessResult(readiness);
+        setSourceReadinessError(null);
+      }
+
+      const isAllowedReadiness =
+        readiness.readiness_status === "ready"
+        || readiness.readiness_status === "path_only"
+        || readiness.readiness_status === "needs_review";
+      if (!isAllowedReadiness || !readiness.can_run_source_intake) {
+        const message = sourceReadinessLaunchBlockMessage(readiness);
         setRowRunError(profile.source_id, message);
         setBanner({ kind: "error", message });
         return;
       }
 
       setRunCandidateProfile(profile);
-      setRunCandidatePathCheck(pathCheck);
+      setRunCandidateReadiness(readiness);
+      setRunReadinessAcknowledged(false);
       setRunLimitInput("");
       setRunBatchSizeInput("500");
       setRunOptionsError(null);
@@ -2575,7 +2648,7 @@ export default function IngestionView() {
     } finally {
       setRunPreflightSourceId(null);
     }
-  }, [clearRowRunError, isSourceIntakeActive, setRowRunError]);
+  }, [clearRowRunError, detailSourceId, isSourceIntakeActive, setRowRunError]);
 
   const handlePrepareIcloudSourceIntake = useCallback(async () => {
     if (!detailProfile || !isDetailIcloudProfile) {
@@ -2599,7 +2672,7 @@ export default function IngestionView() {
       }
 
       setRunCandidateProfile(detailProfile);
-      setRunCandidatePathCheck(pathCheck);
+      setRunCandidateReadiness(null);
       setRunLimitInput(icloudSourceIntakeLimitSuggestion.value);
       setRunBatchSizeInput("500");
       setRunOptionsError(null);
@@ -2623,6 +2696,11 @@ export default function IngestionView() {
       return;
     }
 
+    if (runReadinessRequiresAcknowledgment && !runReadinessAcknowledged) {
+      setRunOptionsError("Acknowledge the readiness warning before starting Source Intake.");
+      return;
+    }
+
     setIsRunActionLoading(true);
     clearRowRunError(runCandidateProfile.source_id);
     setRunErrorDetails(null);
@@ -2637,6 +2715,7 @@ export default function IngestionView() {
         ingestion_source_id: runCandidateProfile.source_id,
         source_intake_limit: normalizedRunLimitInput ? parsedLimit : null,
         ingest_batch_size: parsedBatchSize,
+        readiness_acknowledged: runReadinessRequiresAcknowledgment && runReadinessAcknowledged,
       });
 
       setSourceIntakeStatus(response.current);
@@ -2649,6 +2728,7 @@ export default function IngestionView() {
       const mapped = mapRunStartError(error);
       setRowRunError(runCandidateProfile.source_id, mapped.message);
       setBanner({ kind: "error", message: mapped.message });
+      setRunOptionsError(mapped.message);
       setRunErrorDetails(mapped.raw);
     } finally {
       setIsRunActionLoading(false);
@@ -2662,6 +2742,8 @@ export default function IngestionView() {
     normalizedRunLimitInput,
     runCandidateProfile,
     runBatchSizeValidationError,
+    runReadinessAcknowledged,
+    runReadinessRequiresAcknowledgment,
     runLimitValidationError,
     setRowRunError,
   ]);
@@ -3530,7 +3612,7 @@ export default function IngestionView() {
         </div>
       )}
 
-      {isRunConfirmOpen && runCandidateProfile && runCandidatePathCheck && (
+      {isRunConfirmOpen && runCandidateProfile && runCandidateReadiness && (
         <div className={styles.modalBackdrop} role="dialog" aria-modal="true">
           <div className={styles.modalPanel}>
             <div className={styles.drawerHeader}>
@@ -3560,15 +3642,18 @@ export default function IngestionView() {
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>{isGuidedIcloudRunCandidate ? "Managed Staging Path" : "Source Path"}</span>
-                <span>{runCandidatePathCheck.path ?? "-"}</span>
+                <span>{sourceReadinessObservedPath(runCandidateReadiness, runCandidateProfile.source_root_path)}</span>
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Profile Status</span>
                 <span>{runCandidateProfile.profile_status}</span>
               </div>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Path Verification Result</span>
-                <span className={styles.okBadge}>{formatPathStatus(runCandidatePathCheck)}</span>
+                <span className={styles.detailLabel}>Readiness Result</span>
+                <span className={`${styles.readinessBadge} ${sourceProfileReadinessBadgeClassName(runCandidateReadiness.readiness_status)}`}>
+                  {toSourceProfileReadinessLabel(runCandidateReadiness.readiness_status)}
+                </span>
+                <span className={styles.detailMeta}>Identity match: {toStatusLabel(runCandidateReadiness.identity_match_status)}</span>
               </div>
               {isGuidedIcloudRunCandidate && (
                 <div className={styles.detailCard}>
@@ -3634,12 +3719,33 @@ export default function IngestionView() {
 
             {runOptionsError && <p className={styles.bannerError}>{runOptionsError}</p>}
 
+            {runReadinessRequiresAcknowledgment && (
+              <section className={styles.runOptionsBlock}>
+                <h4 className={styles.runOptionsTitle}>Readiness Acknowledgment</h4>
+                <p className={styles.inlineWarning}>
+                  {runCandidateReadiness.readiness_status === "path_only"
+                    ? "Path-only source. This can run, but durable source identity enrollment is recommended."
+                    : "This source needs review before relying on durable source identity. You may run Source Intake after acknowledging this warning."}
+                </p>
+                <p className={styles.helperText}>{runCandidateReadiness.operator_message}</p>
+                <label className={styles.checkboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={runReadinessAcknowledged}
+                    onChange={(event) => setRunReadinessAcknowledged(event.target.checked)}
+                    disabled={isRunActionLoading}
+                  />
+                  I reviewed this readiness warning and want to run Source Intake for this source now.
+                </label>
+              </section>
+            )}
+
             <div className={styles.drawerActions}>
               <button
                 type="button"
                 className={styles.runButton}
                 onClick={() => void handleConfirmRunIntake()}
-                disabled={isRunActionLoading}
+                disabled={!canConfirmRunIntake}
               >
                 {isRunActionLoading ? "Starting..." : (isGuidedIcloudRunCandidate ? "Start Guided Source Intake" : "Run Intake")}
               </button>

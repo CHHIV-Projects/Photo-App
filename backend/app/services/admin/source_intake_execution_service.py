@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,8 @@ from app.services.ingestion.pipeline_orchestrator import (
     resolve_runtime_path,
 )
 from app.services.admin.source_intake_schema import ensure_source_intake_schema
+from app.services.source_identity.readiness_schema import SourceProfileReadinessResponse
+from app.services.source_identity.readiness_service import SourceProfileReadinessService
 
 STATUS_IDLE = "idle"
 STATUS_RUNNING = "running"
@@ -67,6 +70,21 @@ class SourceIntakeAlreadyRunningError(RuntimeError):
     def __init__(self, snapshot: SourceIntakeStatusSnapshot) -> None:
         super().__init__("A source intake run is already active.")
         self.snapshot = snapshot
+
+
+class SourceIntakeReadinessBlockedError(RuntimeError):
+    """Raised when readiness does not allow generic Source Intake launch."""
+
+    def __init__(self, readiness: SourceProfileReadinessResponse, *, detail: str, error_code: str) -> None:
+        super().__init__(detail)
+        self.readiness = readiness
+        self.detail = detail
+        self.error_code = error_code
+
+
+class _ReadinessService(Protocol):
+    def check_readiness(self, source_profile_id: int) -> SourceProfileReadinessResponse:
+        ...
 
 
 def _utc_now() -> datetime:
@@ -175,7 +193,9 @@ def start_source_intake(
     ingestion_source_id: int,
     source_intake_limit: int | None,
     ingest_batch_size: int,
+    readiness_acknowledged: bool = False,
     created_by: str = "admin_api",
+    readiness_service: _ReadinessService | None = None,
 ) -> SourceIntakeStatusSnapshot:
     """Validate, create a run row, and launch the background thread."""
     ensure_source_intake_schema(db_session)
@@ -189,6 +209,9 @@ def start_source_intake(
     source = db_session.get(IngestionSource, ingestion_source_id)
     if source is None:
         raise ValueError(f"Ingestion source {ingestion_source_id} not found.")
+
+    readiness = (readiness_service or SourceProfileReadinessService(db_session)).check_readiness(ingestion_source_id)
+    _enforce_readiness_for_launch(readiness, readiness_acknowledged=readiness_acknowledged)
 
     source_root_path = source.source_root_path or ""
     if not source_root_path.strip():
@@ -246,6 +269,38 @@ def start_source_intake(
         t.start()
 
     return _to_snapshot(run)
+
+
+def _enforce_readiness_for_launch(
+    readiness: SourceProfileReadinessResponse,
+    *,
+    readiness_acknowledged: bool,
+) -> None:
+    """Apply launch policy for generic operator-initiated Source Intake."""
+    if readiness.can_run_source_intake and not readiness.requires_operator_acknowledgment:
+        return
+
+    if readiness.can_run_source_intake and readiness.requires_operator_acknowledgment:
+        if readiness_acknowledged:
+            return
+        raise SourceIntakeReadinessBlockedError(
+            readiness,
+            detail="Readiness acknowledgment is required before Source Intake can run.",
+            error_code="SOURCE_READINESS_ACKNOWLEDGMENT_REQUIRED",
+        )
+
+    status = readiness.readiness_status
+    if status == "provider_specific":
+        detail = "This source uses a provider-specific workflow. Use iCloud Intake."
+    elif status == "unknown":
+        detail = "Readiness could not be determined. Check readiness again before running intake."
+    else:
+        detail = readiness.operator_message or "Source Profile readiness blocks Source Intake launch."
+    raise SourceIntakeReadinessBlockedError(
+        readiness,
+        detail=detail,
+        error_code="SOURCE_READINESS_BLOCKED",
+    )
 
 
 def _check_stop(run_id: int):

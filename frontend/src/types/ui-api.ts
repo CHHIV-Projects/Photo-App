@@ -1654,6 +1654,32 @@ export interface SourceIntakeRunRequest {
   ingestion_source_id: number;
   source_intake_limit: number | null;
   ingest_batch_size: number;
+  readiness_acknowledged?: boolean;
+}
+
+export interface SourceIntakeReadinessRejectionPayload {
+  detail?: string;
+  error_code?: string;
+  source_profile_id?: number;
+  source_label?: string | null;
+  source_type?: string | null;
+  profile_status?: string | null;
+  cloud_provider?: string | null;
+  endpoint_id?: number | null;
+  endpoint_alias?: string | null;
+  endpoint_source_type?: string | null;
+  readiness_status?: SourceProfileReadinessStatus;
+  identity_match_status?: SourceProfileIdentityMatchStatus;
+  can_run_source_intake?: boolean;
+  requires_operator_acknowledgment?: boolean;
+  hard_block?: boolean;
+  operator_message?: string;
+  recommended_next_action?: string;
+  warnings?: ReadinessMessage[];
+  blockers?: ReadinessMessage[];
+  checked_at?: string;
+  readiness?: Partial<SourceProfileReadinessResponse>;
+  current?: SourceIntakeStatusSnapshot;
 }
 
 export interface SourceIntakeStatusSnapshot {
