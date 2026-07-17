@@ -104,6 +104,8 @@ type SourceIdentityEnrollmentSupport = {
   note: string;
 };
 
+type WorkbenchSourceType = "local" | "external" | "nas" | "icloud" | "advanced";
+
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" },
@@ -127,6 +129,14 @@ const SOURCE_TYPE_OPTIONS: Array<{ value: SourceProfileType; label: string }> = 
   { value: "cloud_export", label: "Cloud Export / iCloud" },
   { value: "scan_batch", label: "Scan Batch" },
   { value: "other", label: "Other" },
+];
+
+const WORKBENCH_SOURCE_TYPE_OPTIONS: Array<{ value: WorkbenchSourceType; label: string }> = [
+  { value: "local", label: "Local" },
+  { value: "external", label: "External" },
+  { value: "nas", label: "NAS" },
+  { value: "icloud", label: "iCloud" },
+  { value: "advanced", label: "Advanced / Legacy" },
 ];
 
 const CLOUD_PROVIDER_OPTIONS: Array<{ value: SourceCloudProvider; label: string }> = [
@@ -481,6 +491,111 @@ function getRunDisabledReason(profile: SourceProfileSummary): string | null {
   return null;
 }
 
+function getOperatorSourceType(profile: SourceProfileSummary): WorkbenchSourceType {
+  if (isIcloudProfile(profile)) {
+    return "icloud";
+  }
+  if (profile.source_type === "local_folder" && isUncPath(profile.source_root_path)) {
+    return "nas";
+  }
+  if (profile.source_type === "local_folder") {
+    return "local";
+  }
+  if (profile.source_type === "external_drive") {
+    return "external";
+  }
+  return "advanced";
+}
+
+function getOperatorSourceTypeLabel(value: WorkbenchSourceType): string {
+  const option = WORKBENCH_SOURCE_TYPE_OPTIONS.find((item) => item.value === value);
+  return option?.label ?? "Advanced / Legacy";
+}
+
+function formatSourceProvider(value: SourceCloudProvider | null | undefined): string {
+  if (value === "icloud") {
+    return "iCloud";
+  }
+  if (value === "google_photos") {
+    return "Google Photos";
+  }
+  if (value === "onedrive") {
+    return "OneDrive";
+  }
+  if (value === "dropbox") {
+    return "Dropbox";
+  }
+  if (value === "other") {
+    return "Other cloud";
+  }
+  return "No provider";
+}
+
+function getSourcePathOrProviderHint(profile: SourceProfileSummary): string {
+  if (isIcloudProfile(profile)) {
+    const accountHint = profile.account_username_masked ? `Account: ${profile.account_username_masked}` : "Account: not shown";
+    const stagingHint = profile.managed_staging_path ? `Staging: ${profile.managed_staging_path}` : "Staging: not configured";
+    return `${accountHint}; ${stagingHint}`;
+  }
+  if (profile.source_root_path) {
+    return profile.source_root_path;
+  }
+  if (profile.managed_staging_path) {
+    return profile.managed_staging_path;
+  }
+  return formatSourceProvider(profile.cloud_provider);
+}
+
+function getSourceIdentityDisplay(profile: SourceProfileSummary): string {
+  if (isIcloudProfile(profile)) {
+    return "Provider-specific";
+  }
+  return profile.endpoint_id ? "Enrolled" : "Not enrolled";
+}
+
+function getSourceWorkflowDisplay(profile: SourceProfileSummary): string {
+  const sourceType = getOperatorSourceType(profile);
+  if (sourceType === "icloud") {
+    return "iCloud Intake";
+  }
+  if (sourceType === "advanced") {
+    return "Advanced / legacy";
+  }
+  return "Filesystem Source Intake";
+}
+
+function getSourceWorkflowPlaceholder(profile: SourceProfileSummary): string {
+  const sourceType = getOperatorSourceType(profile);
+  if (sourceType === "icloud") {
+    return "iCloud workflow actions remain in the iCloud Intake panel for now: Refresh / Prepare and Import / Resume.";
+  }
+  if (sourceType === "advanced") {
+    return "These sources are retained for history, diagnostics, or unsupported workflows.";
+  }
+  return "Filesystem workflow actions will move here next: Check Readiness and Run Intake.";
+}
+
+function normalizeWorkbenchSearch(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function matchesSourceSearch(profile: SourceProfileSummary, query: string): boolean {
+  const normalizedQuery = normalizeWorkbenchSearch(query);
+  if (!normalizedQuery) {
+    return true;
+  }
+  const searchValues = [
+    profile.source_label,
+    profile.source_root_path,
+    profile.managed_staging_path,
+    profile.cloud_provider,
+    profile.acquisition_method,
+    profile.account_username_masked,
+    getSourcePathOrProviderHint(profile),
+  ];
+  return searchValues.some((value) => normalizeWorkbenchSearch(value).includes(normalizedQuery));
+}
+
 function extractReportFilename(reportPath: string | null): string | null {
   if (!reportPath) {
     return null;
@@ -815,6 +930,10 @@ export default function IngestionView() {
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
+  const [workbenchSourceType, setWorkbenchSourceType] = useState<WorkbenchSourceType>("local");
+  const [workbenchSearch, setWorkbenchSearch] = useState("");
+  const [showInactiveWorkbenchSources, setShowInactiveWorkbenchSources] = useState(false);
+  const [selectedWorkbenchSourceId, setSelectedWorkbenchSourceId] = useState<number | null>(null);
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>("create");
@@ -1043,13 +1162,13 @@ export default function IngestionView() {
     try {
       let response;
       try {
-        response = await getSourceProfiles({ status: statusFilter });
+        response = await getSourceProfiles({ status: "all" });
       } catch (error) {
         if (!isTransientFetchError(error)) {
           throw error;
         }
         await delay(350);
-        response = await getSourceProfiles({ status: statusFilter });
+        response = await getSourceProfiles({ status: "all" });
       }
       setProfiles(response.profiles);
     } catch (error) {
@@ -1064,7 +1183,7 @@ export default function IngestionView() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [statusFilter]);
+  }, []);
 
   useEffect(() => {
     void loadProfiles({ clearRowErrors: true });
@@ -1223,6 +1342,13 @@ export default function IngestionView() {
     loadIcloudAcquisitionStatus,
   ]);
 
+  const registryProfiles = useMemo(() => {
+    if (statusFilter === "all") {
+      return profiles;
+    }
+    return profiles.filter((profile) => profile.profile_status === statusFilter);
+  }, [profiles, statusFilter]);
+
   const countsSummary = useMemo(() => {
     const counts: Record<SourceProfileStatus, number> = {
       active: 0,
@@ -1232,7 +1358,7 @@ export default function IngestionView() {
       deprecated: 0,
     };
 
-    for (const profile of profiles) {
+    for (const profile of registryProfiles) {
       counts[profile.profile_status] += 1;
     }
 
@@ -1240,7 +1366,42 @@ export default function IngestionView() {
       active: counts.active,
       nonActive: counts.archived + counts.test + counts.deprecated,
     };
-  }, [profiles]);
+  }, [registryProfiles]);
+
+  const workbenchProfiles = useMemo(() => {
+    return profiles.filter((profile) => {
+      const operatorSourceType = getOperatorSourceType(profile);
+      const isNonActive = profile.profile_status !== "active";
+      const matchesSourceType = workbenchSourceType === "advanced"
+        ? operatorSourceType === "advanced" || (showInactiveWorkbenchSources && isNonActive)
+        : operatorSourceType === workbenchSourceType;
+
+      if (!matchesSourceType) {
+        return false;
+      }
+      if (!showInactiveWorkbenchSources && isNonActive) {
+        return false;
+      }
+      return matchesSourceSearch(profile, workbenchSearch);
+    });
+  }, [profiles, showInactiveWorkbenchSources, workbenchSearch, workbenchSourceType]);
+
+  const selectedWorkbenchProfile = useMemo(() => {
+    if (selectedWorkbenchSourceId == null) {
+      return null;
+    }
+    return workbenchProfiles.find((profile) => profile.source_id === selectedWorkbenchSourceId) ?? null;
+  }, [selectedWorkbenchSourceId, workbenchProfiles]);
+
+  useEffect(() => {
+    if (
+      selectedWorkbenchSourceId != null
+      && workbenchProfiles.some((profile) => profile.source_id === selectedWorkbenchSourceId)
+    ) {
+      return;
+    }
+    setSelectedWorkbenchSourceId(workbenchProfiles[0]?.source_id ?? null);
+  }, [selectedWorkbenchSourceId, workbenchProfiles]);
 
   const managedStagingPreview = useMemo(() => {
     return computeManagedStagingPreview(editorForm.sourceLabel);
@@ -2829,6 +2990,150 @@ export default function IngestionView() {
         Active shown: {countsSummary.active} | Archived/Test/Deprecated shown: {countsSummary.nonActive}
       </p>
 
+      <section className={styles.workbenchPanel} aria-labelledby="ingestion-workbench-title">
+        <div className={styles.workbenchHeader}>
+          <div>
+            <h3 id="ingestion-workbench-title" className={styles.runPanelTitle}>Ingestion Workbench</h3>
+            <p className={styles.helperText}>
+              Choose a source type and source to work with. Source-specific actions will move here as the workflow is simplified.
+            </p>
+          </div>
+          <div className={styles.rowActions}>
+            <button type="button" className={styles.button} onClick={openCreateDrawer}>
+              Create Source Profile
+            </button>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => void loadProfiles({ refreshOnly: true, clearRowErrors: true })}
+              disabled={isLoading || isRefreshing}
+            >
+              {isRefreshing ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+        </div>
+
+        <div className={styles.workbenchControls}>
+          <div className={styles.workbenchControlGroup}>
+            <span className={styles.detailLabel}>Source Type</span>
+            <div className={styles.segmentedControl} role="group" aria-label="Source type">
+              {WORKBENCH_SOURCE_TYPE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`${styles.segmentButton} ${workbenchSourceType === option.value ? styles.segmentButtonActive : ""}`}
+                  onClick={() => setWorkbenchSourceType(option.value)}
+                  aria-pressed={workbenchSourceType === option.value}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className={styles.formLabel}>
+            Search Sources
+            <input
+              className={styles.formInput}
+              value={workbenchSearch}
+              onChange={(event) => setWorkbenchSearch(event.target.value)}
+              placeholder="Search label, path, provider, or masked account"
+            />
+          </label>
+
+          <label className={styles.formLabel}>
+            Source
+            <select
+              className={styles.formInput}
+              value={selectedWorkbenchSourceId ?? ""}
+              onChange={(event) => setSelectedWorkbenchSourceId(event.target.value ? Number(event.target.value) : null)}
+              disabled={workbenchProfiles.length === 0}
+            >
+              {workbenchProfiles.length === 0 ? (
+                <option value="">No matching sources</option>
+              ) : (
+                workbenchProfiles.map((profile) => (
+                  <option key={profile.source_id} value={profile.source_id}>
+                    {profile.source_label} - {getSourcePathOrProviderHint(profile)}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+
+          <label className={styles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={showInactiveWorkbenchSources}
+              onChange={(event) => setShowInactiveWorkbenchSources(event.target.checked)}
+            />
+            Show inactive / legacy sources
+          </label>
+        </div>
+
+        {workbenchProfiles.length === 0 ? (
+          <p className={styles.empty}>
+            No {showInactiveWorkbenchSources ? "" : "active "}
+            {getOperatorSourceTypeLabel(workbenchSourceType)} sources found. Create a Source Profile, adjust search, or show inactive / legacy sources.
+          </p>
+        ) : selectedWorkbenchProfile ? (
+          <div className={styles.workbenchSummary}>
+            <div className={styles.workbenchSummaryHeader}>
+              <div className={styles.labelCell}>
+                <span>{selectedWorkbenchProfile.source_label}</span>
+                <span className={styles.statusBadge}>{selectedWorkbenchProfile.profile_status}</span>
+              </div>
+              <div className={styles.rowActions}>
+                <button type="button" className={styles.updateButton} onClick={() => openDetailsDrawer(selectedWorkbenchProfile)}>
+                  Details
+                </button>
+                <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(selectedWorkbenchProfile)}>
+                  Manage
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.detailGrid}>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Type</span>
+                <span>{getOperatorSourceTypeLabel(getOperatorSourceType(selectedWorkbenchProfile))}</span>
+                <span className={styles.detailMeta}>Stored type: {selectedWorkbenchProfile.source_type}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Path / Provider</span>
+                <span>{getSourcePathOrProviderHint(selectedWorkbenchProfile)}</span>
+                {selectedWorkbenchProfile.cloud_provider && (
+                  <span className={styles.detailMeta}>Provider: {formatSourceProvider(selectedWorkbenchProfile.cloud_provider)}</span>
+                )}
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Identity</span>
+                <span className={selectedWorkbenchProfile.endpoint_id || isIcloudProfile(selectedWorkbenchProfile) ? styles.okBadge : styles.pendingBadge}>
+                  {getSourceIdentityDisplay(selectedWorkbenchProfile)}
+                </span>
+                <span className={styles.detailMeta}>
+                  {selectedWorkbenchProfile.endpoint_id ? `Endpoint ID: ${selectedWorkbenchProfile.endpoint_id}` : "Endpoint ID: -"}
+                </span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Readiness</span>
+                <span>
+                  {sourceReadinessResult && detailSourceId === selectedWorkbenchProfile.source_id
+                    ? toSourceProfileReadinessLabel(sourceReadinessResult.readiness_status)
+                    : "Not checked in this view"}
+                </span>
+                <span className={styles.detailMeta}>Check Readiness moves into this work area in the next milestone.</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Workflow</span>
+                <span>{getSourceWorkflowDisplay(selectedWorkbenchProfile)}</span>
+                <span className={styles.detailMeta}>{getSourceWorkflowPlaceholder(selectedWorkbenchProfile)}</span>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </section>
+
       <IcloudRunWorkflowPanel />
 
       {sourceIntakeStatus && isSourceIntakeActive && (
@@ -3010,6 +3315,8 @@ export default function IngestionView() {
       {isLoading ? (
         <p className={styles.empty}>Loading source profiles...</p>
       ) : profiles.length === 0 ? (
+        <p className={styles.empty}>No source profiles found.</p>
+      ) : registryProfiles.length === 0 ? (
         <p className={styles.empty}>No source profiles match the selected status filter.</p>
       ) : (
         <div className={styles.tableWrap}>
@@ -3031,7 +3338,7 @@ export default function IngestionView() {
               </tr>
             </thead>
             <tbody>
-              {profiles.map((profile) => {
+              {registryProfiles.map((profile) => {
                 const isReferenced = hasHistoricalReferences(profile);
                 return (
                   <tr key={profile.source_id}>
