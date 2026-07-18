@@ -57,6 +57,11 @@ def ensure_source_endpoint_schema(db_session: Session) -> SourceEndpointSchemaSu
     if "endpoint_id" not in ingestion_source_columns:
         db_session.execute(text("ALTER TABLE ingestion_sources ADD COLUMN endpoint_id INTEGER NULL"))
         added_columns.append("ingestion_sources.endpoint_id")
+    if "endpoint_relative_root" not in ingestion_source_columns:
+        db_session.execute(
+            text("ALTER TABLE ingestion_sources ADD COLUMN endpoint_relative_root VARCHAR(2048) NULL")
+        )
+        added_columns.append("ingestion_sources.endpoint_relative_root")
 
     inspector = inspect(connection)
     ingestion_source_columns = {column["name"] for column in inspector.get_columns("ingestion_sources")}

@@ -193,6 +193,7 @@ def _to_source_profile_summary(
         source_label=source.source_label,
         source_type=source.source_type,
         source_root_path=source.source_root_path,
+        endpoint_relative_root=source.endpoint_relative_root,
         endpoint_id=source.endpoint_id,
         endpoint_source_type=source.source_endpoint.source_type if source.source_endpoint is not None else None,
         profile_status=source.profile_status,

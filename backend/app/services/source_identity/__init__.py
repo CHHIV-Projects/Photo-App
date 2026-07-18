@@ -1,5 +1,12 @@
 """Source identity probing and endpoint enrollment services."""
 
+from app.services.source_identity.creation_schema import (
+    SourceCreationConfirmRequest,
+    SourceCreationConfirmResponse,
+    SourceCreationPlanRequest,
+    SourceCreationPlanResponse,
+)
+from app.services.source_identity.creation_service import SourceCreationService
 from app.services.source_identity.enrollment_schema import (
     SourceEndpointEnrollmentConfirmRequest,
     SourceEndpointEnrollmentConfirmResponse,
@@ -17,6 +24,11 @@ from app.services.source_identity.readiness_schema import SourceProfileReadiness
 from app.services.source_identity.readiness_service import SourceProfileReadinessService
 
 __all__ = [
+    "SourceCreationConfirmRequest",
+    "SourceCreationConfirmResponse",
+    "SourceCreationPlanRequest",
+    "SourceCreationPlanResponse",
+    "SourceCreationService",
     "SourceIdentityCapabilitiesResponse",
     "SourceIdentityProbeRequest",
     "SourceIdentityProbeResponse",

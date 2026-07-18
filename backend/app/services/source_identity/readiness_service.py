@@ -154,12 +154,17 @@ class SourceProfileReadinessService:
             and bool(fingerprint.hash_value)
             and endpoint.identity_fingerprint_hash == fingerprint.hash_value
         )
+        legacy_fingerprint_match = (
+            bool(endpoint.identity_fingerprint_hash)
+            and endpoint.identity_fingerprint_hash in fingerprint.legacy_hashes
+        )
 
         if (
             endpoint.identity_fingerprint_hash
             and fingerprint.hash_value
             and endpoint.identity_fingerprint_hash != fingerprint.hash_value
             and fingerprint.strength == "strong"
+            and not legacy_fingerprint_match
         ):
             return self._response(
                 source,
@@ -200,8 +205,12 @@ class SourceProfileReadinessService:
             )
 
         warning = _message(
-            "identity_needs_review",
-            "Source is readable, but endpoint identity evidence requires review before intake.",
+            "legacy_endpoint_fingerprint_needs_review" if legacy_fingerprint_match else "identity_needs_review",
+            (
+                "Source is readable, but the endpoint uses a legacy masked-identifier fingerprint and requires review."
+                if legacy_fingerprint_match
+                else "Source is readable, but endpoint identity evidence requires review before intake."
+            ),
         )
         return self._response(
             source,

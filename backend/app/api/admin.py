@@ -194,6 +194,11 @@ from app.services.source_profile_deferred_asset_service import (
     list_deferred_assets,
 )
 from app.services.source_identity import (
+    SourceCreationConfirmRequest,
+    SourceCreationConfirmResponse,
+    SourceCreationPlanRequest,
+    SourceCreationPlanResponse,
+    SourceCreationService,
     SourceEndpointEnrollmentConfirmRequest,
     SourceEndpointEnrollmentConfirmResponse,
     SourceEndpointEnrollmentPlanRequest,
@@ -230,6 +235,14 @@ def get_source_identity_probe_service() -> SourceIdentityProbeService:
 def get_source_endpoint_enrollment_service(db: Session) -> SourceEndpointEnrollmentService:
     """Return a stateless source endpoint enrollment service."""
     return SourceEndpointEnrollmentService(
+        db_session=db,
+        probe_service=get_source_identity_probe_service(),
+    )
+
+
+def get_source_creation_service(db: Session) -> SourceCreationService:
+    """Return the transactional filesystem Source creation service."""
+    return SourceCreationService(
         db_session=db,
         probe_service=get_source_identity_probe_service(),
     )
@@ -1776,6 +1789,24 @@ def post_source_endpoint_enrollment_confirm(
 ) -> SourceEndpointEnrollmentConfirmResponse:
     """Confirm a stateless source endpoint enrollment plan."""
     return get_source_endpoint_enrollment_service(db).confirm(body)
+
+
+@router.post("/source-creation/plan", response_model=SourceCreationPlanResponse)
+def post_source_creation_plan(
+    body: SourceCreationPlanRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceCreationPlanResponse:
+    """Build a read-only drive-agnostic filesystem Source creation plan."""
+    return get_source_creation_service(db).plan(body)
+
+
+@router.post("/source-creation/confirm", response_model=SourceCreationConfirmResponse)
+def post_source_creation_confirm(
+    body: SourceCreationConfirmRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceCreationConfirmResponse:
+    """Confirm and atomically persist a drive-agnostic filesystem Source."""
+    return get_source_creation_service(db).confirm(body)
 
 
 @router.get("/source-intake/sources", response_model=SourceIntakeSourcesResponse)

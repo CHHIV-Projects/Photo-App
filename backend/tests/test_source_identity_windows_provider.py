@@ -202,6 +202,13 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         volume_guid = next(item for item in response.evidence_items if item.code == "volume_guid_present")
         self.assertEqual(volume_guid.durability, "durable")
         self.assertIn("mountvol", volume_guid.message or "")
+        self.assertTrue(volume_guid.fingerprint_hash.startswith("sha256:"))
+        self.assertEqual(volume_guid.fingerprint_version, "source_endpoint_volume_guid_v2")
+        fingerprint = fingerprint_from_probe(response)
+        self.assertEqual(fingerprint.hash_value, volume_guid.fingerprint_hash)
+        self.assertEqual(fingerprint.version, "source_endpoint_volume_guid_v2")
+        self.assertEqual(fingerprint.strength, "strong")
+        self.assertEqual(len(fingerprint.legacy_hashes), 1)
 
     def test_command_failures_are_summarized_not_crashes(self) -> None:
         results = {

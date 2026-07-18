@@ -17,6 +17,10 @@ import type {
   SourceEndpointEnrollmentConfirmResponse,
   SourceEndpointEnrollmentPlanRequest,
   SourceEndpointEnrollmentPlanResponse,
+  SourceCreationConfirmRequest,
+  SourceCreationConfirmResponse,
+  SourceCreationPlanRequest,
+  SourceCreationPlanResponse,
   IcloudSourceReadiness,
   IcloudReadinessOperationConflicts,
   IcloudReadinessReason,
@@ -1052,6 +1056,24 @@ export function confirmSourceEndpointEnrollment(
   payload: SourceEndpointEnrollmentConfirmRequest,
 ): Promise<SourceEndpointEnrollmentConfirmResponse> {
   return apiRequest<SourceEndpointEnrollmentConfirmResponse>("/api/admin/source-endpoints/enrollment/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function planSourceCreation(
+  payload: SourceCreationPlanRequest,
+): Promise<SourceCreationPlanResponse> {
+  return apiRequest<SourceCreationPlanResponse>("/api/admin/source-creation/plan", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmSourceCreation(
+  payload: SourceCreationConfirmRequest,
+): Promise<SourceCreationConfirmResponse> {
+  return apiRequest<SourceCreationConfirmResponse>("/api/admin/source-creation/confirm", {
     method: "POST",
     body: JSON.stringify(payload),
   });

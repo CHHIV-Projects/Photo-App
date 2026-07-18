@@ -260,6 +260,58 @@
   gap: 6px;
 }
 
+.createSourceBody {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.createSourceControls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 12px;
+  align-items: end;
+  min-width: 0;
+}
+
+.createSourceControls > * {
+  min-width: 0;
+}
+
+.createSourceAction {
+  display: flex;
+  align-items: flex-end;
+  min-height: 38px;
+}
+
+.creationReview {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #cfdce8;
+  padding-top: 14px;
+  min-width: 0;
+}
+
+.creationResultGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #d7e1ea;
+  border-radius: 8px;
+  background: #d7e1ea;
+}
+
+.creationResultGrid > div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  background: #ffffff;
+  padding: 10px;
+  overflow-wrap: anywhere;
+}
+
 .segmentedControl {
   display: flex;
   flex-wrap: wrap;
@@ -855,6 +907,10 @@
   }
 
   .workbenchControls {
+    grid-template-columns: 1fr;
+  }
+
+  .createSourceControls {
     grid-template-columns: 1fr;
   }
 }

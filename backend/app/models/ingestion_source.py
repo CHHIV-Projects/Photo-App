@@ -34,6 +34,7 @@ class IngestionSource(Base):
     source_type: Mapped[str] = mapped_column(String(64), nullable=False, default="local_folder")
     source_root_path: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     source_root_path_normalized: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    endpoint_relative_root: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     profile_status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     cloud_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     acquisition_method: Mapped[str | None] = mapped_column(String(64), nullable=True)

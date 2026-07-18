@@ -82,6 +82,7 @@ class SourceEndpointSchemaTests(unittest.TestCase):
             ["access_nodes", "source_endpoints", "source_endpoint_observed_paths"],
         )
         self.assertIn("ingestion_sources.endpoint_id", summary.added_columns)
+        self.assertIn("ingestion_sources.endpoint_relative_root", summary.added_columns)
         self.assertIn("ix_ingestion_sources_endpoint_id", summary.added_indexes)
 
         inspector = inspect(self.engine)
@@ -93,12 +94,15 @@ class SourceEndpointSchemaTests(unittest.TestCase):
         ingestion_columns = {column["name"]: column for column in inspector.get_columns("ingestion_sources")}
         self.assertIn("endpoint_id", ingestion_columns)
         self.assertTrue(ingestion_columns["endpoint_id"]["nullable"])
+        self.assertIn("endpoint_relative_root", ingestion_columns)
+        self.assertTrue(ingestion_columns["endpoint_relative_root"]["nullable"])
 
         legacy_source = self.db.scalar(
             select(IngestionSource).where(IngestionSource.source_label == "Legacy Source")
         )
         self.assertIsNotNone(legacy_source)
         self.assertIsNone(legacy_source.endpoint_id)
+        self.assertIsNone(legacy_source.endpoint_relative_root)
 
     def test_schema_helper_is_idempotent(self) -> None:
         ensure_source_endpoint_schema(self.db)

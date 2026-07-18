@@ -110,6 +110,8 @@ class SourceIdentityEvidenceItem(BaseModel):
     source_types: list[SourceIdentitySourceType] = Field(default_factory=list)
     display_value: str | None = None
     masked_value: str | None = None
+    fingerprint_hash: str | None = None
+    fingerprint_version: str | None = None
     message: str | None = None
     provider_name: str | None = None
     collected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

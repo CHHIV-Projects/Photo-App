@@ -13,7 +13,7 @@ from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
 from app.models.source_intake_run import SourceIntakeRun
-from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
+from app.services.source_identity.identity_fingerprint import fingerprint_from_probe, volume_guid_fingerprint
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
     SourceIdentityEvidenceItem,
@@ -153,6 +153,47 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertEqual(result.identity_match_status, "mismatch")
         self.assertEqual(result.blockers[0].code, "endpoint_identity_mismatch")
         self.assertFalse(result.can_run_source_intake)
+
+    def test_legacy_masked_volume_fingerprint_returns_needs_review_not_mismatch(self) -> None:
+        fingerprint_hash, fingerprint_version = volume_guid_fingerprint(
+            "12345678-90AB-CDEF-1234-567890ABCDEF"
+        )
+        response = _probe_response(
+            source_type="external_device",
+            evidence_items=[
+                SourceIdentityEvidenceItem(
+                    category="volume_evidence",
+                    code="volume_guid_present",
+                    status="present",
+                    durability="durable",
+                    privacy_level="masked_only",
+                    source_types=["external_device"],
+                    masked_value="{...cdef}",
+                    fingerprint_hash=fingerprint_hash,
+                    fingerprint_version=fingerprint_version,
+                )
+            ],
+        )
+        fingerprint = fingerprint_from_probe(response)
+        endpoint = SourceEndpoint(
+            source_type="external_device",
+            alias="Legacy endpoint",
+            alias_normalized="legacy endpoint",
+            status="active",
+            identity_fingerprint_hash=fingerprint.legacy_hashes[0],
+            identity_fingerprint_version="source_endpoint_identity_v1",
+            identity_confidence="strong_match",
+        )
+        self.db.add(endpoint)
+        self.db.commit()
+        self.db.refresh(endpoint)
+        source = self._add_source(source_type="external_drive", path="E:\\Photos", endpoint_id=endpoint.id)
+
+        result = SourceProfileReadinessService(self.db, _FakeProbeService(response)).check_readiness(source.id)
+
+        self.assertEqual(result.readiness_status, "needs_review")
+        self.assertEqual(result.identity_match_status, "needs_review")
+        self.assertIn("legacy_endpoint_fingerprint_needs_review", [item.code for item in result.warnings])
 
     def test_enrolled_endpoint_readable_weak_evidence_returns_needs_review(self) -> None:
         response = _probe_response(

@@ -21,6 +21,7 @@ from app.services.source_identity.probe_schema import (
     SourceIdentitySourceType,
     SourceRootCandidate,
 )
+from app.services.source_identity.identity_fingerprint import volume_guid_fingerprint
 from app.services.source_identity.providers.base import CommandResult, CommandRunner
 
 
@@ -604,6 +605,7 @@ class WindowsSourceIdentityProbeProvider:
             )
         guid_match = _VOLUME_GUID_RE.search(output)
         if guid_match:
+            fingerprint_hash, fingerprint_version = volume_guid_fingerprint(guid_match.group(1))
             evidence.append(
                 self._evidence(
                     "volume_evidence",
@@ -613,6 +615,8 @@ class WindowsSourceIdentityProbeProvider:
                     durability="durable",
                     privacy_level="masked_only",
                     masked_value=mask_guid(f"Volume{{{guid_match.group(1)}}}"),
+                    fingerprint_hash=fingerprint_hash,
+                    fingerprint_version=fingerprint_version,
                     message="mountvol Volume GUID evidence is present and masked.",
                 )
             )
@@ -887,6 +891,8 @@ class WindowsSourceIdentityProbeProvider:
         privacy_level: str = "advanced_only",
         display_value: str | None = None,
         masked_value: str | None = None,
+        fingerprint_hash: str | None = None,
+        fingerprint_version: str | None = None,
         message: str | None = None,
     ) -> SourceIdentityEvidenceItem:
         return SourceIdentityEvidenceItem(
@@ -898,6 +904,8 @@ class WindowsSourceIdentityProbeProvider:
             source_types=source_types,
             display_value=display_value,
             masked_value=masked_value,
+            fingerprint_hash=fingerprint_hash,
+            fingerprint_version=fingerprint_version,
             message=message,
             provider_name=self.provider_name,
         )

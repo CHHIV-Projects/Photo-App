@@ -14,6 +14,7 @@ from app.services.source_identity.probe_schema import (
 
 
 FINGERPRINT_VERSION = "source_endpoint_identity_v1"
+VOLUME_GUID_FINGERPRINT_VERSION = "source_endpoint_volume_guid_v2"
 FINGERPRINT_HASH_PREFIX = "sha256:"
 STRONG_FINGERPRINT_STRENGTHS = {"strong"}
 
@@ -25,6 +26,7 @@ class FingerprintResult:
     hash_value: str | None
     strength: str
     version: str | None
+    legacy_hashes: tuple[str, ...] = ()
 
 
 def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintResult:
@@ -40,6 +42,38 @@ def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintRes
                 strength="strong",
                 version=FINGERPRINT_VERSION,
             )
+
+    for item in probe.evidence_items:
+        if (
+            item.category == "volume_evidence"
+            and item.code == "volume_guid_present"
+            and item.status == "present"
+            and item.durability == "durable"
+            and item.fingerprint_hash
+            and item.fingerprint_version == VOLUME_GUID_FINGERPRINT_VERSION
+        ):
+            legacy = _legacy_fingerprint_from_probe(probe)
+            return FingerprintResult(
+                hash_value=item.fingerprint_hash,
+                strength="strong",
+                version=item.fingerprint_version,
+                legacy_hashes=(legacy.hash_value,) if legacy.hash_value else (),
+            )
+
+    return _legacy_fingerprint_from_probe(probe)
+
+
+def volume_guid_fingerprint(volume_guid: str) -> tuple[str, str]:
+    """Hash a complete Volume GUID without returning or storing the raw identifier."""
+    normalized = volume_guid.strip().strip("{}\\").casefold()
+    return (
+        _versioned_hash_for(VOLUME_GUID_FINGERPRINT_VERSION, ["volume_guid", normalized]),
+        VOLUME_GUID_FINGERPRINT_VERSION,
+    )
+
+
+def _legacy_fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintResult:
+    """Return the v1 compatibility fingerprint derived from sanitized evidence."""
 
     evidence_parts: list[str] = []
     durable_found = False
@@ -118,8 +152,12 @@ def _normalize_path_for_hash(path: str) -> str:
 
 
 def _versioned_hash(parts: list[str]) -> str:
+    return _versioned_hash_for(FINGERPRINT_VERSION, parts)
+
+
+def _versioned_hash_for(version: str, parts: list[str]) -> str:
     return FINGERPRINT_HASH_PREFIX + hashlib.sha256(
-        _safe_json({"version": FINGERPRINT_VERSION, "parts": parts}).encode("utf-8")
+        _safe_json({"version": version, "parts": parts}).encode("utf-8")
     ).hexdigest()
 
 
