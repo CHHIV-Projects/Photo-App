@@ -112,7 +112,7 @@ def _summarize_volume_identity(probe: SourceIdentityProbeResponse) -> DurableIde
 def _summarize_nas_identity(probe: SourceIdentityProbeResponse) -> DurableIdentitySummary:
     boundary = probe.source_root_candidate.filesystem_boundary_type
     server_share = parse_unc_server_share(
-        probe.normalized_observed_path or probe.observed_path or probe.source_root_candidate.path
+        probe.source_root_candidate.path or probe.normalized_observed_path or probe.observed_path
     )
     if boundary == "nas_server_only":
         return DurableIdentitySummary(
@@ -126,7 +126,7 @@ def _summarize_nas_identity(probe: SourceIdentityProbeResponse) -> DurableIdenti
             status="verified",
             reason="A readable NAS share/root path and UNC server/share identity were confirmed.",
             identifier_type="NAS server/share",
-            identifier=f"\\\\{server}\\{share}",
+            identifier=f"\\\\{server.casefold()}\\{share.casefold()}",
             evidence=[
                 "UNC server/share parsed from the observed path.",
                 "NAS share/root path is readable.",

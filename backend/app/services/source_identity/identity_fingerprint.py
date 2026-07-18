@@ -31,7 +31,7 @@ def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintRes
     """Build the same endpoint fingerprint used by enrollment and readiness."""
     if probe.source_type == "nas":
         server_share = parse_unc_server_share(
-            probe.normalized_observed_path or probe.observed_path or probe.source_root_candidate.path
+            probe.source_root_candidate.path or probe.normalized_observed_path or probe.observed_path
         )
         if server_share is not None:
             server, share = server_share

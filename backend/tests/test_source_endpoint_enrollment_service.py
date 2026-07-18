@@ -248,6 +248,53 @@ class SourceEndpointEnrollmentServiceTests(unittest.TestCase):
         self.assertFalse(linked.created_endpoint)
         self.assertEqual(linked.source_endpoint_id, existing.id)
 
+    def test_strong_match_plan_fingerprint_does_not_require_alias_for_existing_endpoint(self) -> None:
+        service = self._service(_probe_response())
+        fingerprint = service.plan(
+            SourceEndpointEnrollmentPlanRequest(
+                source_profile_id=self.source.id,
+                probe_request=_probe_request(),
+                proposed_alias="Temporary Source Name",
+            )
+        ).candidate.identity_fingerprint_hash
+        existing = SourceEndpoint(
+            source_type="external_device",
+            alias="Existing Camera Archive",
+            alias_normalized="existing camera archive",
+            status="active",
+            identity_fingerprint_hash=fingerprint,
+            identity_fingerprint_version="source_endpoint_identity_v1",
+            identity_confidence="strong_match",
+        )
+        self.db.add(existing)
+        self.db.commit()
+        self.db.refresh(existing)
+
+        plan = service.plan(
+            SourceEndpointEnrollmentPlanRequest(
+                source_profile_id=self.source.id,
+                probe_request=_probe_request(),
+                proposed_alias="Temporary Source Name",
+                selected_existing_endpoint_id=existing.id,
+            )
+        )
+        result = service.confirm(
+            SourceEndpointEnrollmentConfirmRequest(
+                source_profile_id=self.source.id,
+                probe_request=_probe_request(),
+                confirmed_alias=None,
+                selected_existing_endpoint_id=existing.id,
+                plan_fingerprint=plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+
+        self.assertEqual(plan.plan_status, "ready")
+        self.assertEqual(result.enrollment_status, "completed")
+        self.assertEqual(result.source_endpoint_id, existing.id)
+        self.assertFalse(result.created_endpoint)
+        self.assertEqual(self.db.get(SourceEndpoint, existing.id).alias, "Existing Camera Archive")
+
     def test_alias_conflict_blocks_new_endpoint(self) -> None:
         self.db.add(
             SourceEndpoint(

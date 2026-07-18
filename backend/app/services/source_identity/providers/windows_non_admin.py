@@ -30,6 +30,8 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 3.0
 _DRIVE_RE = re.compile(r"^[a-zA-Z]:")
 _VOLUME_SERIAL_RE = re.compile(r"volume serial number is\s+([0-9a-fA-F-]+)", re.IGNORECASE)
 _VOLUME_GUID_RE = re.compile(r"Volume\{([^}]+)\}", re.IGNORECASE)
+_ERROR_MORE_DATA = 234
+_UNIVERSAL_NAME_INFO_LEVEL = 1
 
 
 @dataclass(frozen=True)
@@ -190,6 +192,54 @@ def _default_path_probe(path: str | None) -> PathProbeStatus:
         )
 
 
+def resolve_mapped_drive_to_unc(path: str | None) -> str | None:
+    """Resolve a mapped Windows path through WNetGetUniversalNameW without changing mappings."""
+    if os.name != "nt" or not path or _drive_root(path) is None:
+        return None
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _UniversalNameInfo(ctypes.Structure):
+            _fields_ = [("lpUniversalName", wintypes.LPWSTR)]
+
+        get_universal_name = ctypes.WinDLL("mpr").WNetGetUniversalNameW
+        get_universal_name.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        get_universal_name.restype = wintypes.DWORD
+
+        buffer_size = wintypes.DWORD(0)
+        result = get_universal_name(
+            path,
+            _UNIVERSAL_NAME_INFO_LEVEL,
+            None,
+            ctypes.byref(buffer_size),
+        )
+        if result != _ERROR_MORE_DATA or buffer_size.value <= 0:
+            return None
+
+        buffer = ctypes.create_string_buffer(buffer_size.value)
+        result = get_universal_name(
+            path,
+            _UNIVERSAL_NAME_INFO_LEVEL,
+            buffer,
+            ctypes.byref(buffer_size),
+        )
+        if result != 0:
+            return None
+
+        info = ctypes.cast(buffer, ctypes.POINTER(_UniversalNameInfo)).contents
+        resolved = (info.lpUniversalName or "").strip()
+        return resolved if _is_unc_path(resolved) else None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
 class WindowsSourceIdentityProbeProvider:
     """Read-only Windows provider based on non-admin evidence."""
 
@@ -201,10 +251,12 @@ class WindowsSourceIdentityProbeProvider:
         *,
         command_runner: CommandRunner | None = None,
         path_probe=None,
+        mapped_drive_resolver=None,
         command_timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     ) -> None:
         self._command_runner = command_runner or WindowsCommandRunner()
         self._path_probe = path_probe or _default_path_probe
+        self._mapped_drive_resolver = mapped_drive_resolver or resolve_mapped_drive_to_unc
         self._command_timeout_seconds = command_timeout_seconds
 
     def capabilities(self) -> SourceIdentityProviderCapabilities:
@@ -221,6 +273,7 @@ class WindowsSourceIdentityProbeProvider:
             cloud_profile_check=False,
             limitations=[
                 "Drive-letter-to-device joins are partial in the non-admin Windows provider.",
+                "Mapped NAS paths resolve only when the current Windows runtime can resolve the existing drive mapping.",
                 "Cloud providers use provider-specific readiness and are not validated by this filesystem probe.",
             ],
         )
@@ -234,7 +287,46 @@ class WindowsSourceIdentityProbeProvider:
         blockers: list[SourceIdentityEvidenceItem] = []
         observed_path = (request.observed_path or "").strip()
         normalized_path = _normalize_observed_path(observed_path)
-        boundary = _classify_boundary(request.source_type, observed_path)
+        drive = _drive_root(observed_path)
+        mapped_unc_path = self._mapped_drive_resolver(observed_path) if drive else None
+        classification_path = mapped_unc_path if request.source_type == "nas" and mapped_unc_path else observed_path
+        boundary = _classify_boundary(request.source_type, classification_path)
+
+        if mapped_unc_path:
+            parts = _unc_parts(mapped_unc_path)
+            server_share = f"\\\\{parts[0]}\\{parts[1]}" if len(parts) >= 2 else None
+            mapping_item = self._evidence(
+                "network_share_evidence",
+                "mapped_drive_unc_resolved",
+                "present",
+                source_types=[request.source_type],
+                durability="supporting",
+                privacy_level="normal_ui",
+                display_value=server_share,
+                message="The mapped drive was resolved read-only to a UNC server/share path.",
+            )
+            evidence.append(mapping_item)
+            if request.source_type != "nas":
+                boundary = "unknown"
+                blocker = self._evidence(
+                    "network_share_evidence",
+                    "mapped_network_path_requires_nas",
+                    "blocked",
+                    source_types=[request.source_type],
+                    message="This location is a mapped NAS path. Choose source type NAS.",
+                )
+                evidence.append(blocker)
+                blockers.append(blocker)
+        elif request.source_type == "nas" and drive:
+            blocker = self._evidence(
+                "network_share_evidence",
+                "mapped_nas_unc_resolution_failed",
+                "blocked",
+                source_types=["nas"],
+                message="Mapped NAS path detected, but the UNC share could not be resolved. Enter the UNC path instead.",
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
 
         host_item = self._evidence(
             "host_evidence",
@@ -249,7 +341,7 @@ class WindowsSourceIdentityProbeProvider:
         evidence.append(host_item)
 
         path_status = self._path_probe(observed_path if observed_path else None)
-        root_candidate = self._build_root_candidate(request.source_type, observed_path, boundary, path_status)
+        root_candidate = self._build_root_candidate(request.source_type, classification_path, boundary, path_status)
         path_items, path_warnings, path_blockers = self._path_evidence(request, boundary, path_status)
         evidence.extend(path_items)
         warnings.extend(path_warnings)
@@ -266,8 +358,7 @@ class WindowsSourceIdentityProbeProvider:
             evidence.append(blocker)
             blockers.append(blocker)
 
-        drive = _drive_root(observed_path)
-        if drive and request.source_type in {"local", "external_device", "removable_media"}:
+        if drive and not mapped_unc_path and request.source_type in {"local", "external_device", "removable_media"}:
             command_items, command_warnings = self._collect_drive_command_evidence(drive, request.source_type)
             evidence.extend(command_items)
             warnings.extend(command_warnings)
@@ -769,6 +860,10 @@ class WindowsSourceIdentityProbeProvider:
         warnings: list[SourceIdentityEvidenceItem],
         boundary: FilesystemBoundaryType,
     ) -> list[str]:
+        if any(item.code == "mapped_nas_unc_resolution_failed" for item in blockers):
+            return ["Enter the NAS location as a UNC path, such as \\\\HENDERSON-NAS\\Photos."]
+        if any(item.code == "mapped_network_path_requires_nas" for item in blockers):
+            return ["Choose source type NAS and check the mapped path again."]
         if any(item.code == "nas_server_not_runnable" for item in blockers):
             return ["Choose a NAS share or folder inside a share, such as \\\\HENDERSON-NAS\\Photos."]
         if any(item.code in {"path_not_found", "path_not_readable", "access_denied"} for item in blockers):

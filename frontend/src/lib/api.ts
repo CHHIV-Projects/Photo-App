@@ -27,6 +27,8 @@ import type {
   SourceProfilesResponse,
   SourceProfileStagingFolderCreateResponse,
   SourceProfileSummary,
+  SourceIdentityProbeRequest,
+  SourceIdentityProbeResponse,
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
   SourceIntakeSourcesResponse,
@@ -1023,6 +1025,15 @@ export function createSourceProfile(
     ? `/api/admin/source-profiles?${query}`
     : "/api/admin/source-profiles";
   return apiRequest<SourceProfileCreateResponse>(path, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function probeSourceIdentity(
+  payload: SourceIdentityProbeRequest,
+): Promise<SourceIdentityProbeResponse> {
+  return apiRequest<SourceIdentityProbeResponse>("/api/admin/source-identity/probe", {
     method: "POST",
     body: JSON.stringify(payload),
   });

@@ -825,7 +825,9 @@ def _plan_fingerprint(
                 "access_node_label": candidate.access_node_label,
                 "access_node_os_family": candidate.access_node_os_family,
             },
-            "alias_normalized": alias_normalized,
+            # Existing endpoint aliases are immutable and are not confirmation
+            # input when a profile is linked to an existing endpoint.
+            "alias_normalized": alias_normalized if endpoint_action == "create_new_endpoint" else None,
             "selected_existing_endpoint_id": selected_existing_endpoint_id,
             "endpoint_action": endpoint_action,
             "blockers": [message.code for message in blockers],

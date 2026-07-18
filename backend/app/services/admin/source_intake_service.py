@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.ingestion_run import IngestionRun
@@ -194,6 +194,7 @@ def _to_source_profile_summary(
         source_type=source.source_type,
         source_root_path=source.source_root_path,
         endpoint_id=source.endpoint_id,
+        endpoint_source_type=source.source_endpoint.source_type if source.source_endpoint is not None else None,
         profile_status=source.profile_status,
         cloud_provider=source.cloud_provider,
         acquisition_method=source.acquisition_method,
@@ -556,7 +557,11 @@ def list_source_profiles(
             "Invalid status filter. Allowed values: active, inactive, archived, test, deprecated, all."
         )
 
-    sources_stmt = select(IngestionSource).order_by(IngestionSource.created_at.asc())
+    sources_stmt = (
+        select(IngestionSource)
+        .options(selectinload(IngestionSource.source_endpoint))
+        .order_by(IngestionSource.created_at.asc())
+    )
     if normalized_status != "all":
         sources_stmt = sources_stmt.where(IngestionSource.profile_status == normalized_status)
     sources = db_session.scalars(sources_stmt).all()

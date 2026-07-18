@@ -1254,6 +1254,7 @@ export interface SourceProfileSummary {
   source_type: SourceProfileType;
   source_root_path: string | null;
   endpoint_id: number | null;
+  endpoint_source_type: SourceIdentityProbeSourceType | null;
   profile_status: SourceProfileStatus;
   cloud_provider: SourceCloudProvider | null;
   acquisition_method: SourceAcquisitionMethod | null;
@@ -1445,6 +1446,34 @@ export interface SourceIdentityProbeRequest {
   probe_mode?: "setup_probe" | "readiness_probe" | "run_launch_verification" | "diagnostic_probe";
   intended_use?: string | null;
   os_family?: "windows" | "linux" | "macos" | "unknown";
+}
+
+export interface SourceIdentityProbeEvidenceItem {
+  category: string;
+  code: string;
+  status: string;
+  durability: string;
+  privacy_level: string;
+  display_value: string | null;
+  masked_value: string | null;
+  message: string | null;
+}
+
+export interface SourceIdentityProbeResponse {
+  probe_status: "completed" | "completed_with_warnings" | "blocked" | "unavailable" | "unsupported_provider" | "provider_error";
+  source_type: SourceIdentityProbeSourceType;
+  observed_path: string | null;
+  normalized_observed_path: string | null;
+  source_root_candidate: {
+    path: string | null;
+    is_valid_source_root_candidate: boolean;
+    filesystem_boundary_type: string;
+    root_reason: string;
+  };
+  evidence_items: SourceIdentityProbeEvidenceItem[];
+  blockers: SourceIdentityProbeEvidenceItem[];
+  warnings: SourceIdentityProbeEvidenceItem[];
+  next_safe_actions: string[];
 }
 
 export interface EnrollmentMessage {

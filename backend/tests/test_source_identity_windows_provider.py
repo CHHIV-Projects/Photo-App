@@ -7,6 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.source_identity.probe_schema import SourceIdentityProbeRequest
+from app.services.source_identity.durable_identity import summarize_durable_identity
+from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
 from app.services.source_identity.providers.base import CommandResult
 from app.services.source_identity.providers.windows_non_admin import (
     PathProbeStatus,
@@ -45,10 +47,13 @@ def _provider(
     readable_paths: set[str] | None = None,
     access_denied_paths: set[str] | None = None,
     results: dict[tuple[str, ...], CommandResult] | None = None,
+    mapped_paths: dict[str, str] | None = None,
 ) -> WindowsSourceIdentityProbeProvider:
+    mapped_paths = mapped_paths or {}
     return WindowsSourceIdentityProbeProvider(
         command_runner=_FakeCommandRunner(results),
         path_probe=_path_probe(readable_paths or set(), access_denied_paths=access_denied_paths),
+        mapped_drive_resolver=lambda path: mapped_paths.get(path),
         command_timeout_seconds=0.01,
     )
 
@@ -101,6 +106,58 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         self.assertTrue(share_response.source_root_candidate.is_valid_source_root_candidate)
         self.assertEqual(folder_response.source_root_candidate.filesystem_boundary_type, "nas_share_folder")
         self.assertTrue(folder_response.source_root_candidate.is_valid_source_root_candidate)
+
+    def test_mapped_nas_path_resolves_to_canonical_unc_identity(self) -> None:
+        mapped_path = "Z:\\Dad Files"
+        canonical_path = "\\\\HENDERSON-NAS\\Photos\\Dad Files"
+        provider = _provider(
+            readable_paths={mapped_path},
+            mapped_paths={mapped_path: canonical_path},
+        )
+
+        response = provider.probe(
+            SourceIdentityProbeRequest(source_type="nas", observed_path=mapped_path)
+        )
+        durable_identity = summarize_durable_identity(probe=response, source_type="local_folder")
+        fingerprint = fingerprint_from_probe(response)
+
+        self.assertEqual(response.observed_path, mapped_path)
+        self.assertEqual(response.normalized_observed_path, mapped_path.lower())
+        self.assertEqual(response.source_root_candidate.path, canonical_path)
+        self.assertEqual(response.source_root_candidate.filesystem_boundary_type, "nas_share_folder")
+        self.assertTrue(response.source_root_candidate.is_valid_source_root_candidate)
+        self.assertIn("mapped_drive_unc_resolved", [item.code for item in response.evidence_items])
+        self.assertEqual(durable_identity.status, "verified")
+        self.assertEqual(durable_identity.identifier, "\\\\henderson-nas\\photos")
+        self.assertEqual(fingerprint.strength, "strong")
+
+    def test_unresolved_mapped_nas_path_blocks_and_requests_unc(self) -> None:
+        mapped_path = "Z:\\Dad Files"
+        provider = _provider(readable_paths={mapped_path})
+
+        response = provider.probe(
+            SourceIdentityProbeRequest(source_type="nas", observed_path=mapped_path)
+        )
+
+        self.assertEqual(response.probe_status, "blocked")
+        self.assertFalse(response.source_root_candidate.is_valid_source_root_candidate)
+        self.assertIn("mapped_nas_unc_resolution_failed", [item.code for item in response.blockers])
+        self.assertIn("Enter the NAS location as a UNC path", response.next_safe_actions[0])
+
+    def test_mapped_network_path_is_not_accepted_as_local(self) -> None:
+        mapped_path = "Z:\\Dad Files"
+        provider = _provider(
+            readable_paths={mapped_path},
+            mapped_paths={mapped_path: "\\\\HENDERSON-NAS\\Photos\\Dad Files"},
+        )
+
+        response = provider.probe(
+            SourceIdentityProbeRequest(source_type="local", observed_path=mapped_path)
+        )
+
+        self.assertEqual(response.probe_status, "blocked")
+        self.assertFalse(response.source_root_candidate.is_valid_source_root_candidate)
+        self.assertIn("mapped_network_path_requires_nas", [item.code for item in response.blockers])
 
     def test_unreadable_nas_path_returns_access_blocker(self) -> None:
         path = "\\\\HENDERSON-NAS\\Photos"

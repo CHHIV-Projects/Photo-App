@@ -19,6 +19,7 @@ import {
   getSourceIntakeRunStatus,
   getSourceProfiles,
   planSourceEndpointEnrollment,
+  probeSourceIdentity,
   runIcloudAcquisitionWithDetails,
   runIcloudStagingCleanupDryRun,
   SourceIntakeStartError,
@@ -87,6 +88,7 @@ type IcloudSourceIntakeLimitSuggestion = {
 
 type EditorFormState = {
   sourceLabel: string;
+  operatorSourceType: OperatorSourceType;
   sourceType: SourceProfileType;
   profileStatus: SourceProfileStatus;
   sourceRootPath: string;
@@ -98,6 +100,11 @@ type EditorFormState = {
 
 type SourceIdentityEnrollmentPhase = "idle" | "planning" | "review" | "confirming" | "complete";
 
+type SourceIdentityPlanOutcome = {
+  plan: SourceEndpointEnrollmentPlanResponse;
+  autoLinked: boolean;
+};
+
 type SourceIdentityEnrollmentSupport = {
   supported: boolean;
   probeSourceType: SourceIdentityProbeSourceType | null;
@@ -105,7 +112,7 @@ type SourceIdentityEnrollmentSupport = {
   note: string;
 };
 
-type WorkbenchSourceType = "local" | "external" | "nas" | "icloud" | "advanced";
+type OperatorSourceType = "local" | "external" | "nas" | "removable" | "icloud" | "advanced";
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: "active", label: "Active" },
@@ -124,18 +131,17 @@ const EDITABLE_STATUS_OPTIONS: SourceProfileStatus[] = [
   "deprecated",
 ];
 
-const SOURCE_TYPE_OPTIONS: Array<{ value: SourceProfileType; label: string }> = [
-  { value: "local_folder", label: "Local / NAS Folder" },
-  { value: "external_drive", label: "External" },
-  { value: "cloud_export", label: "iCloud / Cloud Export" },
-  { value: "scan_batch", label: "Advanced / Scan Batch" },
-  { value: "other", label: "Advanced / Other" },
+const ADVANCED_SOURCE_TYPE_OPTIONS: Array<{ value: SourceProfileType; label: string }> = [
+  { value: "scan_batch", label: "Scan Batch" },
+  { value: "other", label: "Other" },
+  { value: "cloud_export", label: "Other Cloud Export" },
 ];
 
-const WORKBENCH_SOURCE_TYPE_OPTIONS: Array<{ value: WorkbenchSourceType; label: string }> = [
+const OPERATOR_SOURCE_TYPE_OPTIONS: Array<{ value: OperatorSourceType; label: string; disabled?: boolean }> = [
   { value: "local", label: "Local" },
-  { value: "external", label: "External" },
   { value: "nas", label: "NAS" },
+  { value: "external", label: "External" },
+  { value: "removable", label: "Removable", disabled: true },
   { value: "icloud", label: "iCloud" },
   { value: "advanced", label: "Advanced / Legacy" },
 ];
@@ -183,6 +189,7 @@ const ICLOUD_ACQUISITION_BENIGN_WARNING_CODES = new Set([
 function initialFormState(): EditorFormState {
   return {
     sourceLabel: "",
+    operatorSourceType: "local",
     sourceType: "local_folder",
     profileStatus: "active",
     sourceRootPath: "",
@@ -419,9 +426,98 @@ function isUncPath(pathValue: string | null | undefined): boolean {
   return normalized.startsWith("\\\\");
 }
 
+function isDriveLetterPath(pathValue: string | null | undefined): boolean {
+  return /^[a-zA-Z]:[\\/]/.test((pathValue ?? "").trim());
+}
+
+function persistedSourceTypeForOperator(value: OperatorSourceType): SourceProfileType {
+  if (value === "external") {
+    return "external_drive";
+  }
+  if (value === "icloud") {
+    return "cloud_export";
+  }
+  if (value === "advanced") {
+    return "other";
+  }
+  return "local_folder";
+}
+
+function probeSourceTypeForOperator(value: OperatorSourceType): SourceIdentityProbeSourceType | null {
+  if (value === "local") {
+    return "local";
+  }
+  if (value === "nas") {
+    return "nas";
+  }
+  if (value === "external") {
+    return "external_device";
+  }
+  return null;
+}
+
+function getCreateSourceIdentitySupport(value: OperatorSourceType): SourceIdentityEnrollmentSupport {
+  const probeSourceType = probeSourceTypeForOperator(value);
+  if (probeSourceType) {
+    return {
+      supported: true,
+      probeSourceType,
+      reason: null,
+      note: value === "nas"
+        ? "NAS identity uses the canonical UNC server/share while the selected folder remains the Source Root."
+        : `${getOperatorSourceTypeLabel(value)} durable identity is checked when the source is created.`,
+    };
+  }
+  if (value === "icloud") {
+    return {
+      supported: false,
+      probeSourceType: null,
+      reason: "iCloud uses provider-specific identity and the iCloud Intake workflow.",
+      note: "iCloud uses provider-specific identity.",
+    };
+  }
+  return {
+    supported: false,
+    probeSourceType: null,
+    reason: value === "removable"
+      ? "Removable sources are coming later."
+      : "Source Identity Check is not available for this Advanced / Legacy source type.",
+    note: "Generic durable identity is unavailable for this source type.",
+  };
+}
+
+function sourceNamePart(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.toLowerCase() === "nas"
+      ? "NAS"
+      : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function suggestSourceName(sourceType: OperatorSourceType, pathValue: string): string | null {
+  const normalized = pathValue.trim().replace(/\//g, "\\").replace(/\\+$/, "");
+  const parts = normalized.split("\\").filter(Boolean);
+  const leaf = parts.length > 0 ? sourceNamePart(parts[parts.length - 1]) : "";
+  if (sourceType === "nas") {
+    const server = isUncPath(normalized) && parts.length > 0 ? sourceNamePart(parts[0]) : "NAS";
+    const endpointName = server.toLowerCase().endsWith(" nas") ? server : `${server} NAS`;
+    return leaf && leaf !== server ? `${endpointName} - ${leaf}` : endpointName;
+  }
+  if (sourceType === "external") {
+    return leaf ? `External - ${leaf}` : "External Source";
+  }
+  if (sourceType === "local") {
+    return leaf ? `Local - ${leaf}` : "Local Source";
+  }
+  return null;
+}
+
 function getSourceIdentityEnrollmentSupport(
   sourceType: SourceProfileType,
   pathValue: string | null | undefined,
+  endpointSourceType: SourceIdentityProbeSourceType | null = null,
 ): SourceIdentityEnrollmentSupport {
   if (sourceType === "cloud_export") {
     return {
@@ -445,6 +541,14 @@ function getSourceIdentityEnrollmentSupport(
       probeSourceType: null,
       reason: "Source Identity Check is not available for this source type yet.",
       note: "Source Identity Check is not available for this source type yet.",
+    };
+  }
+  if (endpointSourceType === "nas") {
+    return {
+      supported: true,
+      probeSourceType: "nas",
+      reason: null,
+      note: "NAS durable identity uses the canonical UNC server/share.",
     };
   }
   if (sourceType === "external_drive") {
@@ -472,13 +576,34 @@ function getSourceIdentityEnrollmentSupport(
 }
 
 function buildSourceIdentityProbeRequest(profile: SourceProfileSummary): SourceIdentityProbeRequest | null {
-  const support = getSourceIdentityEnrollmentSupport(profile.source_type, profile.source_root_path);
+  const support = getSourceIdentityEnrollmentSupport(
+    profile.source_type,
+    profile.source_root_path,
+    profile.endpoint_source_type,
+  );
   if (!support.supported || !support.probeSourceType || !profile.source_root_path) {
     return null;
   }
   return {
     source_type: support.probeSourceType,
     observed_path: profile.source_root_path,
+    probe_mode: "setup_probe",
+    intended_use: "source_profile_endpoint_enrollment",
+    os_family: "windows",
+  };
+}
+
+function buildCreateSourceProbeRequest(
+  sourceType: OperatorSourceType,
+  observedPath: string,
+): SourceIdentityProbeRequest | null {
+  const probeSourceType = probeSourceTypeForOperator(sourceType);
+  if (!probeSourceType || !observedPath.trim()) {
+    return null;
+  }
+  return {
+    source_type: probeSourceType,
+    observed_path: observedPath.trim(),
     probe_mode: "setup_probe",
     intended_use: "source_profile_endpoint_enrollment",
     os_family: "windows",
@@ -502,6 +627,15 @@ function formatPlanStatus(value: string): string {
     .join(" ");
 }
 
+function formatEnrollmentPlanStatus(plan: SourceEndpointEnrollmentPlanResponse): string {
+  if (plan.plan_status === "duplicate_match") {
+    return plan.candidate?.source_type === "nas"
+      ? "Existing NAS share endpoint found"
+      : "Existing durable source identity found";
+  }
+  return formatPlanStatus(plan.plan_status);
+}
+
 function getRunDisabledReason(profile: SourceProfileSummary): string | null {
   if (!isLocalOrExternalSource(profile.source_type)) {
     if (profile.source_type === "cloud_export") {
@@ -517,12 +651,15 @@ function getRunDisabledReason(profile: SourceProfileSummary): string | null {
   return null;
 }
 
-function getOperatorSourceType(profile: SourceProfileSummary): WorkbenchSourceType {
+function getOperatorSourceType(profile: SourceProfileSummary): OperatorSourceType {
   if (isIcloudProfile(profile)) {
     return "icloud";
   }
-  if (profile.source_type === "local_folder" && isUncPath(profile.source_root_path)) {
+  if (profile.endpoint_source_type === "nas" || (profile.source_type === "local_folder" && isUncPath(profile.source_root_path))) {
     return "nas";
+  }
+  if (profile.endpoint_source_type === "removable_media") {
+    return "removable";
   }
   if (profile.source_type === "local_folder") {
     return "local";
@@ -533,8 +670,8 @@ function getOperatorSourceType(profile: SourceProfileSummary): WorkbenchSourceTy
   return "advanced";
 }
 
-function getOperatorSourceTypeLabel(value: WorkbenchSourceType): string {
-  const option = WORKBENCH_SOURCE_TYPE_OPTIONS.find((item) => item.value === value);
+function getOperatorSourceTypeLabel(value: OperatorSourceType): string {
+  const option = OPERATOR_SOURCE_TYPE_OPTIONS.find((item) => item.value === value);
   return option?.label ?? "Advanced / Legacy";
 }
 
@@ -991,10 +1128,11 @@ export default function IngestionView() {
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
-  const [workbenchSourceType, setWorkbenchSourceType] = useState<WorkbenchSourceType>("local");
+  const [workbenchSourceType, setWorkbenchSourceType] = useState<OperatorSourceType>("local");
   const [workbenchSearch, setWorkbenchSearch] = useState("");
   const [showInactiveWorkbenchSources, setShowInactiveWorkbenchSources] = useState(false);
   const [selectedWorkbenchSourceId, setSelectedWorkbenchSourceId] = useState<number | null>(null);
+  const [isCreateSourceExpanded, setIsCreateSourceExpanded] = useState(false);
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>("create");
@@ -1010,6 +1148,7 @@ export default function IngestionView() {
   const [sourceIdentityConfirmResult, setSourceIdentityConfirmResult] = useState<SourceEndpointEnrollmentConfirmResponse | null>(null);
   const [sourceIdentityReviewAcknowledged, setSourceIdentityReviewAcknowledged] = useState(false);
   const [sourceIdentitySelectedEndpointId, setSourceIdentitySelectedEndpointId] = useState<number | null>(null);
+  const [sourceIdentityProbeRequest, setSourceIdentityProbeRequest] = useState<SourceIdentityProbeRequest | null>(null);
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [detailSourceId, setDetailSourceId] = useState<number | null>(null);
@@ -1469,8 +1608,10 @@ export default function IngestionView() {
   }, [editorForm.sourceLabel]);
 
   const editorSourceIdentitySupport = useMemo(() => (
-    getSourceIdentityEnrollmentSupport(editorForm.sourceType, editorForm.sourceRootPath)
-  ), [editorForm.sourceRootPath, editorForm.sourceType]);
+    editorMode === "create"
+      ? getCreateSourceIdentitySupport(editorForm.operatorSourceType)
+      : getSourceIdentityEnrollmentSupport(editorForm.sourceType, editorForm.sourceRootPath)
+  ), [editorForm.operatorSourceType, editorForm.sourceRootPath, editorForm.sourceType, editorMode]);
 
   const sourceIdentityConfirmDisabledReason = useMemo(() => {
     if (!sourceIdentityPlan) {
@@ -1726,6 +1867,7 @@ export default function IngestionView() {
     setSourceIdentityConfirmResult(null);
     setSourceIdentityReviewAcknowledged(false);
     setSourceIdentitySelectedEndpointId(null);
+    setSourceIdentityProbeRequest(null);
   }, []);
 
   const openCreateDrawer = useCallback(() => {
@@ -1747,6 +1889,7 @@ export default function IngestionView() {
     resetSourceIdentityEnrollmentState();
     setEditorForm({
       sourceLabel: profile.source_label,
+      operatorSourceType: getOperatorSourceType(profile),
       sourceType: profile.source_type,
       profileStatus: profile.profile_status,
       sourceRootPath: profile.source_root_path ?? "",
@@ -1912,35 +2055,82 @@ export default function IngestionView() {
   const runSourceIdentityEnrollmentPlan = useCallback(async (
     profile: SourceProfileSummary,
     selectedExistingEndpointId: number | null = sourceIdentitySelectedEndpointId,
-  ) => {
-    const probeRequest = buildSourceIdentityProbeRequest(profile);
+    probeRequestOverride: SourceIdentityProbeRequest | null = null,
+  ): Promise<SourceIdentityPlanOutcome | null> => {
+    const probeRequest = probeRequestOverride ?? buildSourceIdentityProbeRequest(profile);
     if (!probeRequest) {
       setEditorError("Source Identity Check is not available for this Source Profile.");
       return null;
     }
 
+    setSourceIdentityProbeRequest(probeRequest);
     setSourceIdentityPhase("planning");
     setEditorError(null);
     setSourceIdentityPlan(null);
     setSourceIdentityConfirmResult(null);
 
     try {
-      const plan = await planSourceEndpointEnrollment({
+      let plan = await planSourceEndpointEnrollment({
         source_profile_id: profile.source_id,
         probe_request: probeRequest,
         proposed_alias: sourceIdentityAlias.trim() || null,
         selected_existing_endpoint_id: selectedExistingEndpointId,
         operator_review_acknowledged: sourceIdentityReviewAcknowledged,
       });
+
+      const strongMatches = plan.possible_matches.filter((match) => match.match_strength === "strong");
+      const shouldAutoLink = (
+        selectedExistingEndpointId == null
+        && plan.durable_identity_status === "verified"
+        && plan.blockers.length === 0
+        && strongMatches.length === 1
+      );
+
+      if (shouldAutoLink) {
+        const matchedEndpointId = strongMatches[0].source_endpoint_id;
+        setSourceIdentitySelectedEndpointId(matchedEndpointId);
+        setSourceIdentityReviewAcknowledged(true);
+        plan = await planSourceEndpointEnrollment({
+          source_profile_id: profile.source_id,
+          probe_request: probeRequest,
+          proposed_alias: sourceIdentityAlias.trim() || null,
+          selected_existing_endpoint_id: matchedEndpointId,
+          operator_review_acknowledged: true,
+        });
+        setSourceIdentityPlan(plan);
+
+        if (
+          plan.plan_status === "ready"
+          && plan.endpoint_action === "link_existing_endpoint"
+          && plan.durable_identity_status === "verified"
+          && plan.blockers.length === 0
+        ) {
+          setSourceIdentityPhase("confirming");
+          const response = await confirmSourceEndpointEnrollment({
+            source_profile_id: profile.source_id,
+            probe_request: probeRequest,
+            plan_fingerprint: plan.plan_fingerprint,
+            confirmed_alias: null,
+            selected_existing_endpoint_id: matchedEndpointId,
+            operator_confirmed: true,
+            operator_review_acknowledged: true,
+          });
+          setSourceIdentityConfirmResult(response);
+          setSourceIdentityPhase(response.enrollment_status === "completed" ? "complete" : "review");
+          await loadProfiles({ refreshOnly: true });
+          return { plan, autoLinked: response.enrollment_status === "completed" };
+        }
+      }
+
       setSourceIdentityPlan(plan);
       setSourceIdentityPhase("review");
-      return plan;
+      return { plan, autoLinked: false };
     } catch (error) {
       setSourceIdentityPhase("review");
       setEditorError(error instanceof Error ? error.message : "Failed to plan endpoint enrollment.");
       return null;
     }
-  }, [sourceIdentityAlias, sourceIdentityReviewAcknowledged, sourceIdentitySelectedEndpointId]);
+  }, [loadProfiles, sourceIdentityAlias, sourceIdentityReviewAcknowledged, sourceIdentitySelectedEndpointId]);
 
   const confirmSourceIdentityEnrollment = useCallback(async () => {
     if (!sourceIdentityCreatedProfile || !sourceIdentityPlan) {
@@ -1948,7 +2138,7 @@ export default function IngestionView() {
       return;
     }
 
-    const probeRequest = buildSourceIdentityProbeRequest(sourceIdentityCreatedProfile);
+    const probeRequest = sourceIdentityProbeRequest ?? buildSourceIdentityProbeRequest(sourceIdentityCreatedProfile);
     if (!probeRequest) {
       setEditorError("Source Identity Check is not available for this Source Profile.");
       return;
@@ -2002,6 +2192,7 @@ export default function IngestionView() {
     sourceIdentityAlias,
     sourceIdentityCreatedProfile,
     sourceIdentityPlan,
+    sourceIdentityProbeRequest,
     sourceIdentityReviewAcknowledged,
     sourceIdentitySelectedEndpointId,
   ]);
@@ -2012,7 +2203,12 @@ export default function IngestionView() {
 
     if (editorMode === "create") {
       if (!trimmedLabel) {
-        setEditorError("Source label is required.");
+        setEditorError("Source Name is required.");
+        return;
+      }
+
+      if (editorForm.operatorSourceType === "removable") {
+        setEditorError("Removable sources are coming later and cannot be created yet.");
         return;
       }
 
@@ -2022,7 +2218,23 @@ export default function IngestionView() {
       }
 
       if (isIcloudCloudExport(editorForm) && !editorForm.accountUsername.trim()) {
-        setEditorError("Account username is required for iCloud source profiles.");
+        setEditorError("Account username is required for iCloud sources.");
+        return;
+      }
+
+      if (
+        (editorForm.operatorSourceType === "local" || editorForm.operatorSourceType === "external")
+        && isUncPath(editorForm.sourceRootPath)
+      ) {
+        setEditorError("This looks like a NAS path. Choose source type NAS.");
+        return;
+      }
+
+      if (
+        (editorForm.operatorSourceType === "local" || editorForm.operatorSourceType === "external")
+        && !isDriveLetterPath(editorForm.sourceRootPath)
+      ) {
+        setEditorError("Enter an absolute Windows drive path, such as C:\\Photos.");
         return;
       }
 
@@ -2041,13 +2253,56 @@ export default function IngestionView() {
     setIsSavingEditor(true);
     try {
       if (editorMode === "create") {
+        let sourceRootPath = editorForm.sourceRootPath.trim();
+        const createProbeRequest = buildCreateSourceProbeRequest(
+          editorForm.operatorSourceType,
+          sourceRootPath,
+        );
+        const drivePathProbe = createProbeRequest && isDriveLetterPath(sourceRootPath)
+          ? await probeSourceIdentity(createProbeRequest)
+          : null;
+        const mappedNetworkBlocker = drivePathProbe?.blockers.find(
+          (item) => item.code === "mapped_network_path_requires_nas",
+        );
+        if (mappedNetworkBlocker) {
+          setEditorError(mappedNetworkBlocker.message);
+          return;
+        }
+
+        if (editorForm.operatorSourceType === "nas") {
+          if (!isUncPath(sourceRootPath) && !isDriveLetterPath(sourceRootPath)) {
+            setEditorError("Enter a UNC path or an existing mapped NAS drive path.");
+            return;
+          }
+          if (!createProbeRequest) {
+            setEditorError("Unable to check this NAS location.");
+            return;
+          }
+          const probe = drivePathProbe ?? await probeSourceIdentity(createProbeRequest);
+          const canonicalRoot = probe.source_root_candidate.path;
+          const boundary = probe.source_root_candidate.filesystem_boundary_type;
+          const resolutionBlocker = probe.blockers.find((item) => (
+            item.code === "mapped_nas_unc_resolution_failed"
+            || item.code === "nas_server_not_runnable"
+          ));
+          if (resolutionBlocker || !canonicalRoot || !isUncPath(canonicalRoot) || boundary === "nas_server_only" || boundary === "unknown") {
+            setEditorError(
+              resolutionBlocker?.message
+              ?? probe.next_safe_actions[0]
+              ?? "The NAS location could not be resolved to a UNC share and folder.",
+            );
+            return;
+          }
+          sourceRootPath = canonicalRoot;
+        }
+
         const payload: SourceProfileCreateRequest = {
           source_label: trimmedLabel,
           source_type: editorForm.sourceType,
           profile_status: editorForm.profileStatus,
           source_root_path: isIcloudCloudExport(editorForm)
             ? null
-            : editorForm.sourceRootPath.trim(),
+            : sourceRootPath,
           cloud_provider: editorForm.sourceType === "cloud_export" ? editorForm.cloudProvider : null,
           account_username: editorForm.accountUsername.trim() || null,
           acquisition_method: editorForm.sourceType === "cloud_export" ? editorForm.acquisitionMethod : null,
@@ -2058,15 +2313,31 @@ export default function IngestionView() {
 
         const response = await createSourceProfile(payload);
         await loadProfiles({ refreshOnly: true });
+        setWorkbenchSourceType(editorForm.operatorSourceType);
+        setSelectedWorkbenchSourceId(response.profile.source_id);
         if (sourceIdentityEnrollRequested) {
           setSourceIdentityCreatedProfile(response.profile);
           setSourceIdentityAlias((current) => current.trim() || response.profile.source_label);
-          await runSourceIdentityEnrollmentPlan(response.profile, null);
+          const planOutcome = await runSourceIdentityEnrollmentPlan(
+            response.profile,
+            null,
+            createProbeRequest,
+          );
+          if (planOutcome?.autoLinked) {
+            closeEditor();
+            setBanner({
+              kind: "success",
+              message: response.already_exists
+                ? `Source already exists and is linked: ${response.profile.source_label}`
+                : `Source created and linked: ${response.profile.source_label}`,
+            });
+            return;
+          }
           setBanner({
             kind: "success",
             message: response.already_exists
-              ? `Source profile already exists: ${response.profile.source_label}`
-              : `Source profile created: ${response.profile.source_label}`,
+              ? `Source already exists: ${response.profile.source_label}`
+              : `Source created: ${response.profile.source_label}. Review the identity result to finish enrollment.`,
           });
           return;
         }
@@ -2074,8 +2345,8 @@ export default function IngestionView() {
         setBanner({
           kind: "success",
           message: response.already_exists
-            ? `Source profile already exists: ${response.profile.source_label}`
-            : `Source profile created: ${response.profile.source_label}`,
+            ? `Source already exists: ${response.profile.source_label}`
+            : `Source created: ${response.profile.source_label}`,
         });
         return;
       }
@@ -3003,9 +3274,6 @@ export default function IngestionView() {
           </p>
         </div>
         <div className={styles.toolbar}>
-          <button type="button" className={styles.button} onClick={openCreateDrawer}>
-            Create Source Profile
-          </button>
           <label>
             <span className={styles.subtitle}>Status filter</span>
             <br />
@@ -3058,18 +3326,33 @@ export default function IngestionView() {
         Active shown: {countsSummary.active} | Archived/Test/Deprecated shown: {countsSummary.nonActive}
       </p>
 
-      <section className={styles.workbenchPanel} aria-labelledby="ingestion-workbench-title">
+      <section className={styles.workbenchPanel} aria-labelledby="create-source-title">
+        <div className={styles.workbenchHeader}>
+          <h3 id="create-source-title" className={styles.runPanelTitle}>Create Source</h3>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={() => setIsCreateSourceExpanded((current) => !current)}
+            aria-expanded={isCreateSourceExpanded}
+          >
+            {isCreateSourceExpanded ? "Collapse" : "Expand"}
+          </button>
+        </div>
+        {isCreateSourceExpanded && (
+          <div className={styles.rowActions}>
+            <button type="button" className={styles.updateButton} onClick={openCreateDrawer}>
+              Create Source
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className={styles.workbenchPanel} aria-labelledby="source-selector-title">
         <div className={styles.workbenchHeader}>
           <div>
-            <h3 id="ingestion-workbench-title" className={styles.runPanelTitle}>Ingestion Workbench</h3>
-            <p className={styles.helperText}>
-              Choose a source type and source to work with. Source-specific actions will move here as the workflow is simplified.
-            </p>
+            <h3 id="source-selector-title" className={styles.runPanelTitle}>Source Selector</h3>
           </div>
           <div className={styles.rowActions}>
-            <button type="button" className={styles.button} onClick={openCreateDrawer}>
-              Create Source Profile
-            </button>
             <button
               type="button"
               className={styles.button}
@@ -3085,15 +3368,17 @@ export default function IngestionView() {
           <div className={styles.workbenchControlGroup}>
             <span className={styles.detailLabel}>Source Type</span>
             <div className={styles.segmentedControl} role="group" aria-label="Source type">
-              {WORKBENCH_SOURCE_TYPE_OPTIONS.map((option) => (
+              {OPERATOR_SOURCE_TYPE_OPTIONS.map((option) => (
                 <button
                   key={option.value}
                   type="button"
                   className={`${styles.segmentButton} ${workbenchSourceType === option.value ? styles.segmentButtonActive : ""}`}
                   onClick={() => setWorkbenchSourceType(option.value)}
                   aria-pressed={workbenchSourceType === option.value}
+                  disabled={option.disabled}
+                  title={option.disabled ? "Coming later" : undefined}
                 >
-                  {option.label}
+                  {option.label}{option.disabled ? " - coming later" : ""}
                 </button>
               ))}
             </div>
@@ -3142,7 +3427,7 @@ export default function IngestionView() {
         {workbenchProfiles.length === 0 ? (
           <p className={styles.empty}>
             No {showInactiveWorkbenchSources ? "" : "active "}
-            {getOperatorSourceTypeLabel(workbenchSourceType)} sources found. Create a Source Profile, adjust search, or show inactive / legacy sources.
+            {getOperatorSourceTypeLabel(workbenchSourceType)} sources found. Create a Source, adjust search, or show inactive / legacy sources.
           </p>
         ) : selectedWorkbenchProfile ? (
           <div className={styles.workbenchSummary}>
@@ -3505,11 +3790,11 @@ export default function IngestionView() {
             <div className={styles.drawerHeader}>
               <div>
                 <h3 className={styles.drawerTitle}>
-                  {editorMode === "create" ? "Create Source Profile" : "Manage Source Profile Status"}
+                  {editorMode === "create" ? "Create Source" : "Manage Source Status"}
                 </h3>
                 <p className={styles.drawerSubtitle}>
                   {editorMode === "create"
-                    ? "Create a safe metadata profile without starting ingestion."
+                    ? "Create a source without starting ingestion."
                     : "Manage lifecycle status while preserving historical source identity."}
                 </p>
               </div>
@@ -3536,10 +3821,11 @@ export default function IngestionView() {
 
             <div className={styles.formGrid}>
               <label className={styles.formLabel}>
-                Source Label
+                Source Name
                 {editorMode === "create" ? (
                   <input
                     className={styles.formInput}
+                    autoComplete="off"
                     value={editorForm.sourceLabel}
                     disabled={sourceIdentityPhase !== "idle"}
                     onChange={(event) => {
@@ -3568,64 +3854,85 @@ export default function IngestionView() {
                 {editorMode === "create" ? (
                   <select
                     className={styles.formInput}
+                    value={editorForm.operatorSourceType}
+                    disabled={sourceIdentityPhase !== "idle"}
+                    onChange={(event) => {
+                      const operatorSourceType = event.target.value as OperatorSourceType;
+                      const sourceType = persistedSourceTypeForOperator(operatorSourceType);
+                      resetSourceIdentityEnrollmentState();
+                      setSourceIdentityEnrollRequested(probeSourceTypeForOperator(operatorSourceType) != null);
+                      setEditorForm((prev) => ({
+                        ...prev,
+                        operatorSourceType,
+                        sourceType,
+                        cloudProvider: operatorSourceType === "icloud" ? "icloud" : prev.cloudProvider,
+                        acquisitionMethod: operatorSourceType === "icloud" ? "icloudpd" : prev.acquisitionMethod,
+                      }));
+                    }}
+                  >
+                    {OPERATOR_SOURCE_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value} disabled={option.disabled}>
+                        {option.label}{option.disabled ? " - coming later" : ""}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className={`${styles.formInput} ${styles.readOnlyInput}`}
+                    value={getOperatorSourceTypeLabel(editorForm.operatorSourceType)}
+                    readOnly
+                  />
+                )}
+              </label>
+
+              {editorMode === "create" && editorForm.operatorSourceType === "advanced" && (
+                <label className={styles.formLabel}>
+                  Legacy Type
+                  <select
+                    className={styles.formInput}
                     value={editorForm.sourceType}
                     disabled={sourceIdentityPhase !== "idle"}
                     onChange={(event) => {
                       const sourceType = event.target.value as SourceProfileType;
-                      resetSourceIdentityEnrollmentState();
-                      setSourceIdentityEnrollRequested(sourceType === "local_folder" || sourceType === "external_drive");
                       setEditorForm((prev) => ({
                         ...prev,
                         sourceType,
-                        cloudProvider: sourceType === "cloud_export" ? prev.cloudProvider : "icloud",
-                        acquisitionMethod: sourceType === "cloud_export" ? prev.acquisitionMethod : "icloudpd",
+                        cloudProvider: sourceType === "cloud_export" ? "other" : prev.cloudProvider,
                       }));
                     }}
                   >
-                    {SOURCE_TYPE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
+                    {ADVANCED_SOURCE_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
-                    <option value="removable_media" disabled>
-                      Removable - coming later
-                    </option>
                   </select>
-                ) : (
-                  <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.sourceType} readOnly />
-                )}
-                {editorMode === "create" && (
-                  <span className={styles.detailMeta}>
-                    NAS uses Local / NAS Folder with a UNC path. Removable is not persisted yet.
-                  </span>
-                )}
-              </label>
+                </label>
+              )}
 
-              <label className={styles.formLabel}>
-                Profile Status
-                <select
-                  className={styles.formInput}
-                  value={editorForm.profileStatus}
-                  disabled={editorMode === "create" && sourceIdentityPhase !== "idle"}
-                  onChange={(event) => setEditorForm((prev) => ({
-                    ...prev,
-                    profileStatus: event.target.value as SourceProfileStatus,
-                  }))}
-                >
-                  {EDITABLE_STATUS_OPTIONS.map((statusValue) => (
-                    <option key={statusValue} value={statusValue}>
-                      {statusValue}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {editorMode === "edit" && (
+                <label className={styles.formLabel}>
+                  Profile Status
+                  <select
+                    className={styles.formInput}
+                    value={editorForm.profileStatus}
+                    onChange={(event) => setEditorForm((prev) => ({
+                      ...prev,
+                      profileStatus: event.target.value as SourceProfileStatus,
+                    }))}
+                  >
+                    {EDITABLE_STATUS_OPTIONS.map((statusValue) => (
+                      <option key={statusValue} value={statusValue}>{statusValue}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               {!isIcloudCloudExport(editorForm) && (
                 <label className={styles.formLabel}>
-                  Source Root Path
+                  Location / Root Path
                   {editorMode === "create" ? (
                     <input
                       className={styles.formInput}
+                      autoComplete="off"
                       value={editorForm.sourceRootPath}
                       disabled={sourceIdentityPhase !== "idle"}
                       onChange={(event) => setEditorForm((prev) => ({
@@ -3638,6 +3945,14 @@ export default function IngestionView() {
                         setSourceIdentityPhase("idle");
                         setSourceIdentitySelectedEndpointId(null);
                         setSourceIdentityReviewAcknowledged(false);
+                        setSourceIdentityProbeRequest(null);
+                        if (!editorForm.sourceLabel.trim()) {
+                          const suggestion = suggestSourceName(editorForm.operatorSourceType, editorForm.sourceRootPath);
+                          if (suggestion) {
+                            setEditorForm((prev) => ({ ...prev, sourceLabel: suggestion }));
+                            setSourceIdentityAlias(suggestion);
+                          }
+                        }
                       }}
                       placeholder="C:\\Users\\chhen\\Pictures"
                     />
@@ -3763,30 +4078,10 @@ export default function IngestionView() {
                 <h4 className={styles.detailHeading}>Source Identity</h4>
                 {editorSourceIdentitySupport.supported ? (
                   <>
-                    <label className={styles.checkboxLabel}>
-                      <input
-                        type="checkbox"
-                        checked={sourceIdentityEnrollRequested}
-                        disabled={sourceIdentityPhase !== "idle"}
-                        onChange={(event) => {
-                          const checked = event.target.checked;
-                          setSourceIdentityEnrollRequested(checked);
-                          setSourceIdentityPlan(null);
-                          setSourceIdentityConfirmResult(null);
-                          setSourceIdentityPhase("idle");
-                          setSourceIdentityReviewAcknowledged(false);
-                          setSourceIdentitySelectedEndpointId(null);
-                          if (checked && !sourceIdentityAlias.trim()) {
-                            setSourceIdentityAlias(editorForm.sourceLabel.trim());
-                          }
-                        }}
-                      />
-                      Run Source Identity Check after creating this profile
-                    </label>
                     <p className={styles.helperText}>{editorSourceIdentitySupport.note}</p>
-
-                    {sourceIdentityEnrollRequested && (
-                      <>
+                    <details className={styles.advancedDetails}>
+                      <summary>Advanced Details</summary>
+                      <div className={styles.advancedDetailsText}>
                         <label className={styles.formLabel}>
                           Endpoint Alias
                           <input
@@ -3797,18 +4092,15 @@ export default function IngestionView() {
                             placeholder={editorForm.sourceLabel.trim() || "Chuck PC Pictures"}
                           />
                         </label>
-                        <p className={styles.helperText}>
-                          Source Intake behavior is unchanged. A source endpoint is recorded only after you review and confirm the identity plan.
-                        </p>
-                      </>
-                    )}
+                      </div>
+                    </details>
                   </>
                 ) : (
-                  <p className={styles.inlineWarning}>{editorSourceIdentitySupport.reason}</p>
+                  <p className={styles.helperText}>{editorSourceIdentitySupport.reason}</p>
                 )}
 
                 {sourceIdentityPhase === "planning" && (
-                  <p className={styles.note}>Creating profile and planning endpoint enrollment...</p>
+                  <p className={styles.note}>Creating source and checking durable identity...</p>
                 )}
 
                 {sourceIdentityPlan && (
@@ -3817,23 +4109,16 @@ export default function IngestionView() {
                       <div>
                         <h5 className={styles.runOptionsTitle}>Enrollment Plan</h5>
                         <p className={styles.runOptionsSummary}>
-                          {formatPlanStatus(sourceIdentityPlan.plan_status)} | {formatEnrollmentAction(sourceIdentityPlan.endpoint_action)}
+                          {formatEnrollmentPlanStatus(sourceIdentityPlan)} | {formatEnrollmentAction(sourceIdentityPlan.endpoint_action)}
                         </p>
                       </div>
-                      <span className={styles.statusBadge}>{formatPlanStatus(sourceIdentityPlan.plan_status)}</span>
+                      <span className={styles.statusBadge}>{formatEnrollmentPlanStatus(sourceIdentityPlan)}</span>
                     </div>
 
                     <div className={styles.detailGrid}>
                       <div className={styles.detailCard}>
-                        <span className={styles.detailLabel}>Candidate Type</span>
-                        <span>{sourceIdentityPlan.candidate?.source_type ?? "-"}</span>
-                        <span className={styles.detailMeta}>
-                          Boundary: {sourceIdentityPlan.candidate?.filesystem_boundary_type ?? "-"}
-                        </span>
-                      </div>
-                      <div className={styles.detailCard}>
-                        <span className={styles.detailLabel}>Observed Path</span>
-                        <span>{sourceIdentityPlan.candidate?.observed_path ?? "-"}</span>
+                        <span className={styles.detailLabel}>Source Root</span>
+                        <span>{sourceIdentityPlan.candidate?.source_root_candidate_path ?? "-"}</span>
                       </div>
                       <div className={styles.detailCard}>
                         <span className={styles.detailLabel}>Durable Identity</span>
@@ -3843,16 +4128,14 @@ export default function IngestionView() {
                         <span className={styles.detailMeta}>
                           {sourceIdentityPlan.durable_identity_reason ?? "Durable identity was not checked."}
                         </span>
-                        {sourceIdentityPlan.durable_identity_identifier_type && (
-                          <span className={styles.detailMeta}>
-                            {sourceIdentityPlan.durable_identity_identifier_type}: {sourceIdentityPlan.durable_identity_identifier ?? "-"}
-                          </span>
-                        )}
                       </div>
                       <div className={styles.detailCard}>
-                        <span className={styles.detailLabel}>Alias</span>
-                        <span>{sourceIdentityPlan.proposed_alias ?? (sourceIdentityAlias.trim() || "-")}</span>
-                        <span className={styles.detailMeta}>Normalized: {sourceIdentityPlan.alias_normalized ?? "-"}</span>
+                        <span className={styles.detailLabel}>Identifier Type</span>
+                        <span>{sourceIdentityPlan.durable_identity_identifier_type ?? "-"}</span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Identifier</span>
+                        <span>{sourceIdentityPlan.durable_identity_identifier ?? "-"}</span>
                       </div>
                     </div>
 
@@ -3862,19 +4145,11 @@ export default function IngestionView() {
                       </p>
                     )}
 
-                    {sourceIdentityPlan.durable_identity_evidence.length > 0 && (
-                      <div className={styles.warningList}>
-                        {sourceIdentityPlan.durable_identity_evidence.map((evidence, index) => (
-                          <p key={`source-identity-plan-evidence:${index}:${evidence}`} className={styles.helperText}>
-                            Evidence - {evidence}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-
                     {sourceIdentityPlan.possible_matches.length > 0 && (
                       <label className={styles.formLabel}>
-                        Existing Endpoint Match
+                        {sourceIdentityPlan.candidate?.source_type === "nas"
+                          ? "Existing NAS Share"
+                          : "Existing Durable Identity"}
                         <select
                           className={styles.formInput}
                           value={sourceIdentitySelectedEndpointId ?? ""}
@@ -3886,7 +4161,7 @@ export default function IngestionView() {
                           <option value="">Select endpoint...</option>
                           {sourceIdentityPlan.possible_matches.map((match) => (
                             <option key={match.source_endpoint_id} value={match.source_endpoint_id}>
-                              {match.alias} (#{match.source_endpoint_id}, {match.match_strength})
+                              {match.alias} ({match.match_strength})
                             </option>
                           ))}
                         </select>
@@ -3900,7 +4175,7 @@ export default function IngestionView() {
                             }
                           }}
                         >
-                          Plan Selected Endpoint
+                          Review Selected Identity
                         </button>
                       </label>
                     )}
@@ -3977,9 +4252,16 @@ export default function IngestionView() {
                       <summary>Advanced Details</summary>
                       <p className={styles.errorDetailsText}>
                         Plan fingerprint: {sourceIdentityPlan.plan_fingerprint}
+                        {"\n"}Candidate type: {sourceIdentityPlan.candidate?.source_type ?? "-"}
+                        {"\n"}Boundary: {sourceIdentityPlan.candidate?.filesystem_boundary_type ?? "-"}
+                        {"\n"}Observed access path: {sourceIdentityPlan.candidate?.observed_path ?? "-"}
+                        {"\n"}Endpoint alias: {sourceIdentityPlan.proposed_alias ?? (sourceIdentityAlias.trim() || "-")}
+                        {"\n"}Normalized alias: {sourceIdentityPlan.alias_normalized ?? "-"}
                         {"\n"}Provider: {sourceIdentityPlan.candidate?.provider_name ?? "-"} {sourceIdentityPlan.candidate?.provider_version ?? ""}
                         {"\n"}Identity confidence: {sourceIdentityPlan.candidate?.confidence_tier ?? "-"}
                         {"\n"}Fingerprint evidence: {sourceIdentityPlan.candidate?.identity_fingerprint_strength ?? "-"}
+                        {"\n"}Durable identity evidence: {sourceIdentityPlan.durable_identity_evidence.join(" | ") || "-"}
+                        {"\n"}Possible endpoint IDs: {sourceIdentityPlan.possible_matches.map((match) => match.source_endpoint_id).join(", ") || "-"}
                         {"\n"}Blocker codes: {sourceIdentityPlan.blockers.map((item) => item.code).join(", ") || "-"}
                         {"\n"}Warning codes: {sourceIdentityPlan.warnings.map((item) => item.code).join(", ") || "-"}
                       </p>
@@ -4032,9 +4314,7 @@ export default function IngestionView() {
                 {isSavingEditor || sourceIdentityPhase === "planning"
                   ? "Saving..."
                   : editorMode === "create"
-                    ? sourceIdentityEnrollRequested
-                      ? "Create Profile and Plan Enrollment"
-                      : "Create Profile"
+                    ? "Create Source"
                     : "Save Status"}
               </button>
               <button
