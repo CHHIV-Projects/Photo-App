@@ -51,7 +51,7 @@ class _FakeProbeService:
             evidence_items=[
                 SourceIdentityEvidenceItem(
                     category="volume_evidence",
-                    code="volume_guid",
+                    code="volume_guid_present",
                     status="present",
                     durability="durable",
                     privacy_level="masked_only",
@@ -116,6 +116,9 @@ class AdminSourceEndpointEnrollmentApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["plan_status"], "ready")
         self.assertEqual(payload["endpoint_action"], "create_new_endpoint")
+        self.assertEqual(payload["durable_identity_status"], "verified")
+        self.assertEqual(payload["durable_identity_identifier_type"], "Volume GUID")
+        self.assertEqual(payload["durable_identity_identifier"], "volume-guid-1234")
         self.assertEqual(self.db.scalar(select(func.count(SourceEndpoint.id))), 0)
 
     def test_confirm_endpoint_creates_endpoint_and_links_profile(self) -> None:
@@ -151,6 +154,7 @@ class AdminSourceEndpointEnrollmentApiTests(unittest.TestCase):
         self.assertEqual(confirm_response.status_code, 200)
         payload = confirm_response.json()
         self.assertEqual(payload["enrollment_status"], "completed")
+        self.assertEqual(payload["durable_identity_status"], "verified")
         self.assertTrue(payload["created_endpoint"])
         self.db.refresh(self.source)
         self.assertEqual(self.source.endpoint_id, payload["source_endpoint_id"])

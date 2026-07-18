@@ -60,6 +60,8 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertTrue(result.can_run_source_intake)
         self.assertTrue(result.requires_operator_acknowledgment)
         self.assertFalse(result.hard_block)
+        self.assertEqual(result.durable_identity_status, "verified")
+        self.assertEqual(result.durable_identity_identifier_type, "Volume GUID")
         self.assertEqual(fake.requests[0].source_type, "external_device")
         self.assert_non_mutating(source.id, expected_endpoint_id=None)
 
@@ -109,6 +111,8 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertEqual(result.identity_match_status, "provider_specific")
         self.assertFalse(result.can_run_source_intake)
         self.assertFalse(result.hard_block)
+        self.assertEqual(result.durable_identity_status, "provider_specific")
+        self.assertEqual(result.durable_identity_identifier_type, "Provider workflow")
         self.assertIn("iCloud Intake", result.recommended_next_action)
         self.assertNotIn("private@example.com", result.model_dump_json())
 
@@ -134,6 +138,8 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertTrue(result.can_run_source_intake)
         self.assertFalse(result.requires_operator_acknowledgment)
         self.assertFalse(result.hard_block)
+        self.assertEqual(result.durable_identity_status, "verified")
+        self.assertEqual(result.durable_identity_identifier_type, "Volume GUID")
         self.assert_non_mutating(source.id, expected_endpoint_id=endpoint.id)
 
     def test_enrolled_endpoint_fingerprint_mismatch_returns_blocked(self) -> None:
@@ -165,6 +171,7 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertTrue(result.can_run_source_intake)
         self.assertTrue(result.requires_operator_acknowledgment)
         self.assertFalse(result.hard_block)
+        self.assertEqual(result.durable_identity_status, "not_verified")
 
     def test_enrolled_endpoint_unavailable_path_returns_blocked(self) -> None:
         endpoint = self._add_endpoint_from_probe(_probe_response(source_type="external_device", masked_value="volume-a"))
@@ -203,6 +210,9 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
 
         self.assertEqual(fake.requests[0].source_type, "nas")
         self.assertEqual(result.readiness_status, "path_only")
+        self.assertEqual(result.durable_identity_status, "verified")
+        self.assertEqual(result.durable_identity_identifier_type, "NAS server/share")
+        self.assertEqual(result.durable_identity_identifier, r"\\henderson-nas\photos")
 
     def test_nas_server_only_returns_blocked(self) -> None:
         source = self._add_source(source_type="local_folder", path=r"\\HENDERSON-NAS")
@@ -229,6 +239,7 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertEqual(result.readiness_status, "blocked")
         self.assertEqual(result.identity_match_status, "unsupported")
         self.assertEqual(result.blockers[0].code, "nas_server_only_not_source_root")
+        self.assertEqual(result.durable_identity_status, "not_verified")
 
     def assert_non_mutating(self, source_id: int, *, expected_endpoint_id: int | None) -> None:
         self.db.expire_all()
@@ -316,7 +327,7 @@ def _probe_response(
         evidence_items = [
             SourceIdentityEvidenceItem(
                 category="volume_evidence",
-                code="volume_guid",
+                code="volume_guid_present",
                 status="present",
                 durability="durable",
                 privacy_level="masked_only",

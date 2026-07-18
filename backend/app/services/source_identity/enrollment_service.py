@@ -23,6 +23,7 @@ from app.services.source_identity.enrollment_schema import (
     SourceEndpointEnrollmentPlanRequest,
     SourceEndpointEnrollmentPlanResponse,
 )
+from app.services.source_identity.durable_identity import summarize_durable_identity
 from app.services.source_identity.identity_fingerprint import (
     STRONG_FINGERPRINT_STRENGTHS,
     fingerprint_from_probe,
@@ -104,6 +105,7 @@ class SourceEndpointEnrollmentService:
                 endpoint_action=plan.endpoint_action,
                 source_profile_action=plan.source_profile_action,
                 plan_fingerprint=plan.plan_fingerprint,
+                **_plan_durable_identity_fields(plan),
                 blockers=_dedupe_messages(blockers),
                 warnings=plan.warnings,
             )
@@ -114,6 +116,7 @@ class SourceEndpointEnrollmentService:
                 enrollment_status="blocked",
                 source_profile_id=request.source_profile_id,
                 plan_fingerprint=plan.plan_fingerprint,
+                **_plan_durable_identity_fields(plan),
                 blockers=[
                     _message(
                         "source_profile_not_found",
@@ -140,6 +143,11 @@ class SourceEndpointEnrollmentService:
 
         probe = self._probe_service.probe(request.probe_request)
         candidate = self._build_candidate(probe)
+        durable_identity = summarize_durable_identity(
+            probe=probe,
+            source_type=source.source_type,
+            cloud_provider=source.cloud_provider,
+        )
         blockers = list(self._candidate_blockers(probe, candidate))
         warnings = list(self._candidate_warnings(probe))
         required_confirmations = list(self._candidate_required_confirmations(probe, candidate))
@@ -283,6 +291,7 @@ class SourceEndpointEnrollmentService:
             proposed_alias=alias_result.alias,
             alias_normalized=alias_result.alias_normalized,
             plan_fingerprint=fingerprint,
+            **durable_identity.response_fields(),
             candidate=candidate,
             possible_matches=possible_matches,
             blockers=blockers,
@@ -306,6 +315,7 @@ class SourceEndpointEnrollmentService:
             plan_status="blocked",
             source_profile_id=request.source_profile_id,
             plan_fingerprint=fingerprint,
+            **summarize_durable_identity(probe=None).response_fields(),
             blockers=[blocker],
         )
 
@@ -519,6 +529,7 @@ class SourceEndpointEnrollmentService:
                 enrollment_status="blocked",
                 source_profile_id=source.id,
                 plan_fingerprint=plan.plan_fingerprint,
+                **_plan_durable_identity_fields(plan),
                 blockers=[
                     _message(
                         "candidate_missing",
@@ -568,6 +579,7 @@ class SourceEndpointEnrollmentService:
                 enrollment_status="blocked",
                 source_profile_id=source.id,
                 plan_fingerprint=plan.plan_fingerprint,
+                **_plan_durable_identity_fields(plan),
                 blockers=[
                     _message(
                         "source_endpoint_not_found",
@@ -598,6 +610,7 @@ class SourceEndpointEnrollmentService:
             created_observed_path=created_observed_path,
             observed_path_id=observed_path.id,
             plan_fingerprint=plan.plan_fingerprint,
+            **_plan_durable_identity_fields(plan),
             warnings=plan.warnings,
         )
 
@@ -770,6 +783,16 @@ def _prepend_match(
     return [match, *filtered]
 
 
+def _plan_durable_identity_fields(plan: SourceEndpointEnrollmentPlanResponse) -> dict[str, object]:
+    return {
+        "durable_identity_status": plan.durable_identity_status,
+        "durable_identity_reason": plan.durable_identity_reason,
+        "durable_identity_identifier_type": plan.durable_identity_identifier_type,
+        "durable_identity_identifier": plan.durable_identity_identifier,
+        "durable_identity_evidence": list(plan.durable_identity_evidence),
+    }
+
+
 def _plan_fingerprint(
     *,
     source_profile_id: int,
@@ -781,15 +804,31 @@ def _plan_fingerprint(
     warnings: list[EnrollmentMessage],
     required_confirmations: list[EnrollmentMessage],
 ) -> str:
+    # Warnings can reflect transient read-only command timing. Candidate identity,
+    # blockers, and required confirmations are the safety-relevant plan inputs.
     return _stable_hash(
         {
             "source_profile_id": source_profile_id,
-            "candidate": candidate.model_dump(mode="json"),
+            "candidate": {
+                "source_type": candidate.source_type,
+                "normalized_observed_path": candidate.normalized_observed_path,
+                "source_root_candidate_path": candidate.source_root_candidate_path,
+                "filesystem_boundary_type": candidate.filesystem_boundary_type,
+                "is_valid_source_root_candidate": candidate.is_valid_source_root_candidate,
+                "safe_to_run": candidate.safe_to_run,
+                "confidence_tier": candidate.confidence_tier,
+                "identity_fingerprint_hash": candidate.identity_fingerprint_hash,
+                "identity_fingerprint_version": candidate.identity_fingerprint_version,
+                "identity_fingerprint_strength": candidate.identity_fingerprint_strength,
+                "provider_name": candidate.provider_name,
+                "provider_version": candidate.provider_version,
+                "access_node_label": candidate.access_node_label,
+                "access_node_os_family": candidate.access_node_os_family,
+            },
             "alias_normalized": alias_normalized,
             "selected_existing_endpoint_id": selected_existing_endpoint_id,
             "endpoint_action": endpoint_action,
             "blockers": [message.code for message in blockers],
-            "warnings": [message.code for message in warnings],
             "required_confirmations": [message.code for message in required_confirmations],
         }
     )

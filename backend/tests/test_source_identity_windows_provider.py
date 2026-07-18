@@ -142,6 +142,9 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         self.assertNotIn("12345678-90AB-CDEF-1234-567890ABCDEF", payload)
         self.assertIn("volume_serial_present", [item.code for item in response.evidence_items])
         self.assertIn("volume_guid_present", [item.code for item in response.evidence_items])
+        volume_guid = next(item for item in response.evidence_items if item.code == "volume_guid_present")
+        self.assertEqual(volume_guid.durability, "durable")
+        self.assertIn("mountvol", volume_guid.message or "")
 
     def test_command_failures_are_summarized_not_crashes(self) -> None:
         results = {
@@ -175,6 +178,9 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         self.assertIn("command_unavailable", warning_codes)
         self.assertIn("command_timeout", warning_codes)
         self.assertIn("command_nonzero_exit", warning_codes)
+        warning_messages = [item.message or "" for item in response.warnings]
+        self.assertTrue(any("cmd /c fsutil fsinfo drivetype C:" in message for message in warning_messages))
+        self.assertTrue(any("cmd /c fsutil fsinfo volumeinfo C:" in message for message in warning_messages))
         self.assertIn(response.probe_status, {"completed_with_warnings", "completed"})
 
     def test_cloud_probe_does_not_probe_provider_credentials(self) -> None:

@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.services.source_identity.durable_identity import DurableIdentityStatus
 from app.services.source_identity.probe_schema import SourceIdentityProbeRequest
 
 
@@ -86,6 +87,11 @@ class SourceEndpointEnrollmentPlanResponse(BaseModel):
     proposed_alias: str | None = None
     alias_normalized: str | None = None
     plan_fingerprint: str
+    durable_identity_status: DurableIdentityStatus = "unknown"
+    durable_identity_reason: str | None = None
+    durable_identity_identifier_type: str | None = None
+    durable_identity_identifier: str | None = None
+    durable_identity_evidence: list[str] = Field(default_factory=list)
     candidate: SourceEndpointEnrollmentCandidate | None = None
     possible_matches: list[SourceEndpointEnrollmentMatch] = Field(default_factory=list)
     blockers: list[EnrollmentMessage] = Field(default_factory=list)
@@ -121,5 +127,10 @@ class SourceEndpointEnrollmentConfirmResponse(BaseModel):
     created_observed_path: bool = False
     observed_path_id: int | None = None
     plan_fingerprint: str | None = None
+    durable_identity_status: DurableIdentityStatus = "unknown"
+    durable_identity_reason: str | None = None
+    durable_identity_identifier_type: str | None = None
+    durable_identity_identifier: str | None = None
+    durable_identity_evidence: list[str] = Field(default_factory=list)
     blockers: list[EnrollmentMessage] = Field(default_factory=list)
     warnings: list[EnrollmentMessage] = Field(default_factory=list)

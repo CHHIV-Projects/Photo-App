@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import SourceEndpoint
+from app.services.source_identity.durable_identity import summarize_durable_identity
 from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
 from app.services.source_identity.probe_schema import (
     SourceIdentityProbeRequest,
@@ -253,6 +254,11 @@ class SourceProfileReadinessService:
             if source.cloud_provider == "icloud"
             else "Cloud readiness is handled by the provider-specific workflow."
         )
+        durable_identity = summarize_durable_identity(
+            probe=None,
+            source_type=source.source_type,
+            cloud_provider=source.cloud_provider,
+        )
         return SourceProfileReadinessResponse(
             source_profile_id=source.id,
             source_label=source.source_label,
@@ -260,6 +266,7 @@ class SourceProfileReadinessService:
             profile_status=source.profile_status,
             cloud_provider=source.cloud_provider,
             endpoint_id=source.endpoint_id,
+            **durable_identity.response_fields(),
             readiness_status="provider_specific",
             identity_match_status="provider_specific",
             can_run_source_intake=False,
@@ -320,6 +327,11 @@ class SourceProfileReadinessService:
         current_fingerprint_strength: str | None = None,
         fingerprint_match: bool | None = None,
     ) -> SourceProfileReadinessResponse:
+        durable_identity = summarize_durable_identity(
+            probe=probe,
+            source_type=source.source_type,
+            cloud_provider=source.cloud_provider,
+        )
         return SourceProfileReadinessResponse(
             source_profile_id=source.id,
             source_label=source.source_label,
@@ -329,6 +341,7 @@ class SourceProfileReadinessService:
             endpoint_id=source.endpoint_id,
             endpoint_alias=endpoint.alias if endpoint is not None else None,
             endpoint_source_type=endpoint.source_type if endpoint is not None else None,
+            **durable_identity.response_fields(),
             readiness_status=readiness_status,
             identity_match_status=identity_match_status,
             can_run_source_intake=can_run_source_intake,

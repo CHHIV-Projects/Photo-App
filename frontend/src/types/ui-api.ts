@@ -1375,6 +1375,12 @@ export interface ReadinessMessage {
   message: string;
 }
 
+export type SourceDurableIdentityStatus =
+  | "verified"
+  | "not_verified"
+  | "provider_specific"
+  | "unknown";
+
 export interface SourceProfileReadinessResponse {
   source_profile_id: number;
   source_label: string | null;
@@ -1384,6 +1390,11 @@ export interface SourceProfileReadinessResponse {
   endpoint_id: number | null;
   endpoint_alias: string | null;
   endpoint_source_type: string | null;
+  durable_identity_status: SourceDurableIdentityStatus;
+  durable_identity_reason: string | null;
+  durable_identity_identifier_type: string | null;
+  durable_identity_identifier: string | null;
+  durable_identity_evidence: string[];
   readiness_status: SourceProfileReadinessStatus;
   identity_match_status: SourceProfileIdentityMatchStatus;
   can_run_source_intake: boolean;
@@ -1494,6 +1505,11 @@ export interface SourceEndpointEnrollmentPlanResponse {
   proposed_alias: string | null;
   alias_normalized: string | null;
   plan_fingerprint: string;
+  durable_identity_status: SourceDurableIdentityStatus;
+  durable_identity_reason: string | null;
+  durable_identity_identifier_type: string | null;
+  durable_identity_identifier: string | null;
+  durable_identity_evidence: string[];
   candidate: SourceEndpointEnrollmentCandidate | null;
   possible_matches: SourceEndpointEnrollmentMatch[];
   blockers: EnrollmentMessage[];
@@ -1525,6 +1541,11 @@ export interface SourceEndpointEnrollmentConfirmResponse {
   created_observed_path: boolean;
   observed_path_id: number | null;
   plan_fingerprint: string | null;
+  durable_identity_status: SourceDurableIdentityStatus;
+  durable_identity_reason: string | null;
+  durable_identity_identifier_type: string | null;
+  durable_identity_identifier: string | null;
+  durable_identity_evidence: string[];
   blockers: EnrollmentMessage[];
   warnings: EnrollmentMessage[];
 }

@@ -46,6 +46,7 @@ import type {
   SourceIntakeReportDetail,
   SourceIntakeReportSummary,
   SourceIntakeReadinessRejectionPayload,
+  SourceDurableIdentityStatus,
   SourceProfileStagingFolderCreateResponse,
   SourceProfileStatus,
   SourceProfileSummary,
@@ -124,11 +125,11 @@ const EDITABLE_STATUS_OPTIONS: SourceProfileStatus[] = [
 ];
 
 const SOURCE_TYPE_OPTIONS: Array<{ value: SourceProfileType; label: string }> = [
-  { value: "local_folder", label: "Local Folder" },
-  { value: "external_drive", label: "External Drive" },
-  { value: "cloud_export", label: "Cloud Export / iCloud" },
-  { value: "scan_batch", label: "Scan Batch" },
-  { value: "other", label: "Other" },
+  { value: "local_folder", label: "Local / NAS Folder" },
+  { value: "external_drive", label: "External" },
+  { value: "cloud_export", label: "iCloud / Cloud Export" },
+  { value: "scan_batch", label: "Advanced / Scan Batch" },
+  { value: "other", label: "Advanced / Other" },
 ];
 
 const WORKBENCH_SOURCE_TYPE_OPTIONS: Array<{ value: WorkbenchSourceType; label: string }> = [
@@ -242,12 +243,37 @@ function sourceProfileReadinessBadgeClassName(value: SourceProfileReadinessStatu
   return styles.readinessBadgeUnknown;
 }
 
+function toDurableIdentityLabel(value: SourceDurableIdentityStatus | null | undefined): string {
+  if (value === "verified") {
+    return "Verified";
+  }
+  if (value === "not_verified") {
+    return "Not verified";
+  }
+  if (value === "provider_specific") {
+    return "Provider-specific";
+  }
+  return "Unknown";
+}
+
+function durableIdentityBadgeClassName(value: SourceDurableIdentityStatus | null | undefined): string {
+  if (value === "verified" || value === "provider_specific") {
+    return styles.okBadge;
+  }
+  if (value === "not_verified") {
+    return styles.pendingBadge;
+  }
+  return styles.pendingBadge;
+}
+
 function buildSourceReadinessAdvancedDetails(result: SourceProfileReadinessResponse): Record<string, unknown> {
   return {
     identity_match_status: result.identity_match_status,
     endpoint_id: result.endpoint_id,
     endpoint_alias: result.endpoint_alias,
     endpoint_source_type: result.endpoint_source_type,
+    durable_identity_identifier_type: result.durable_identity_identifier_type,
+    durable_identity_identifier: result.durable_identity_identifier,
     checked_at: result.checked_at,
     probe_summary: result.probe_summary,
     observed_path_summary: result.observed_path_summary,
@@ -401,7 +427,7 @@ function getSourceIdentityEnrollmentSupport(
     return {
       supported: false,
       probeSourceType: null,
-      reason: "Cloud sources use provider-specific identity and staging. Generic filesystem endpoint enrollment is not available for this source type yet.",
+      reason: "Cloud sources use provider-specific identity and staging. Generic filesystem Source Identity Check is not available for this source type yet.",
       note: "Cloud sources use provider-specific identity and staging.",
     };
   }
@@ -409,16 +435,16 @@ function getSourceIdentityEnrollmentSupport(
     return {
       supported: false,
       probeSourceType: null,
-      reason: "Endpoint enrollment is not available for scan batch profiles yet.",
-      note: "Endpoint enrollment is not available for scan batch profiles yet.",
+      reason: "Source Identity Check is not available for scan batch profiles yet.",
+      note: "Source Identity Check is not available for scan batch profiles yet.",
     };
   }
   if (sourceType === "other") {
     return {
       supported: false,
       probeSourceType: null,
-      reason: "Endpoint enrollment is not available for this source type yet.",
-      note: "Endpoint enrollment is not available for this source type yet.",
+      reason: "Source Identity Check is not available for this source type yet.",
+      note: "Source Identity Check is not available for this source type yet.",
     };
   }
   if (sourceType === "external_drive") {
@@ -426,7 +452,7 @@ function getSourceIdentityEnrollmentSupport(
       supported: true,
       probeSourceType: "external_device",
       reason: null,
-      note: "External source identity can be enrolled after the profile is created.",
+      note: "External durable identity can be checked after the profile is created.",
     };
   }
   if (sourceType === "local_folder" && isUncPath(pathValue)) {
@@ -434,14 +460,14 @@ function getSourceIdentityEnrollmentSupport(
       supported: true,
       probeSourceType: "nas",
       reason: null,
-      note: "UNC paths are treated as NAS source identity for enrollment.",
+      note: "UNC paths are treated as NAS source identity for the check.",
     };
   }
   return {
     supported: true,
     probeSourceType: "local",
     reason: null,
-    note: "Local source identity can be enrolled after the profile is created.",
+    note: "Local durable identity can be checked after the profile is created.",
   };
 }
 
@@ -546,11 +572,46 @@ function getSourcePathOrProviderHint(profile: SourceProfileSummary): string {
   return formatSourceProvider(profile.cloud_provider);
 }
 
-function getSourceIdentityDisplay(profile: SourceProfileSummary): string {
+function getSourceIdentityDisplay(
+  profile: SourceProfileSummary,
+  readinessResult: SourceProfileReadinessResponse | null,
+): string {
+  if (readinessResult && readinessResult.source_profile_id === profile.source_id) {
+    return toDurableIdentityLabel(readinessResult.durable_identity_status);
+  }
   if (isIcloudProfile(profile)) {
     return "Provider-specific";
   }
-  return profile.endpoint_id ? "Enrolled" : "Not enrolled";
+  return "Not checked";
+}
+
+function getSourceIdentityBadgeClassName(
+  profile: SourceProfileSummary,
+  readinessResult: SourceProfileReadinessResponse | null,
+): string {
+  if (readinessResult && readinessResult.source_profile_id === profile.source_id) {
+    return durableIdentityBadgeClassName(readinessResult.durable_identity_status);
+  }
+  if (isIcloudProfile(profile)) {
+    return durableIdentityBadgeClassName("provider_specific");
+  }
+  return durableIdentityBadgeClassName("unknown");
+}
+
+function getSourceIdentityMeta(
+  profile: SourceProfileSummary,
+  readinessResult: SourceProfileReadinessResponse | null,
+): string {
+  if (readinessResult && readinessResult.source_profile_id === profile.source_id) {
+    return readinessResult.durable_identity_reason ?? "Durable identity checked.";
+  }
+  if (profile.endpoint_id) {
+    return "Endpoint link present. Run Check Readiness to verify current durable identity.";
+  }
+  if (isIcloudProfile(profile)) {
+    return "Use iCloud Intake for provider-specific identity.";
+  }
+  return "Run Check Readiness to verify durable identity.";
 }
 
 function getSourceWorkflowDisplay(profile: SourceProfileSummary): string {
@@ -1674,6 +1735,7 @@ export default function IngestionView() {
     setEditorError(null);
     setEditorForm(initialFormState());
     resetSourceIdentityEnrollmentState();
+    setSourceIdentityEnrollRequested(true);
     setIsEditorOpen(true);
   }, [resetSourceIdentityEnrollmentState]);
 
@@ -1853,7 +1915,7 @@ export default function IngestionView() {
   ) => {
     const probeRequest = buildSourceIdentityProbeRequest(profile);
     if (!probeRequest) {
-      setEditorError("Endpoint enrollment is not available for this Source Profile.");
+      setEditorError("Source Identity Check is not available for this Source Profile.");
       return null;
     }
 
@@ -1888,13 +1950,13 @@ export default function IngestionView() {
 
     const probeRequest = buildSourceIdentityProbeRequest(sourceIdentityCreatedProfile);
     if (!probeRequest) {
-      setEditorError("Endpoint enrollment is not available for this Source Profile.");
+      setEditorError("Source Identity Check is not available for this Source Profile.");
       return;
     }
 
     const confirmedAlias = sourceIdentityAlias.trim();
     if (sourceIdentityPlan.endpoint_action === "create_new_endpoint" && !confirmedAlias) {
-      setEditorError("Endpoint alias is required before confirming enrollment.");
+      setEditorError("Endpoint alias is required before confirming durable identity.");
       return;
     }
 
@@ -1923,13 +1985,13 @@ export default function IngestionView() {
         operator_review_acknowledged: sourceIdentityReviewAcknowledged || sourceIdentityPlan.required_confirmations.length === 0,
       });
       setSourceIdentityConfirmResult(response);
-      setSourceIdentityPhase("complete");
+      setSourceIdentityPhase(response.enrollment_status === "completed" ? "complete" : "review");
       await loadProfiles({ refreshOnly: true });
       setBanner({
         kind: response.enrollment_status === "completed" ? "success" : "error",
         message: response.enrollment_status === "completed"
           ? "Endpoint enrolled. Source Intake behavior is unchanged."
-          : "Endpoint enrollment did not complete.",
+          : response.blockers[0]?.message ?? "Endpoint enrollment did not complete.",
       });
     } catch (error) {
       setSourceIdentityPhase("review");
@@ -1966,11 +2028,11 @@ export default function IngestionView() {
 
       if (sourceIdentityEnrollRequested) {
         if (!editorSourceIdentitySupport.supported) {
-          setEditorError(editorSourceIdentitySupport.reason ?? "Endpoint enrollment is not available for this source type.");
+          setEditorError(editorSourceIdentitySupport.reason ?? "Source Identity Check is not available for this source type.");
           return;
         }
         if (!sourceIdentityAlias.trim()) {
-          setEditorError("Endpoint alias is required when enrolling a new source identity.");
+          setEditorError("Endpoint alias is required when recording a new durable source identity.");
           return;
         }
       }
@@ -2170,13 +2232,19 @@ export default function IngestionView() {
   const readinessBlockingReasons = useMemo(() => icloudReadinessSnapshot?.blocking_reasons ?? [], [icloudReadinessSnapshot?.blocking_reasons]);
   const readinessWarnings = useMemo(() => icloudReadinessSnapshot?.warnings ?? [], [icloudReadinessSnapshot?.warnings]);
 
-  const sourceReadinessStatus = sourceReadinessResult?.readiness_status ?? "unknown";
+  const detailReadinessResult = detailSourceId != null && sourceReadinessResult?.source_profile_id === detailSourceId
+    ? sourceReadinessResult
+    : null;
+  const selectedWorkbenchReadinessResult = selectedWorkbenchProfile && sourceReadinessResult?.source_profile_id === selectedWorkbenchProfile.source_id
+    ? sourceReadinessResult
+    : null;
+  const sourceReadinessStatus = detailReadinessResult?.readiness_status ?? "unknown";
   const sourceReadinessBadgeClassName = sourceProfileReadinessBadgeClassName(sourceReadinessStatus);
-  const sourceReadinessWarnings = sourceReadinessResult?.warnings ?? [];
-  const sourceReadinessBlockers = sourceReadinessResult?.blockers ?? [];
+  const sourceReadinessWarnings = detailReadinessResult?.warnings ?? [];
+  const sourceReadinessBlockers = detailReadinessResult?.blockers ?? [];
   const sourceReadinessAdvancedDetails = useMemo(
-    () => sourceReadinessResult ? buildSourceReadinessAdvancedDetails(sourceReadinessResult) : null,
-    [sourceReadinessResult],
+    () => detailReadinessResult ? buildSourceReadinessAdvancedDetails(detailReadinessResult) : null,
+    [detailReadinessResult],
   );
 
   const activeRunReport = useMemo(() => {
@@ -3107,22 +3175,24 @@ export default function IngestionView() {
                 )}
               </div>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Identity</span>
-                <span className={selectedWorkbenchProfile.endpoint_id || isIcloudProfile(selectedWorkbenchProfile) ? styles.okBadge : styles.pendingBadge}>
-                  {getSourceIdentityDisplay(selectedWorkbenchProfile)}
+                <span className={styles.detailLabel}>Durable Identity</span>
+                <span className={getSourceIdentityBadgeClassName(selectedWorkbenchProfile, selectedWorkbenchReadinessResult)}>
+                  {getSourceIdentityDisplay(selectedWorkbenchProfile, selectedWorkbenchReadinessResult)}
                 </span>
                 <span className={styles.detailMeta}>
-                  {selectedWorkbenchProfile.endpoint_id ? `Endpoint ID: ${selectedWorkbenchProfile.endpoint_id}` : "Endpoint ID: -"}
+                  {getSourceIdentityMeta(selectedWorkbenchProfile, selectedWorkbenchReadinessResult)}
                 </span>
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Readiness</span>
                 <span>
-                  {sourceReadinessResult && detailSourceId === selectedWorkbenchProfile.source_id
-                    ? toSourceProfileReadinessLabel(sourceReadinessResult.readiness_status)
+                  {selectedWorkbenchReadinessResult
+                    ? toSourceProfileReadinessLabel(selectedWorkbenchReadinessResult.readiness_status)
                     : "Not checked in this view"}
                 </span>
-                <span className={styles.detailMeta}>Check Readiness moves into this work area in the next milestone.</span>
+                <span className={styles.detailMeta}>
+                  {selectedWorkbenchReadinessResult?.operator_message ?? "Open Details to run the manual readiness check."}
+                </span>
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Workflow</span>
@@ -3472,7 +3542,20 @@ export default function IngestionView() {
                     className={styles.formInput}
                     value={editorForm.sourceLabel}
                     disabled={sourceIdentityPhase !== "idle"}
-                    onChange={(event) => setEditorForm((prev) => ({ ...prev, sourceLabel: event.target.value }))}
+                    onChange={(event) => {
+                      const nextLabel = event.target.value;
+                      const previousLabel = editorForm.sourceLabel.trim();
+                      setEditorForm((prev) => ({ ...prev, sourceLabel: nextLabel }));
+                      if (sourceIdentityEnrollRequested) {
+                        setSourceIdentityAlias((prevAlias) => {
+                          const trimmedAlias = prevAlias.trim();
+                          if (!trimmedAlias || trimmedAlias === previousLabel) {
+                            return nextLabel.trim();
+                          }
+                          return prevAlias;
+                        });
+                      }
+                    }}
                     placeholder="Chuck PC"
                   />
                 ) : (
@@ -3490,6 +3573,7 @@ export default function IngestionView() {
                     onChange={(event) => {
                       const sourceType = event.target.value as SourceProfileType;
                       resetSourceIdentityEnrollmentState();
+                      setSourceIdentityEnrollRequested(sourceType === "local_folder" || sourceType === "external_drive");
                       setEditorForm((prev) => ({
                         ...prev,
                         sourceType,
@@ -3503,9 +3587,17 @@ export default function IngestionView() {
                         {option.label}
                       </option>
                     ))}
+                    <option value="removable_media" disabled>
+                      Removable - coming later
+                    </option>
                   </select>
                 ) : (
                   <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.sourceType} readOnly />
+                )}
+                {editorMode === "create" && (
+                  <span className={styles.detailMeta}>
+                    NAS uses Local / NAS Folder with a UNC path. Removable is not persisted yet.
+                  </span>
                 )}
               </label>
 
@@ -3689,7 +3781,7 @@ export default function IngestionView() {
                           }
                         }}
                       />
-                      Enroll durable source identity after creating this profile
+                      Run Source Identity Check after creating this profile
                     </label>
                     <p className={styles.helperText}>{editorSourceIdentitySupport.note}</p>
 
@@ -3706,7 +3798,7 @@ export default function IngestionView() {
                           />
                         </label>
                         <p className={styles.helperText}>
-                          Source Intake behavior is unchanged. Enrollment only records durable source identity after you review and confirm the plan.
+                          Source Intake behavior is unchanged. A source endpoint is recorded only after you review and confirm the identity plan.
                         </p>
                       </>
                     )}
@@ -3744,11 +3836,18 @@ export default function IngestionView() {
                         <span>{sourceIdentityPlan.candidate?.observed_path ?? "-"}</span>
                       </div>
                       <div className={styles.detailCard}>
-                        <span className={styles.detailLabel}>Identity Confidence</span>
-                        <span>{sourceIdentityPlan.candidate?.confidence_tier ?? "-"}</span>
-                        <span className={styles.detailMeta}>
-                          Fingerprint evidence: {sourceIdentityPlan.candidate?.identity_fingerprint_strength ?? "-"}
+                        <span className={styles.detailLabel}>Durable Identity</span>
+                        <span className={durableIdentityBadgeClassName(sourceIdentityPlan.durable_identity_status)}>
+                          {toDurableIdentityLabel(sourceIdentityPlan.durable_identity_status)}
                         </span>
+                        <span className={styles.detailMeta}>
+                          {sourceIdentityPlan.durable_identity_reason ?? "Durable identity was not checked."}
+                        </span>
+                        {sourceIdentityPlan.durable_identity_identifier_type && (
+                          <span className={styles.detailMeta}>
+                            {sourceIdentityPlan.durable_identity_identifier_type}: {sourceIdentityPlan.durable_identity_identifier ?? "-"}
+                          </span>
+                        )}
                       </div>
                       <div className={styles.detailCard}>
                         <span className={styles.detailLabel}>Alias</span>
@@ -3761,6 +3860,16 @@ export default function IngestionView() {
                       <p className={styles.helperText}>
                         NAS endpoint identity is server + share. The full configured folder remains this Source Profile root.
                       </p>
+                    )}
+
+                    {sourceIdentityPlan.durable_identity_evidence.length > 0 && (
+                      <div className={styles.warningList}>
+                        {sourceIdentityPlan.durable_identity_evidence.map((evidence, index) => (
+                          <p key={`source-identity-plan-evidence:${index}:${evidence}`} className={styles.helperText}>
+                            Evidence - {evidence}
+                          </p>
+                        ))}
+                      </div>
                     )}
 
                     {sourceIdentityPlan.possible_matches.length > 0 && (
@@ -3839,16 +3948,38 @@ export default function IngestionView() {
                     {sourceIdentityConfirmResult && (
                       <p className={sourceIdentityConfirmResult.enrollment_status === "completed" ? styles.bannerSuccess : styles.bannerError}>
                         {sourceIdentityConfirmResult.enrollment_status === "completed"
-                          ? `Endpoint enrolled. Endpoint ID: ${sourceIdentityConfirmResult.source_endpoint_id ?? "-"}; observed path ID: ${sourceIdentityConfirmResult.observed_path_id ?? "-"}. Source Intake behavior is unchanged.`
-                          : "Endpoint enrollment did not complete."}
+                          ? `Endpoint enrolled. Durable identity: ${toDurableIdentityLabel(sourceIdentityConfirmResult.durable_identity_status)}. Source Intake behavior is unchanged.`
+                          : sourceIdentityConfirmResult.blockers[0]?.message ?? "Endpoint enrollment did not complete."}
                       </p>
                     )}
+
+                    {sourceIdentityConfirmResult?.blockers.length ? (
+                      <div className={styles.warningList}>
+                        {sourceIdentityConfirmResult.blockers.map((blocker) => (
+                          <p className={styles.bannerError} key={`confirm-blocker:${blocker.code}`}>
+                            {blocker.code}: {blocker.message}
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {sourceIdentityConfirmResult?.warnings.length ? (
+                      <div className={styles.warningList}>
+                        {sourceIdentityConfirmResult.warnings.map((warning) => (
+                          <p className={styles.inlineWarning} key={`confirm-warning:${warning.code}`}>
+                            {warning.code}: {warning.message}
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
 
                     <details className={styles.errorDetails}>
                       <summary>Advanced Details</summary>
                       <p className={styles.errorDetailsText}>
                         Plan fingerprint: {sourceIdentityPlan.plan_fingerprint}
                         {"\n"}Provider: {sourceIdentityPlan.candidate?.provider_name ?? "-"} {sourceIdentityPlan.candidate?.provider_version ?? ""}
+                        {"\n"}Identity confidence: {sourceIdentityPlan.candidate?.confidence_tier ?? "-"}
+                        {"\n"}Fingerprint evidence: {sourceIdentityPlan.candidate?.identity_fingerprint_strength ?? "-"}
                         {"\n"}Blocker codes: {sourceIdentityPlan.blockers.map((item) => item.code).join(", ") || "-"}
                         {"\n"}Warning codes: {sourceIdentityPlan.warnings.map((item) => item.code).join(", ") || "-"}
                       </p>
@@ -4403,7 +4534,7 @@ export default function IngestionView() {
                 <section className={styles.detailSection}>
                   <h4 className={styles.detailHeading}>Source Identity</h4>
                   <p className={styles.helperText}>
-                    Source identity is based on label + type + effective path. Source labels are not globally unique.
+                    Source labels are not globally unique. Durable identity verification uses safe provider evidence from Check Readiness.
                   </p>
                   <div className={styles.detailGrid}>
                     <div className={styles.detailCard}>
@@ -4424,12 +4555,27 @@ export default function IngestionView() {
                     </div>
                     <div className={styles.detailCard}>
                       <span className={styles.detailLabel}>Durable Source Identity</span>
-                      <span className={detailProfile.endpoint_id ? styles.okBadge : styles.pendingBadge}>
-                        {detailProfile.endpoint_id ? "Enrolled" : "Not enrolled"}
+                      <span className={durableIdentityBadgeClassName(
+                        detailReadinessResult?.durable_identity_status
+                          ?? (isIcloudProfile(detailProfile) ? "provider_specific" : "unknown"),
+                      )}>
+                        {detailReadinessResult
+                          ? toDurableIdentityLabel(detailReadinessResult.durable_identity_status)
+                          : isIcloudProfile(detailProfile)
+                            ? "Provider-specific"
+                            : "Unknown"}
                       </span>
                       <span className={styles.detailMeta}>
-                        {detailProfile.endpoint_id ? `Endpoint ID: ${detailProfile.endpoint_id}` : "Path-only profiles remain valid."}
+                        {detailReadinessResult?.durable_identity_reason
+                          ?? (detailProfile.endpoint_id
+                            ? "Endpoint link present. Run Check Readiness to verify current durable identity."
+                            : "Run Check Readiness to verify durable identity.")}
                       </span>
+                      {detailReadinessResult?.durable_identity_identifier_type && (
+                        <span className={styles.detailMeta}>
+                          {detailReadinessResult.durable_identity_identifier_type}: {detailReadinessResult.durable_identity_identifier ?? "-"}
+                        </span>
+                      )}
                     </div>
                     <div className={styles.detailCard}>
                       <span className={styles.detailLabel}>Effective Path</span>
@@ -4460,19 +4606,19 @@ export default function IngestionView() {
                         {toSourceProfileReadinessLabel(sourceReadinessStatus)}
                       </span>
                       <span className={styles.detailMeta}>
-                        Identity match: {sourceReadinessResult ? toStatusLabel(sourceReadinessResult.identity_match_status) : "Not checked"}
+                        Identity match: {detailReadinessResult ? toStatusLabel(detailReadinessResult.identity_match_status) : "Not checked"}
                       </span>
                       <span className={styles.detailMeta}>
-                        Checked: {sourceReadinessResult ? toDisplayDate(sourceReadinessResult.checked_at) : "Not checked"}
+                        Checked: {detailReadinessResult ? toDisplayDate(detailReadinessResult.checked_at) : "Not checked"}
                       </span>
                     </div>
                     <div className={styles.detailCard}>
                       <span className={styles.detailLabel}>Message</span>
-                      <span>{sourceReadinessResult?.operator_message ?? "Readiness has not been checked."}</span>
+                      <span>{detailReadinessResult?.operator_message ?? "Readiness has not been checked."}</span>
                       <span className={styles.detailMeta}>
-                        Recommended next action: {sourceReadinessResult?.recommended_next_action ?? "Check readiness before running intake."}
+                        Recommended next action: {detailReadinessResult?.recommended_next_action ?? "Check readiness before running intake."}
                       </span>
-                      {sourceReadinessResult?.readiness_status === "provider_specific" && (
+                      {detailReadinessResult?.readiness_status === "provider_specific" && (
                         <span className={styles.detailMeta}>
                           Use iCloud Intake or the provider-specific workflow for this source.
                         </span>
@@ -4480,25 +4626,42 @@ export default function IngestionView() {
                     </div>
                     <div className={styles.detailCard}>
                       <span className={styles.detailLabel}>Source Intake</span>
-                      <span className={sourceReadinessResult?.can_run_source_intake ? styles.okBadge : styles.pendingBadge}>
-                        Can run: {sourceReadinessResult ? (sourceReadinessResult.can_run_source_intake ? "Yes" : "No") : "Unknown"}
+                      <span className={detailReadinessResult?.can_run_source_intake ? styles.okBadge : styles.pendingBadge}>
+                        Can run: {detailReadinessResult ? (detailReadinessResult.can_run_source_intake ? "Yes" : "No") : "Unknown"}
                       </span>
                       <span className={styles.detailMeta}>
-                        Run acknowledgment needed later: {sourceReadinessResult ? (sourceReadinessResult.requires_operator_acknowledgment ? "Yes" : "No") : "Unknown"}
+                        Run acknowledgment needed later: {detailReadinessResult ? (detailReadinessResult.requires_operator_acknowledgment ? "Yes" : "No") : "Unknown"}
                       </span>
                       <span className={styles.detailMeta}>
-                        Hard block: {sourceReadinessResult ? (sourceReadinessResult.hard_block ? "Yes" : "No") : "Unknown"}
+                        Hard block: {detailReadinessResult ? (detailReadinessResult.hard_block ? "Yes" : "No") : "Unknown"}
                       </span>
                     </div>
                     <div className={styles.detailCard}>
-                      <span className={styles.detailLabel}>Endpoint</span>
-                      <span>{sourceReadinessResult?.endpoint_alias ?? (sourceReadinessResult?.endpoint_id ? `Endpoint ID ${sourceReadinessResult.endpoint_id}` : "No endpoint linked")}</span>
-                      <span className={styles.detailMeta}>Endpoint ID: {sourceReadinessResult?.endpoint_id ?? "-"}</span>
-                      <span className={styles.detailMeta}>Endpoint type: {sourceReadinessResult?.endpoint_source_type ?? "-"}</span>
+                      <span className={styles.detailLabel}>Durable Identity</span>
+                      <span className={durableIdentityBadgeClassName(detailReadinessResult?.durable_identity_status)}>
+                        {toDurableIdentityLabel(detailReadinessResult?.durable_identity_status)}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        {detailReadinessResult?.durable_identity_reason ?? "Check readiness to verify durable identity."}
+                      </span>
+                      {detailReadinessResult?.durable_identity_identifier_type && (
+                        <span className={styles.detailMeta}>
+                          {detailReadinessResult.durable_identity_identifier_type}: {detailReadinessResult.durable_identity_identifier ?? "-"}
+                        </span>
+                      )}
                     </div>
                   </div>
                   {sourceReadinessError && (
                     <p className={styles.bannerError}>{sourceReadinessError}</p>
+                  )}
+                  {detailReadinessResult && detailReadinessResult.durable_identity_evidence.length > 0 && (
+                    <div className={styles.warningList}>
+                      {detailReadinessResult.durable_identity_evidence.map((evidence, index) => (
+                        <p key={`durable-identity-evidence:${index}:${evidence}`} className={styles.helperText}>
+                          Evidence - {evidence}
+                        </p>
+                      ))}
+                    </div>
                   )}
                   {sourceReadinessBlockers.length > 0 && (
                     <div className={styles.warningList}>
@@ -4535,7 +4698,7 @@ export default function IngestionView() {
                     >
                       {isCheckingSourceReadiness
                         ? "Checking readiness..."
-                        : sourceReadinessResult
+                        : detailReadinessResult
                           ? "Recheck Readiness"
                           : "Check Readiness"}
                     </button>

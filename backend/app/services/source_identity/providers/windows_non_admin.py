@@ -442,7 +442,7 @@ class WindowsSourceIdentityProbeProvider:
     ) -> tuple[list[SourceIdentityEvidenceItem], list[SourceIdentityEvidenceItem]]:
         evidence: list[SourceIdentityEvidenceItem] = []
         warnings: list[SourceIdentityEvidenceItem] = []
-        command_name = " ".join(result.args[:4])
+        command_name = " ".join(result.args)
         if result.timed_out:
             item = self._evidence(
                 "capability_evidence",
@@ -519,10 +519,10 @@ class WindowsSourceIdentityProbeProvider:
                     "volume_guid_present",
                     "present",
                     source_types=[source_type],
-                    durability="supporting",
+                    durability="durable",
                     privacy_level="masked_only",
                     masked_value=mask_guid(f"Volume{{{guid_match.group(1)}}}"),
-                    message="Volume GUID evidence is present and masked.",
+                    message="mountvol Volume GUID evidence is present and masked.",
                 )
             )
         lowered = output.lower()

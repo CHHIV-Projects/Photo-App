@@ -35,6 +35,18 @@ class _FakeProbeService:
         return self.response
 
 
+class _SequenceProbeService:
+    def __init__(self, responses: list[SourceIdentityProbeResponse]) -> None:
+        self.responses = responses
+        self.requests: list[SourceIdentityProbeRequest] = []
+
+    def probe(self, request: SourceIdentityProbeRequest) -> SourceIdentityProbeResponse:
+        self.requests.append(request)
+        if len(self.requests) <= len(self.responses):
+            return self.responses[len(self.requests) - 1]
+        return self.responses[-1]
+
+
 class SourceEndpointEnrollmentServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
@@ -76,6 +88,8 @@ class SourceEndpointEnrollmentServiceTests(unittest.TestCase):
         self.assertEqual(plan.plan_status, "ready")
         self.assertEqual(plan.endpoint_action, "create_new_endpoint")
         self.assertEqual(plan.alias_normalized, "camera archive")
+        self.assertEqual(plan.durable_identity_status, "verified")
+        self.assertEqual(plan.durable_identity_identifier_type, "Volume GUID")
         self.assertEqual(self.db.scalar(select(func.count(SourceEndpoint.id))), 0)
         self.assertEqual(self.db.scalar(select(func.count(SourceEndpointObservedPath.id))), 0)
         self.db.refresh(self.source)
@@ -102,6 +116,7 @@ class SourceEndpointEnrollmentServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(result.enrollment_status, "completed")
+        self.assertEqual(result.durable_identity_status, "verified")
         self.assertTrue(result.created_endpoint)
         self.assertTrue(result.created_observed_path)
         self.db.refresh(self.source)
@@ -110,6 +125,48 @@ class SourceEndpointEnrollmentServiceTests(unittest.TestCase):
         self.assertIsNotNone(endpoint)
         self.assertEqual(endpoint.alias, "Camera Archive")
         self.assertEqual(endpoint.alias_normalized, "camera archive")
+
+    def test_confirm_allows_transient_warning_change_when_identity_is_same(self) -> None:
+        warning = SourceIdentityEvidenceItem(
+            category="capability_evidence",
+            code="command_timeout",
+            status="warning",
+            durability="unknown",
+            privacy_level="advanced_only",
+            source_types=["external_device"],
+            message="Read-only command timed out: cmd /c fsutil fsinfo volumeinfo E:",
+        )
+        service = SourceEndpointEnrollmentService(
+            db_session=self.db,
+            probe_service=_SequenceProbeService(
+                [
+                    _probe_response(warnings=[warning], probe_status="completed_with_warnings"),
+                    _probe_response(),
+                ]
+            ),
+        )
+        plan = service.plan(
+            SourceEndpointEnrollmentPlanRequest(
+                source_profile_id=self.source.id,
+                probe_request=_probe_request(),
+                proposed_alias="Camera Archive",
+            )
+        )
+
+        result = service.confirm(
+            SourceEndpointEnrollmentConfirmRequest(
+                source_profile_id=self.source.id,
+                probe_request=_probe_request(),
+                confirmed_alias="Camera Archive",
+                plan_fingerprint=plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+
+        self.assertEqual(result.enrollment_status, "completed")
+        self.assertTrue(result.created_endpoint)
+        self.db.refresh(self.source)
+        self.assertEqual(self.source.endpoint_id, result.source_endpoint_id)
 
     def test_confirm_retry_returns_already_linked_without_duplicate_observed_path(self) -> None:
         service = self._service(_probe_response())
@@ -247,6 +304,7 @@ class SourceEndpointEnrollmentServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(plan.candidate.identity_fingerprint_strength, "weak")
+        self.assertEqual(plan.durable_identity_status, "not_verified")
         self.assertEqual(plan.possible_matches, [])
         self.assertNotEqual(plan.plan_status, "duplicate_match")
 
@@ -281,6 +339,8 @@ class SourceEndpointEnrollmentServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(first.candidate.identity_fingerprint_strength, "strong")
+        self.assertEqual(first.durable_identity_status, "verified")
+        self.assertEqual(first.durable_identity_identifier_type, "NAS server/share")
         self.assertEqual(first.candidate.identity_fingerprint_hash, second.candidate.identity_fingerprint_hash)
 
     def test_nas_server_only_is_blocked(self) -> None:
@@ -303,6 +363,7 @@ class SourceEndpointEnrollmentServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(plan.plan_status, "blocked")
+        self.assertEqual(plan.durable_identity_status, "not_verified")
         self.assertIn("nas_server_only_not_source_root", [blocker.code for blocker in plan.blockers])
 
     def _service(self, response: SourceIdentityProbeResponse) -> SourceEndpointEnrollmentService:
@@ -329,12 +390,15 @@ def _probe_response(
     is_valid: bool = True,
     masked_value: str = "volume-guid-1234",
     evidence_items: list[SourceIdentityEvidenceItem] | None = None,
+    warnings: list[SourceIdentityEvidenceItem] | None = None,
+    probe_status: str = "completed",
 ) -> SourceIdentityProbeResponse:
+    warnings = warnings or []
     if evidence_items is None:
         evidence_items = [
             SourceIdentityEvidenceItem(
                 category="volume_evidence",
-                code="volume_guid",
+                code="volume_guid_present",
                 status="present",
                 durability="durable",
                 privacy_level="masked_only",
@@ -345,7 +409,7 @@ def _probe_response(
             )
         ]
     return SourceIdentityProbeResponse(
-        probe_status="completed",
+        probe_status=probe_status,
         source_type=source_type,
         os_family="windows",
         provider_name="fake_probe",
@@ -364,10 +428,11 @@ def _probe_response(
             filesystem_boundary_type=boundary,
             root_reason="test",
         ),
-        evidence_items=evidence_items,
+        evidence_items=[*evidence_items, *warnings],
         evidence_summary={"path": "present"},
         confidence_tier="strong_match",
         safe_to_run=True,
+        warnings=warnings,
     )
 
 

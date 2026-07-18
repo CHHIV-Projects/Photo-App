@@ -74,6 +74,9 @@ class AdminSourceProfileReadinessApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["readiness_status"], "path_only")
         self.assertEqual(payload["identity_match_status"], "not_enrolled")
+        self.assertEqual(payload["durable_identity_status"], "verified")
+        self.assertEqual(payload["durable_identity_identifier_type"], "Volume GUID")
+        self.assertEqual(payload["durable_identity_identifier"], "volume-guid-1234")
         self.assertTrue(payload["can_run_source_intake"])
         self.assertTrue(payload["requires_operator_acknowledgment"])
         self.assertEqual(fake.requests[0].source_type, "external_device")
@@ -100,6 +103,8 @@ class AdminSourceProfileReadinessApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["readiness_status"], "provider_specific")
         self.assertEqual(payload["identity_match_status"], "provider_specific")
+        self.assertEqual(payload["durable_identity_status"], "provider_specific")
+        self.assertEqual(payload["durable_identity_identifier_type"], "Provider workflow")
         self.assertFalse(payload["hard_block"])
         self.assertNotIn("private@example.com", response.text)
         self.assertNotIn("raw", response.text.lower())
@@ -148,7 +153,7 @@ def _probe_response(
 ) -> SourceIdentityProbeResponse:
     evidence = SourceIdentityEvidenceItem(
         category="volume_evidence",
-        code="volume_guid",
+        code="volume_guid_present",
         status="present",
         durability="durable",
         privacy_level="masked_only",

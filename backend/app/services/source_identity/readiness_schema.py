@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.services.source_identity.durable_identity import DurableIdentityStatus
+
 
 ReadinessStatus = Literal["ready", "path_only", "needs_review", "blocked", "provider_specific", "unknown"]
 IdentityMatchStatus = Literal[
@@ -41,6 +43,12 @@ class SourceProfileReadinessResponse(BaseModel):
     endpoint_id: int | None = None
     endpoint_alias: str | None = None
     endpoint_source_type: str | None = None
+
+    durable_identity_status: DurableIdentityStatus = "unknown"
+    durable_identity_reason: str | None = None
+    durable_identity_identifier_type: str | None = None
+    durable_identity_identifier: str | None = None
+    durable_identity_evidence: list[str] = Field(default_factory=list)
 
     readiness_status: ReadinessStatus
     identity_match_status: IdentityMatchStatus
