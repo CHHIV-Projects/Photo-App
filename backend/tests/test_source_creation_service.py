@@ -76,7 +76,8 @@ class SourceCreationServiceTests(unittest.TestCase):
         self.assertEqual(plan.plan_status, "ready")
         self.assertEqual(plan.endpoint_relative_root, "Archive\\Family Photos")
         self.assertNotIn("E:", plan.endpoint_relative_root)
-        self.assertEqual(plan.source_display_name, "External 1 - Archive\\Family Photos")
+        self.assertEqual(plan.source_display_name, "Family Photos")
+        self.assertEqual(plan.durable_identity_status, "verified")
         self.assertEqual(self.db.scalar(select(func.count(IngestionSource.id))), 0)
 
         result = service.confirm(
@@ -96,6 +97,7 @@ class SourceCreationServiceTests(unittest.TestCase):
         endpoint = self.db.get(SourceEndpoint, result.source_endpoint_id)
         observed = self.db.get(SourceEndpointObservedPath, result.observed_path_id)
         self.assertEqual(source.endpoint_relative_root, "Archive\\Family Photos")
+        self.assertEqual(source.source_label, "Family Photos")
         self.assertEqual(source.source_root_path, path)
         self.assertEqual(endpoint.identity_fingerprint_version, "source_endpoint_volume_guid_v2")
         self.assertEqual(endpoint.identity_fingerprint_hash, fingerprint_from_probe(probe).hash_value)
@@ -115,7 +117,7 @@ class SourceCreationServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(plan.endpoint_relative_root, "Users\\chhen\\Pictures\\Scans")
-        self.assertEqual(plan.source_display_name, "Chuck PC - Users\\chhen\\Pictures\\Scans")
+        self.assertEqual(plan.source_display_name, "Scans")
         self.assertFalse(plan.entire_endpoint)
         result = service.confirm(
             SourceCreationConfirmRequest(
@@ -146,7 +148,7 @@ class SourceCreationServiceTests(unittest.TestCase):
         self.assertEqual(plan.endpoint_relative_root, "")
         self.assertTrue(plan.entire_endpoint)
         self.assertEqual(plan.entire_endpoint_label, "Entire device")
-        self.assertEqual(plan.source_display_name, "External 1 - Entire device")
+        self.assertEqual(plan.source_display_name, "Entire device")
 
     def test_nas_unc_folder_and_whole_share_are_derived(self) -> None:
         folder = "\\\\HENDERSON-NAS\\Photos\\Dad Files\\Scans"
@@ -170,8 +172,68 @@ class SourceCreationServiceTests(unittest.TestCase):
 
         self.assertEqual(folder_plan.endpoint_relative_root, "Dad Files\\Scans")
         self.assertEqual(folder_plan.advanced_details["endpoint_boundary"], "\\\\HENDERSON-NAS\\Photos")
+        self.assertEqual(folder_plan.source_display_name, "Scans")
+        self.assertEqual(folder_plan.durable_identity_status, "verified")
         self.assertEqual(share_plan.endpoint_relative_root, "")
         self.assertEqual(share_plan.entire_endpoint_label, "Entire share")
+        self.assertEqual(share_plan.source_display_name, "Entire share")
+        self.assertEqual(share_plan.durable_identity_status, "verified")
+
+    def test_source_display_name_uses_final_folder_and_parent_context_on_collision(self) -> None:
+        first_path = "E:\\Archive\\Photos"
+        second_path = "E:\\Backup\\Photos"
+        service = SourceCreationService(
+            self.db,
+            _FakeProbeService(
+                {
+                    first_path: _volume_probe("external_device", first_path, boundary="external_folder"),
+                    second_path: _volume_probe("external_device", second_path, boundary="external_folder"),
+                }
+            ),
+        )
+
+        first = self._confirm(service, "external", "External 1", first_path)
+        first_source = self.db.get(IngestionSource, first.source_profile_id)
+        self.assertEqual(first_source.source_label, "Photos")
+
+        second_plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="external",
+                observed_path=second_path,
+                naming_action="use_existing",
+            )
+        )
+
+        self.assertEqual(second_plan.source_display_name, "Backup - Photos")
+        second = service.confirm(
+            SourceCreationConfirmRequest(
+                source_type="external",
+                observed_path=second_path,
+                naming_action="use_existing",
+                plan_fingerprint=second_plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+        second_source = self.db.get(IngestionSource, second.source_profile_id)
+        self.assertEqual(second_source.source_label, "Backup - Photos")
+
+    def test_long_technical_relative_root_uses_final_folder_name(self) -> None:
+        path = (
+            "E:\\WD Backup.swstor\\hende\\NzRjMzVjZTUwYThiNGJjZT\\"
+            "Volume{0cba1e6c-5d1c-4b78-b5de-154078db4e3d}\\Users\\hende\\Pictures\\2019-03-13"
+        )
+        service = self._service(_volume_probe("external_device", path, boundary="external_folder"))
+
+        plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="external",
+                device_name="External 10",
+                observed_path=path,
+            )
+        )
+
+        self.assertEqual(plan.source_display_name, "2019-03-13")
+        self.assertIn("WD Backup.swstor", plan.endpoint_relative_root)
 
     def test_mapped_nas_persists_canonical_unc_and_original_observed_path(self) -> None:
         mapped = "Z:\\Dad Files\\Scans"

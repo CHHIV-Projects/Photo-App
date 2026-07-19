@@ -115,12 +115,16 @@ class AdminSourceCreationApiTests(unittest.TestCase):
 
         self.assertEqual(plan_response.status_code, 200)
         self.assertEqual(plan["endpoint_relative_root"], "Archive\\Family Photos")
+        self.assertEqual(plan["source_display_name"], "Family Photos")
+        self.assertEqual(plan["durable_identity_status"], "verified")
         self.assertEqual(confirm_response.status_code, 200)
         result = confirm_response.json()
         self.assertEqual(result["creation_status"], "completed")
         self.assertTrue(result["created_source"])
+        self.assertEqual(result["source_display_name"], "Family Photos")
         source = self.db.get(IngestionSource, result["source_profile_id"])
         self.assertEqual(source.endpoint_relative_root, "Archive\\Family Photos")
+        self.assertEqual(source.source_label, "Family Photos")
         self.assertIsNotNone(source.endpoint_id)
 
     def test_path_first_plan_does_not_require_device_name_or_write_rows(self) -> None:

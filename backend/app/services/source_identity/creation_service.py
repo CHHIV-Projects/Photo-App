@@ -64,6 +64,7 @@ _LOCATION_BLOCKER_CODES = {
     "nas_path_required",
     "nas_server_not_runnable",
     "nas_share_not_derived",
+    "network_path_requires_nas",
     "path_not_found",
     "path_not_readable",
     "probe_not_completed",
@@ -474,10 +475,10 @@ class SourceCreationService:
             source_display_name = existing_source.source_label
             display_warning = None
         else:
-            source_display_name, display_warning = _source_display_name(
-                display_device_name,
-                derived_root.endpoint_relative_root,
-                recognized_source_type,
+            source_display_name, display_warning = self._source_display_name_for_plan(
+                endpoint_relative_root=derived_root.endpoint_relative_root,
+                source_type=recognized_source_type,
+                selected_endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
             )
         if display_warning is not None:
             warnings.append(display_warning)
@@ -927,6 +928,48 @@ class SourceCreationService:
             ]
         return []
 
+    def _source_display_name_for_plan(
+        self,
+        *,
+        endpoint_relative_root: str,
+        source_type: str,
+        selected_endpoint_id: int | None,
+    ) -> tuple[str, SourceCreationMessage | None]:
+        warning: SourceCreationMessage | None = None
+        display_name = "Source"
+        for candidate in _source_display_name_candidates(endpoint_relative_root, source_type):
+            display_name, candidate_warning = _fit_source_display_name(candidate)
+            if candidate_warning is not None:
+                warning = candidate_warning
+            if not self._source_display_name_exists_on_endpoint(
+                endpoint_id=selected_endpoint_id,
+                display_name=display_name,
+            ):
+                return display_name, warning
+
+        fallback_seed = endpoint_relative_root or source_type
+        fallback_hash = stable_hash(fallback_seed)[:8]
+        fallback, fallback_warning = _fit_source_display_name(f"{display_name} ({fallback_hash})")
+        return fallback, fallback_warning or warning
+
+    def _source_display_name_exists_on_endpoint(
+        self,
+        *,
+        endpoint_id: int | None,
+        display_name: str,
+    ) -> bool:
+        if endpoint_id is None:
+            return False
+        existing_id = self._db.scalar(
+            select(IngestionSource.id)
+            .where(
+                IngestionSource.endpoint_id == endpoint_id,
+                IngestionSource.source_label_normalized == normalize_source_label(display_name),
+            )
+            .limit(1)
+        )
+        return existing_id is not None
+
     def _alias_conflict(
         self,
         alias: str,
@@ -1338,8 +1381,10 @@ def _path_shape_blocker(source_type: str, observed_path: str) -> SourceCreationM
     if not normalized:
         return _message("source_path_required", "Root Path or Mount Point is required.")
     if source_type in {"local", "external"}:
-        if not normalized.startswith("\\\\") and not _DRIVE_PATH_RE.match(normalized):
-            return _message("absolute_source_path_required", "Enter an absolute Windows drive or UNC path.")
+        if normalized.startswith("\\\\"):
+            return _message("network_path_requires_nas", "This is a network path. Choose NAS.")
+        if not _DRIVE_PATH_RE.match(normalized):
+            return _message("absolute_source_path_required", "Enter an absolute Windows drive path.")
     elif source_type == "nas":
         if not normalized.startswith("\\\\") and not _DRIVE_PATH_RE.match(normalized):
             return _message("nas_path_required", "Enter a UNC path or an existing mapped NAS drive path.")
@@ -1431,17 +1476,28 @@ def _derive_root(
     )
 
 
-def _source_display_name(
-    device_name: str,
-    endpoint_relative_root: str,
-    source_type: str,
-) -> tuple[str, SourceCreationMessage | None]:
-    suffix = endpoint_relative_root or ("Entire share" if source_type == "nas" else "Entire device")
-    full_name = f"{device_name} - {suffix}"
-    if len(full_name) <= _SOURCE_LABEL_MAX_LENGTH:
-        return full_name, None
-    available = max(12, _SOURCE_LABEL_MAX_LENGTH - len(device_name) - 6)
-    shortened = f"{device_name} - ...{suffix[-available:]}"
+def _source_display_name_candidates(endpoint_relative_root: str, source_type: str) -> list[str]:
+    if not endpoint_relative_root:
+        return ["Entire share" if source_type == "nas" else "Entire device"]
+
+    parts = [part.strip() for part in endpoint_relative_root.replace("/", "\\").split("\\") if part.strip()]
+    if not parts:
+        return ["Entire share" if source_type == "nas" else "Entire device"]
+
+    candidates = [parts[-1]]
+    if len(parts) >= 2:
+        candidates.append(f"{parts[-2]} - {parts[-1]}")
+    if len(parts) >= 3:
+        candidates.append(f"{parts[-3]} - {parts[-2]} - {parts[-1]}")
+    candidates.append(endpoint_relative_root)
+    return list(dict.fromkeys(candidates))
+
+
+def _fit_source_display_name(value: str) -> tuple[str, SourceCreationMessage | None]:
+    cleaned = re.sub(r"\s+", " ", value.strip()) or "Source"
+    if len(cleaned) <= _SOURCE_LABEL_MAX_LENGTH:
+        return cleaned, None
+    shortened = f"...{cleaned[-(_SOURCE_LABEL_MAX_LENGTH - 3):]}"
     return shortened[:_SOURCE_LABEL_MAX_LENGTH], _message(
         "source_display_name_shortened",
         "The Source display name was shortened; the complete endpoint-relative root remains stored.",

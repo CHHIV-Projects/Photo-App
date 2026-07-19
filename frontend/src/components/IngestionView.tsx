@@ -496,6 +496,24 @@ function sourceCreationFinalActionLabel(
   return plan.final_action_label;
 }
 
+function sourceCreationCompletedActionLabel(result: SourceCreationConfirmResponse): string {
+  const baseAction = result.reactivated_source
+    ? "Reactivated existing Source"
+    : result.adopted_legacy_source
+      ? "Adopted and linked existing Source"
+      : result.reused_source
+        ? "Used existing Source"
+        : result.created_source
+          ? "Created new Source"
+          : "Completed Source action";
+
+  if (!result.renamed_endpoint) {
+    return baseAction;
+  }
+
+  return `Renamed device and ${baseAction.charAt(0).toLowerCase()}${baseAction.slice(1)}`;
+}
+
 function getCreateSourceIdentitySupport(value: OperatorSourceType): SourceIdentityEnrollmentSupport {
   const probeSourceType = probeSourceTypeForOperator(value);
   if (probeSourceType) {
@@ -3738,6 +3756,7 @@ export default function IngestionView() {
                     <span className={styles.detailLabel}>Recognized Device</span>
                     <span>{sourceCreationPlan.selected_existing_endpoint_id ? sourceCreationPlan.device_name : "New device"}</span>
                   </div>
+                  <div><span className={styles.detailLabel}>Source Name</span><span>{sourceCreationPlan.source_display_name}</span></div>
                   <div>
                     <span className={styles.detailLabel}>Durable Identity</span>
                     <span className={durableIdentityBadgeClassName(sourceCreationPlan.durable_identity_status)}>
@@ -4000,9 +4019,8 @@ export default function IngestionView() {
                   <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationResult.durable_identity_identifier ?? "-"}</span></div>
                   <div><span className={styles.detailLabel}>Root Relative to Device</span><span>{sourceCreationResult.entire_endpoint_label ?? sourceCreationResult.endpoint_relative_root}</span></div>
                   <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationResult.observed_path}</span></div>
-                  <div><span className={styles.detailLabel}>Source</span><span>{sourceCreationResult.source_display_name}</span></div>
-                  <div><span className={styles.detailLabel}>Device Identity</span><span>{sourceCreationResult.renamed_endpoint ? "Existing endpoint renamed" : sourceCreationResult.created_endpoint ? "New endpoint created" : "Existing endpoint reused"}</span></div>
-                  <div><span className={styles.detailLabel}>Source Profile</span><span>{sourceCreationResult.reactivated_source ? "Existing source reactivated" : sourceCreationResult.adopted_legacy_source ? "Legacy source linked" : sourceCreationResult.created_source ? "New source created" : "Existing source reused"}</span></div>
+                  <div><span className={styles.detailLabel}>Source Name</span><span>{sourceCreationResult.source_display_name}</span></div>
+                  <div><span className={styles.detailLabel}>Action Completed</span><span>{sourceCreationCompletedActionLabel(sourceCreationResult)}</span></div>
                 </div>
                 <details className={styles.advancedDetails}>
                   <summary>Advanced Details</summary>
