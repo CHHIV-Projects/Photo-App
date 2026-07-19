@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models.ingestion_source import IngestionSource
+from app.models.ingestion_run import IngestionRun
 from app.models.source_endpoint import (
     AccessNode,
     SourceEndpoint,
@@ -53,6 +54,7 @@ class SourceCreationServiceTests(unittest.TestCase):
         SourceEndpoint.__table__.create(self.engine)
         SourceEndpointAliasEvent.__table__.create(self.engine)
         IngestionSource.__table__.create(self.engine)
+        IngestionRun.__table__.create(self.engine)
         SourceEndpointObservedPath.__table__.create(self.engine)
         self.db = Session(self.engine)
 
@@ -234,6 +236,72 @@ class SourceCreationServiceTests(unittest.TestCase):
 
         self.assertEqual(plan.source_display_name, "2019-03-13")
         self.assertIn("WD Backup.swstor", plan.endpoint_relative_root)
+
+    def test_operator_source_name_is_trimmed_and_persisted_without_identity_change(self) -> None:
+        path = "E:\\Archive\\Family Photos"
+        service = self._service(_volume_probe("external_device", path, boundary="external_folder"))
+
+        plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="external",
+                device_name="External 1",
+                source_name="  2019 Vacation Photos  ",
+                observed_path=path,
+            )
+        )
+
+        self.assertEqual(plan.source_display_name, "2019 Vacation Photos")
+        self.assertEqual(plan.suggested_source_name, "Family Photos")
+        result = service.confirm(
+            SourceCreationConfirmRequest(
+                source_type="external",
+                device_name="External 1",
+                source_name="  2019 Vacation Photos  ",
+                observed_path=path,
+                plan_fingerprint=plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+        source = self.db.get(IngestionSource, result.source_profile_id)
+        self.assertEqual(source.source_label, "2019 Vacation Photos")
+        self.assertEqual(source.endpoint_relative_root, "Archive\\Family Photos")
+
+    def test_blank_or_conflicting_source_name_is_blocked(self) -> None:
+        first_path = "E:\\Archive\\Photos"
+        second_path = "E:\\Backup\\Photos"
+        service = SourceCreationService(
+            self.db,
+            _FakeProbeService(
+                {
+                    first_path: _volume_probe("external_device", first_path, boundary="external_folder"),
+                    second_path: _volume_probe("external_device", second_path, boundary="external_folder"),
+                }
+            ),
+        )
+        self._confirm(service, "external", "External 1", first_path)
+
+        blank = service.plan(
+            SourceCreationPlanRequest(
+                source_type="external",
+                observed_path=second_path,
+                source_name="   ",
+                naming_action="use_existing",
+            )
+        )
+        self.assertEqual(blank.plan_status, "blocked")
+        self.assertIn("source_name_required", [item.code for item in blank.blockers])
+
+        conflict = service.plan(
+            SourceCreationPlanRequest(
+                source_type="external",
+                observed_path=second_path,
+                source_name="Photos",
+                naming_action="use_existing",
+            )
+        )
+        self.assertEqual(conflict.plan_status, "blocked")
+        self.assertIn("source_name_conflict", [item.code for item in conflict.blockers])
+        self.assertEqual(conflict.source_name_suggested_alternative, "Backup - Photos")
 
     def test_mapped_nas_persists_canonical_unc_and_original_observed_path(self) -> None:
         mapped = "Z:\\Dad Files\\Scans"
@@ -867,6 +935,160 @@ class SourceCreationServiceTests(unittest.TestCase):
         self.assertEqual(legacy.source_root_path, path)
         self.assertEqual(modern.profile_status, "inactive")
         self.assertEqual(self.db.scalar(select(func.count(IngestionSource.id))), 2)
+
+    def test_linked_legacy_source_is_canonicalized_while_inactive_duplicate_remains(self) -> None:
+        share = "\\\\HENDERSON-NAS\\Photos"
+        folder = "\\\\HENDERSON-NAS\\Photos\\Camera imports"
+        service = SourceCreationService(
+            self.db,
+            _FakeProbeService(
+                {
+                    share: _nas_probe(share, canonical_path=share, boundary="nas_share_root"),
+                    folder: _nas_probe(folder, canonical_path=folder, boundary="nas_share_folder"),
+                }
+            ),
+        )
+        endpoint_result = self._confirm(service, "nas", "Henderson NAS", share)
+        active_legacy = IngestionSource(
+            source_label="Camera imports",
+            source_label_normalized="camera imports",
+            source_type="local_folder",
+            source_root_path=folder,
+            source_root_path_normalized=normalize_source_root_path(folder),
+            endpoint_id=endpoint_result.source_endpoint_id,
+            endpoint_relative_root=None,
+            profile_status="active",
+        )
+        inactive_legacy = IngestionSource(
+            source_label="Camera imports validation duplicate",
+            source_label_normalized="camera imports validation duplicate",
+            source_type="local_folder",
+            source_root_path=folder,
+            source_root_path_normalized=normalize_source_root_path(folder),
+            endpoint_id=endpoint_result.source_endpoint_id,
+            endpoint_relative_root=None,
+            profile_status="inactive",
+        )
+        self.db.add_all([active_legacy, inactive_legacy])
+        self.db.commit()
+        self.db.refresh(active_legacy)
+        self.db.refresh(inactive_legacy)
+
+        plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="nas",
+                observed_path=folder,
+                naming_action="use_existing",
+            )
+        )
+
+        self.assertEqual(plan.source_action, "canonicalize_existing_source")
+        self.assertEqual(plan.final_action_label, "Use and Canonicalize Existing Source")
+        self.assertEqual(plan.existing_source_profile_id, active_legacy.id)
+        self.assertEqual(plan.conflicting_source_profile_ids, [inactive_legacy.id])
+        result = service.confirm(
+            SourceCreationConfirmRequest(
+                source_type="nas",
+                observed_path=folder,
+                naming_action="use_existing",
+                plan_fingerprint=plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+
+        self.db.refresh(active_legacy)
+        self.db.refresh(inactive_legacy)
+        self.assertEqual(result.source_profile_id, active_legacy.id)
+        self.assertTrue(result.canonicalized_source)
+        self.assertFalse(result.created_source)
+        self.assertEqual(active_legacy.endpoint_relative_root, "Camera imports")
+        self.assertEqual(active_legacy.profile_status, "active")
+        self.assertEqual(inactive_legacy.endpoint_relative_root, None)
+        self.assertEqual(inactive_legacy.profile_status, "inactive")
+
+    def test_active_no_history_duplicate_can_be_explicitly_marked_inactive(self) -> None:
+        path = "E:\\Archive"
+        service = self._service(_volume_probe("external_device", path, boundary="external_folder"))
+        canonical_result = self._confirm(service, "external", "External", path)
+        duplicate = IngestionSource(
+            source_label="Duplicate No History",
+            source_label_normalized="duplicate no history",
+            source_type="external_drive",
+            source_root_path=path,
+            source_root_path_normalized=normalize_source_root_path(path),
+            profile_status="active",
+        )
+        self.db.add(duplicate)
+        self.db.commit()
+        self.db.refresh(duplicate)
+
+        blocked = service.plan(
+            SourceCreationPlanRequest(
+                source_type="external",
+                observed_path=path,
+                naming_action="use_existing",
+            )
+        )
+        self.assertEqual(blocked.plan_status, "blocked")
+
+        plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="external",
+                observed_path=path,
+                naming_action="use_existing",
+                selected_canonical_source_id=canonical_result.source_profile_id,
+                duplicate_source_ids_to_inactivate=[duplicate.id],
+            )
+        )
+        self.assertEqual(plan.plan_status, "source_exists")
+        self.assertEqual(plan.duplicate_source_ids_to_inactivate, [duplicate.id])
+        result = service.confirm(
+            SourceCreationConfirmRequest(
+                source_type="external",
+                observed_path=path,
+                naming_action="use_existing",
+                selected_canonical_source_id=canonical_result.source_profile_id,
+                duplicate_source_ids_to_inactivate=[duplicate.id],
+                plan_fingerprint=plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+        self.db.refresh(duplicate)
+        self.assertEqual(result.inactivated_duplicate_source_ids, [duplicate.id])
+        self.assertEqual(duplicate.profile_status, "inactive")
+
+    def test_history_bearing_duplicate_cannot_be_marked_inactive(self) -> None:
+        path = "E:\\Archive"
+        service = self._service(_volume_probe("external_device", path, boundary="external_folder"))
+        canonical_result = self._confirm(service, "external", "External", path)
+        duplicate = IngestionSource(
+            source_label="Duplicate With History",
+            source_label_normalized="duplicate with history",
+            source_type="external_drive",
+            source_root_path=path,
+            source_root_path_normalized=normalize_source_root_path(path),
+            profile_status="active",
+        )
+        self.db.add(duplicate)
+        self.db.flush()
+        self.db.add(IngestionRun(ingestion_source_id=duplicate.id, from_path=path))
+        self.db.commit()
+        self.db.refresh(duplicate)
+
+        plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="external",
+                observed_path=path,
+                naming_action="use_existing",
+                selected_canonical_source_id=canonical_result.source_profile_id,
+                duplicate_source_ids_to_inactivate=[duplicate.id],
+            )
+        )
+
+        self.assertEqual(plan.plan_status, "blocked")
+        self.assertIn("duplicate_source_has_history", [item.code for item in plan.blockers])
+        self.db.refresh(duplicate)
+        self.assertEqual(duplicate.profile_status, "active")
 
     def test_inactive_unlinked_legacy_is_adopted_and_reactivated(self) -> None:
         registered_path = "E:\\Registered"

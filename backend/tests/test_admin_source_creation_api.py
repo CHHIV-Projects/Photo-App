@@ -127,6 +127,34 @@ class AdminSourceCreationApiTests(unittest.TestCase):
         self.assertEqual(source.source_label, "Family Photos")
         self.assertIsNotNone(source.endpoint_id)
 
+    def test_confirm_persists_operator_source_name(self) -> None:
+        request = {
+            "source_type": "external",
+            "device_name": "External 1",
+            "source_name": "  Vacation Photos  ",
+            "naming_action": "create_new",
+            "observed_path": "E:\\Archive\\Family Photos",
+        }
+        with patch("app.api.admin.get_source_identity_probe_service", return_value=_FakeProbeService()):
+            plan_response = self.client.post("/api/admin/source-creation/plan", json=request)
+            plan = plan_response.json()
+            confirm_response = self.client.post(
+                "/api/admin/source-creation/confirm",
+                json={
+                    **request,
+                    "plan_fingerprint": plan["plan_fingerprint"],
+                    "operator_confirmed": True,
+                },
+            )
+
+        self.assertEqual(plan_response.status_code, 200)
+        self.assertEqual(plan["source_display_name"], "Vacation Photos")
+        self.assertEqual(confirm_response.status_code, 200)
+        result = confirm_response.json()
+        source = self.db.get(IngestionSource, result["source_profile_id"])
+        self.assertEqual(result["source_display_name"], "Vacation Photos")
+        self.assertEqual(source.source_label, "Vacation Photos")
+
     def test_path_first_plan_does_not_require_device_name_or_write_rows(self) -> None:
         with patch("app.api.admin.get_source_identity_probe_service", return_value=_FakeProbeService()):
             response = self.client.post(

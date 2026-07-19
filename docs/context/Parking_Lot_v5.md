@@ -510,6 +510,234 @@ This should be part of the source identity design milestone or its immediate fol
 
 ---
 
+## SRC-ID-006 — Source Creation, Exact-Match, and Legacy Identity Repair Workflows
+
+### Summary
+
+Define future operator workflows for Source Creation exact-match handling, legacy Source repair, endpoint identity reconciliation, and deliberate duplicate Source cleanup.
+
+### Current Issue
+
+Milestone `12.63.18.x` introduced the new Source Creation model:
+
+```text
+Source Endpoint = durable device/share/provider identity
+Source Profile = endpoint + endpoint-relative root + Source settings/name
+Observed Path = current access-path evidence
+```
+
+The implementation now has useful machinery for:
+
+```text
+path-first Source Creation planning
+durable endpoint recognition
+endpoint-relative-root derivation
+exact Source detection
+legacy Source detection
+linked legacy Source canonicalization
+unlinked legacy Source adoption/linking
+inactive Source reactivation
+no-history duplicate inactivation
+manual Source Name selection
+same-endpoint Source Name uniqueness
+plan/confirm fingerprint protection
+transactional metadata writes
+```
+
+However, normal Create Source should stay simple. If an exact Source already exists, the normal workflow should generally say:
+
+```text
+This Source already exists.
+Use the existing Source.
+Do not create another exact Source.
+```
+
+The more advanced repair controls should not be exposed as normal Source Creation controls. They belong in a deliberate management/reconciliation workflow.
+
+### Use Cases
+
+#### 1. Exact Source Already Exists
+
+When the system detects the same durable endpoint plus the same endpoint-relative root:
+
+```text
+Endpoint: External 10 / Volume GUID {...8206}
+Root: Pictures\2019-03-13
+```
+
+Desired normal behavior:
+
+```text
+Show: This Source already exists.
+Use/reuse the existing Source.
+Create no new Source Profile.
+Expose technical rows only in Advanced Details.
+```
+
+No canonical/duplicate controls should be needed in the normal path.
+
+#### 2. Legacy Path-Only Source With History
+
+Older Sources may have been defined as:
+
+```text
+Source = user-created label + full source_root_path
+```
+
+Example:
+
+```text
+Label: External 4
+Root: E:\WD Backup.swstor\...\Pictures\2017-01-22
+```
+
+Future repair workflow should determine whether the legacy Source truly corresponds to the newly recognized durable endpoint/root, then safely:
+
+```text
+retain Source Profile ID
+retain Source label unless operator explicitly renames it
+retain source_root_path
+retain status unless explicitly changed
+link endpoint_id when missing
+populate endpoint_relative_root when deterministic
+preserve ingestion runs, Source Intake runs, provenance, assets, and reports
+```
+
+This should be explicit operator-managed repair, not hidden automatic migration.
+
+#### 3. Linked Legacy Source Missing Endpoint-Relative Root
+
+A Source may already have the correct endpoint link but still have:
+
+```text
+endpoint_relative_root = NULL
+```
+
+Future repair action:
+
+```text
+Use and Canonicalize Existing Source
+```
+
+This should only populate the deterministic relative root and current observed-path evidence when genuinely new. It must not delete, merge, or rewrite history.
+
+#### 4. Endpoint Identity Conflict
+
+The system may identify the current path as one endpoint while an exact-path Source is linked to another endpoint.
+
+Example:
+
+```text
+Existing Source: External 4
+Current recognized endpoint: External 10
+Same apparent full path, different durable endpoint relationship
+```
+
+Future workflow should present this as:
+
+```text
+Source identity conflict
+```
+
+not as a filesystem path failure.
+
+The workflow should help the operator answer:
+
+```text
+Are these actually the same physical/logical device?
+Which endpoint identity is correct?
+Does the older Source have history that must remain attached to its Source ID?
+Can the old Source be linked/canonicalized safely?
+```
+
+No automatic reuse should occur until endpoint identity reconciliation is safe and explicit.
+
+#### 5. No-History Duplicate Source Cleanup
+
+If two exact Sources exist and the noncanonical Source has no protected history:
+
+```text
+zero provenance rows
+zero distinct provenance assets
+zero ingestion runs
+zero Source Intake runs
+```
+
+Future management workflow may allow:
+
+```text
+Mark duplicate Source inactive
+```
+
+This must not delete the Source Profile or move history.
+
+#### 6. Source Name Cleanup vs Source Identity Repair
+
+Source Name is display metadata. Durable Source identity is:
+
+```text
+endpoint identity + endpoint-relative root
+```
+
+Future workflows should keep these separate:
+
+```text
+Rename Source display label = UI/metadata action
+Repair endpoint/root identity = source identity action
+```
+
+Do not treat label differences such as `External 4` vs `External 10` as proof of different durable Sources. They may reflect older naming conventions.
+
+### Existing Machinery to Reuse
+
+Reuse the `12.63.18.x` Source Creation machinery where practical:
+
+```text
+POST /api/admin/source-creation/plan
+POST /api/admin/source-creation/confirm
+SourceCreationPlanRequest / SourceCreationPlanResponse
+SourceCreationConfirmRequest / SourceCreationConfirmResponse
+SourceCreationSourceMatch duplicate metadata
+SourceCreationService exact match detection
+SourceCreationService reference-count checks
+plan fingerprint validation
+transactional confirm path
+SourceEndpointObservedPath evidence writes
+source_endpoint_alias_events for endpoint display-name audit
+```
+
+Keep the backend repair primitives available, but surface them through a clearer future Source management workflow rather than normal Create Source controls.
+
+### Safety Rules
+
+- Do not delete Source Profiles as part of repair.
+
+- Do not merge Source Profile IDs.
+
+- Do not move ingestion runs between Sources.
+
+- Do not rewrite provenance casually.
+
+- Do not rewrite assets or Vault files.
+
+- Do not infer endpoint equivalence from label similarity alone.
+
+- Do not run broad automatic migration from Create Source.
+
+- Require explicit operator confirmation for any identity repair.
+
+- Prefer read-only plan/review before confirm.
+
+- Preserve existing historical labels unless source rename is explicitly scoped.
+
+### Importance
+
+High after normal Source Creation stabilizes.
+
+This is especially important before large external/NAS imports, because older dev/test Source records and path-only Sources can otherwise confuse normal source creation.
+
+---
+
 ## UX-INGEST-001 — Guided Source Profile / Ingestion Tab Simplification
 
 ### Summary

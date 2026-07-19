@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.ingestion_source import IngestionSource
@@ -89,6 +89,7 @@ class _ExactResolution:
     target: IngestionSource | None
     source_action: str
     conflicting_source_ids: tuple[int, ...]
+    duplicate_source_ids_to_inactivate: tuple[int, ...]
     blockers: tuple[SourceCreationMessage, ...]
     warnings: tuple[SourceCreationMessage, ...]
 
@@ -100,6 +101,26 @@ class _PlanContext:
     selected_endpoint: SourceEndpoint | None
     existing_source: IngestionSource | None
     safe_legacy_upgrade_endpoint_ids: frozenset[int]
+
+
+@dataclass(frozen=True)
+class _SourceReferenceSummary:
+    provenance_count: int = 0
+    ingestion_runs_count: int = 0
+    source_intake_runs_count: int = 0
+    asset_count: int = 0
+
+    @property
+    def has_protected_history(self) -> bool:
+        return any(
+            value > 0
+            for value in (
+                self.provenance_count,
+                self.ingestion_runs_count,
+                self.source_intake_runs_count,
+                self.asset_count,
+            )
+        )
 
 
 class SourceCreationService:
@@ -123,9 +144,12 @@ class SourceCreationService:
         plan_request = SourceCreationPlanRequest(
             source_type=request.source_type,
             observed_path=request.observed_path,
+            source_name=request.source_name,
             device_name=request.device_name,
             naming_action=request.naming_action,
             selected_existing_endpoint_id=request.selected_existing_endpoint_id,
+            selected_canonical_source_id=request.selected_canonical_source_id,
+            duplicate_source_ids_to_inactivate=request.duplicate_source_ids_to_inactivate,
             use_registered_source_type=request.use_registered_source_type,
             operator_review_acknowledged=request.operator_review_acknowledged,
         )
@@ -427,10 +451,16 @@ class SourceCreationService:
             endpoint_relative_root=derived_root.endpoint_relative_root,
             canonical_source_root_path=derived_root.canonical_source_root_path,
         )
+        reference_summaries = {
+            source.id: self._source_reference_summary(source.id) for source in exact_sources
+        }
         exact_resolution = self._resolve_exact_sources(
             exact_sources=exact_sources,
             selected_endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
             endpoint_relative_root=derived_root.endpoint_relative_root,
+            selected_canonical_source_id=request.selected_canonical_source_id,
+            duplicate_source_ids_to_inactivate=tuple(request.duplicate_source_ids_to_inactivate),
+            reference_summaries=reference_summaries,
         )
         blockers.extend(exact_resolution.blockers)
         warnings.extend(exact_resolution.warnings)
@@ -471,15 +501,40 @@ class SourceCreationService:
             canonical_device_name
             or (selected_endpoint.alias if selected_endpoint is not None else "Device name required")
         )
+        suggested_source_name, display_warning = self._source_display_name_for_plan(
+            endpoint_relative_root=derived_root.endpoint_relative_root,
+            source_type=recognized_source_type,
+            selected_endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
+        )
+        requested_source_name = _normalize_source_name(request.source_name)
+        source_name_suggested_alternative: str | None = None
         if existing_source is not None:
             source_display_name = existing_source.source_label
-            display_warning = None
         else:
-            source_display_name, display_warning = self._source_display_name_for_plan(
-                endpoint_relative_root=derived_root.endpoint_relative_root,
-                source_type=recognized_source_type,
-                selected_endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
-            )
+            source_display_name = requested_source_name or suggested_source_name
+            if request.source_name is not None:
+                source_name_error = _validate_source_name(requested_source_name)
+                if source_name_error is not None:
+                    blockers.append(source_name_error)
+                elif self._source_display_name_exists_on_endpoint(
+                    endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
+                    display_name=requested_source_name,
+                ) or self._source_display_name_conflicts_with_db_tuple(
+                    display_name=requested_source_name,
+                    persisted_source_type=_persisted_source_type(recognized_source_type),
+                    canonical_source_root_path=derived_root.canonical_source_root_path,
+                ):
+                    source_name_suggested_alternative, _ = self._source_display_name_for_plan(
+                        endpoint_relative_root=derived_root.endpoint_relative_root,
+                        source_type=recognized_source_type,
+                        selected_endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
+                    )
+                    blockers.append(
+                        _message(
+                            "source_name_conflict",
+                            "Source Name is already used by another Source on this durable device.",
+                        )
+                    )
         if display_warning is not None:
             warnings.append(display_warning)
 
@@ -508,37 +563,68 @@ class SourceCreationService:
             endpoint_action=endpoint_action,
             selected_endpoint=selected_endpoint,
         )
-        exact_source_matches = [
-            SourceCreationSourceMatch(
-                source_profile_id=source.id,
-                source_label=source.source_label,
-                profile_status=source.profile_status,
-                source_endpoint_id=source.endpoint_id,
-                endpoint_relative_root=source.endpoint_relative_root,
-                match_kind=(
-                    "modern_exact"
-                    if _is_modern_exact(
+        exact_source_matches: list[SourceCreationSourceMatch] = []
+        for source in exact_sources:
+            reference_summary = reference_summaries[source.id]
+            selected_for_action = existing_source is not None and source.id == existing_source.id
+            allowed_actions: list[str] = []
+            recommended_action: str | None = None
+            if selected_for_action:
+                allowed_actions.append(source_action)
+                recommended_action = source_action
+            elif source.id in exact_resolution.duplicate_source_ids_to_inactivate:
+                allowed_actions.append("mark_inactive")
+                recommended_action = "mark_inactive"
+            elif source.profile_status == "inactive":
+                recommended_action = "leave_inactive"
+
+            exact_source_matches.append(
+                SourceCreationSourceMatch(
+                    source_profile_id=source.id,
+                    source_label=source.source_label,
+                    source_type=source.source_type,
+                    profile_status=source.profile_status,
+                    source_root_path=source.source_root_path,
+                    source_endpoint_id=source.endpoint_id,
+                    endpoint_alias=(source.source_endpoint.alias if source.source_endpoint is not None else None),
+                    endpoint_relative_root=source.endpoint_relative_root,
+                    match_kind=(
+                        "modern_exact"
+                        if _is_modern_exact(
+                            source,
+                            selected_endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
+                            endpoint_relative_root=derived_root.endpoint_relative_root,
+                        )
+                        else "legacy_exact"
+                    ),
+                    classification=_source_match_classification(
                         source,
                         selected_endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
                         endpoint_relative_root=derived_root.endpoint_relative_root,
-                    )
-                    else "legacy_exact"
-                ),
-                selected_for_action=existing_source is not None and source.id == existing_source.id,
-                conflict_reason=(
-                    "Inactive duplicate retained for management review."
-                    if source.id in exact_resolution.conflicting_source_ids
-                    else None
-                ),
+                    ),
+                    provenance_count=reference_summary.provenance_count,
+                    ingestion_runs_count=reference_summary.ingestion_runs_count,
+                    source_intake_runs_count=reference_summary.source_intake_runs_count,
+                    asset_count=reference_summary.asset_count,
+                    has_protected_history=reference_summary.has_protected_history,
+                    recommended_action=recommended_action,
+                    allowed_actions=allowed_actions,
+                    selected_for_action=selected_for_action,
+                    conflict_reason=(
+                        "Inactive duplicate retained for management review."
+                        if source.id in exact_resolution.conflicting_source_ids
+                        else None
+                    ),
+                )
             )
-            for source in exact_sources
-        ]
 
         plan_fingerprint = stable_hash(
             {
                 "source_type": request.source_type,
                 "recognized_source_type": recognized_source_type,
                 "canonical_device_name": canonical_device_name,
+                "source_display_name": source_display_name,
+                "requested_source_name": requested_source_name,
                 "naming_action": naming_action,
                 "use_registered_source_type": request.use_registered_source_type,
                 "canonical_source_root_path": derived_root.canonical_source_root_path.casefold(),
@@ -564,9 +650,12 @@ class SourceCreationService:
                         "status": source.profile_status,
                         "endpoint_id": source.endpoint_id,
                         "relative_root": source.endpoint_relative_root,
+                        "references": reference_summaries[source.id].__dict__,
                     }
                     for source in exact_sources
                 ],
+                "selected_canonical_source_id": request.selected_canonical_source_id,
+                "duplicate_source_ids_to_inactivate": list(exact_resolution.duplicate_source_ids_to_inactivate),
                 "existing_source_profile_id": existing_source.id if existing_source is not None else None,
                 "blockers": [item.code for item in blockers],
                 "required_confirmations": [item.code for item in required_confirmations],
@@ -595,13 +684,18 @@ class SourceCreationService:
             endpoint_relative_root=derived_root.endpoint_relative_root,
             entire_endpoint=derived_root.entire_endpoint,
             entire_endpoint_label=derived_root.entire_endpoint_label,
+                suggested_source_name=suggested_source_name,
+                requested_source_name=requested_source_name or None,
+                source_name_suggested_alternative=source_name_suggested_alternative,
             source_display_name=source_display_name,
             **durable_identity.response_fields(),
             endpoint_action=endpoint_action,  # type: ignore[arg-type]
             source_action=source_action,  # type: ignore[arg-type]
             selected_existing_endpoint_id=(selected_endpoint.id if selected_endpoint is not None else None),
+                selected_canonical_source_id=(existing_source.id if existing_source is not None else None),
             existing_source_profile_id=existing_source.id if existing_source is not None else None,
             existing_source_status=(existing_source.profile_status if existing_source is not None else None),
+                duplicate_source_ids_to_inactivate=list(exact_resolution.duplicate_source_ids_to_inactivate),
             possible_matches=possible_matches,
             exact_source_matches=exact_source_matches,
             conflicting_source_profile_ids=list(exact_resolution.conflicting_source_ids),
@@ -792,9 +886,12 @@ class SourceCreationService:
         exact_sources: list[IngestionSource],
         selected_endpoint_id: int | None,
         endpoint_relative_root: str,
+        selected_canonical_source_id: int | None,
+        duplicate_source_ids_to_inactivate: tuple[int, ...],
+        reference_summaries: dict[int, _SourceReferenceSummary],
     ) -> _ExactResolution:
         if not exact_sources:
-            return _ExactResolution((), None, "create_new_source", (), (), ())
+            return _ExactResolution((), None, "create_new_source", (), (), (), ())
 
         blockers: list[SourceCreationMessage] = []
         warnings: list[SourceCreationMessage] = []
@@ -824,7 +921,7 @@ class SourceCreationService:
 
         active = [source for source in exact_sources if source.profile_status == "active"]
         inactive = [source for source in exact_sources if source.profile_status == "inactive"]
-        if len(active) > 1:
+        if len(active) > 1 and selected_canonical_source_id is None:
             blockers.append(
                 _message(
                     "multiple_active_exact_sources",
@@ -835,7 +932,31 @@ class SourceCreationService:
         target: IngestionSource | None = None
         source_action = "none"
         conflicting_source_ids: tuple[int, ...] = ()
-        if not blockers and len(active) == 1:
+        selected_canonical = (
+            next((source for source in exact_sources if source.id == selected_canonical_source_id), None)
+            if selected_canonical_source_id is not None
+            else None
+        )
+        requested_inactivation_ids = tuple(dict.fromkeys(duplicate_source_ids_to_inactivate))
+
+        if selected_canonical_source_id is not None and selected_canonical is None:
+            blockers.append(
+                _message(
+                    "selected_canonical_source_not_exact",
+                    "The selected canonical Source no longer matches this exact location.",
+                )
+            )
+
+        if not blockers and selected_canonical is not None:
+            target = selected_canonical
+            source_action = _source_action_for_target(
+                target,
+                selected_endpoint_id=selected_endpoint_id,
+                endpoint_relative_root=endpoint_relative_root,
+                reactivate=target.profile_status == "inactive",
+            )
+            conflicting_source_ids = tuple(source.id for source in exact_sources if source.id != target.id)
+        elif not blockers and len(active) == 1:
             candidate = active[0]
             if len(exact_sources) == 1:
                 target = candidate
@@ -852,7 +973,7 @@ class SourceCreationService:
                 warnings.append(
                     _message(
                         "inactive_modern_duplicate_retained",
-                        "The active legacy Source can be adopted. The inactive linked duplicate will remain unchanged for management review.",
+                        "The active legacy Source can be used safely. The inactive exact duplicate will remain unchanged for management review.",
                     )
                 )
             else:
@@ -863,26 +984,20 @@ class SourceCreationService:
                     )
                 )
             if target is not None:
-                source_action = (
-                    "reuse_existing_source"
-                    if _is_modern_exact(
-                        target,
-                        selected_endpoint_id=selected_endpoint_id,
-                        endpoint_relative_root=endpoint_relative_root,
-                    )
-                    else "adopt_legacy_source"
+                source_action = _source_action_for_target(
+                    target,
+                    selected_endpoint_id=selected_endpoint_id,
+                    endpoint_relative_root=endpoint_relative_root,
+                    reactivate=False,
                 )
         elif not blockers and not active:
             if len(inactive) == 1 and len(exact_sources) == 1:
                 target = inactive[0]
-                source_action = (
-                    "reactivate_existing_source"
-                    if _is_modern_exact(
-                        target,
-                        selected_endpoint_id=selected_endpoint_id,
-                        endpoint_relative_root=endpoint_relative_root,
-                    )
-                    else "adopt_and_reactivate_source"
+                source_action = _source_action_for_target(
+                    target,
+                    selected_endpoint_id=selected_endpoint_id,
+                    endpoint_relative_root=endpoint_relative_root,
+                    reactivate=True,
                 )
             else:
                 blockers.append(
@@ -892,11 +1007,50 @@ class SourceCreationService:
                     )
                 )
 
+        allowed_inactivation_ids: list[int] = []
+        exact_source_ids = {source.id for source in exact_sources}
+        for source_id in requested_inactivation_ids:
+            source = next((item for item in exact_sources if item.id == source_id), None)
+            if source is None or source_id not in exact_source_ids:
+                blockers.append(
+                    _message(
+                        "duplicate_source_not_exact",
+                        "A selected duplicate Source no longer matches this exact location.",
+                    )
+                )
+                continue
+            if target is not None and source.id == target.id:
+                blockers.append(
+                    _message(
+                        "canonical_source_cannot_be_inactivated",
+                        "The selected canonical Source cannot also be marked inactive.",
+                    )
+                )
+                continue
+            if source.profile_status != "active":
+                blockers.append(
+                    _message(
+                        "duplicate_source_not_active",
+                        "Only active no-history duplicate Sources can be marked inactive.",
+                    )
+                )
+                continue
+            if reference_summaries[source.id].has_protected_history:
+                blockers.append(
+                    _message(
+                        "duplicate_source_has_history",
+                        "A selected duplicate Source has protected history and cannot be marked inactive here.",
+                    )
+                )
+                continue
+            allowed_inactivation_ids.append(source.id)
+
         return _ExactResolution(
             matches=tuple(exact_sources),
             target=target,
             source_action=source_action,
             conflicting_source_ids=conflicting_source_ids,
+            duplicate_source_ids_to_inactivate=tuple(allowed_inactivation_ids),
             blockers=tuple(blockers),
             warnings=tuple(warnings),
         )
@@ -969,6 +1123,59 @@ class SourceCreationService:
             .limit(1)
         )
         return existing_id is not None
+
+    def _source_display_name_conflicts_with_db_tuple(
+        self,
+        *,
+        display_name: str,
+        persisted_source_type: str,
+        canonical_source_root_path: str,
+    ) -> bool:
+        existing_id = self._db.scalar(
+            select(IngestionSource.id)
+            .where(
+                IngestionSource.source_label_normalized == normalize_source_label(display_name),
+                IngestionSource.source_type == persisted_source_type,
+                IngestionSource.source_root_path_normalized
+                == normalize_source_root_path(canonical_source_root_path),
+            )
+            .limit(1)
+        )
+        return existing_id is not None
+
+    def _source_reference_summary(self, source_id: int) -> _SourceReferenceSummary:
+        table_names = set(inspect(self._db.connection()).get_table_names())
+
+        def count_rows(table_name: str, column_name: str) -> int:
+            if table_name not in table_names:
+                return 0
+            return int(
+                self._db.execute(
+                    text(f"SELECT COUNT(*) FROM {table_name} WHERE {column_name} = :source_id"),
+                    {"source_id": source_id},
+                ).scalar()
+                or 0
+            )
+
+        asset_count = 0
+        if "provenance" in table_names:
+            asset_count = int(
+                self._db.execute(
+                    text(
+                        "SELECT COUNT(DISTINCT asset_sha256) "
+                        "FROM provenance WHERE ingestion_source_id = :source_id"
+                    ),
+                    {"source_id": source_id},
+                ).scalar()
+                or 0
+            )
+
+        return _SourceReferenceSummary(
+            provenance_count=count_rows("provenance", "ingestion_source_id"),
+            ingestion_runs_count=count_rows("ingestion_runs", "ingestion_source_id"),
+            source_intake_runs_count=count_rows("source_intake_runs", "ingestion_source_id"),
+            asset_count=asset_count,
+        )
 
     def _alias_conflict(
         self,
@@ -1103,6 +1310,7 @@ class SourceCreationService:
         reused_source = source is not None
         reactivated_source = False
         adopted_legacy_source = False
+        canonicalized_source = False
         if source is None:
             source = IngestionSource(
                 source_label=plan.source_display_name,
@@ -1119,14 +1327,45 @@ class SourceCreationService:
             created_source = True
             reused_source = False
         else:
-            if plan.source_action in {"adopt_legacy_source", "adopt_and_reactivate_source"}:
-                source.endpoint_id = endpoint.id
+            if plan.source_action in {
+                "adopt_legacy_source",
+                "adopt_and_reactivate_source",
+                "canonicalize_existing_source",
+                "canonicalize_and_reactivate_source",
+            }:
+                if source.endpoint_id is None:
+                    source.endpoint_id = endpoint.id
                 source.endpoint_relative_root = plan.endpoint_relative_root
-                adopted_legacy_source = True
-            if plan.source_action in {"reactivate_existing_source", "adopt_and_reactivate_source"}:
+                adopted_legacy_source = plan.source_action in {
+                    "adopt_legacy_source",
+                    "adopt_and_reactivate_source",
+                }
+                canonicalized_source = plan.source_action in {
+                    "canonicalize_existing_source",
+                    "canonicalize_and_reactivate_source",
+                }
+            if plan.source_action in {
+                "reactivate_existing_source",
+                "adopt_and_reactivate_source",
+                "canonicalize_and_reactivate_source",
+            }:
                 source.profile_status = "active"
                 reactivated_source = True
             self._db.add(source)
+            self._db.flush()
+
+        inactivated_duplicate_source_ids: list[int] = []
+        for duplicate_source_id in plan.duplicate_source_ids_to_inactivate:
+            duplicate_source = self._db.get(IngestionSource, duplicate_source_id)
+            if duplicate_source is None:
+                return self._blocked_confirm_response(
+                    plan,
+                    [_message("duplicate_source_missing", "A selected duplicate Source no longer exists.")],
+                )
+            duplicate_source.profile_status = "inactive"
+            self._db.add(duplicate_source)
+            inactivated_duplicate_source_ids.append(duplicate_source.id)
+        if inactivated_duplicate_source_ids:
             self._db.flush()
 
         self._db.commit()
@@ -1155,6 +1394,8 @@ class SourceCreationService:
             ),
             entire_endpoint=plan.entire_endpoint,
             entire_endpoint_label=plan.entire_endpoint_label,
+            suggested_source_name=plan.suggested_source_name,
+            requested_source_name=plan.requested_source_name,
             source_display_name=source.source_label,
             durable_identity_status=plan.durable_identity_status,
             durable_identity_reason=plan.durable_identity_reason,
@@ -1171,6 +1412,8 @@ class SourceCreationService:
             reused_source=reused_source,
             reactivated_source=reactivated_source,
             adopted_legacy_source=adopted_legacy_source,
+            canonicalized_source=canonicalized_source,
+            inactivated_duplicate_source_ids=inactivated_duplicate_source_ids,
             created_observed_path=created_observed_path,
             warnings=plan.warnings,
             advanced_details={
@@ -1294,6 +1537,8 @@ class SourceCreationService:
             endpoint_relative_root=plan.endpoint_relative_root,
             entire_endpoint=plan.entire_endpoint,
             entire_endpoint_label=plan.entire_endpoint_label,
+            suggested_source_name=plan.suggested_source_name,
+            requested_source_name=plan.requested_source_name,
             source_display_name=plan.source_display_name,
             durable_identity_status=plan.durable_identity_status,
             durable_identity_reason=plan.durable_identity_reason,
@@ -1366,6 +1611,10 @@ def _normalize_device_name(value: str | None) -> str:
     return re.sub(r"\s+", " ", (value or "").strip())
 
 
+def _normalize_source_name(value: str | None) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip())
+
+
 def _validate_device_name(value: str) -> SourceCreationMessage | None:
     if not value:
         return _message("device_name_required", "Device Name is required.")
@@ -1373,6 +1622,16 @@ def _validate_device_name(value: str) -> SourceCreationMessage | None:
         return _message("device_name_too_long", "Device Name must be 255 characters or fewer.")
     if _CONTROL_CHARACTER_RE.search(value):
         return _message("device_name_invalid", "Device Name contains an unsupported control character.")
+    return None
+
+
+def _validate_source_name(value: str) -> SourceCreationMessage | None:
+    if not value:
+        return _message("source_name_required", "Source Name is required.")
+    if len(value) > _SOURCE_LABEL_MAX_LENGTH:
+        return _message("source_name_too_long", "Source Name must be 255 characters or fewer.")
+    if _CONTROL_CHARACTER_RE.search(value):
+        return _message("source_name_invalid", "Source Name contains an unsupported control character.")
     return None
 
 
@@ -1518,6 +1777,47 @@ def _is_modern_exact(
     )
 
 
+def _is_legacy_root_model(source: IngestionSource) -> bool:
+    return source.endpoint_id is None or source.endpoint_relative_root is None
+
+
+def _source_action_for_target(
+    source: IngestionSource,
+    *,
+    selected_endpoint_id: int | None,
+    endpoint_relative_root: str,
+    reactivate: bool,
+) -> str:
+    if _is_modern_exact(
+        source,
+        selected_endpoint_id=selected_endpoint_id,
+        endpoint_relative_root=endpoint_relative_root,
+    ):
+        return "reactivate_existing_source" if reactivate else "reuse_existing_source"
+    if source.endpoint_id == selected_endpoint_id and source.endpoint_relative_root is None:
+        return "canonicalize_and_reactivate_source" if reactivate else "canonicalize_existing_source"
+    return "adopt_and_reactivate_source" if reactivate else "adopt_legacy_source"
+
+
+def _source_match_classification(
+    source: IngestionSource,
+    *,
+    selected_endpoint_id: int | None,
+    endpoint_relative_root: str,
+) -> str:
+    if _is_modern_exact(
+        source,
+        selected_endpoint_id=selected_endpoint_id,
+        endpoint_relative_root=endpoint_relative_root,
+    ):
+        return f"{source.profile_status} modern linked Source"
+    if source.endpoint_id is None:
+        return f"{source.profile_status} unlinked legacy Source"
+    if source.endpoint_relative_root is None:
+        return f"{source.profile_status} linked legacy Source"
+    return f"{source.profile_status} exact Source"
+
+
 def _is_approved_active_legacy_conflict(
     *,
     active_source: IngestionSource,
@@ -1525,15 +1825,18 @@ def _is_approved_active_legacy_conflict(
     selected_endpoint_id: int | None,
     endpoint_relative_root: str,
 ) -> bool:
-    if len(exact_sources) != 2 or active_source.endpoint_id is not None:
+    if len(exact_sources) != 2 or not _is_legacy_root_model(active_source):
         return False
     other = next(source for source in exact_sources if source.id != active_source.id)
     return (
         other.profile_status == "inactive"
-        and _is_modern_exact(
-            other,
-            selected_endpoint_id=selected_endpoint_id,
-            endpoint_relative_root=endpoint_relative_root,
+        and (
+            _is_modern_exact(
+                other,
+                selected_endpoint_id=selected_endpoint_id,
+                endpoint_relative_root=endpoint_relative_root,
+            )
+            or _is_legacy_root_model(other)
         )
     )
 
@@ -1553,6 +1856,12 @@ def _recognition_summary(
             "Location blocked or unreadable",
             blockers[0].message,
         )
+    if "exact_source_endpoint_conflict" in blocker_codes:
+        return (
+            "multiple_source_matches",
+            "Source identity conflict",
+            blockers[0].message,
+        )
     if "multiple_active_exact_sources" in blocker_codes or "multiple_exact_sources" in blocker_codes:
         return (
             "multiple_source_matches",
@@ -1561,8 +1870,8 @@ def _recognition_summary(
         )
     if blockers:
         return (
-            "location_blocked",
-            "Location blocked or unreadable",
+            "identity_needs_review",
+            "Review required",
             blockers[0].message,
         )
     if source_action == "reuse_existing_source":
@@ -1577,11 +1886,16 @@ def _recognition_summary(
             "Existing inactive Source found",
             "The exact Source exists and can be reactivated without creating a duplicate.",
         )
-    if source_action in {"adopt_legacy_source", "adopt_and_reactivate_source"}:
+    if source_action in {
+        "adopt_legacy_source",
+        "adopt_and_reactivate_source",
+        "canonicalize_existing_source",
+        "canonicalize_and_reactivate_source",
+    }:
         return (
             "existing_legacy_source",
-            "Existing unlinked legacy Source found",
-            "The exact legacy Source can be linked while retaining its Source Profile ID and history.",
+            "Existing legacy Source found",
+            "The exact legacy Source can be used while retaining its Source Profile ID and history.",
         )
     if selected_endpoint is not None and source_type_mismatch:
         return (
@@ -1625,6 +1939,8 @@ def _final_action_label(
         "reactivate_existing_source": "Reactivate Existing Source",
         "adopt_legacy_source": "Adopt and Link Existing Source",
         "adopt_and_reactivate_source": "Adopt and Reactivate Existing Source",
+        "canonicalize_existing_source": "Use and Canonicalize Existing Source",
+        "canonicalize_and_reactivate_source": "Canonicalize and Reactivate Existing Source",
         "none": "Review Source Matches",
     }
     base = labels.get(source_action, "Create Source")

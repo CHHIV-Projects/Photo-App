@@ -1610,10 +1610,21 @@ export interface SourceCreationEndpointMatch {
 export interface SourceCreationSourceMatch {
   source_profile_id: number;
   source_label: string;
+  source_type: string;
   profile_status: string;
+  source_root_path: string | null;
   source_endpoint_id: number | null;
+  endpoint_alias: string | null;
   endpoint_relative_root: string | null;
   match_kind: "modern_exact" | "legacy_exact";
+  classification: string;
+  provenance_count: number;
+  ingestion_runs_count: number;
+  source_intake_runs_count: number;
+  asset_count: number;
+  has_protected_history: boolean;
+  recommended_action: string | null;
+  allowed_actions: string[];
   selected_for_action: boolean;
   conflict_reason: string | null;
 }
@@ -1621,9 +1632,12 @@ export interface SourceCreationSourceMatch {
 export interface SourceCreationPlanRequest {
   source_type: SourceCreationType;
   observed_path: string;
+  source_name?: string | null;
   device_name?: string | null;
   naming_action?: SourceCreationNameAction | null;
   selected_existing_endpoint_id?: number | null;
+  selected_canonical_source_id?: number | null;
+  duplicate_source_ids_to_inactivate?: number[];
   use_registered_source_type?: boolean;
   operator_review_acknowledged?: boolean;
 }
@@ -1649,6 +1663,9 @@ export interface SourceCreationPlanResponse {
   endpoint_relative_root: string;
   entire_endpoint: boolean;
   entire_endpoint_label: string | null;
+  suggested_source_name: string;
+  requested_source_name: string | null;
+  source_name_suggested_alternative: string | null;
   source_display_name: string;
   durable_identity_status: SourceDurableIdentityStatus;
   durable_identity_reason: string | null;
@@ -1668,10 +1685,14 @@ export interface SourceCreationPlanResponse {
     | "reactivate_existing_source"
     | "adopt_legacy_source"
     | "adopt_and_reactivate_source"
+    | "canonicalize_existing_source"
+    | "canonicalize_and_reactivate_source"
     | "none";
   selected_existing_endpoint_id: number | null;
+  selected_canonical_source_id: number | null;
   existing_source_profile_id: number | null;
   existing_source_status: string | null;
+  duplicate_source_ids_to_inactivate: number[];
   possible_matches: SourceCreationEndpointMatch[];
   exact_source_matches: SourceCreationSourceMatch[];
   conflicting_source_profile_ids: number[];
@@ -1704,6 +1725,8 @@ export interface SourceCreationConfirmResponse {
   endpoint_relative_root: string;
   entire_endpoint: boolean;
   entire_endpoint_label: string | null;
+  suggested_source_name: string;
+  requested_source_name: string | null;
   source_display_name: string;
   durable_identity_status: SourceDurableIdentityStatus;
   durable_identity_reason: string | null;
@@ -1720,6 +1743,8 @@ export interface SourceCreationConfirmResponse {
   reused_source: boolean;
   reactivated_source: boolean;
   adopted_legacy_source: boolean;
+  canonicalized_source: boolean;
+  inactivated_duplicate_source_ids: number[];
   created_observed_path: boolean;
   blockers: SourceCreationMessage[];
   warnings: SourceCreationMessage[];

@@ -39,6 +39,8 @@ SourceCreationProfileAction = Literal[
     "reactivate_existing_source",
     "adopt_legacy_source",
     "adopt_and_reactivate_source",
+    "canonicalize_existing_source",
+    "canonicalize_and_reactivate_source",
     "none",
 ]
 
@@ -66,10 +68,21 @@ class SourceCreationSourceMatch(BaseModel):
 
     source_profile_id: int
     source_label: str
+    source_type: str
     profile_status: str
+    source_root_path: str | None = None
     source_endpoint_id: int | None = None
+    endpoint_alias: str | None = None
     endpoint_relative_root: str | None = None
     match_kind: Literal["modern_exact", "legacy_exact"]
+    classification: str
+    provenance_count: int = 0
+    ingestion_runs_count: int = 0
+    source_intake_runs_count: int = 0
+    asset_count: int = 0
+    has_protected_history: bool = False
+    recommended_action: str | None = None
+    allowed_actions: list[str] = Field(default_factory=list)
     selected_for_action: bool = False
     conflict_reason: str | None = None
 
@@ -79,9 +92,12 @@ class SourceCreationPlanRequest(BaseModel):
 
     source_type: SourceCreationType
     observed_path: str
+    source_name: str | None = None
     device_name: str | None = None
     naming_action: SourceCreationNameAction | None = None
     selected_existing_endpoint_id: int | None = None
+    selected_canonical_source_id: int | None = None
+    duplicate_source_ids_to_inactivate: list[int] = Field(default_factory=list)
     use_registered_source_type: bool = False
     operator_review_acknowledged: bool = False
 
@@ -109,6 +125,9 @@ class SourceCreationPlanResponse(BaseModel):
     endpoint_relative_root: str
     entire_endpoint: bool
     entire_endpoint_label: str | None = None
+    suggested_source_name: str
+    requested_source_name: str | None = None
+    source_name_suggested_alternative: str | None = None
     source_display_name: str
     durable_identity_status: DurableIdentityStatus
     durable_identity_reason: str | None = None
@@ -118,8 +137,10 @@ class SourceCreationPlanResponse(BaseModel):
     endpoint_action: SourceCreationEndpointAction = "none"
     source_action: SourceCreationProfileAction = "none"
     selected_existing_endpoint_id: int | None = None
+    selected_canonical_source_id: int | None = None
     existing_source_profile_id: int | None = None
     existing_source_status: str | None = None
+    duplicate_source_ids_to_inactivate: list[int] = Field(default_factory=list)
     possible_matches: list[SourceCreationEndpointMatch] = Field(default_factory=list)
     exact_source_matches: list[SourceCreationSourceMatch] = Field(default_factory=list)
     conflicting_source_profile_ids: list[int] = Field(default_factory=list)
@@ -156,6 +177,8 @@ class SourceCreationConfirmResponse(BaseModel):
     endpoint_relative_root: str
     entire_endpoint: bool
     entire_endpoint_label: str | None = None
+    suggested_source_name: str
+    requested_source_name: str | None = None
     source_display_name: str
     durable_identity_status: DurableIdentityStatus
     durable_identity_reason: str | None = None
@@ -172,6 +195,8 @@ class SourceCreationConfirmResponse(BaseModel):
     reused_source: bool = False
     reactivated_source: bool = False
     adopted_legacy_source: bool = False
+    canonicalized_source: bool = False
+    inactivated_duplicate_source_ids: list[int] = Field(default_factory=list)
     created_observed_path: bool = False
     blockers: list[SourceCreationMessage] = Field(default_factory=list)
     warnings: list[SourceCreationMessage] = Field(default_factory=list)

@@ -496,22 +496,32 @@ function sourceCreationFinalActionLabel(
   return plan.final_action_label;
 }
 
+function sourceCreationAllowsEditableSourceName(plan: SourceCreationPlanResponse): boolean {
+  return plan.source_action === "create_new_source";
+}
+
 function sourceCreationCompletedActionLabel(result: SourceCreationConfirmResponse): string {
   const baseAction = result.reactivated_source
     ? "Reactivated existing Source"
     : result.adopted_legacy_source
       ? "Adopted and linked existing Source"
+      : result.canonicalized_source
+        ? "Canonicalized existing Source"
       : result.reused_source
         ? "Used existing Source"
         : result.created_source
           ? "Created new Source"
           : "Completed Source action";
 
+  const duplicateSuffix = result.inactivated_duplicate_source_ids.length > 0
+    ? `; marked ${result.inactivated_duplicate_source_ids.length} duplicate Source inactive`
+    : "";
+
   if (!result.renamed_endpoint) {
-    return baseAction;
+    return `${baseAction}${duplicateSuffix}`;
   }
 
-  return `Renamed device and ${baseAction.charAt(0).toLowerCase()}${baseAction.slice(1)}`;
+  return `Renamed device and ${baseAction.charAt(0).toLowerCase()}${baseAction.slice(1)}${duplicateSuffix}`;
 }
 
 function getCreateSourceIdentitySupport(value: OperatorSourceType): SourceIdentityEnrollmentSupport {
@@ -1200,6 +1210,9 @@ export default function IngestionView() {
   const [sourceCreationNamingAction, setSourceCreationNamingAction] = useState<SourceCreationNameAction | null>(null);
   const [sourceCreationUseRegisteredType, setSourceCreationUseRegisteredType] = useState(false);
   const [sourceCreationReviewAcknowledged, setSourceCreationReviewAcknowledged] = useState(false);
+  const [sourceCreationSourceName, setSourceCreationSourceName] = useState("");
+  const [sourceCreationSelectedCanonicalSourceId, setSourceCreationSelectedCanonicalSourceId] = useState<number | null>(null);
+  const [sourceCreationDuplicateIdsToInactivate, setSourceCreationDuplicateIdsToInactivate] = useState<number[]>([]);
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>("create");
@@ -1939,6 +1952,27 @@ export default function IngestionView() {
     setSourceCreationNamingAction(null);
     setSourceCreationUseRegisteredType(false);
     setSourceCreationReviewAcknowledged(false);
+    setSourceCreationSourceName("");
+    setSourceCreationSelectedCanonicalSourceId(null);
+    setSourceCreationDuplicateIdsToInactivate([]);
+  }, []);
+
+  const clearSourceCreationInputsAfterSuccess = useCallback(() => {
+    setCreateSourceForm((current) => ({
+      ...initialFormState(),
+      operatorSourceType: current.operatorSourceType,
+      sourceType: persistedSourceTypeForOperator(current.operatorSourceType),
+      cloudProvider: current.operatorSourceType === "icloud" ? "icloud" : "icloud",
+    }));
+    setSourceCreationPlan(null);
+    setSourceCreationError(null);
+    setSourceCreationSelectedEndpointId(null);
+    setSourceCreationNamingAction(null);
+    setSourceCreationUseRegisteredType(false);
+    setSourceCreationReviewAcknowledged(false);
+    setSourceCreationSourceName("");
+    setSourceCreationSelectedCanonicalSourceId(null);
+    setSourceCreationDuplicateIdsToInactivate([]);
   }, []);
 
   const handleIdentifySourceLocation = useCallback(async (selectedEndpointId: number | null = null) => {
@@ -1966,6 +2000,9 @@ export default function IngestionView() {
       });
       setSourceCreationPlan(plan);
       setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationSelectedCanonicalSourceId(plan.selected_canonical_source_id);
+      setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
+      setSourceCreationSourceName(sourceCreationAllowsEditableSourceName(plan) ? plan.source_display_name : "");
       setSourceCreationNamingAction(
         plan.selected_existing_endpoint_id == null && plan.possible_matches.length === 0
           ? "create_new"
@@ -2019,9 +2056,10 @@ export default function IngestionView() {
         });
         setCreatedIcloudSource(response.profile);
         setSourceCreationPhase("complete");
+        clearSourceCreationInputsAfterSuccess();
         setWorkbenchSourceType("icloud");
-        await loadProfiles({ refreshOnly: true });
         setSelectedWorkbenchSourceId(response.profile.source_id);
+        void loadProfiles({ refreshOnly: true });
         setBanner({
           kind: "success",
           message: response.already_exists
@@ -2059,6 +2097,10 @@ export default function IngestionView() {
       setSourceCreationError("Device Name is required.");
       return;
     }
+    if (sourceCreationAllowsEditableSourceName(sourceCreationPlan) && !sourceCreationSourceName.trim()) {
+      setSourceCreationError("Source Name is required.");
+      return;
+    }
     if (sourceCreationPlan.source_type_mismatch && !sourceCreationUseRegisteredType) {
       setSourceCreationError("Confirm the recognized Source Type or cancel.");
       return;
@@ -2071,9 +2113,14 @@ export default function IngestionView() {
     const request = {
       source_type: sourceType,
       observed_path: observedPath,
+      source_name: sourceCreationAllowsEditableSourceName(sourceCreationPlan)
+        ? sourceCreationSourceName.trim()
+        : null,
       device_name: sourceCreationNamingAction === "use_existing" ? null : deviceName,
       naming_action: sourceCreationNamingAction,
       selected_existing_endpoint_id: sourceCreationSelectedEndpointId,
+      selected_canonical_source_id: sourceCreationSelectedCanonicalSourceId,
+      duplicate_source_ids_to_inactivate: sourceCreationDuplicateIdsToInactivate,
       use_registered_source_type: sourceCreationUseRegisteredType,
       operator_review_acknowledged: sourceCreationReviewAcknowledged,
     };
@@ -2083,6 +2130,8 @@ export default function IngestionView() {
       const plan = await planSourceCreation(request);
       setSourceCreationPlan(plan);
       setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationSelectedCanonicalSourceId(plan.selected_canonical_source_id);
+      setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
       if (plan.plan_status === "blocked" || plan.plan_status === "needs_review") {
         setSourceCreationPhase("review");
         setSourceCreationError(null);
@@ -2103,9 +2152,10 @@ export default function IngestionView() {
       }
 
       setSourceCreationPhase("complete");
+      clearSourceCreationInputsAfterSuccess();
       setWorkbenchSourceType(result.recognized_source_type);
-      await loadProfiles({ refreshOnly: true });
       setSelectedWorkbenchSourceId(result.source_profile_id);
+      void loadProfiles({ refreshOnly: true });
       setBanner({
         kind: "success",
         message: result.reactivated_source
@@ -2123,12 +2173,72 @@ export default function IngestionView() {
   }, [
     createManagedStagingPreview,
     createSourceForm,
+    clearSourceCreationInputsAfterSuccess,
     handleIdentifySourceLocation,
     loadProfiles,
+    sourceCreationDuplicateIdsToInactivate,
     sourceCreationNamingAction,
     sourceCreationPlan,
     sourceCreationReviewAcknowledged,
+    sourceCreationSelectedCanonicalSourceId,
     sourceCreationSelectedEndpointId,
+    sourceCreationSourceName,
+    sourceCreationUseRegisteredType,
+  ]);
+
+  const handleReviewDuplicateResolution = useCallback(async () => {
+    if (!sourceCreationPlan) {
+      setSourceCreationError("Identify the location before reviewing duplicate resolution.");
+      return;
+    }
+    const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
+    const observedPath = createSourceForm.sourceRootPath.trim();
+    if (!sourceType || !observedPath) {
+      setSourceCreationError("Root Path or Mount Point is required.");
+      return;
+    }
+    if (sourceCreationSelectedCanonicalSourceId == null) {
+      setSourceCreationError("Choose a canonical Source before reviewing duplicate resolution.");
+      return;
+    }
+
+    setSourceCreationPhase("planning");
+    setSourceCreationError(null);
+    try {
+      const plan = await planSourceCreation({
+        source_type: sourceType,
+        observed_path: observedPath,
+        source_name: sourceCreationAllowsEditableSourceName(sourceCreationPlan)
+          ? sourceCreationSourceName.trim()
+          : null,
+        device_name: sourceCreationNamingAction === "use_existing" ? null : createSourceForm.sourceLabel.trim(),
+        naming_action: sourceCreationNamingAction,
+        selected_existing_endpoint_id: sourceCreationSelectedEndpointId,
+        selected_canonical_source_id: sourceCreationSelectedCanonicalSourceId,
+        duplicate_source_ids_to_inactivate: sourceCreationDuplicateIdsToInactivate,
+        use_registered_source_type: sourceCreationUseRegisteredType,
+        operator_review_acknowledged: sourceCreationReviewAcknowledged,
+      });
+      setSourceCreationPlan(plan);
+      setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationSelectedCanonicalSourceId(plan.selected_canonical_source_id);
+      setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
+      setSourceCreationPhase("review");
+    } catch (error) {
+      setSourceCreationPhase("review");
+      setSourceCreationError(error instanceof Error ? error.message : "Failed to review duplicate resolution.");
+    }
+  }, [
+    createSourceForm.operatorSourceType,
+    createSourceForm.sourceLabel,
+    createSourceForm.sourceRootPath,
+    sourceCreationDuplicateIdsToInactivate,
+    sourceCreationNamingAction,
+    sourceCreationPlan,
+    sourceCreationReviewAcknowledged,
+    sourceCreationSelectedCanonicalSourceId,
+    sourceCreationSelectedEndpointId,
+    sourceCreationSourceName,
     sourceCreationUseRegisteredType,
   ]);
 
@@ -3811,7 +3921,7 @@ export default function IngestionView() {
                 )}
 
                 {sourceCreationPlan.selected_existing_endpoint_id != null
-                  && sourceCreationPlan.plan_status !== "blocked" && (
+                  && (
                   <div className={styles.createSourceDecision}>
                     <span className={styles.detailLabel}>Device Name</span>
                     <p className={styles.helperText}>
@@ -3864,6 +3974,32 @@ export default function IngestionView() {
                   </div>
                 )}
 
+                {sourceCreationAllowsEditableSourceName(sourceCreationPlan) && (
+                  <div className={styles.createSourceDecision}>
+                    <label className={styles.formLabel}>
+                      Source Name
+                      <input
+                        className={styles.formInput}
+                        autoComplete="off"
+                        value={sourceCreationSourceName}
+                        placeholder={sourceCreationPlan.suggested_source_name}
+                        onChange={(event) => {
+                          setSourceCreationSourceName(event.target.value);
+                          setSourceCreationError(null);
+                        }}
+                      />
+                      <span className={styles.helperText}>
+                        Suggested: {sourceCreationPlan.suggested_source_name}. Durable identity and root stay unchanged.
+                      </span>
+                      {sourceCreationPlan.source_name_suggested_alternative && (
+                        <span className={styles.helperText}>
+                          Alternative: {sourceCreationPlan.source_name_suggested_alternative}
+                        </span>
+                      )}
+                    </label>
+                  </div>
+                )}
+
                 {sourceCreationPlan.selected_existing_endpoint_id == null
                   && sourceCreationPlan.possible_matches.length === 0
                   && sourceCreationPlan.plan_status !== "blocked" && (
@@ -3913,22 +4049,13 @@ export default function IngestionView() {
 
                 {sourceCreationPlan.exact_source_matches.length > 0 && (
                   <div className={styles.createSourceDecision}>
-                    <span className={styles.detailLabel}>Exact Source Matches</span>
-                    <div className={styles.creationResultGrid}>
-                      {sourceCreationPlan.exact_source_matches.map((match) => (
-                        <div key={match.source_profile_id}>
-                          <span className={styles.detailLabel}>
-                            Source {match.source_profile_id} | {match.profile_status}
-                          </span>
-                          <span>{match.source_label}</span>
-                          <span className={styles.helperText}>
-                            {match.match_kind === "modern_exact" ? "Endpoint + relative root" : "Legacy exact path"}
-                            {match.selected_for_action ? " | selected" : ""}
-                          </span>
-                          {match.conflict_reason && <span className={styles.helperText}>{match.conflict_reason}</span>}
-                        </div>
-                      ))}
-                    </div>
+                    <span className={styles.detailLabel}>Existing Sources for This Location</span>
+                    <p className={styles.helperText}>
+                      This location already has Source records. The normal Create Source flow will not create another exact Source.
+                    </p>
+                    <p className={styles.helperText}>
+                      Detailed duplicate/legacy record information is available under Advanced Details.
+                    </p>
                   </div>
                 )}
 
@@ -3962,6 +4089,8 @@ export default function IngestionView() {
                     existing_source_profile_id: sourceCreationPlan.existing_source_profile_id,
                     exact_source_matches: sourceCreationPlan.exact_source_matches,
                     conflicting_source_profile_ids: sourceCreationPlan.conflicting_source_profile_ids,
+                    selected_canonical_source_id: sourceCreationPlan.selected_canonical_source_id,
+                    duplicate_source_ids_to_inactivate: sourceCreationPlan.duplicate_source_ids_to_inactivate,
                     endpoint_action: sourceCreationPlan.endpoint_action,
                     source_action: sourceCreationPlan.source_action,
                     plan_fingerprint: sourceCreationPlan.plan_fingerprint,
@@ -3979,6 +4108,7 @@ export default function IngestionView() {
                         || sourceCreationPhase === "confirming"
                         || (sourceCreationPlan.possible_matches.length > 1 && sourceCreationSelectedEndpointId == null)
                         || sourceCreationNamingAction == null
+                        || (sourceCreationAllowsEditableSourceName(sourceCreationPlan) && !sourceCreationSourceName.trim())
                         || ((sourceCreationNamingAction === "create_new" || sourceCreationNamingAction === "rename_existing")
                           && !createSourceForm.sourceLabel.trim())
                         || (sourceCreationPlan.source_type_mismatch && !sourceCreationUseRegisteredType)
