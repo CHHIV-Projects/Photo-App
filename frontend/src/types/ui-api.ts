@@ -1581,6 +1581,17 @@ export interface SourceEndpointEnrollmentConfirmResponse {
 }
 
 export type SourceCreationType = "local" | "external" | "nas";
+export type SourceCreationNameAction = "create_new" | "use_existing" | "rename_existing" | "cancel";
+export type SourceCreationRecognitionStatus =
+  | "new_device"
+  | "existing_device"
+  | "existing_device_type_mismatch"
+  | "existing_source_active"
+  | "existing_source_inactive"
+  | "existing_legacy_source"
+  | "multiple_source_matches"
+  | "identity_needs_review"
+  | "location_blocked";
 
 export interface SourceCreationMessage {
   code: string;
@@ -1596,11 +1607,24 @@ export interface SourceCreationEndpointMatch {
   identity_confidence: string;
 }
 
+export interface SourceCreationSourceMatch {
+  source_profile_id: number;
+  source_label: string;
+  profile_status: string;
+  source_endpoint_id: number | null;
+  endpoint_relative_root: string | null;
+  match_kind: "modern_exact" | "legacy_exact";
+  selected_for_action: boolean;
+  conflict_reason: string | null;
+}
+
 export interface SourceCreationPlanRequest {
   source_type: SourceCreationType;
-  device_name: string;
   observed_path: string;
+  device_name?: string | null;
+  naming_action?: SourceCreationNameAction | null;
   selected_existing_endpoint_id?: number | null;
+  use_registered_source_type?: boolean;
   operator_review_acknowledged?: boolean;
 }
 
@@ -1608,10 +1632,18 @@ export interface SourceCreationPlanResponse {
   generated_at: string;
   plan_status: "ready" | "needs_review" | "blocked" | "source_exists";
   plan_fingerprint: string;
+  recognition_status: SourceCreationRecognitionStatus;
+  recognition_title: string;
+  recognition_message: string;
   source_type: SourceCreationType;
+  recognized_source_type: SourceCreationType;
+  registered_endpoint_source_type: string | null;
+  source_type_mismatch: boolean;
   persisted_source_type: string;
   requested_device_name: string;
   device_name: string;
+  naming_action: SourceCreationNameAction | null;
+  name_decision_required: boolean;
   observed_path: string;
   canonical_source_root_path: string;
   endpoint_relative_root: string;
@@ -1623,11 +1655,27 @@ export interface SourceCreationPlanResponse {
   durable_identity_identifier_type: string | null;
   durable_identity_identifier: string | null;
   durable_identity_evidence: string[];
-  endpoint_action: "create_new_endpoint" | "reuse_existing_endpoint" | "upgrade_legacy_endpoint" | "none";
-  source_action: "create_new_source" | "reuse_existing_source" | "none";
+  endpoint_action:
+    | "create_new_endpoint"
+    | "reuse_existing_endpoint"
+    | "upgrade_legacy_endpoint"
+    | "rename_existing_endpoint"
+    | "upgrade_and_rename_endpoint"
+    | "none";
+  source_action:
+    | "create_new_source"
+    | "reuse_existing_source"
+    | "reactivate_existing_source"
+    | "adopt_legacy_source"
+    | "adopt_and_reactivate_source"
+    | "none";
   selected_existing_endpoint_id: number | null;
   existing_source_profile_id: number | null;
+  existing_source_status: string | null;
   possible_matches: SourceCreationEndpointMatch[];
+  exact_source_matches: SourceCreationSourceMatch[];
+  conflicting_source_profile_ids: number[];
+  final_action_label: string;
   blockers: SourceCreationMessage[];
   warnings: SourceCreationMessage[];
   required_confirmations: SourceCreationMessage[];
@@ -1646,7 +1694,9 @@ export interface SourceCreationConfirmResponse {
   source_profile_id: number | null;
   source_endpoint_id: number | null;
   observed_path_id: number | null;
+  alias_event_id: number | null;
   source_type: SourceCreationType;
+  recognized_source_type: SourceCreationType;
   persisted_source_type: string;
   device_name: string;
   observed_path: string;
@@ -1665,8 +1715,11 @@ export interface SourceCreationConfirmResponse {
   created_endpoint: boolean;
   reused_endpoint: boolean;
   upgraded_legacy_endpoint: boolean;
+  renamed_endpoint: boolean;
   created_source: boolean;
   reused_source: boolean;
+  reactivated_source: boolean;
+  adopted_legacy_source: boolean;
   created_observed_path: boolean;
   blockers: SourceCreationMessage[];
   warnings: SourceCreationMessage[];

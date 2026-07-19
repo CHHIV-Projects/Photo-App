@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
-from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
+from app.models.source_endpoint import (
+    AccessNode,
+    SourceEndpoint,
+    SourceEndpointAliasEvent,
+    SourceEndpointObservedPath,
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,7 @@ def ensure_source_endpoint_schema(db_session: Session) -> SourceEndpointSchemaSu
     for table in (
         AccessNode.__table__,
         SourceEndpoint.__table__,
+        SourceEndpointAliasEvent.__table__,
         SourceEndpointObservedPath.__table__,
     ):
         if table.name not in existing_tables:

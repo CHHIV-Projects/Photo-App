@@ -16,7 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.api.admin import router as admin_router
 from app.db.session import get_db_session
 from app.models.ingestion_source import IngestionSource
-from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
+from app.models.source_endpoint import (
+    AccessNode,
+    SourceEndpoint,
+    SourceEndpointAliasEvent,
+    SourceEndpointObservedPath,
+)
 from app.services.source_identity.identity_fingerprint import volume_guid_fingerprint
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
@@ -74,6 +79,7 @@ class AdminSourceCreationApiTests(unittest.TestCase):
         )
         AccessNode.__table__.create(self.engine)
         SourceEndpoint.__table__.create(self.engine)
+        SourceEndpointAliasEvent.__table__.create(self.engine)
         IngestionSource.__table__.create(self.engine)
         SourceEndpointObservedPath.__table__.create(self.engine)
         self.db = Session(self.engine)
@@ -91,6 +97,7 @@ class AdminSourceCreationApiTests(unittest.TestCase):
         request = {
             "source_type": "external",
             "device_name": "External 1",
+            "naming_action": "create_new",
             "observed_path": "E:\\Archive\\Family Photos",
         }
         with patch("app.api.admin.get_source_identity_probe_service", return_value=_FakeProbeService()):
@@ -115,6 +122,23 @@ class AdminSourceCreationApiTests(unittest.TestCase):
         source = self.db.get(IngestionSource, result["source_profile_id"])
         self.assertEqual(source.endpoint_relative_root, "Archive\\Family Photos")
         self.assertIsNotNone(source.endpoint_id)
+
+    def test_path_first_plan_does_not_require_device_name_or_write_rows(self) -> None:
+        with patch("app.api.admin.get_source_identity_probe_service", return_value=_FakeProbeService()):
+            response = self.client.post(
+                "/api/admin/source-creation/plan",
+                json={
+                    "source_type": "external",
+                    "observed_path": "E:\\Archive\\Family Photos",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["recognition_status"], "new_device")
+        self.assertEqual(payload["plan_status"], "needs_review")
+        self.assertEqual(self.db.scalar(select(func.count(SourceEndpoint.id))), 0)
+        self.assertEqual(self.db.scalar(select(func.count(IngestionSource.id))), 0)
 
     def test_blocked_plan_writes_nothing(self) -> None:
         response = self.client.post(

@@ -65,7 +65,7 @@ class AccessNode(Base):
 
 
 class SourceEndpoint(Base):
-    """Durable source identity anchor with an immutable v1 alias."""
+    """Durable source identity anchor with a mutable display alias."""
 
     __tablename__ = "source_endpoints"
     __table_args__ = (
@@ -108,6 +108,33 @@ class SourceEndpoint(Base):
         back_populates="source_endpoint",
         cascade="all, delete-orphan",
     )
+    alias_events: Mapped[list["SourceEndpointAliasEvent"]] = relationship(
+        back_populates="source_endpoint",
+        cascade="all, delete-orphan",
+    )
+
+
+class SourceEndpointAliasEvent(Base):
+    """Narrow audit record for an endpoint display-alias change."""
+
+    __tablename__ = "source_endpoint_alias_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    source_endpoint_id: Mapped[int] = mapped_column(
+        ForeignKey("source_endpoints.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    old_alias: Mapped[str] = mapped_column(String(255), nullable=False)
+    new_alias: Mapped[str] = mapped_column(String(255), nullable=False)
+    action_source: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    source_endpoint: Mapped[SourceEndpoint] = relationship(back_populates="alias_events")
 
 
 class SourceEndpointObservedPath(Base):

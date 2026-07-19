@@ -292,6 +292,14 @@
   min-width: 0;
 }
 
+.createSourceDecision {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 1px solid #d7e1ea;
+}
+
 .creationResultGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));

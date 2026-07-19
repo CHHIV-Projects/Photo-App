@@ -39,6 +39,7 @@ import type {
   SourceEndpointEnrollmentConfirmResponse,
   SourceEndpointEnrollmentPlanResponse,
   SourceCreationConfirmResponse,
+  SourceCreationNameAction,
   SourceCreationPlanResponse,
   SourceCreationType,
   SourceIdentityProbeRequest,
@@ -469,6 +470,30 @@ function sourceCreationTypeForOperator(value: OperatorSourceType): SourceCreatio
     return value;
   }
   return null;
+}
+
+const SOURCE_CREATION_STRUCTURED_DECISION_CODES = new Set([
+  "device_name_required",
+  "device_name_decision_required",
+  "source_type_mismatch_acknowledgment_required",
+  "select_existing_endpoint",
+  "select_legacy_endpoint",
+]);
+
+function sourceCreationRequiresReviewAcknowledgment(plan: SourceCreationPlanResponse): boolean {
+  return plan.required_confirmations.some(
+    (confirmation) => !SOURCE_CREATION_STRUCTURED_DECISION_CODES.has(confirmation.code),
+  );
+}
+
+function sourceCreationFinalActionLabel(
+  plan: SourceCreationPlanResponse,
+  namingAction: SourceCreationNameAction | null,
+): string {
+  if (namingAction === "rename_existing" && !plan.final_action_label.startsWith("Rename Device")) {
+    return `Rename Device and ${plan.final_action_label}`;
+  }
+  return plan.final_action_label;
 }
 
 function getCreateSourceIdentitySupport(value: OperatorSourceType): SourceIdentityEnrollmentSupport {
@@ -1147,7 +1172,6 @@ export default function IngestionView() {
   const [workbenchSearch, setWorkbenchSearch] = useState("");
   const [showInactiveWorkbenchSources, setShowInactiveWorkbenchSources] = useState(false);
   const [selectedWorkbenchSourceId, setSelectedWorkbenchSourceId] = useState<number | null>(null);
-  const [isCreateSourceExpanded, setIsCreateSourceExpanded] = useState(false);
   const [createSourceForm, setCreateSourceForm] = useState<EditorFormState>(initialFormState());
   const [sourceCreationPhase, setSourceCreationPhase] = useState<SourceCreationPhase>("idle");
   const [sourceCreationPlan, setSourceCreationPlan] = useState<SourceCreationPlanResponse | null>(null);
@@ -1155,6 +1179,8 @@ export default function IngestionView() {
   const [createdIcloudSource, setCreatedIcloudSource] = useState<SourceProfileSummary | null>(null);
   const [sourceCreationError, setSourceCreationError] = useState<string | null>(null);
   const [sourceCreationSelectedEndpointId, setSourceCreationSelectedEndpointId] = useState<number | null>(null);
+  const [sourceCreationNamingAction, setSourceCreationNamingAction] = useState<SourceCreationNameAction | null>(null);
+  const [sourceCreationUseRegisteredType, setSourceCreationUseRegisteredType] = useState(false);
   const [sourceCreationReviewAcknowledged, setSourceCreationReviewAcknowledged] = useState(false);
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -1892,8 +1918,54 @@ export default function IngestionView() {
     setCreatedIcloudSource(null);
     setSourceCreationError(null);
     setSourceCreationSelectedEndpointId(null);
+    setSourceCreationNamingAction(null);
+    setSourceCreationUseRegisteredType(false);
     setSourceCreationReviewAcknowledged(false);
   }, []);
+
+  const handleIdentifySourceLocation = useCallback(async (selectedEndpointId: number | null = null) => {
+    setSourceCreationError(null);
+    setSourceCreationResult(null);
+    setCreatedIcloudSource(null);
+
+    const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
+    const observedPath = createSourceForm.sourceRootPath.trim();
+    if (!sourceType) {
+      setSourceCreationError("Choose Local, External, or NAS before identifying the location.");
+      return;
+    }
+    if (!observedPath) {
+      setSourceCreationError("Root Path or Mount Point is required.");
+      return;
+    }
+
+    setSourceCreationPhase("planning");
+    try {
+      const plan = await planSourceCreation({
+        source_type: sourceType,
+        observed_path: observedPath,
+        selected_existing_endpoint_id: selectedEndpointId,
+      });
+      setSourceCreationPlan(plan);
+      setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationNamingAction(
+        plan.selected_existing_endpoint_id == null && plan.possible_matches.length === 0
+          ? "create_new"
+          : null,
+      );
+      setSourceCreationUseRegisteredType(!plan.source_type_mismatch);
+      setSourceCreationReviewAcknowledged(false);
+      setCreateSourceForm((current) => ({ ...current, sourceLabel: "" }));
+      setSourceCreationPhase("review");
+
+      if (plan.plan_status === "blocked") {
+        setSourceCreationError(null);
+      }
+    } catch (error) {
+      setSourceCreationPhase("idle");
+      setSourceCreationError(error instanceof Error ? error.message : "Failed to identify the source location.");
+    }
+  }, [createSourceForm.operatorSourceType, createSourceForm.sourceRootPath]);
 
   const handleCreateSource = useCallback(async (confirmReview = false) => {
     const deviceName = createSourceForm.sourceLabel.trim();
@@ -1901,16 +1973,16 @@ export default function IngestionView() {
     setSourceCreationResult(null);
     setCreatedIcloudSource(null);
 
-    if (!deviceName) {
-      setSourceCreationError("Device Name is required.");
-      return;
-    }
     if (createSourceForm.operatorSourceType === "removable") {
       setSourceCreationError("Removable sources are coming later and cannot be created yet.");
       return;
     }
 
     if (createSourceForm.operatorSourceType === "icloud") {
+      if (!deviceName) {
+        setSourceCreationError("Device Name is required.");
+        return;
+      }
       if (!createSourceForm.accountUsername.trim()) {
         setSourceCreationError("Account username is required for iCloud sources.");
         return;
@@ -1945,55 +2017,63 @@ export default function IngestionView() {
       return;
     }
 
+    if (!confirmReview) {
+      await handleIdentifySourceLocation();
+      return;
+    }
+
     const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
     const observedPath = createSourceForm.sourceRootPath.trim();
-    if (!sourceType) {
-      setSourceCreationError("Choose Local, External, NAS, or iCloud.");
+    if (!sourceType || !observedPath || !sourceCreationPlan) {
+      setSourceCreationError("Identify the location before completing Create Source.");
       return;
     }
-    if (!observedPath) {
-      setSourceCreationError("Root Path or Mount Point is required.");
+    const hasExistingEndpoint = sourceCreationPlan.selected_existing_endpoint_id != null;
+    if (!sourceCreationNamingAction) {
+      setSourceCreationError(
+        hasExistingEndpoint
+          ? "Choose Use Existing Name, Rename Device, or Cancel."
+          : "Enter a Device Name before creating this source.",
+      );
       return;
     }
-    if (confirmReview && sourceCreationPlan?.required_confirmations.length && !sourceCreationReviewAcknowledged) {
-      setSourceCreationError("Review acknowledgment is required before creating this source.");
+    if ((sourceCreationNamingAction === "create_new" || sourceCreationNamingAction === "rename_existing") && !deviceName) {
+      setSourceCreationError("Device Name is required.");
       return;
     }
+    if (sourceCreationPlan.source_type_mismatch && !sourceCreationUseRegisteredType) {
+      setSourceCreationError("Confirm the recognized Source Type or cancel.");
+      return;
+    }
+    if (sourceCreationRequiresReviewAcknowledgment(sourceCreationPlan) && !sourceCreationReviewAcknowledged) {
+      setSourceCreationError("Review acknowledgment is required before completing this action.");
+      return;
+    }
+
+    const request = {
+      source_type: sourceType,
+      observed_path: observedPath,
+      device_name: sourceCreationNamingAction === "use_existing" ? null : deviceName,
+      naming_action: sourceCreationNamingAction,
+      selected_existing_endpoint_id: sourceCreationSelectedEndpointId,
+      use_registered_source_type: sourceCreationUseRegisteredType,
+      operator_review_acknowledged: sourceCreationReviewAcknowledged,
+    };
 
     setSourceCreationPhase("planning");
     try {
-      const plan = await planSourceCreation({
-        source_type: sourceType,
-        device_name: deviceName,
-        observed_path: observedPath,
-        selected_existing_endpoint_id: confirmReview ? sourceCreationSelectedEndpointId : null,
-        operator_review_acknowledged: confirmReview && sourceCreationReviewAcknowledged,
-      });
+      const plan = await planSourceCreation(request);
       setSourceCreationPlan(plan);
       setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
-
-      if (plan.plan_status === "blocked") {
+      if (plan.plan_status === "blocked" || plan.plan_status === "needs_review") {
         setSourceCreationPhase("review");
-        setSourceCreationError(plan.blockers[0]?.message ?? "Create Source is blocked.");
-        return;
-      }
-      if (plan.plan_status === "needs_review") {
-        setSourceCreationPhase("review");
-        if (confirmReview) {
-          setSourceCreationError(
-            plan.required_confirmations[0]?.message ?? "Complete the required review before confirming.",
-          );
-        }
+        setSourceCreationError(null);
         return;
       }
 
       setSourceCreationPhase("confirming");
       const result = await confirmSourceCreation({
-        source_type: sourceType,
-        device_name: deviceName,
-        observed_path: observedPath,
-        selected_existing_endpoint_id: plan.selected_existing_endpoint_id,
-        operator_review_acknowledged: confirmReview && sourceCreationReviewAcknowledged,
+        ...request,
         plan_fingerprint: plan.plan_fingerprint,
         operator_confirmed: true,
       });
@@ -2005,26 +2085,33 @@ export default function IngestionView() {
       }
 
       setSourceCreationPhase("complete");
-      setWorkbenchSourceType(createSourceForm.operatorSourceType);
+      setWorkbenchSourceType(result.recognized_source_type);
       await loadProfiles({ refreshOnly: true });
       setSelectedWorkbenchSourceId(result.source_profile_id);
       setBanner({
         kind: "success",
-        message: result.reused_source
-          ? `Source already exists: ${result.source_display_name}`
-          : `Source created: ${result.source_display_name}`,
+        message: result.reactivated_source
+          ? `Source reactivated: ${result.source_display_name}`
+          : result.adopted_legacy_source
+            ? `Existing Source adopted: ${result.source_display_name}`
+            : result.reused_source
+              ? `Existing Source selected: ${result.source_display_name}`
+              : `Source created: ${result.source_display_name}`,
       });
     } catch (error) {
-      setSourceCreationPhase(confirmReview ? "review" : "idle");
+      setSourceCreationPhase("review");
       setSourceCreationError(error instanceof Error ? error.message : "Failed to create source.");
     }
   }, [
     createManagedStagingPreview,
     createSourceForm,
+    handleIdentifySourceLocation,
     loadProfiles,
-    sourceCreationPlan?.required_confirmations.length,
+    sourceCreationNamingAction,
+    sourceCreationPlan,
     sourceCreationReviewAcknowledged,
     sourceCreationSelectedEndpointId,
+    sourceCreationUseRegisteredType,
   ]);
 
   const resetSourceIdentityEnrollmentState = useCallback(() => {
@@ -3487,17 +3574,8 @@ export default function IngestionView() {
       <section className={styles.workbenchPanel} aria-labelledby="create-source-title">
         <div className={styles.workbenchHeader}>
           <h3 id="create-source-title" className={styles.runPanelTitle}>Create a Source</h3>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={() => setIsCreateSourceExpanded((current) => !current)}
-            aria-expanded={isCreateSourceExpanded}
-          >
-            {isCreateSourceExpanded ? "Collapse" : "Expand"}
-          </button>
         </div>
-        {isCreateSourceExpanded && (
-          <div className={styles.createSourceBody}>
+        <div className={styles.createSourceBody}>
             <div className={styles.workbenchControlGroup}>
               <span className={styles.detailLabel}>Source Type</span>
               <div className={styles.segmentedControl} role="group" aria-label="Create source type">
@@ -3526,20 +3604,22 @@ export default function IngestionView() {
             </div>
 
             <div className={styles.createSourceControls}>
-              <label className={styles.formLabel}>
-                Device Name
-                <input
-                  className={styles.formInput}
-                  autoComplete="off"
-                  value={createSourceForm.sourceLabel}
-                  disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming"}
-                  placeholder={createSourceForm.operatorSourceType === "icloud" ? "Family iCloud" : "External 1"}
-                  onChange={(event) => {
-                    resetSourceCreationOutcome();
-                    setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
-                  }}
-                />
-              </label>
+              {createSourceForm.operatorSourceType === "icloud" && (
+                <label className={styles.formLabel}>
+                  Device Name
+                  <input
+                    className={styles.formInput}
+                    autoComplete="off"
+                    value={createSourceForm.sourceLabel}
+                    disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming"}
+                    placeholder="Family iCloud"
+                    onChange={(event) => {
+                      resetSourceCreationOutcome();
+                      setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                    }}
+                  />
+                </label>
+              )}
 
               {createSourceForm.operatorSourceType !== "icloud" && (
                 <label className={styles.formLabel}>
@@ -3621,10 +3701,12 @@ export default function IngestionView() {
                   onClick={() => void handleCreateSource(false)}
                 >
                   {sourceCreationPhase === "planning"
-                    ? "Checking..."
+                    ? "Identifying..."
                     : sourceCreationPhase === "confirming"
                       ? "Creating..."
-                      : "Create Source"}
+                      : createSourceForm.operatorSourceType === "icloud"
+                        ? "Create Source"
+                        : "Identify Location"}
                 </button>
               </div>
             </div>
@@ -3635,19 +3717,27 @@ export default function IngestionView() {
               <section className={styles.creationReview} aria-label="Create Source review">
                 <div className={styles.workbenchSummaryHeader}>
                   <div>
-                    <h4 className={styles.detailHeading}>Source Review</h4>
-                    <p className={styles.helperText}>{sourceCreationPlan.source_display_name}</p>
+                    <h4 className={styles.detailHeading}>{sourceCreationPlan.recognition_title}</h4>
+                    <p className={styles.helperText}>{sourceCreationPlan.recognition_message}</p>
                   </div>
                   <span className={`${styles.pendingBadge} ${sourceCreationPlan.plan_status === "blocked" ? styles.readinessBadgeNotReady : ""}`}>
-                    {sourceCreationPlan.plan_status === "source_exists"
-                      ? "Source exists"
-                      : sourceCreationPlan.plan_status.replace(/_/g, " ")}
+                    {sourceCreationPlan.recognition_status.replace(/_/g, " ")}
                   </span>
                 </div>
 
                 <div className={styles.creationResultGrid}>
-                  <div><span className={styles.detailLabel}>Device Name</span><span>{sourceCreationPlan.device_name}</span></div>
-                  <div><span className={styles.detailLabel}>Source Type</span><span>{getOperatorSourceTypeLabel(createSourceForm.operatorSourceType)}</span></div>
+                  <div>
+                    <span className={styles.detailLabel}>Selected Source Type</span>
+                    <span>{getOperatorSourceTypeLabel(createSourceForm.operatorSourceType)}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Recognized Source Type</span>
+                    <span>{getOperatorSourceTypeLabel(sourceCreationPlan.recognized_source_type)}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Recognized Device</span>
+                    <span>{sourceCreationPlan.selected_existing_endpoint_id ? sourceCreationPlan.device_name : "New device"}</span>
+                  </div>
                   <div>
                     <span className={styles.detailLabel}>Durable Identity</span>
                     <span className={durableIdentityBadgeClassName(sourceCreationPlan.durable_identity_status)}>
@@ -3661,30 +3751,166 @@ export default function IngestionView() {
                     <span>{sourceCreationPlan.entire_endpoint_label ?? sourceCreationPlan.endpoint_relative_root}</span>
                   </div>
                   <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationPlan.observed_path}</span></div>
-                  <div><span className={styles.detailLabel}>Source</span><span>{sourceCreationPlan.source_display_name}</span></div>
+                  <div><span className={styles.detailLabel}>Exact Action</span><span>{sourceCreationFinalActionLabel(sourceCreationPlan, sourceCreationNamingAction)}</span></div>
+                  {sourceCreationPlan.existing_source_status && (
+                    <div><span className={styles.detailLabel}>Existing Source Status</span><span>{sourceCreationPlan.existing_source_status}</span></div>
+                  )}
                 </div>
 
                 {sourceCreationPlan.possible_matches.length > 1 && (
-                  <label className={styles.formLabel}>
-                    Existing Device Identity
-                    <select
-                      className={styles.formInput}
-                      value={sourceCreationSelectedEndpointId ?? ""}
-                      onChange={(event) => {
-                        const parsed = Number(event.target.value);
-                        setSourceCreationSelectedEndpointId(Number.isInteger(parsed) && parsed > 0 ? parsed : null);
-                        setSourceCreationReviewAcknowledged(false);
-                        setSourceCreationError(null);
-                      }}
+                  <div className={styles.createSourceDecision}>
+                    <label className={styles.formLabel}>
+                      Existing Device Identity
+                      <select
+                        className={styles.formInput}
+                        value={sourceCreationSelectedEndpointId ?? ""}
+                        onChange={(event) => {
+                          const parsed = Number(event.target.value);
+                          setSourceCreationSelectedEndpointId(Number.isInteger(parsed) && parsed > 0 ? parsed : null);
+                          setSourceCreationNamingAction(null);
+                          setSourceCreationReviewAcknowledged(false);
+                          setSourceCreationError(null);
+                        }}
+                      >
+                        <option value="">Select device...</option>
+                        {sourceCreationPlan.possible_matches.map((match) => (
+                          <option key={match.source_endpoint_id} value={match.source_endpoint_id}>
+                            {match.alias} ({match.match_strength === "legacy_review" ? "legacy review" : "verified match"})
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={sourceCreationSelectedEndpointId == null || sourceCreationPhase === "planning"}
+                      onClick={() => void handleIdentifySourceLocation(sourceCreationSelectedEndpointId)}
                     >
-                      <option value="">Select device...</option>
-                      {sourceCreationPlan.possible_matches.map((match) => (
-                        <option key={match.source_endpoint_id} value={match.source_endpoint_id}>
-                          {match.alias} ({match.match_strength === "legacy_review" ? "legacy review" : "verified match"})
-                        </option>
+                      Review Selected Device
+                    </button>
+                  </div>
+                )}
+
+                {sourceCreationPlan.selected_existing_endpoint_id != null
+                  && sourceCreationPlan.plan_status !== "blocked" && (
+                  <div className={styles.createSourceDecision}>
+                    <span className={styles.detailLabel}>Device Name</span>
+                    <p className={styles.helperText}>
+                      Recognized Device: <strong>{sourceCreationPlan.device_name}</strong>
+                    </p>
+                    <div className={styles.rowActions} role="group" aria-label="Device Name action">
+                      <button
+                        type="button"
+                        className={sourceCreationNamingAction === "use_existing" ? styles.updateButton : styles.button}
+                        onClick={() => {
+                          setSourceCreationNamingAction("use_existing");
+                          setCreateSourceForm((current) => ({ ...current, sourceLabel: "" }));
+                          setSourceCreationError(null);
+                        }}
+                      >
+                        Use Existing Name
+                      </button>
+                      <button
+                        type="button"
+                        className={sourceCreationNamingAction === "rename_existing" ? styles.updateButton : styles.button}
+                        onClick={() => {
+                          setSourceCreationNamingAction("rename_existing");
+                          setCreateSourceForm((current) => ({ ...current, sourceLabel: sourceCreationPlan.device_name }));
+                          setSourceCreationError(null);
+                        }}
+                      >
+                        Rename Device
+                      </button>
+                      <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
+                        Cancel
+                      </button>
+                    </div>
+                    {sourceCreationNamingAction === "rename_existing" && (
+                      <label className={styles.formLabel}>
+                        New Device Name
+                        <input
+                          className={styles.formInput}
+                          autoComplete="off"
+                          value={createSourceForm.sourceLabel}
+                          onChange={(event) => {
+                            setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                            setSourceCreationError(null);
+                          }}
+                        />
+                        <span className={styles.helperText}>
+                          Durable identity, Sources, roots, and history will not change.
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {sourceCreationPlan.selected_existing_endpoint_id == null
+                  && sourceCreationPlan.possible_matches.length === 0
+                  && sourceCreationPlan.plan_status !== "blocked" && (
+                  <div className={styles.createSourceDecision}>
+                    <label className={styles.formLabel}>
+                      Device Name
+                      <input
+                        className={styles.formInput}
+                        autoComplete="off"
+                        value={createSourceForm.sourceLabel}
+                        placeholder="Name this recognized device"
+                        onChange={(event) => {
+                          setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                          setSourceCreationNamingAction("create_new");
+                          setSourceCreationError(null);
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
+
+                {sourceCreationPlan.source_type_mismatch && (
+                  <div className={styles.createSourceDecision}>
+                    <p className={styles.inlineWarning}>
+                      This location is recognized as {getOperatorSourceTypeLabel(sourceCreationPlan.recognized_source_type)}.
+                      {sourceCreationPlan.selected_existing_endpoint_id
+                        ? " The registered category will be retained."
+                        : " The recognized technical category will be used."}
+                    </p>
+                    <div className={styles.rowActions}>
+                      <button
+                        type="button"
+                        className={sourceCreationUseRegisteredType ? styles.updateButton : styles.button}
+                        onClick={() => {
+                          setSourceCreationUseRegisteredType(true);
+                          setSourceCreationError(null);
+                        }}
+                      >
+                        Continue Using {getOperatorSourceTypeLabel(sourceCreationPlan.recognized_source_type)}
+                      </button>
+                      <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {sourceCreationPlan.exact_source_matches.length > 0 && (
+                  <div className={styles.createSourceDecision}>
+                    <span className={styles.detailLabel}>Exact Source Matches</span>
+                    <div className={styles.creationResultGrid}>
+                      {sourceCreationPlan.exact_source_matches.map((match) => (
+                        <div key={match.source_profile_id}>
+                          <span className={styles.detailLabel}>
+                            Source {match.source_profile_id} | {match.profile_status}
+                          </span>
+                          <span>{match.source_label}</span>
+                          <span className={styles.helperText}>
+                            {match.match_kind === "modern_exact" ? "Endpoint + relative root" : "Legacy exact path"}
+                            {match.selected_for_action ? " | selected" : ""}
+                          </span>
+                          {match.conflict_reason && <span className={styles.helperText}>{match.conflict_reason}</span>}
+                        </div>
                       ))}
-                    </select>
-                  </label>
+                    </div>
+                  </div>
                 )}
 
                 {sourceCreationPlan.blockers.map((blocker) => (
@@ -3693,18 +3919,20 @@ export default function IngestionView() {
                 {sourceCreationPlan.warnings.map((warning) => (
                   <p className={styles.inlineWarning} key={warning.code}>{warning.message}</p>
                 ))}
-                {sourceCreationPlan.required_confirmations.map((confirmation) => (
-                  <p className={styles.inlineWarning} key={confirmation.code}>{confirmation.message}</p>
-                ))}
+                {sourceCreationPlan.required_confirmations
+                  .filter((confirmation) => !SOURCE_CREATION_STRUCTURED_DECISION_CODES.has(confirmation.code))
+                  .map((confirmation) => (
+                    <p className={styles.inlineWarning} key={confirmation.code}>{confirmation.message}</p>
+                  ))}
 
-                {sourceCreationPlan.required_confirmations.length > 0 && (
+                {sourceCreationRequiresReviewAcknowledgment(sourceCreationPlan) && (
                   <label className={styles.checkboxLabel}>
                     <input
                       type="checkbox"
                       checked={sourceCreationReviewAcknowledged}
                       onChange={(event) => setSourceCreationReviewAcknowledged(event.target.checked)}
                     />
-                    I reviewed the identity result and want to create or reuse this source.
+                    I reviewed the identity evidence and want to complete the displayed action.
                   </label>
                 )}
 
@@ -3713,6 +3941,8 @@ export default function IngestionView() {
                   <pre className={styles.advancedDetailsText}>{JSON.stringify({
                     selected_existing_endpoint_id: sourceCreationPlan.selected_existing_endpoint_id,
                     existing_source_profile_id: sourceCreationPlan.existing_source_profile_id,
+                    exact_source_matches: sourceCreationPlan.exact_source_matches,
+                    conflicting_source_profile_ids: sourceCreationPlan.conflicting_source_profile_ids,
                     endpoint_action: sourceCreationPlan.endpoint_action,
                     source_action: sourceCreationPlan.source_action,
                     plan_fingerprint: sourceCreationPlan.plan_fingerprint,
@@ -3720,7 +3950,7 @@ export default function IngestionView() {
                   }, null, 2)}</pre>
                 </details>
 
-                {sourceCreationPlan.plan_status === "needs_review" && (
+                {sourceCreationPlan.plan_status !== "blocked" && (
                   <div className={styles.rowActions}>
                     <button
                       type="button"
@@ -3729,11 +3959,19 @@ export default function IngestionView() {
                         sourceCreationPhase === "planning"
                         || sourceCreationPhase === "confirming"
                         || (sourceCreationPlan.possible_matches.length > 1 && sourceCreationSelectedEndpointId == null)
-                        || (sourceCreationPlan.required_confirmations.length > 0 && !sourceCreationReviewAcknowledged)
+                        || sourceCreationNamingAction == null
+                        || ((sourceCreationNamingAction === "create_new" || sourceCreationNamingAction === "rename_existing")
+                          && !createSourceForm.sourceLabel.trim())
+                        || (sourceCreationPlan.source_type_mismatch && !sourceCreationUseRegisteredType)
+                        || (sourceCreationRequiresReviewAcknowledgment(sourceCreationPlan)
+                          && !sourceCreationReviewAcknowledged)
                       }
                       onClick={() => void handleCreateSource(true)}
                     >
-                      Confirm Create Source
+                      {sourceCreationFinalActionLabel(sourceCreationPlan, sourceCreationNamingAction)}
+                    </button>
+                    <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
+                      Cancel
                     </button>
                   </div>
                 )}
@@ -3743,20 +3981,28 @@ export default function IngestionView() {
             {sourceCreationResult?.creation_status === "completed" && (
               <section className={styles.creationReview} aria-label="Created Source result">
                 <div className={styles.workbenchSummaryHeader}>
-                  <h4 className={styles.detailHeading}>{sourceCreationResult.reused_source ? "Source already exists" : "Source created"}</h4>
+                  <h4 className={styles.detailHeading}>
+                    {sourceCreationResult.reactivated_source
+                      ? "Source reactivated"
+                      : sourceCreationResult.adopted_legacy_source
+                        ? "Existing Source adopted"
+                        : sourceCreationResult.reused_source
+                          ? "Existing Source selected"
+                          : "Source created"}
+                  </h4>
                   <span className={styles.okBadge}>Completed</span>
                 </div>
                 <div className={styles.creationResultGrid}>
                   <div><span className={styles.detailLabel}>Device Name</span><span>{sourceCreationResult.device_name}</span></div>
-                  <div><span className={styles.detailLabel}>Source Type</span><span>{getOperatorSourceTypeLabel(createSourceForm.operatorSourceType)}</span></div>
+                  <div><span className={styles.detailLabel}>Source Type</span><span>{getOperatorSourceTypeLabel(sourceCreationResult.recognized_source_type)}</span></div>
                   <div><span className={styles.detailLabel}>Durable Identity</span><span>{toDurableIdentityLabel(sourceCreationResult.durable_identity_status)}</span></div>
                   <div><span className={styles.detailLabel}>Identifier Type</span><span>{sourceCreationResult.durable_identity_identifier_type ?? "-"}</span></div>
                   <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationResult.durable_identity_identifier ?? "-"}</span></div>
                   <div><span className={styles.detailLabel}>Root Relative to Device</span><span>{sourceCreationResult.entire_endpoint_label ?? sourceCreationResult.endpoint_relative_root}</span></div>
                   <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationResult.observed_path}</span></div>
                   <div><span className={styles.detailLabel}>Source</span><span>{sourceCreationResult.source_display_name}</span></div>
-                  <div><span className={styles.detailLabel}>Device Identity</span><span>{sourceCreationResult.created_endpoint ? "New endpoint created" : "Existing endpoint reused"}</span></div>
-                  <div><span className={styles.detailLabel}>Source Profile</span><span>{sourceCreationResult.created_source ? "New source created" : "Existing source reused"}</span></div>
+                  <div><span className={styles.detailLabel}>Device Identity</span><span>{sourceCreationResult.renamed_endpoint ? "Existing endpoint renamed" : sourceCreationResult.created_endpoint ? "New endpoint created" : "Existing endpoint reused"}</span></div>
+                  <div><span className={styles.detailLabel}>Source Profile</span><span>{sourceCreationResult.reactivated_source ? "Existing source reactivated" : sourceCreationResult.adopted_legacy_source ? "Legacy source linked" : sourceCreationResult.created_source ? "New source created" : "Existing source reused"}</span></div>
                 </div>
                 <details className={styles.advancedDetails}>
                   <summary>Advanced Details</summary>
@@ -3779,8 +4025,7 @@ export default function IngestionView() {
                 </div>
               </section>
             )}
-          </div>
-        )}
+        </div>
       </section>
 
       <section className={styles.workbenchPanel} aria-labelledby="source-selector-title">

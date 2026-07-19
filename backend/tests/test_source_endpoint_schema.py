@@ -12,6 +12,7 @@ from app.models.source_endpoint import (
     SOURCE_ENDPOINT_TYPES,
     AccessNode,
     SourceEndpoint,
+    SourceEndpointAliasEvent,
     SourceEndpointObservedPath,
 )
 from app.services.source_endpoint_schema import ensure_source_endpoint_schema
@@ -79,7 +80,12 @@ class SourceEndpointSchemaTests(unittest.TestCase):
 
         self.assertEqual(
             summary.created_tables,
-            ["access_nodes", "source_endpoints", "source_endpoint_observed_paths"],
+            [
+                "access_nodes",
+                "source_endpoints",
+                "source_endpoint_alias_events",
+                "source_endpoint_observed_paths",
+            ],
         )
         self.assertIn("ingestion_sources.endpoint_id", summary.added_columns)
         self.assertIn("ingestion_sources.endpoint_relative_root", summary.added_columns)
@@ -89,6 +95,7 @@ class SourceEndpointSchemaTests(unittest.TestCase):
         table_names = set(inspector.get_table_names())
         self.assertIn("access_nodes", table_names)
         self.assertIn("source_endpoints", table_names)
+        self.assertIn("source_endpoint_alias_events", table_names)
         self.assertIn("source_endpoint_observed_paths", table_names)
 
         ingestion_columns = {column["name"]: column for column in inspector.get_columns("ingestion_sources")}
@@ -191,6 +198,32 @@ class SourceEndpointSchemaTests(unittest.TestCase):
 
         with self.assertRaises(IntegrityError):
             self.db.commit()
+
+    def test_alias_event_records_only_endpoint_display_name_change(self) -> None:
+        ensure_source_endpoint_schema(self.db)
+        endpoint = SourceEndpoint(
+            endpoint_uuid="endpoint-alias-event",
+            source_type="local",
+            alias="Old Name",
+            alias_normalized="old name",
+            identity_confidence="strong_match",
+        )
+        self.db.add(endpoint)
+        self.db.flush()
+        event = SourceEndpointAliasEvent(
+            source_endpoint_id=endpoint.id,
+            old_alias="Old Name",
+            new_alias="New Name",
+            action_source="test",
+        )
+        self.db.add(event)
+        self.db.commit()
+
+        saved = self.db.scalar(select(SourceEndpointAliasEvent))
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved.source_endpoint_id, endpoint.id)
+        self.assertEqual(saved.old_alias, "Old Name")
+        self.assertEqual(saved.new_alias, "New Name")
 
     def test_source_type_values_are_storable(self) -> None:
         ensure_source_endpoint_schema(self.db)
