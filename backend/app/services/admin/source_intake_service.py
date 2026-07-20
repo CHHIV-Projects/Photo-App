@@ -72,7 +72,7 @@ def _normalize_source_type_strict(value: str | None) -> str:
     normalized = (value or "").strip().lower()
     if normalized not in KNOWN_SOURCE_TYPES:
         raise ValueError(
-            "Invalid source_type. Allowed values: local_folder, external_drive, cloud_export, scan_batch, other."
+            "Invalid source_type. Allowed values: local_folder, external_drive, removable_media, optical_media, cloud_export, scan_batch, other."
         )
     return normalized
 

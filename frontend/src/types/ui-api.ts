@@ -1232,6 +1232,7 @@ export type SourceProfileType =
   | "local_folder"
   | "external_drive"
   | "removable_media"
+  | "optical_media"
   | "cloud_export"
   | "scan_batch"
   | "other";
@@ -1439,6 +1440,7 @@ export type SourceIdentityProbeSourceType =
   | "local"
   | "external_device"
   | "removable_media"
+  | "optical_media"
   | "nas"
   | "cloud";
 
@@ -1581,7 +1583,7 @@ export interface SourceEndpointEnrollmentConfirmResponse {
   warnings: EnrollmentMessage[];
 }
 
-export type SourceCreationType = "local" | "external" | "removable" | "nas";
+export type SourceCreationType = "local" | "external" | "removable" | "optical" | "nas";
 export type SourceCreationNameAction = "create_new" | "use_existing" | "rename_existing" | "cancel";
 export type SourceCreationRecognitionStatus =
   | "new_device"

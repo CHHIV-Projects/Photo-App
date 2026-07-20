@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.session import Base
 
 
-SOURCE_ENDPOINT_TYPES = {"local", "external_device", "removable_media", "nas", "cloud"}
+SOURCE_ENDPOINT_TYPES = {"local", "external_device", "removable_media", "optical_media", "nas", "cloud"}
 SOURCE_ENDPOINT_STATUSES = {"active", "needs_review", "retired"}
 ACCESS_NODE_STATUSES = {"active", "inactive", "retired"}
 SOURCE_ENDPOINT_CONFIDENCE_TIERS = {

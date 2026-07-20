@@ -12,6 +12,9 @@ from app.services.source_identity.durable_identity import summarize_durable_iden
 from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
 from app.services.source_identity.providers.base import CommandResult
 from app.services.source_identity.providers.windows_non_admin import (
+    _OpticalManifestError,
+    _OpticalManifestResult,
+    _optical_metadata_command,
     PathProbeStatus,
     WindowsSourceIdentityProbeProvider,
     mask_guid,
@@ -49,6 +52,7 @@ def _provider(
     access_denied_paths: set[str] | None = None,
     results: dict[tuple[str, ...], CommandResult] | None = None,
     mapped_paths: dict[str, str] | None = None,
+    optical_manifest_reader=None,
 ) -> WindowsSourceIdentityProbeProvider:
     mapped_paths = mapped_paths or {}
     return WindowsSourceIdentityProbeProvider(
@@ -56,6 +60,79 @@ def _provider(
         path_probe=_path_probe(readable_paths or set(), access_denied_paths=access_denied_paths),
         mapped_drive_resolver=lambda path: mapped_paths.get(path),
         command_timeout_seconds=0.01,
+        optical_manifest_reader=optical_manifest_reader,
+    )
+
+
+def _optical_metadata_results(
+    drive: str = "E",
+    *,
+    filesystem: str | None = "UDF",
+    volume_label: str = "",
+    volume_serial: str = "7967C7EC",
+    media_loaded: bool = True,
+    media_type: str = "DVD Writer",
+    drive_name: str = "Slimtype DVD A DS8A5S USB Device",
+    pnp_device_id: str = "USBSTOR\\CDROM&VEN_SLIMTYPE&PROD_DVD_A__DS8A5S&REV_WP56\\FFFFFFFE0D103110198982&0",
+    total_size: int = 736960512,
+    free_space: int = 706088960,
+) -> dict[tuple[str, ...], CommandResult]:
+    script = _optical_metadata_command(drive)
+    payload = json.dumps(
+        {
+            "Volume": {
+                "DriveLetter": drive,
+                "DriveType": "CD-ROM",
+                "FileSystemType": "Unknown",
+                "FileSystemLabel": volume_label,
+                "Size": total_size,
+                "SizeRemaining": free_space,
+            },
+            "LogicalDisk": {
+                "DeviceID": f"{drive}:",
+                "DriveType": 5,
+                "FileSystem": filesystem,
+                "VolumeName": volume_label,
+                "VolumeSerialNumber": volume_serial,
+                "Size": total_size,
+                "FreeSpace": free_space,
+                "MediaType": 11,
+            },
+            "CdRom": {
+                "Drive": f"{drive}:",
+                "MediaLoaded": media_loaded,
+                "MediaType": media_type,
+                "Name": drive_name,
+                "VolumeName": volume_label,
+                "VolumeSerialNumber": volume_serial,
+                "PNPDeviceID": pnp_device_id,
+            },
+        }
+    )
+    return {
+        ("powershell", "-NoProfile", "-Command", script): CommandResult(
+            args=("powershell", "-NoProfile", "-Command", script),
+            returncode=0,
+            stdout=payload,
+        )
+    }
+
+
+def _optical_manifest(
+    entries: tuple[dict[str, object], ...] | None = None,
+    *,
+    root_names: tuple[str, ...] = ("ordinary.txt",),
+) -> _OpticalManifestResult:
+    manifest_entries = entries or (
+        {"relative_path": "ordinary.txt", "entry_type": "file", "file_size": 42},
+    )
+    return _OpticalManifestResult(
+        entries=manifest_entries,
+        root_names=root_names,
+        file_count=sum(1 for item in manifest_entries if item.get("entry_type") == "file"),
+        directory_count=sum(1 for item in manifest_entries if item.get("entry_type") == "directory"),
+        timestamps_included=False,
+        elapsed_seconds=0.003,
     )
 
 
@@ -271,6 +348,147 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         )
 
         self.assertIn("no_readable_media_inserted", [item.code for item in response.blockers])
+
+    def test_optical_data_disc_uses_complete_manifest_fingerprint(self) -> None:
+        provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(),
+        )
+
+        response = provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+        fingerprint = fingerprint_from_probe(response)
+        durable_identity = summarize_durable_identity(probe=response, source_type="optical_media")
+        codes = [item.code for item in response.evidence_items]
+
+        self.assertEqual(response.probe_status, "completed")
+        self.assertEqual(response.source_root_candidate.filesystem_boundary_type, "optical_media_root")
+        self.assertFalse(response.blockers)
+        self.assertIn("filesystem_type_present", codes)
+        self.assertIn("optical_manifest_complete", codes)
+        self.assertIn("optical_media_fingerprint_present", codes)
+        self.assertEqual(fingerprint.strength, "strong")
+        self.assertEqual(fingerprint.version, "optical_media_fingerprint_v1")
+        self.assertEqual(durable_identity.status, "verified")
+        self.assertEqual(durable_identity.identifier_type, "Optical media fingerprint")
+        self.assertNotIn("ordinary.txt", response.model_dump_json())
+
+    def test_optical_fingerprint_excludes_drive_letter_and_reader_hardware(self) -> None:
+        manifest_reader = lambda root_path, *, timeout_seconds: _optical_manifest()
+        e_provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results("E"),
+            optical_manifest_reader=manifest_reader,
+        )
+        f_provider = _provider(
+            readable_paths={"F:\\"},
+            results=_optical_metadata_results("F", drive_name="Different Physical DVD Drive"),
+            optical_manifest_reader=manifest_reader,
+        )
+
+        e_response = e_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+        f_response = f_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="F:\\"))
+
+        self.assertEqual(fingerprint_from_probe(e_response).hash_value, fingerprint_from_probe(f_response).hash_value)
+
+    def test_different_optical_manifest_changes_fingerprint(self) -> None:
+        first_provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(),
+        )
+        second_provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(
+                ({"relative_path": "different.txt", "entry_type": "file", "file_size": 42},),
+                root_names=("different.txt",),
+            ),
+        )
+
+        first = first_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+        second = second_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+
+        self.assertNotEqual(fingerprint_from_probe(first).hash_value, fingerprint_from_probe(second).hash_value)
+
+    def test_optical_empty_drive_blocks_with_specific_message(self) -> None:
+        provider = _provider(
+            results=_optical_metadata_results(media_loaded=False),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(),
+        )
+
+        response = provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+        blocker_codes = [item.code for item in response.blockers]
+
+        self.assertIn("no_readable_optical_media_inserted", blocker_codes)
+        self.assertNotIn("path_not_found", blocker_codes)
+        self.assertEqual(response.blockers[0].message, "No readable optical media is inserted.")
+
+    def test_optical_audio_cd_blocks_only_when_no_data_filesystem_is_exposed(self) -> None:
+        provider = _provider(
+            results=_optical_metadata_results(filesystem=None, volume_label="Audio CD", media_type="Audio CD"),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(),
+        )
+
+        response = provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+
+        self.assertIn("audio_cd_not_supported", [item.code for item in response.blockers])
+        self.assertNotIn("optical_media_fingerprint_present", [item.code for item in response.evidence_items])
+
+    def test_optical_movie_disc_blocks_from_root_level_names(self) -> None:
+        provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(
+                (
+                    {"relative_path": "bdmv", "entry_type": "directory"},
+                    {"relative_path": "certificate", "entry_type": "directory"},
+                ),
+                root_names=("BDMV", "CERTIFICATE"),
+            ),
+        )
+
+        response = provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+
+        self.assertIn("unsupported_movie_optical_media", [item.code for item in response.blockers])
+        self.assertNotIn("optical_media_fingerprint_present", [item.code for item in response.evidence_items])
+
+    def test_virtual_optical_drive_blocks(self) -> None:
+        provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(
+                drive_name="Microsoft Virtual DVD-ROM",
+                pnp_device_id="SCSI\\CDROM&VEN_MSFT&PROD_VIRTUAL_DVD-ROM\\1",
+            ),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(),
+        )
+
+        response = provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+
+        self.assertIn("virtual_optical_drive_not_supported", [item.code for item in response.blockers])
+        self.assertNotIn("optical_media_fingerprint_present", [item.code for item in response.evidence_items])
+
+    def test_optical_manifest_timeout_blocks_without_partial_fingerprint(self) -> None:
+        def _timeout_reader(root_path: str, *, timeout_seconds: float) -> _OpticalManifestResult:
+            raise _OpticalManifestError(
+                "optical_identity_timeout",
+                "The optical disc could not be completely identified within the allowed time. No partial fingerprint was saved.",
+                elapsed_seconds=300.0,
+                file_count=1,
+                directory_count=0,
+            )
+
+        provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(),
+            optical_manifest_reader=_timeout_reader,
+        )
+
+        response = provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+
+        self.assertIn("optical_identity_timeout", [item.code for item in response.blockers])
+        self.assertIn("optical_manifest_partial_summary", [item.code for item in response.evidence_items])
+        self.assertNotIn("optical_media_fingerprint_present", [item.code for item in response.evidence_items])
 
     def test_command_failures_are_summarized_not_crashes(self) -> None:
         results = {

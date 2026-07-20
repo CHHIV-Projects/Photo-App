@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from app.services.source_identity.durable_identity import DurableIdentityStatus
 
 
-SourceCreationType = Literal["local", "external", "removable", "nas"]
+SourceCreationType = Literal["local", "external", "removable", "optical", "nas"]
 SourceCreationPlanStatus = Literal["ready", "needs_review", "blocked", "source_exists"]
 SourceCreationStatus = Literal["completed", "blocked"]
 SourceCreationNameAction = Literal["create_new", "use_existing", "rename_existing", "cancel"]

@@ -15,6 +15,7 @@ from app.services.source_identity.probe_schema import (
 
 FINGERPRINT_VERSION = "source_endpoint_identity_v1"
 VOLUME_GUID_FINGERPRINT_VERSION = "source_endpoint_volume_guid_v2"
+OPTICAL_MEDIA_FINGERPRINT_VERSION = "optical_media_fingerprint_v1"
 FINGERPRINT_HASH_PREFIX = "sha256:"
 STRONG_FINGERPRINT_STRENGTHS = {"strong"}
 
@@ -31,6 +32,22 @@ class FingerprintResult:
 
 def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintResult:
     """Build the same endpoint fingerprint used by enrollment and readiness."""
+    if probe.source_type == "optical_media":
+        for item in probe.evidence_items:
+            if (
+                item.category == "media_evidence"
+                and item.code == "optical_media_fingerprint_present"
+                and item.status == "present"
+                and item.durability == "durable"
+                and item.fingerprint_hash
+                and item.fingerprint_version == OPTICAL_MEDIA_FINGERPRINT_VERSION
+            ):
+                return FingerprintResult(
+                    hash_value=item.fingerprint_hash,
+                    strength="strong",
+                    version=item.fingerprint_version,
+                )
+
     if probe.source_type == "nas":
         server_share = parse_unc_server_share(
             probe.source_root_candidate.path or probe.normalized_observed_path or probe.observed_path
@@ -69,6 +86,14 @@ def volume_guid_fingerprint(volume_guid: str) -> tuple[str, str]:
     return (
         _versioned_hash_for(VOLUME_GUID_FINGERPRINT_VERSION, ["volume_guid", normalized]),
         VOLUME_GUID_FINGERPRINT_VERSION,
+    )
+
+
+def optical_media_fingerprint(payload: dict[str, Any]) -> tuple[str, str]:
+    """Hash a complete metadata-only optical media identity payload."""
+    return (
+        _versioned_hash_for(OPTICAL_MEDIA_FINGERPRINT_VERSION, [stable_hash(payload)]),
+        OPTICAL_MEDIA_FINGERPRINT_VERSION,
     )
 
 

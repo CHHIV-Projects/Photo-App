@@ -7,8 +7,10 @@ import os
 import platform
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
@@ -22,19 +24,25 @@ from app.services.source_identity.probe_schema import (
     SourceIdentitySourceType,
     SourceRootCandidate,
 )
-from app.services.source_identity.identity_fingerprint import volume_guid_fingerprint
+from app.services.source_identity.identity_fingerprint import optical_media_fingerprint, volume_guid_fingerprint
 from app.services.source_identity.providers.base import CommandResult, CommandRunner
 
 
 PROVIDER_NAME = "windows_non_admin_probe_v1"
 PROVIDER_VERSION = "1"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 10.0
+DEFAULT_OPTICAL_FINGERPRINT_TIMEOUT_SECONDS = 300.0
 _DRIVE_RE = re.compile(r"^[a-zA-Z]:")
 _VOLUME_SERIAL_RE = re.compile(r"volume serial number is\s+([0-9a-fA-F-]+)", re.IGNORECASE)
 _VOLUME_GUID_RE = re.compile(r"Volume\{([^}]+)\}", re.IGNORECASE)
 _ERROR_MORE_DATA = 234
 _UNIVERSAL_NAME_INFO_LEVEL = 1
 _CARD_READER_HINT_RE = re.compile(r"\b(sd|mmc|micro\s*sd|card\s*reader|memory\s*card)\b", re.IGNORECASE)
+_VIRTUAL_OPTICAL_HINT_RE = re.compile(
+    r"\b(virtual|vbox|vmware|hyper-v|msft\s+virtual|daemon|dvdfab|elby|imdisk|iso|image)\b",
+    re.IGNORECASE,
+)
+_MOVIE_ROOT_NAMES = {"VIDEO_TS", "BDMV", "AACS"}
 
 
 @dataclass(frozen=True)
@@ -46,6 +54,48 @@ class PathProbeStatus:
     readable: bool
     access_denied: bool = False
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class _OpticalMediaMetadata:
+    drive_type: str | None = None
+    filesystem_type: str | None = None
+    volume_label: str | None = None
+    volume_serial: str | None = None
+    total_size: int | None = None
+    free_space: int | None = None
+    media_loaded: bool | None = None
+    media_type: str | None = None
+    drive_name: str | None = None
+    pnp_device_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _OpticalManifestResult:
+    entries: tuple[dict[str, Any], ...]
+    root_names: tuple[str, ...]
+    file_count: int
+    directory_count: int
+    timestamps_included: bool
+    elapsed_seconds: float
+
+
+class _OpticalManifestError(Exception):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        elapsed_seconds: float = 0.0,
+        file_count: int = 0,
+        directory_count: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.elapsed_seconds = elapsed_seconds
+        self.file_count = file_count
+        self.directory_count = directory_count
 
 
 class WindowsCommandRunner:
@@ -127,6 +177,22 @@ def _drive_root(path: str) -> str | None:
     return cleaned[:2]
 
 
+def _drive_root_path(drive: str) -> str:
+    return drive.rstrip(":\\/").upper() + ":\\"
+
+
+def _optical_metadata_command(drive_letter: str) -> str:
+    drive = drive_letter.rstrip(":\\/").upper()
+    return (
+        "$drive='" + drive + "';"
+        "$logical=Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='" + drive + ":'\" -ErrorAction SilentlyContinue | "
+        "Select-Object -First 1 DeviceID,DriveType,FileSystem,VolumeName,VolumeSerialNumber,Size,FreeSpace,MediaType;"
+        "$cdrom=Get-CimInstance Win32_CDROMDrive -ErrorAction SilentlyContinue | Where-Object Drive -eq '" + drive + ":' | "
+        "Select-Object -First 1 Drive,MediaLoaded,MediaType,Name,VolumeName,VolumeSerialNumber,Manufacturer,PNPDeviceID;"
+        "[pscustomobject]@{LogicalDisk=$logical;CdRom=$cdrom} | ConvertTo-Json -Compress -Depth 4"
+    )
+
+
 def _is_drive_root(path: str) -> bool:
     cleaned = path.strip().replace("/", "\\")
     if not _DRIVE_RE.match(cleaned):
@@ -160,6 +226,8 @@ def _classify_boundary(source_type: SourceIdentitySourceType, observed_path: str
         return "external_volume_root" if is_root else "external_folder"
     if source_type == "removable_media":
         return "removable_media_root" if is_root else "removable_media_folder"
+    if source_type == "optical_media":
+        return "optical_media_root" if is_root else "optical_media_folder"
     return "unknown"
 
 
@@ -277,11 +345,15 @@ class WindowsSourceIdentityProbeProvider:
         path_probe=None,
         mapped_drive_resolver=None,
         command_timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        optical_fingerprint_timeout_seconds: float = DEFAULT_OPTICAL_FINGERPRINT_TIMEOUT_SECONDS,
+        optical_manifest_reader=None,
     ) -> None:
         self._command_runner = command_runner or WindowsCommandRunner()
         self._path_probe = path_probe or _default_path_probe
         self._mapped_drive_resolver = mapped_drive_resolver or resolve_mapped_drive_to_unc
         self._command_timeout_seconds = command_timeout_seconds
+        self._optical_fingerprint_timeout_seconds = optical_fingerprint_timeout_seconds
+        self._optical_manifest_reader = optical_manifest_reader or self._build_optical_manifest
 
     def capabilities(self) -> SourceIdentityProviderCapabilities:
         return SourceIdentityProviderCapabilities(
@@ -299,6 +371,7 @@ class WindowsSourceIdentityProbeProvider:
                 "Drive-letter-to-device joins are partial in the non-admin Windows provider.",
                 "Mapped NAS paths resolve only when the current Windows runtime can resolve the existing drive mapping.",
                 "Cloud providers use provider-specific readiness and are not validated by this filesystem probe.",
+                "Optical media identity uses a complete metadata-only logical-media fingerprint when Windows does not expose a proven inserted-disc identifier.",
             ],
         )
 
@@ -389,6 +462,16 @@ class WindowsSourceIdentityProbeProvider:
             storage_items, storage_warnings = self._collect_storage_metadata_evidence(drive, request.source_type)
             evidence.extend(storage_items)
             warnings.extend(storage_warnings)
+
+        if drive and not mapped_unc_path and request.source_type == "optical_media":
+            optical_items, optical_warnings, optical_blockers = self._collect_optical_media_evidence(
+                drive=drive,
+                observed_path=observed_path,
+                path_status=path_status,
+            )
+            evidence.extend(optical_items)
+            warnings.extend(optical_warnings)
+            blockers.extend(optical_blockers)
 
         network_items, network_warnings = self._collect_network_mapping_evidence()
         evidence.extend(network_items)
@@ -710,6 +793,371 @@ class WindowsSourceIdentityProbeProvider:
 
         return evidence, warnings
 
+    def _collect_optical_media_evidence(
+        self,
+        *,
+        drive: str,
+        observed_path: str,
+        path_status: PathProbeStatus,
+    ) -> tuple[list[SourceIdentityEvidenceItem], list[SourceIdentityEvidenceItem], list[SourceIdentityEvidenceItem]]:
+        evidence: list[SourceIdentityEvidenceItem] = []
+        warnings: list[SourceIdentityEvidenceItem] = []
+        blockers: list[SourceIdentityEvidenceItem] = []
+        metadata, metadata_items, metadata_warnings = self._collect_optical_metadata(drive)
+        evidence.extend(metadata_items)
+        warnings.extend(metadata_warnings)
+
+        drive_type = (metadata.drive_type or "").casefold()
+        if drive_type:
+            evidence.append(
+                self._evidence(
+                    "volume_evidence",
+                    "drive_type_present",
+                    "present",
+                    source_types=["optical_media"],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value=drive_type,
+                    message="Windows volume drive type evidence is present.",
+                )
+            )
+        if metadata.filesystem_type:
+            evidence.append(
+                self._evidence(
+                    "volume_evidence",
+                    "filesystem_type_present",
+                    "present",
+                    source_types=["optical_media"],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value=metadata.filesystem_type.casefold(),
+                    message="Windows filesystem type evidence is present.",
+                )
+            )
+        if metadata.volume_label:
+            evidence.append(
+                self._evidence(
+                    "volume_evidence",
+                    "volume_label_present",
+                    "present",
+                    source_types=["optical_media"],
+                    durability="supporting",
+                    privacy_level="normal_ui",
+                    display_value=metadata.volume_label,
+                    message="Optical volume label evidence is present.",
+                )
+            )
+        if metadata.volume_serial:
+            evidence.append(
+                self._evidence(
+                    "volume_evidence",
+                    "volume_serial_present",
+                    "present",
+                    source_types=["optical_media"],
+                    durability="supporting",
+                    privacy_level="masked_only",
+                    masked_value=mask_identifier(metadata.volume_serial),
+                    message="Optical volume serial evidence is present and masked.",
+                )
+            )
+        if metadata.total_size is not None:
+            used_size = None
+            if metadata.free_space is not None:
+                used_size = max(metadata.total_size - metadata.free_space, 0)
+            evidence.append(
+                self._evidence(
+                    "media_evidence",
+                    "optical_media_capacity_present",
+                    "present",
+                    source_types=["optical_media"],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value=f"total={metadata.total_size};used={used_size if used_size is not None else 'unknown'}",
+                    message="Optical media capacity evidence is present.",
+                )
+            )
+        if metadata.media_loaded is not None:
+            evidence.append(
+                self._evidence(
+                    "media_evidence",
+                    "optical_media_loaded_state_present",
+                    "present",
+                    source_types=["optical_media"],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value="loaded" if metadata.media_loaded else "empty",
+                    message="Windows optical drive media-loaded state is present.",
+                )
+            )
+        if metadata.media_type:
+            evidence.append(
+                self._evidence(
+                    "media_evidence",
+                    "optical_media_type_present",
+                    "present",
+                    source_types=["optical_media"],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value=metadata.media_type,
+                    message="Windows optical media type evidence is present.",
+                )
+            )
+
+        if drive_type and drive_type != "cd-rom":
+            blocker = self._evidence(
+                "volume_evidence",
+                "non_optical_path_selected",
+                "blocked",
+                source_types=["optical_media"],
+                message="The selected path is not an optical drive. Choose Optical only for readable data CDs, DVDs, or Blu-ray discs.",
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
+            return evidence, warnings, blockers
+        if not drive_type:
+            blocker = self._evidence(
+                "volume_evidence",
+                "optical_drive_unverified",
+                "blocked",
+                source_types=["optical_media"],
+                message="Windows could not verify that the selected path is an optical drive.",
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
+            return evidence, warnings, blockers
+
+        physical_status = _optical_physical_status(metadata)
+        if physical_status == "virtual":
+            blocker = self._evidence(
+                "device_evidence",
+                "virtual_optical_drive_not_supported",
+                "blocked",
+                source_types=["optical_media"],
+                message="Virtual optical drives and mounted disc images are not supported in this milestone.",
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
+            return evidence, warnings, blockers
+        if physical_status != "physical":
+            blocker = self._evidence(
+                "device_evidence",
+                "optical_drive_unverified",
+                "blocked",
+                source_types=["optical_media"],
+                message="Windows could not verify this as a supported physical optical drive.",
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
+            return evidence, warnings, blockers
+        evidence.append(
+            self._evidence(
+                "device_evidence",
+                "physical_optical_drive_verified",
+                "present",
+                source_types=["optical_media"],
+                durability="supporting",
+                privacy_level="advanced_only",
+                display_value="physical",
+                message="Windows optical drive evidence indicates a physical optical drive.",
+            )
+        )
+
+        if metadata.media_loaded is False:
+            blocker = self._evidence(
+                "media_evidence",
+                "no_readable_optical_media_inserted",
+                "blocked",
+                source_types=["optical_media"],
+                message="No readable optical media is inserted.",
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
+            return evidence, warnings, blockers
+
+        if not path_status.exists or not path_status.is_dir or not path_status.readable:
+            blocker = self._optical_unreadable_blocker(metadata)
+            evidence.append(blocker)
+            blockers.append(blocker)
+            return evidence, warnings, blockers
+
+        try:
+            manifest = self._optical_manifest_reader(
+                _drive_root_path(drive),
+                timeout_seconds=self._optical_fingerprint_timeout_seconds,
+            )
+        except _OpticalManifestError as exc:
+            blocker = self._evidence(
+                "media_evidence",
+                exc.code,
+                "blocked",
+                source_types=["optical_media"],
+                message=exc.message,
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
+            if exc.file_count or exc.directory_count or exc.elapsed_seconds:
+                evidence.append(
+                    self._evidence(
+                        "media_evidence",
+                        "optical_manifest_partial_summary",
+                        "warning",
+                        source_types=["optical_media"],
+                        display_value=(
+                            f"files={exc.file_count};directories={exc.directory_count};"
+                            f"elapsed_seconds={exc.elapsed_seconds:.3f}"
+                        ),
+                        message="Partial optical manifest metadata was discarded and not fingerprinted.",
+                    )
+                )
+            return evidence, warnings, blockers
+
+        movie_blocker = self._movie_disc_blocker(manifest.root_names)
+        if movie_blocker is not None:
+            evidence.append(movie_blocker)
+            blockers.append(movie_blocker)
+            return evidence, warnings, blockers
+        if not manifest.entries:
+            blocker = self._evidence(
+                "media_evidence",
+                "blank_or_unreadable_optical_media",
+                "blocked",
+                source_types=["optical_media"],
+                message="The optical disc appears blank or does not expose ordinary file entries.",
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
+            return evidence, warnings, blockers
+        if not _optical_identity_evidence_is_sufficient(metadata, manifest):
+            blocker = self._evidence(
+                "media_evidence",
+                "optical_identity_incomplete",
+                "blocked",
+                source_types=["optical_media"],
+                message="The optical disc could not be identified from complete stable metadata.",
+            )
+            evidence.append(blocker)
+            blockers.append(blocker)
+            return evidence, warnings, blockers
+
+        fingerprint_payload = _optical_fingerprint_payload(metadata, manifest)
+        fingerprint_hash, fingerprint_version = optical_media_fingerprint(fingerprint_payload)
+        evidence.append(
+            self._evidence(
+                "media_evidence",
+                "optical_manifest_complete",
+                "present",
+                source_types=["optical_media"],
+                durability="supporting",
+                privacy_level="advanced_only",
+                display_value=(
+                    f"files={manifest.file_count};directories={manifest.directory_count};"
+                    f"timestamps={'included' if manifest.timestamps_included else 'excluded'};"
+                    f"elapsed_seconds={manifest.elapsed_seconds:.3f}"
+                ),
+                message="Complete metadata-only optical directory manifest was enumerated.",
+            )
+        )
+        evidence.append(
+            self._evidence(
+                "media_evidence",
+                "optical_media_fingerprint_present",
+                "present",
+                source_types=["optical_media"],
+                durability="durable",
+                privacy_level="masked_only",
+                masked_value=_mask_hash(fingerprint_hash),
+                fingerprint_hash=fingerprint_hash,
+                fingerprint_version=fingerprint_version,
+                message="Complete metadata-only inserted-disc fingerprint is present and masked.",
+            )
+        )
+        return evidence, warnings, blockers
+
+    def _collect_optical_metadata(
+        self,
+        drive: str,
+    ) -> tuple[_OpticalMediaMetadata, list[SourceIdentityEvidenceItem], list[SourceIdentityEvidenceItem]]:
+        drive_letter = drive.rstrip(":\\/")
+        result = self._command_runner.run(
+            ["powershell", "-NoProfile", "-Command", _optical_metadata_command(drive_letter)],
+            timeout_seconds=self._command_timeout_seconds,
+        )
+        evidence, warnings = self._command_result_to_evidence(result, "optical_media")
+        if result.returncode != 0 or not result.combined_output:
+            return _OpticalMediaMetadata(), evidence, warnings
+        try:
+            payload = json.loads(result.combined_output)
+        except json.JSONDecodeError:
+            item = self._evidence(
+                "capability_evidence",
+                "optical_metadata_unparsed",
+                "warning",
+                source_types=["optical_media"],
+                message="Read-only Windows optical metadata could not be parsed.",
+            )
+            evidence.append(item)
+            warnings.append(item)
+            return _OpticalMediaMetadata(), evidence, warnings
+        return _optical_metadata_from_payload(payload), evidence, warnings
+
+    def _optical_unreadable_blocker(self, metadata: _OpticalMediaMetadata) -> SourceIdentityEvidenceItem:
+        if _looks_like_audio_cd(metadata):
+            return self._evidence(
+                "media_evidence",
+                "audio_cd_not_supported",
+                "blocked",
+                source_types=["optical_media"],
+                message="Audio CDs are not supported by Optical Source Creation.",
+            )
+        return self._evidence(
+            "media_evidence",
+            "blank_or_unreadable_optical_media",
+            "blocked",
+            source_types=["optical_media"],
+            message="The optical disc is blank, unreadable, or does not expose a supported data filesystem.",
+        )
+
+    def _movie_disc_blocker(self, root_names: tuple[str, ...]) -> SourceIdentityEvidenceItem | None:
+        normalized_names = {name.upper() for name in root_names}
+        if normalized_names & _MOVIE_ROOT_NAMES:
+            return self._evidence(
+                "media_evidence",
+                "unsupported_movie_optical_media",
+                "blocked",
+                source_types=["optical_media"],
+                message="Movie-oriented DVD or Blu-ray media is not supported by Optical Source Creation.",
+            )
+        return None
+
+    def _build_optical_manifest(self, root_path: str, *, timeout_seconds: float) -> _OpticalManifestResult:
+        started_at = time.monotonic()
+        deadline = started_at + timeout_seconds
+        first_entries, root_names = _scan_optical_manifest_once(root_path, deadline=deadline)
+        second_entries, _ = _scan_optical_manifest_once(root_path, deadline=deadline)
+        elapsed = time.monotonic() - started_at
+        first_without_timestamps = _strip_manifest_timestamps(first_entries)
+        second_without_timestamps = _strip_manifest_timestamps(second_entries)
+        if first_without_timestamps != second_without_timestamps:
+            raise _OpticalManifestError(
+                "optical_identity_incomplete",
+                "The optical disc metadata changed while it was being identified. Try again without replacing or modifying the disc.",
+                elapsed_seconds=elapsed,
+                file_count=_manifest_file_count(first_without_timestamps),
+                directory_count=_manifest_directory_count(first_without_timestamps),
+            )
+        timestamps_included = first_entries == second_entries and all(
+            "last_write_time_ns" in entry for entry in first_entries
+        )
+        entries = tuple(first_entries if timestamps_included else first_without_timestamps)
+        return _OpticalManifestResult(
+            entries=entries,
+            root_names=tuple(sorted(root_names)),
+            file_count=_manifest_file_count(entries),
+            directory_count=_manifest_directory_count(entries),
+            timestamps_included=timestamps_included,
+            elapsed_seconds=elapsed,
+        )
+
     def _storage_metadata_blockers(
         self,
         *,
@@ -873,8 +1321,12 @@ class WindowsSourceIdentityProbeProvider:
                 )
             )
         lowered = output.lower()
-        if "removable" in lowered or "fixed" in lowered or "network" in lowered:
-            drive_type = "removable" if "removable" in lowered else "network" if "network" in lowered else "fixed"
+        if "removable" in lowered or "fixed" in lowered or "network" in lowered or "cd-rom" in lowered or "cdrom" in lowered:
+            drive_type = (
+                "cd-rom"
+                if "cd-rom" in lowered or "cdrom" in lowered
+                else "removable" if "removable" in lowered else "network" if "network" in lowered else "fixed"
+            )
             evidence.append(
                 self._evidence(
                     "volume_evidence",
@@ -963,6 +1415,12 @@ class WindowsSourceIdentityProbeProvider:
             evidence.append(item)
             blockers.append(item)
             return evidence, warnings, blockers
+        if (
+            request.source_type == "optical_media"
+            and boundary in {"optical_media_root", "optical_media_folder"}
+            and (not path_status.exists or not path_status.is_dir or not path_status.readable)
+        ):
+            return evidence, warnings, blockers
         if not path_status.exists and boundary != "nas_server_only":
             item = self._evidence(
                 "path_evidence",
@@ -1035,6 +1493,16 @@ class WindowsSourceIdentityProbeProvider:
             if has_volume:
                 return "medium_needs_review", "needs_review", "needs_review"
             return "weak_manual_confirmation_required", "needs_review", "needs_review"
+        if request.source_type == "optical_media" and path_status.exists and path_status.readable:
+            has_fingerprint = any(
+                item.category == "media_evidence"
+                and item.code == "optical_media_fingerprint_present"
+                and item.status == "present"
+                for item in evidence
+            )
+            if has_fingerprint:
+                return "strong_match", "not_compared", "not_applicable"
+            return "weak_manual_confirmation_required", "needs_review", "needs_review"
         if request.source_type == "nas" and path_status.exists and path_status.readable:
             return "medium_needs_review", "needs_review", "needs_review"
         return "not_compared", "not_compared", "not_applicable"
@@ -1064,7 +1532,7 @@ class WindowsSourceIdentityProbeProvider:
         if blockers:
             return IdentityFingerprintCandidate(available=False, display="identity-evidence-blocked")
         has_identity = any(
-            item.category in {"volume_evidence", "device_evidence", "network_share_evidence"}
+            item.category in {"volume_evidence", "device_evidence", "media_evidence", "network_share_evidence"}
             and item.status in {"present", "missing"}
             for item in evidence
         )
@@ -1101,6 +1569,8 @@ class WindowsSourceIdentityProbeProvider:
                 summary[item.category] = "missing"
         if source_type in {"external_device", "removable_media"} and summary["device_evidence"] == "not_applicable":
             summary["device_evidence"] = "unavailable"
+        if source_type == "optical_media" and summary["media_evidence"] == "not_applicable":
+            summary["media_evidence"] = "unavailable"
         if source_type == "nas" and summary["network_share_evidence"] == "not_applicable":
             summary["network_share_evidence"] = "unavailable"
         if blockers:
@@ -1124,7 +1594,7 @@ class WindowsSourceIdentityProbeProvider:
             return ["Choose a NAS share or folder inside a share, such as \\\\HENDERSON-NAS\\Photos."]
         if any(item.code in {"path_not_found", "path_not_readable", "access_denied"} for item in blockers):
             return ["Confirm the source is connected and the selected path is readable, then probe again."]
-        if source_type in {"external_device", "removable_media", "nas"} and not blockers:
+        if source_type in {"external_device", "removable_media", "optical_media", "nas"} and not blockers:
             return ["Review the evidence before using this path for endpoint enrollment or future intake."]
         if warnings:
             return ["Review probe warnings before proceeding."]
@@ -1161,6 +1631,250 @@ class WindowsSourceIdentityProbeProvider:
             message=message,
             provider_name=self.provider_name,
         )
+
+
+def _optical_metadata_from_payload(payload: Any) -> _OpticalMediaMetadata:
+    payload_dict = payload if isinstance(payload, dict) else {}
+    volume = _metadata_dict(payload_dict.get("Volume"))
+    logical = _metadata_dict(payload_dict.get("LogicalDisk"))
+    cdrom = _metadata_dict(payload_dict.get("CdRom"))
+    return _OpticalMediaMetadata(
+        drive_type=_normalize_drive_type(_first_text(volume.get("DriveType"), logical.get("DriveType"))),
+        filesystem_type=_normalize_filesystem_type(_first_text(logical.get("FileSystem"), volume.get("FileSystemType"))),
+        volume_label=_normalize_optional_text(
+            _first_text(logical.get("VolumeName"), volume.get("FileSystemLabel"), cdrom.get("VolumeName"))
+        ),
+        volume_serial=_normalize_optional_text(
+            _first_text(logical.get("VolumeSerialNumber"), cdrom.get("VolumeSerialNumber"))
+        ),
+        total_size=_first_int(logical.get("Size"), volume.get("Size")),
+        free_space=_first_int(logical.get("FreeSpace"), volume.get("SizeRemaining")),
+        media_loaded=_bool_value(cdrom.get("MediaLoaded")),
+        media_type=_normalize_optional_text(_first_text(cdrom.get("MediaType"), logical.get("MediaType"))),
+        drive_name=_normalize_optional_text(_first_text(cdrom.get("Name"))),
+        pnp_device_id=_normalize_optional_text(_first_text(cdrom.get("PNPDeviceID"))),
+    )
+
+
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _first_text(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _bool_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().casefold()
+    if text in {"true", "1", "yes"}:
+        return True
+    if text in {"false", "0", "no"}:
+        return False
+    return None
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    cleaned = (value or "").strip()
+    return cleaned or None
+
+
+def _normalize_filesystem_type(value: str | None) -> str | None:
+    cleaned = _normalize_optional_text(value)
+    if cleaned is None or cleaned.casefold() == "unknown":
+        return None
+    return cleaned
+
+
+def _normalize_drive_type(value: str | None) -> str | None:
+    cleaned = _normalize_optional_text(value)
+    if cleaned is None:
+        return None
+    lowered = cleaned.casefold()
+    if lowered in {"5", "cdrom", "cd-rom", "cd-rom drive"} or "cd-rom" in lowered or "cdrom" in lowered:
+        return "cd-rom"
+    if lowered in {"2", "removable"} or "removable" in lowered:
+        return "removable"
+    if lowered in {"3", "fixed"} or "fixed" in lowered:
+        return "fixed"
+    if lowered in {"4", "network"} or "network" in lowered:
+        return "network"
+    return lowered
+
+
+def _optical_physical_status(metadata: _OpticalMediaMetadata) -> str:
+    combined = " ".join(
+        value
+        for value in [metadata.drive_name, metadata.media_type, metadata.pnp_device_id]
+        if value
+    )
+    if _VIRTUAL_OPTICAL_HINT_RE.search(combined):
+        return "virtual"
+    pnp = (metadata.pnp_device_id or "").upper()
+    if any(token in pnp for token in ("USBSTOR\\CDROM", "IDE\\CDROM", "SCSI\\CDROM")):
+        return "physical"
+    if metadata.drive_name and any(token in metadata.drive_name.upper() for token in ("DVD", "CD-ROM", "CDROM", "BLU-RAY", "BD-ROM")):
+        return "physical"
+    return "unverified"
+
+
+def _looks_like_audio_cd(metadata: _OpticalMediaMetadata) -> bool:
+    combined = " ".join(
+        value
+        for value in [metadata.volume_label, metadata.media_type, metadata.filesystem_type]
+        if value
+    ).casefold()
+    return "audio cd" in combined or "cdda" in combined
+
+
+def _optical_identity_evidence_is_sufficient(
+    metadata: _OpticalMediaMetadata,
+    manifest: _OpticalManifestResult,
+) -> bool:
+    has_stable_media_metadata = any(
+        [
+            metadata.filesystem_type,
+            metadata.volume_serial,
+            metadata.volume_label,
+            metadata.total_size is not None,
+        ]
+    )
+    return bool(manifest.entries) and has_stable_media_metadata
+
+
+def _optical_fingerprint_payload(
+    metadata: _OpticalMediaMetadata,
+    manifest: _OpticalManifestResult,
+) -> dict[str, Any]:
+    used_size = None
+    if metadata.total_size is not None and metadata.free_space is not None:
+        used_size = max(metadata.total_size - metadata.free_space, 0)
+    return {
+        "algorithm": "optical_media_fingerprint_v1",
+        "disc_metadata": {
+            "filesystem_type": _normalized_payload_text(metadata.filesystem_type),
+            "volume_label": _normalized_payload_text(metadata.volume_label),
+            "volume_serial": _normalized_payload_text(metadata.volume_serial),
+            "total_size": metadata.total_size,
+            "used_size": used_size,
+        },
+        "manifest": {
+            "entries": list(manifest.entries),
+            "file_count": manifest.file_count,
+            "directory_count": manifest.directory_count,
+            "timestamps_included": manifest.timestamps_included,
+        },
+    }
+
+
+def _normalized_payload_text(value: str | None) -> str | None:
+    cleaned = _normalize_optional_text(value)
+    return cleaned.casefold() if cleaned is not None else None
+
+
+def _mask_hash(value: str) -> str:
+    prefix = "sha256:"
+    if value.startswith(prefix):
+        return f"{prefix}...{value[-12:]}"
+    return mask_identifier(value, keep=12) or "..."
+
+
+def _scan_optical_manifest_once(root_path: str, *, deadline: float) -> tuple[tuple[dict[str, Any], ...], tuple[str, ...]]:
+    entries: list[dict[str, Any]] = []
+    root_names: list[str] = []
+    stack: list[tuple[str, Path]] = [("", Path(root_path))]
+    while stack:
+        _raise_if_manifest_timeout(deadline, entries)
+        relative_dir, current_path = stack.pop()
+        try:
+            directory_entries = list(os.scandir(current_path))
+        except OSError as exc:
+            raise _OpticalManifestError(
+                "optical_identity_incomplete",
+                f"The optical disc manifest could not be completely enumerated: {exc}",
+                file_count=_manifest_file_count(tuple(entries)),
+                directory_count=_manifest_directory_count(tuple(entries)),
+            ) from exc
+        child_directories: list[tuple[str, Path]] = []
+        for directory_entry in directory_entries:
+            _raise_if_manifest_timeout(deadline, entries)
+            relative_path = f"{relative_dir}\\{directory_entry.name}" if relative_dir else directory_entry.name
+            normalized_relative_path = relative_path.replace("/", "\\").strip("\\").casefold()
+            try:
+                is_directory = directory_entry.is_dir(follow_symlinks=False)
+                is_file = directory_entry.is_file(follow_symlinks=False)
+                stat_result = directory_entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise _OpticalManifestError(
+                    "optical_identity_incomplete",
+                    f"The optical disc manifest could not read metadata for {normalized_relative_path}.",
+                    file_count=_manifest_file_count(tuple(entries)),
+                    directory_count=_manifest_directory_count(tuple(entries)),
+                ) from exc
+            entry_type = "directory" if is_directory else "file" if is_file else "other"
+            manifest_entry: dict[str, Any] = {
+                "relative_path": normalized_relative_path,
+                "entry_type": entry_type,
+            }
+            if is_file:
+                manifest_entry["file_size"] = int(stat_result.st_size)
+            if hasattr(stat_result, "st_mtime_ns"):
+                manifest_entry["last_write_time_ns"] = int(stat_result.st_mtime_ns)
+            entries.append(manifest_entry)
+            if not relative_dir:
+                root_names.append(directory_entry.name.upper())
+            if is_directory:
+                child_directories.append((normalized_relative_path, Path(directory_entry.path)))
+        stack.extend(reversed(sorted(child_directories, key=lambda item: item[0])))
+    return tuple(sorted(entries, key=lambda item: (item["relative_path"], item["entry_type"]))), tuple(sorted(root_names))
+
+
+def _raise_if_manifest_timeout(deadline: float, entries: list[dict[str, Any]]) -> None:
+    if time.monotonic() <= deadline:
+        return
+    raise _OpticalManifestError(
+        "optical_identity_timeout",
+        "The optical disc could not be completely identified within the allowed time. No partial fingerprint was saved.",
+        file_count=_manifest_file_count(tuple(entries)),
+        directory_count=_manifest_directory_count(tuple(entries)),
+    )
+
+
+def _strip_manifest_timestamps(entries: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    stripped = []
+    for entry in entries:
+        stripped_entry = dict(entry)
+        stripped_entry.pop("last_write_time_ns", None)
+        stripped.append(stripped_entry)
+    return tuple(sorted(stripped, key=lambda item: (item["relative_path"], item["entry_type"])))
+
+
+def _manifest_file_count(entries: tuple[dict[str, Any], ...]) -> int:
+    return sum(1 for entry in entries if entry.get("entry_type") == "file")
+
+
+def _manifest_directory_count(entries: tuple[dict[str, Any], ...]) -> int:
+    return sum(1 for entry in entries if entry.get("entry_type") == "directory")
 
 
 __all__ = [

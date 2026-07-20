@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-SourceIdentitySourceType = Literal["local", "external_device", "removable_media", "nas", "cloud"]
+SourceIdentitySourceType = Literal["local", "external_device", "removable_media", "optical_media", "nas", "cloud"]
 ProbeMode = Literal["setup_probe", "readiness_probe", "run_launch_verification", "diagnostic_probe"]
 OsFamily = Literal["windows", "linux", "macos", "unknown"]
 ProbeStatus = Literal[
@@ -36,6 +36,8 @@ FilesystemBoundaryType = Literal[
     "external_folder",
     "removable_media_root",
     "removable_media_folder",
+    "optical_media_root",
+    "optical_media_folder",
     "nas_server_only",
     "nas_share_root",
     "nas_share_folder",

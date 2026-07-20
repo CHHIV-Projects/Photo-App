@@ -63,6 +63,8 @@ def summarize_durable_identity(
 
     if probe.source_type == "nas":
         return _summarize_nas_identity(probe)
+    if probe.source_type == "optical_media":
+        return _summarize_optical_media_identity(probe)
     if probe.source_type in {"local", "external_device", "removable_media"}:
         return _summarize_volume_identity(probe)
     if probe.source_type == "cloud":
@@ -145,6 +147,39 @@ def _summarize_nas_identity(probe: SourceIdentityProbeResponse) -> DurableIdenti
     )
 
 
+def _summarize_optical_media_identity(probe: SourceIdentityProbeResponse) -> DurableIdentitySummary:
+    if not _has_readable_source_root(probe):
+        return DurableIdentitySummary(
+            status="not_verified",
+            reason="The optical source root was not confirmed readable, so inserted-disc identity is not verified.",
+            evidence=_safe_probe_evidence(probe),
+        )
+
+    for item in probe.evidence_items:
+        if (
+            item.category == "media_evidence"
+            and item.code == "optical_media_fingerprint_present"
+            and item.status == "present"
+            and item.durability == "durable"
+        ):
+            return DurableIdentitySummary(
+                status="verified",
+                reason="A complete metadata-only optical media fingerprint was confirmed for the inserted disc.",
+                identifier_type="Optical media fingerprint",
+                identifier=item.masked_value or item.display_value,
+                evidence=[
+                    "Optical source root path is readable.",
+                    "Complete metadata-only inserted-disc fingerprint evidence is present.",
+                ],
+            )
+
+    return DurableIdentitySummary(
+        status="not_verified",
+        reason="The optical source root is readable, but no complete inserted-disc fingerprint was confirmed.",
+        evidence=_safe_probe_evidence(probe),
+    )
+
+
 def _is_provider_specific(
     *,
     source_type: str | None,
@@ -192,6 +227,8 @@ def _safe_probe_evidence(probe: SourceIdentityProbeResponse) -> list[str]:
             continue
         if item.code == "volume_guid_present" and item.durability == "durable":
             evidence.append("mountvol Volume GUID evidence is present and masked.")
+        elif item.code == "optical_media_fingerprint_present" and item.durability == "durable":
+            evidence.append("Complete metadata-only inserted-disc fingerprint evidence is present.")
         elif item.code == "volume_serial_present":
             evidence.append("Volume serial evidence is present as supporting evidence.")
         elif item.code == "pnp_evidence_present":

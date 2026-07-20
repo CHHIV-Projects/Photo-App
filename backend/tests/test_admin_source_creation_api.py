@@ -22,7 +22,7 @@ from app.models.source_endpoint import (
     SourceEndpointAliasEvent,
     SourceEndpointObservedPath,
 )
-from app.services.source_identity.identity_fingerprint import volume_guid_fingerprint
+from app.services.source_identity.identity_fingerprint import optical_media_fingerprint, volume_guid_fingerprint
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
     SourceIdentityEvidenceItem,
@@ -34,20 +34,47 @@ from app.services.source_identity.probe_schema import (
 
 class _FakeProbeService:
     def probe(self, request: SourceIdentityProbeRequest) -> SourceIdentityProbeResponse:
-        fingerprint_hash, fingerprint_version = volume_guid_fingerprint(
-            "12345678-90AB-CDEF-1234-567890ABCDEF"
-        )
-        evidence = SourceIdentityEvidenceItem(
-            category="volume_evidence",
-            code="volume_guid_present",
-            status="present",
-            durability="durable",
-            privacy_level="masked_only",
-            source_types=[request.source_type],
-            masked_value="{...cdef}",
-            fingerprint_hash=fingerprint_hash,
-            fingerprint_version=fingerprint_version,
-        )
+        if request.source_type == "optical_media":
+            fingerprint_hash, fingerprint_version = optical_media_fingerprint(
+                {
+                    "algorithm": "optical_media_fingerprint_v1",
+                    "disc_metadata": {"filesystem_type": "udf", "volume_serial": "7967c7ec"},
+                    "manifest": {
+                        "entries": [{"relative_path": "ordinary.txt", "entry_type": "file", "file_size": 42}],
+                        "file_count": 1,
+                        "directory_count": 0,
+                        "timestamps_included": False,
+                    },
+                }
+            )
+            evidence = SourceIdentityEvidenceItem(
+                category="media_evidence",
+                code="optical_media_fingerprint_present",
+                status="present",
+                durability="durable",
+                privacy_level="masked_only",
+                source_types=[request.source_type],
+                masked_value=f"sha256:...{fingerprint_hash[-12:]}",
+                fingerprint_hash=fingerprint_hash,
+                fingerprint_version=fingerprint_version,
+            )
+            boundary = "optical_media_root" if (request.observed_path or "").rstrip("\\/").endswith(":") else "optical_media_folder"
+        else:
+            fingerprint_hash, fingerprint_version = volume_guid_fingerprint(
+                "12345678-90AB-CDEF-1234-567890ABCDEF"
+            )
+            evidence = SourceIdentityEvidenceItem(
+                category="volume_evidence",
+                code="volume_guid_present",
+                status="present",
+                durability="durable",
+                privacy_level="masked_only",
+                source_types=[request.source_type],
+                masked_value="{...cdef}",
+                fingerprint_hash=fingerprint_hash,
+                fingerprint_version=fingerprint_version,
+            )
+            boundary = "external_folder"
         return SourceIdentityProbeResponse(
             probe_status="completed",
             source_type=request.source_type,
@@ -60,7 +87,7 @@ class _FakeProbeService:
             source_root_candidate=SourceRootCandidate(
                 path=request.observed_path,
                 is_valid_source_root_candidate=True,
-                filesystem_boundary_type="external_folder",
+                filesystem_boundary_type=boundary,
                 root_reason="test",
             ),
             evidence_items=[evidence],
@@ -216,6 +243,22 @@ class AdminSourceCreationApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["recognized_source_type"], "removable")
         self.assertEqual(payload["persisted_source_type"], "removable_media")
+
+    def test_optical_plan_is_accepted(self) -> None:
+        request = {
+            "source_type": "optical",
+            "device_name": "12.63.18.6 Validation CD-RW",
+            "naming_action": "create_new",
+            "observed_path": "E:\\",
+        }
+        with patch("app.api.admin.get_source_identity_probe_service", return_value=_FakeProbeService()):
+            response = self.client.post("/api/admin/source-creation/plan", json=request)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["recognized_source_type"], "optical")
+        self.assertEqual(payload["persisted_source_type"], "optical_media")
+        self.assertEqual(payload["entire_endpoint_label"], "Entire disc")
 
     def _override_db(self):
         yield self.db

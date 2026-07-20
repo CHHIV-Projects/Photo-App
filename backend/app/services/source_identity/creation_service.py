@@ -58,6 +58,8 @@ _MANAGEMENT_REVIEW_STATUSES = {"archived", "test", "deprecated"}
 _LOCATION_BLOCKER_CODES = {
     "absolute_source_path_required",
     "access_denied",
+    "audio_cd_not_supported",
+    "blank_or_unreadable_optical_media",
     "drive_root_not_derived",
     "invalid_source_root",
     "mapped_nas_unc_resolution_failed",
@@ -66,7 +68,14 @@ _LOCATION_BLOCKER_CODES = {
     "nas_share_not_derived",
     "network_path_requires_nas",
     "no_readable_media_inserted",
+    "no_readable_optical_media_inserted",
+    "non_optical_path_selected",
     "optical_media_not_supported",
+    "optical_drive_unverified",
+    "optical_identity_incomplete",
+    "optical_identity_timeout",
+    "unsupported_movie_optical_media",
+    "virtual_optical_drive_not_supported",
     "path_not_found",
     "path_not_readable",
     "probe_not_completed",
@@ -1609,6 +1618,7 @@ def _probe_source_type(source_type: str) -> str:
     return {
         "external": "external_device",
         "removable": "removable_media",
+        "optical": "optical_media",
     }.get(source_type, source_type)
 
 
@@ -1622,6 +1632,8 @@ def _operator_source_type_from_probe(
         return "external"
     if probe.source_type == "removable_media":
         return "removable"
+    if probe.source_type == "optical_media":
+        return "optical"
     if probe.source_type == "local":
         return "local"
     return selected_source_type
@@ -1634,19 +1646,22 @@ def _operator_source_type_from_endpoint(source_type: str) -> str | None:
         return "external"
     if source_type == "removable_media":
         return "removable"
+    if source_type == "optical_media":
+        return "optical"
     if source_type == "nas":
         return "nas"
     return None
 
 
 def _operator_source_type_label(source_type: str) -> str:
-    return {"local": "Local", "external": "External", "removable": "Removable", "nas": "NAS"}.get(source_type, source_type)
+    return {"local": "Local", "external": "External", "removable": "Removable", "optical": "Optical", "nas": "NAS"}.get(source_type, source_type)
 
 
 def _endpoint_source_type(source_type: str) -> str:
     return {
         "external": "external_device",
         "removable": "removable_media",
+        "optical": "optical_media",
     }.get(source_type, source_type)
 
 
@@ -1656,6 +1671,8 @@ def _persisted_source_type(source_type: str) -> str:
         "external_device": "external_drive",
         "removable": "removable_media",
         "removable_media": "removable_media",
+        "optical": "optical_media",
+        "optical_media": "optical_media",
     }.get(source_type, "local_folder")
 
 
@@ -1700,7 +1717,7 @@ def _path_shape_blocker(source_type: str, observed_path: str) -> SourceCreationM
     normalized = observed_path.replace("/", "\\")
     if not normalized:
         return _message("source_path_required", "Root Path or Mount Point is required.")
-    if source_type in {"local", "external", "removable"}:
+    if source_type in {"local", "external", "removable", "optical"}:
         if normalized.startswith("\\\\"):
             return _message("network_path_requires_nas", "This is a network path. Choose NAS.")
         if not _DRIVE_PATH_RE.match(normalized):
@@ -1795,7 +1812,7 @@ def _derive_root(
     observed_path: str,
     probe: SourceIdentityProbeResponse | None,
 ) -> tuple[_DerivedRoot | None, SourceCreationMessage | None]:
-    if source_type in {"local", "external", "removable"}:
+    if source_type in {"local", "external", "removable", "optical"}:
         normalized = ntpath.normpath(observed_path.replace("/", "\\"))
         drive, tail = ntpath.splitdrive(normalized)
         if len(drive) != 2 or not tail.startswith("\\"):
@@ -1811,6 +1828,9 @@ def _derive_root(
                 endpoint_relative_root=endpoint_relative_root,
                 entire_endpoint=endpoint_relative_root == "",
                 entire_endpoint_label=(
+                    "Entire disc"
+                    if endpoint_relative_root == "" and source_type == "optical"
+                    else
                     "Entire medium"
                     if endpoint_relative_root == "" and source_type == "removable"
                     else "Entire device" if endpoint_relative_root == "" else None
@@ -1848,6 +1868,8 @@ def _source_display_name_candidates(endpoint_relative_root: str, source_type: st
     if not endpoint_relative_root:
         if source_type == "nas":
             return ["Entire share"]
+        if source_type == "optical":
+            return ["Entire disc"]
         if source_type == "removable":
             return ["Entire medium"]
         return ["Entire device"]
@@ -1856,6 +1878,8 @@ def _source_display_name_candidates(endpoint_relative_root: str, source_type: st
     if not parts:
         if source_type == "nas":
             return ["Entire share"]
+        if source_type == "optical":
+            return ["Entire disc"]
         if source_type == "removable":
             return ["Entire medium"]
         return ["Entire device"]

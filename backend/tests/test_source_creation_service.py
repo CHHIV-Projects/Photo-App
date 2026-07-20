@@ -26,6 +26,7 @@ from app.services.source_identity.creation_schema import (
 from app.services.source_identity.creation_service import SourceCreationService
 from app.services.source_identity.identity_fingerprint import (
     fingerprint_from_probe,
+    optical_media_fingerprint,
     volume_guid_fingerprint,
 )
 from app.services.source_identity.probe_schema import (
@@ -176,6 +177,95 @@ class SourceCreationServiceTests(unittest.TestCase):
         self.assertEqual(plan.entire_endpoint_label, "Entire medium")
         self.assertEqual(plan.source_display_name, "Entire medium")
         self.assertEqual(plan.persisted_source_type, "removable_media")
+
+    def test_whole_optical_disc_uses_empty_relative_root_and_entire_disc(self) -> None:
+        path = "E:\\"
+        probe = _optical_probe(path, boundary="optical_media_root")
+        service = self._service(probe)
+
+        plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="optical",
+                device_name="12.63.18.6 Validation CD-RW",
+                observed_path=path,
+            )
+        )
+
+        self.assertEqual(plan.plan_status, "ready")
+        self.assertEqual(plan.endpoint_relative_root, "")
+        self.assertTrue(plan.entire_endpoint)
+        self.assertEqual(plan.entire_endpoint_label, "Entire disc")
+        self.assertEqual(plan.source_display_name, "Entire disc")
+        self.assertEqual(plan.persisted_source_type, "optical_media")
+        self.assertEqual(plan.durable_identity_status, "verified")
+
+        result = service.confirm(
+            SourceCreationConfirmRequest(
+                source_type="optical",
+                device_name="12.63.18.6 Validation CD-RW",
+                observed_path=path,
+                plan_fingerprint=plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+        source = self.db.get(IngestionSource, result.source_profile_id)
+        endpoint = self.db.get(SourceEndpoint, result.source_endpoint_id)
+
+        self.assertEqual(result.creation_status, "completed")
+        self.assertEqual(source.source_type, "optical_media")
+        self.assertEqual(source.endpoint_relative_root, "")
+        self.assertEqual(endpoint.source_type, "optical_media")
+        self.assertEqual(endpoint.identity_fingerprint_hash, fingerprint_from_probe(probe).hash_value)
+        self.assertEqual(endpoint.identity_fingerprint_version, "optical_media_fingerprint_v1")
+
+    def test_optical_subfolder_reuses_disc_endpoint_and_exact_source(self) -> None:
+        whole_path = "E:\\"
+        folder_path = "E:\\New folder"
+        service = SourceCreationService(
+            self.db,
+            _FakeProbeService(
+                {
+                    whole_path: _optical_probe(whole_path, boundary="optical_media_root"),
+                    folder_path: _optical_probe(folder_path, boundary="optical_media_folder"),
+                }
+            ),
+        )
+        whole = self._confirm(service, "optical", "12.63.18.6 Validation CD-RW", whole_path)
+
+        folder_plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="optical",
+                observed_path=folder_path,
+                naming_action="use_existing",
+            )
+        )
+        self.assertEqual(folder_plan.plan_status, "ready")
+        self.assertEqual(folder_plan.endpoint_relative_root, "New folder")
+        self.assertEqual(folder_plan.source_display_name, "New folder")
+        folder = service.confirm(
+            SourceCreationConfirmRequest(
+                source_type="optical",
+                observed_path=folder_path,
+                naming_action="use_existing",
+                plan_fingerprint=folder_plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+
+        repeat = service.plan(
+            SourceCreationPlanRequest(
+                source_type="optical",
+                observed_path=folder_path,
+                naming_action="use_existing",
+            )
+        )
+
+        self.assertEqual(folder.source_endpoint_id, whole.source_endpoint_id)
+        self.assertNotEqual(folder.source_profile_id, whole.source_profile_id)
+        self.assertEqual(repeat.plan_status, "source_exists")
+        self.assertEqual(repeat.existing_source_profile_id, folder.source_profile_id)
+        self.assertEqual(self.db.scalar(select(func.count(SourceEndpoint.id))), 1)
+        self.assertEqual(self.db.scalar(select(func.count(IngestionSource.id))), 2)
 
     def test_nas_unc_folder_and_whole_share_are_derived(self) -> None:
         folder = "\\\\HENDERSON-NAS\\Photos\\Dad Files\\Scans"
@@ -1538,6 +1628,67 @@ def _volume_probe(
         canonical_path=path,
         boundary=boundary,
         evidence=evidence_items,
+    )
+
+
+def _optical_probe(
+    path: str,
+    *,
+    boundary: str,
+    manifest_name: str = "ordinary.txt",
+) -> SourceIdentityProbeResponse:
+    fingerprint_hash, fingerprint_version = optical_media_fingerprint(
+        {
+            "algorithm": "optical_media_fingerprint_v1",
+            "disc_metadata": {
+                "filesystem_type": "udf",
+                "volume_label": None,
+                "volume_serial": "7967c7ec",
+                "total_size": 736960512,
+                "used_size": 30871552,
+            },
+            "manifest": {
+                "entries": [
+                    {"relative_path": manifest_name, "entry_type": "file", "file_size": 42},
+                ],
+                "file_count": 1,
+                "directory_count": 0,
+                "timestamps_included": False,
+            },
+        }
+    )
+    evidence = [
+        SourceIdentityEvidenceItem(
+            category="media_evidence",
+            code="optical_manifest_complete",
+            status="present",
+            durability="supporting",
+            privacy_level="advanced_only",
+            source_types=["optical_media"],
+            display_value="files=1;directories=0;timestamps=excluded;elapsed_seconds=0.003",
+            message="Complete metadata-only optical directory manifest was enumerated.",
+            provider_name="fake_probe",
+        ),
+        SourceIdentityEvidenceItem(
+            category="media_evidence",
+            code="optical_media_fingerprint_present",
+            status="present",
+            durability="durable",
+            privacy_level="masked_only",
+            source_types=["optical_media"],
+            masked_value=f"sha256:...{fingerprint_hash[-12:]}",
+            fingerprint_hash=fingerprint_hash,
+            fingerprint_version=fingerprint_version,
+            message="Complete metadata-only inserted-disc fingerprint is present and masked.",
+            provider_name="fake_probe",
+        ),
+    ]
+    return _probe_response(
+        source_type="optical_media",
+        observed_path=path,
+        canonical_path=path,
+        boundary=boundary,
+        evidence=evidence,
     )
 
 

@@ -119,7 +119,7 @@ type SourceIdentityEnrollmentSupport = {
   note: string;
 };
 
-type OperatorSourceType = "local" | "external" | "nas" | "removable" | "icloud" | "advanced";
+type OperatorSourceType = "local" | "external" | "nas" | "removable" | "optical" | "icloud" | "advanced";
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: "active", label: "Active" },
@@ -150,6 +150,7 @@ const OPERATOR_SOURCE_TYPE_OPTIONS: Array<{ value: OperatorSourceType; label: st
   { value: "nas", label: "NAS" },
   { value: "icloud", label: "iCloud" },
   { value: "removable", label: "Removable" },
+  { value: "optical", label: "Optical" },
   { value: "advanced", label: "Advanced / Legacy" },
 ];
 
@@ -446,6 +447,9 @@ function persistedSourceTypeForOperator(value: OperatorSourceType): SourceProfil
   if (value === "removable") {
     return "removable_media";
   }
+  if (value === "optical") {
+    return "optical_media";
+  }
   if (value === "icloud") {
     return "cloud_export";
   }
@@ -468,22 +472,37 @@ function probeSourceTypeForOperator(value: OperatorSourceType): SourceIdentityPr
   if (value === "removable") {
     return "removable_media";
   }
+  if (value === "optical") {
+    return "optical_media";
+  }
   return null;
 }
 
 function sourceCreationTypeForOperator(value: OperatorSourceType): SourceCreationType | null {
-  if (value === "local" || value === "external" || value === "removable" || value === "nas") {
+  if (value === "local" || value === "external" || value === "removable" || value === "optical" || value === "nas") {
     return value;
   }
   return null;
 }
 
 function getSourceCreationDeviceLabel(value: OperatorSourceType): string {
-  return value === "removable" ? "Media Name" : "Device Name";
+  if (value === "removable") {
+    return "Media Name";
+  }
+  if (value === "optical") {
+    return "Disc Name";
+  }
+  return "Device Name";
 }
 
 function getSourceCreationRootLabel(value: OperatorSourceType): string {
-  return value === "removable" ? "Root Relative to Media" : "Root Relative to Device";
+  if (value === "removable") {
+    return "Root Relative to Media";
+  }
+  if (value === "optical") {
+    return "Root Relative to Disc";
+  }
+  return "Root Relative to Device";
 }
 
 const SOURCE_CREATION_STRUCTURED_DECISION_CODES = new Set([
@@ -650,6 +669,14 @@ function getSourceIdentityEnrollmentSupport(
       note: "Removable durable identity can be checked after the profile is created.",
     };
   }
+  if (sourceType === "optical_media") {
+    return {
+      supported: true,
+      probeSourceType: "optical_media",
+      reason: null,
+      note: "Optical durable identity uses the inserted disc fingerprint.",
+    };
+  }
   if (sourceType === "local_folder" && isUncPath(pathValue)) {
     return {
       supported: true,
@@ -751,6 +778,9 @@ function getOperatorSourceType(profile: SourceProfileSummary): OperatorSourceTyp
   }
   if (profile.endpoint_source_type === "removable_media") {
     return "removable";
+  }
+  if (profile.endpoint_source_type === "optical_media" || profile.source_type === "optical_media") {
+    return "optical";
   }
   if (profile.source_type === "local_folder") {
     return "local";
@@ -3771,6 +3801,8 @@ export default function IngestionView() {
                     disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming"}
                     placeholder={createSourceForm.operatorSourceType === "nas"
                       ? "\\\\server\\share\\folder"
+                      : createSourceForm.operatorSourceType === "optical"
+                        ? "E:\\"
                       : "E:\\Archive\\Family Photos"}
                     onChange={(event) => {
                       resetSourceCreationOutcome();
@@ -3961,7 +3993,11 @@ export default function IngestionView() {
                           setSourceCreationError(null);
                         }}
                       >
-                        {sourceCreationPlan.recognized_source_type === "removable" ? "Rename Media" : "Rename Device"}
+                        {sourceCreationPlan.recognized_source_type === "removable"
+                          ? "Rename Media"
+                          : sourceCreationPlan.recognized_source_type === "optical"
+                            ? "Rename Disc"
+                            : "Rename Device"}
                       </button>
                       <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
                         Cancel
@@ -3969,7 +4005,11 @@ export default function IngestionView() {
                     </div>
                     {sourceCreationNamingAction === "rename_existing" && (
                       <label className={styles.formLabel}>
-                        {sourceCreationPlan.recognized_source_type === "removable" ? "New Media Name" : "New Device Name"}
+                        {sourceCreationPlan.recognized_source_type === "removable"
+                          ? "New Media Name"
+                          : sourceCreationPlan.recognized_source_type === "optical"
+                            ? "New Disc Name"
+                            : "New Device Name"}
                         <input
                           className={styles.formInput}
                           autoComplete="off"
@@ -4023,7 +4063,11 @@ export default function IngestionView() {
                         className={styles.formInput}
                         autoComplete="off"
                         value={createSourceForm.sourceLabel}
-                        placeholder={sourceCreationPlan.recognized_source_type === "removable" ? "Name this recognized medium" : "Name this recognized device"}
+                        placeholder={sourceCreationPlan.recognized_source_type === "removable"
+                          ? "Name this recognized medium"
+                          : sourceCreationPlan.recognized_source_type === "optical"
+                            ? "Name this recognized disc"
+                            : "Name this recognized device"}
                         onChange={(event) => {
                           setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
                           setSourceCreationNamingAction("create_new");
