@@ -53,7 +53,7 @@ _SOURCE_LABEL_MAX_LENGTH = 255
 _DRIVE_PATH_RE = re.compile(r"^[a-zA-Z]:[\\/]")
 _CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f]")
 _COMPLETED_PROBE_STATUSES = {"completed", "completed_with_warnings"}
-_LOCAL_ENDPOINT_TYPES = {"local", "external_device"}
+_LOCAL_ENDPOINT_TYPES = {"local", "external_device", "removable_media"}
 _MANAGEMENT_REVIEW_STATUSES = {"archived", "test", "deprecated"}
 _LOCATION_BLOCKER_CODES = {
     "absolute_source_path_required",
@@ -65,12 +65,16 @@ _LOCATION_BLOCKER_CODES = {
     "nas_server_not_runnable",
     "nas_share_not_derived",
     "network_path_requires_nas",
+    "no_readable_media_inserted",
+    "optical_media_not_supported",
     "path_not_found",
     "path_not_readable",
     "probe_not_completed",
-    "removable_media_requires_supported_flow",
+    "reliable_external_storage_detected",
+    "removable_requires_positive_evidence",
     "source_path_required",
     "source_root_invalid",
+    "system_volume_requires_local",
 }
 
 
@@ -101,6 +105,12 @@ class _PlanContext:
     selected_endpoint: SourceEndpoint | None
     existing_source: IngestionSource | None
     safe_legacy_upgrade_endpoint_ids: frozenset[int]
+
+
+@dataclass(frozen=True)
+class _RemovableClassification:
+    status: str
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -210,13 +220,6 @@ class SourceCreationService:
             technical_source_type = _operator_source_type_from_probe(probe, request.source_type)
             blockers.extend(_probe_blockers(probe))
             warnings.extend(_probe_warnings(probe))
-            if request.source_type in {"local", "external"} and _has_clear_removable_evidence(probe):
-                blockers.append(
-                    _message(
-                        "removable_media_requires_supported_flow",
-                        "This location is removable media. Use Removable Media when that source type becomes available.",
-                    )
-                )
 
         derived_root, derive_blocker = _derive_root(technical_source_type, observed_path, probe)
         if derive_blocker is not None:
@@ -309,6 +312,49 @@ class SourceCreationService:
 
         if selected_endpoint is not None and selected_endpoint.status == "retired":
             blockers.append(_message("selected_endpoint_retired", "The selected device identity is retired."))
+
+        removable_classification = _classify_removable_probe(probe) if probe is not None else None
+        if selected_endpoint is None and removable_classification is not None:
+            if request.source_type in {"local", "external"} and removable_classification.status in {"supported", "needs_review"}:
+                blockers.append(
+                    _message(
+                        "removable_media_requires_supported_flow",
+                        "This location appears to be removable flash or memory-card media. Choose Removable.",
+                    )
+                )
+            elif request.source_type == "removable":
+                if removable_classification.status == "blocked_external":
+                    blockers.append(
+                        _message(
+                            "reliable_external_storage_detected",
+                            removable_classification.message
+                            or "This location appears to be External storage. Choose External.",
+                        )
+                    )
+                elif removable_classification.status == "blocked_local":
+                    blockers.append(
+                        _message(
+                            "system_volume_requires_local",
+                            removable_classification.message
+                            or "This location appears to be internal/system storage. Choose Local.",
+                        )
+                    )
+                elif removable_classification.status == "blocked_unknown":
+                    blockers.append(
+                        _message(
+                            "removable_requires_positive_evidence",
+                            removable_classification.message
+                            or "Windows could not verify that this is removable flash or memory-card media. Choose Removable only for USB flash drives, SD cards, or microSD cards.",
+                        )
+                    )
+                elif removable_classification.status == "needs_review" and not request.operator_review_acknowledged:
+                    required_confirmations.append(
+                        _message(
+                            "removable_classification_acknowledgment_required",
+                            removable_classification.message
+                            or "Windows could not conclusively classify this medium. Continue only if this is a USB flash drive or memory card. USB HDDs and SSDs should be registered as External.",
+                        )
+                    )
 
         registered_operator_type = (
             _operator_source_type_from_endpoint(selected_endpoint.source_type)
@@ -1560,7 +1606,10 @@ def _initial_probe_source_type(source_type: str, observed_path: str) -> str:
 
 
 def _probe_source_type(source_type: str) -> str:
-    return "external_device" if source_type == "external" else source_type
+    return {
+        "external": "external_device",
+        "removable": "removable_media",
+    }.get(source_type, source_type)
 
 
 def _operator_source_type_from_probe(
@@ -1571,6 +1620,8 @@ def _operator_source_type_from_probe(
         return "nas"
     if probe.source_type == "external_device":
         return "external"
+    if probe.source_type == "removable_media":
+        return "removable"
     if probe.source_type == "local":
         return "local"
     return selected_source_type
@@ -1581,28 +1632,38 @@ def _operator_source_type_from_endpoint(source_type: str) -> str | None:
         return "local"
     if source_type == "external_device":
         return "external"
+    if source_type == "removable_media":
+        return "removable"
     if source_type == "nas":
         return "nas"
     return None
 
 
 def _operator_source_type_label(source_type: str) -> str:
-    return {"local": "Local", "external": "External", "nas": "NAS"}.get(source_type, source_type)
+    return {"local": "Local", "external": "External", "removable": "Removable", "nas": "NAS"}.get(source_type, source_type)
 
 
 def _endpoint_source_type(source_type: str) -> str:
-    return "external_device" if source_type == "external" else source_type
+    return {
+        "external": "external_device",
+        "removable": "removable_media",
+    }.get(source_type, source_type)
 
 
 def _persisted_source_type(source_type: str) -> str:
-    return "external_drive" if source_type == "external" else "local_folder"
+    return {
+        "external": "external_drive",
+        "external_device": "external_drive",
+        "removable": "removable_media",
+        "removable_media": "removable_media",
+    }.get(source_type, "local_folder")
 
 
 def _match_endpoint_types(
     probe: SourceIdentityProbeResponse | None,
     technical_source_type: str,
 ) -> set[str]:
-    if probe is not None and probe.source_type in {"local", "external_device"}:
+    if probe is not None and probe.source_type in {"local", "external_device", "removable_media"}:
         return set(_LOCAL_ENDPOINT_TYPES)
     return {_endpoint_source_type(technical_source_type)}
 
@@ -1639,7 +1700,7 @@ def _path_shape_blocker(source_type: str, observed_path: str) -> SourceCreationM
     normalized = observed_path.replace("/", "\\")
     if not normalized:
         return _message("source_path_required", "Root Path or Mount Point is required.")
-    if source_type in {"local", "external"}:
+    if source_type in {"local", "external", "removable"}:
         if normalized.startswith("\\\\"):
             return _message("network_path_requires_nas", "This is a network path. Choose NAS.")
         if not _DRIVE_PATH_RE.match(normalized):
@@ -1658,13 +1719,57 @@ def _probe_reports_mapped_nas(probe: SourceIdentityProbeResponse) -> bool:
 
 
 def _has_clear_removable_evidence(probe: SourceIdentityProbeResponse) -> bool:
-    return any(
-        item.category == "volume_evidence"
-        and item.code == "drive_type_present"
-        and item.status == "present"
-        and (item.display_value or "").casefold() == "removable"
-        for item in probe.evidence_items
-    )
+    classification = _classify_removable_probe(probe)
+    return classification is not None and classification.status in {"supported", "needs_review"}
+
+
+def _classify_removable_probe(probe: SourceIdentityProbeResponse) -> _RemovableClassification | None:
+    if probe.source_type not in {"local", "external_device", "removable_media"}:
+        return None
+
+    drive_type = _first_probe_display_value(probe, category="volume_evidence", code="drive_type_present")
+    bus_type = _first_probe_display_value(probe, category="device_evidence", code="bus_type_present")
+    media_type = _first_probe_display_value(probe, category="device_evidence", code="media_type_present")
+    has_guid = _has_probe_evidence(probe, category="volume_evidence", code="volume_guid_present")
+    has_sd_signal = _has_probe_evidence(probe, category="media_evidence", code="card_reader_media_present")
+    has_usb_signal = (bus_type or "").casefold() == "usb"
+    has_removable_signal = (drive_type or "").casefold() == "removable"
+    is_system = _has_probe_evidence(probe, category="device_evidence", code="system_volume_present")
+
+    if is_system:
+        return _RemovableClassification(
+            "blocked_local",
+            "This location appears to be internal/system storage. Choose Local.",
+        )
+    if has_usb_signal and (media_type or "").casefold() in {"hdd", "ssd"}:
+        return _RemovableClassification(
+            "blocked_external",
+            "This location appears to be External storage. Choose External.",
+        )
+    if has_removable_signal or has_sd_signal:
+        return _RemovableClassification("supported")
+    if has_guid and has_usb_signal:
+        return _RemovableClassification(
+            "needs_review",
+            "Windows could not conclusively classify this medium. Continue only if this is a USB flash drive or memory card. USB HDDs and SSDs should be registered as External.",
+        )
+    if has_guid:
+        return _RemovableClassification(
+            "blocked_unknown",
+            "Windows could not verify that this is removable flash or memory-card media. Choose Removable only for USB flash drives, SD cards, or microSD cards.",
+        )
+    return None
+
+
+def _has_probe_evidence(probe: SourceIdentityProbeResponse, *, category: str, code: str) -> bool:
+    return any(item.category == category and item.code == code and item.status == "present" for item in probe.evidence_items)
+
+
+def _first_probe_display_value(probe: SourceIdentityProbeResponse, *, category: str, code: str) -> str | None:
+    for item in probe.evidence_items:
+        if item.category == category and item.code == code and item.status == "present":
+            return item.display_value or item.masked_value
+    return None
 
 
 def _probe_blockers(probe: SourceIdentityProbeResponse) -> list[SourceCreationMessage]:
@@ -1690,7 +1795,7 @@ def _derive_root(
     observed_path: str,
     probe: SourceIdentityProbeResponse | None,
 ) -> tuple[_DerivedRoot | None, SourceCreationMessage | None]:
-    if source_type in {"local", "external"}:
+    if source_type in {"local", "external", "removable"}:
         normalized = ntpath.normpath(observed_path.replace("/", "\\"))
         drive, tail = ntpath.splitdrive(normalized)
         if len(drive) != 2 or not tail.startswith("\\"):
@@ -1705,7 +1810,11 @@ def _derive_root(
                 canonical_source_root_path=canonical,
                 endpoint_relative_root=endpoint_relative_root,
                 entire_endpoint=endpoint_relative_root == "",
-                entire_endpoint_label="Entire device" if endpoint_relative_root == "" else None,
+                entire_endpoint_label=(
+                    "Entire medium"
+                    if endpoint_relative_root == "" and source_type == "removable"
+                    else "Entire device" if endpoint_relative_root == "" else None
+                ),
                 endpoint_boundary=endpoint_boundary,
             ),
             None,
@@ -1737,11 +1846,19 @@ def _derive_root(
 
 def _source_display_name_candidates(endpoint_relative_root: str, source_type: str) -> list[str]:
     if not endpoint_relative_root:
-        return ["Entire share" if source_type == "nas" else "Entire device"]
+        if source_type == "nas":
+            return ["Entire share"]
+        if source_type == "removable":
+            return ["Entire medium"]
+        return ["Entire device"]
 
     parts = [part.strip() for part in endpoint_relative_root.replace("/", "\\").split("\\") if part.strip()]
     if not parts:
-        return ["Entire share" if source_type == "nas" else "Entire device"]
+        if source_type == "nas":
+            return ["Entire share"]
+        if source_type == "removable":
+            return ["Entire medium"]
+        return ["Entire device"]
 
     candidates = [parts[-1]]
     if len(parts) >= 2:

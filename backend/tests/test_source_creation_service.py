@@ -152,6 +152,31 @@ class SourceCreationServiceTests(unittest.TestCase):
         self.assertEqual(plan.entire_endpoint_label, "Entire device")
         self.assertEqual(plan.source_display_name, "Entire device")
 
+    def test_whole_removable_uses_empty_relative_root_and_entire_medium(self) -> None:
+        path = "H:\\"
+        service = self._service(
+            _volume_probe(
+                "removable_media",
+                path,
+                boundary="removable_media_root",
+                drive_type="removable",
+            )
+        )
+
+        plan = service.plan(
+            SourceCreationPlanRequest(
+                source_type="removable",
+                device_name="Camera SD Card",
+                observed_path=path,
+            )
+        )
+
+        self.assertEqual(plan.endpoint_relative_root, "")
+        self.assertTrue(plan.entire_endpoint)
+        self.assertEqual(plan.entire_endpoint_label, "Entire medium")
+        self.assertEqual(plan.source_display_name, "Entire medium")
+        self.assertEqual(plan.persisted_source_type, "removable_media")
+
     def test_nas_unc_folder_and_whole_share_are_derived(self) -> None:
         folder = "\\\\HENDERSON-NAS\\Photos\\Dad Files\\Scans"
         share = "\\\\HENDERSON-NAS\\Photos"
@@ -1278,6 +1303,43 @@ class SourceCreationServiceTests(unittest.TestCase):
         self.assertEqual(self.db.scalar(select(func.count(SourceEndpoint.id))), 0)
         self.assertEqual(self.db.scalar(select(func.count(IngestionSource.id))), 0)
 
+    def test_removable_requires_acknowledgment_for_usb_guid_without_media_type(self) -> None:
+        path = "D:\\Photos"
+        probe = _volume_probe(
+            "removable_media",
+            path,
+            boundary="removable_media_folder",
+            bus_type="USB",
+        )
+        service = self._service(probe)
+
+        plan = service.plan(SourceCreationPlanRequest(source_type="removable", observed_path=path))
+
+        self.assertEqual(plan.plan_status, "needs_review")
+        self.assertIn(
+            "removable_classification_acknowledgment_required",
+            [item.code for item in plan.required_confirmations],
+        )
+
+    def test_removable_blocks_usb_hdd_and_directs_to_external(self) -> None:
+        path = "E:\\Photos"
+        probe = _volume_probe(
+            "removable_media",
+            path,
+            boundary="removable_media_folder",
+            bus_type="USB",
+            media_type="HDD",
+        )
+        service = self._service(probe)
+
+        plan = service.plan(SourceCreationPlanRequest(source_type="removable", observed_path=path))
+
+        self.assertEqual(plan.plan_status, "blocked")
+        self.assertIn(
+            "reliable_external_storage_detected",
+            [item.code for item in plan.blockers],
+        )
+
     def test_unreadable_location_takes_precedence_over_duplicate_classification(self) -> None:
         path = "\\\\HENDERSON-NAS\\Photos\\Camera imports"
         blocker = SourceIdentityEvidenceItem(
@@ -1378,6 +1440,10 @@ def _volume_probe(
     *,
     boundary: str,
     drive_type: str | None = None,
+    bus_type: str | None = None,
+    media_type: str | None = None,
+    system_volume: bool = False,
+    card_reader_signal: bool = False,
 ) -> SourceIdentityProbeResponse:
     fingerprint_hash, fingerprint_version = volume_guid_fingerprint(
         "12345678-90AB-CDEF-1234-567890ABCDEF"
@@ -1407,6 +1473,62 @@ def _volume_probe(
                 source_types=[source_type],
                 display_value=drive_type,
                 message="Drive type evidence is present.",
+                provider_name="fake_probe",
+            )
+        )
+    if bus_type is not None:
+        evidence_items.append(
+            SourceIdentityEvidenceItem(
+                category="device_evidence",
+                code="bus_type_present",
+                status="present",
+                durability="supporting",
+                privacy_level="advanced_only",
+                source_types=[source_type],
+                display_value=bus_type,
+                message="Windows bus/interface evidence is present.",
+                provider_name="fake_probe",
+            )
+        )
+    if media_type is not None:
+        evidence_items.append(
+            SourceIdentityEvidenceItem(
+                category="device_evidence",
+                code="media_type_present",
+                status="present",
+                durability="supporting",
+                privacy_level="advanced_only",
+                source_types=[source_type],
+                display_value=media_type,
+                message="Windows physical media-type evidence is present.",
+                provider_name="fake_probe",
+            )
+        )
+    if system_volume:
+        evidence_items.append(
+            SourceIdentityEvidenceItem(
+                category="device_evidence",
+                code="system_volume_present",
+                status="present",
+                durability="supporting",
+                privacy_level="advanced_only",
+                source_types=[source_type],
+                display_value="system",
+                message="Windows storage metadata indicates the active system volume.",
+                provider_name="fake_probe",
+            )
+        )
+    if card_reader_signal:
+        evidence_items.append(
+            SourceIdentityEvidenceItem(
+                category="media_evidence",
+                code="card_reader_media_present",
+                status="present",
+                durability="supporting",
+                privacy_level="advanced_only",
+                source_types=[source_type],
+                display_value="card_reader",
+                message="Windows storage metadata indicates SD, memory-card, or card-reader media.",
                 provider_name="fake_probe",
             )
         )

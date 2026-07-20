@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import re
@@ -27,12 +28,13 @@ from app.services.source_identity.providers.base import CommandResult, CommandRu
 
 PROVIDER_NAME = "windows_non_admin_probe_v1"
 PROVIDER_VERSION = "1"
-DEFAULT_COMMAND_TIMEOUT_SECONDS = 3.0
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 10.0
 _DRIVE_RE = re.compile(r"^[a-zA-Z]:")
 _VOLUME_SERIAL_RE = re.compile(r"volume serial number is\s+([0-9a-fA-F-]+)", re.IGNORECASE)
 _VOLUME_GUID_RE = re.compile(r"Volume\{([^}]+)\}", re.IGNORECASE)
 _ERROR_MORE_DATA = 234
 _UNIVERSAL_NAME_INFO_LEVEL = 1
+_CARD_READER_HINT_RE = re.compile(r"\b(sd|mmc|micro\s*sd|card\s*reader|memory\s*card)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -241,6 +243,27 @@ def resolve_mapped_drive_to_unc(path: str | None) -> str | None:
         return None
 
 
+def _has_evidence_code(
+    evidence: list[SourceIdentityEvidenceItem],
+    *,
+    category: str,
+    code: str,
+) -> bool:
+    return any(item.category == category and item.code == code and item.status == "present" for item in evidence)
+
+
+def _first_evidence_display_value(
+    evidence: list[SourceIdentityEvidenceItem],
+    *,
+    category: str,
+    code: str,
+) -> str | None:
+    for item in evidence:
+        if item.category == category and item.code == code and item.status == "present":
+            return item.display_value or item.masked_value
+    return None
+
+
 class WindowsSourceIdentityProbeProvider:
     """Read-only Windows provider based on non-admin evidence."""
 
@@ -363,6 +386,9 @@ class WindowsSourceIdentityProbeProvider:
             command_items, command_warnings = self._collect_drive_command_evidence(drive, request.source_type)
             evidence.extend(command_items)
             warnings.extend(command_warnings)
+            storage_items, storage_warnings = self._collect_storage_metadata_evidence(drive, request.source_type)
+            evidence.extend(storage_items)
+            warnings.extend(storage_warnings)
 
         network_items, network_warnings = self._collect_network_mapping_evidence()
         evidence.extend(network_items)
@@ -372,6 +398,15 @@ class WindowsSourceIdentityProbeProvider:
             pnp_items, pnp_warnings = self._collect_pnp_evidence(request.source_type)
             evidence.extend(pnp_items)
             warnings.extend(pnp_warnings)
+
+        storage_blockers = self._storage_metadata_blockers(
+            request=request,
+            drive=drive,
+            path_status=path_status,
+            evidence=evidence,
+        )
+        evidence.extend(storage_blockers)
+        blockers.extend(storage_blockers)
 
         confidence, match_status, safe_to_run = self._classify_safety(
             request=request,
@@ -506,6 +541,223 @@ class WindowsSourceIdentityProbeProvider:
                     )
                 )
         return evidence, warnings
+
+    def _collect_storage_metadata_evidence(
+        self,
+        drive: str,
+        source_type: SourceIdentitySourceType,
+    ) -> tuple[list[SourceIdentityEvidenceItem], list[SourceIdentityEvidenceItem]]:
+        drive_letter = drive.rstrip(":\\/")
+        script = (
+            "$drive='" + drive_letter + "';"
+            "$volume=Get-Volume -DriveLetter $drive -ErrorAction SilentlyContinue | "
+            "Select-Object -First 1 DriveLetter,DriveType,UniqueId,Path,FileSystemType,FileSystemLabel;"
+            "$partition=Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue | "
+            "Select-Object -First 1 DriveLetter,DiskNumber,PartitionNumber,Type;"
+            "$disk=$null;$physical=$null;"
+            "if($partition){"
+            "$disk=Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue | "
+            "Select-Object -First 1 Number,FriendlyName,BusType,PartitionStyle,IsBoot,IsSystem,IsReadOnly,IsOffline;"
+            "$physical=Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object DeviceId -eq $partition.DiskNumber | "
+            "Select-Object -First 1 DeviceId,FriendlyName,BusType,MediaType,HealthStatus;}"
+            "[pscustomobject]@{Volume=$volume;Partition=$partition;Disk=$disk;PhysicalDisk=$physical} | ConvertTo-Json -Compress -Depth 4"
+        )
+        result = self._command_runner.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            timeout_seconds=self._command_timeout_seconds,
+        )
+        evidence, warnings = self._command_result_to_evidence(result, source_type)
+        if result.returncode != 0 or not result.combined_output:
+            return evidence, warnings
+
+        try:
+            payload = json.loads(result.combined_output)
+        except json.JSONDecodeError:
+            item = self._evidence(
+                "capability_evidence",
+                "powershell_storage_metadata_unparsed",
+                "warning",
+                source_types=[source_type],
+                message="Read-only Windows storage metadata could not be parsed.",
+            )
+            evidence.append(item)
+            warnings.append(item)
+            return evidence, warnings
+
+        volume = payload.get("Volume") or {}
+        disk = payload.get("Disk") or {}
+        physical_disk = payload.get("PhysicalDisk") or {}
+        partition = payload.get("Partition") or {}
+
+        drive_type = str(volume.get("DriveType") or "").strip()
+        if drive_type:
+            evidence.append(
+                self._evidence(
+                    "volume_evidence",
+                    "drive_type_present",
+                    "present",
+                    source_types=[source_type],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value=drive_type.casefold(),
+                    message="Windows volume drive type evidence is present.",
+                )
+            )
+
+        unique_id = str(volume.get("UniqueId") or "").strip()
+        if unique_id and not any(item.code == "volume_guid_present" for item in evidence):
+            guid_match = _VOLUME_GUID_RE.search(unique_id)
+            if guid_match:
+                fingerprint_hash, fingerprint_version = volume_guid_fingerprint(guid_match.group(1))
+                evidence.append(
+                    self._evidence(
+                        "volume_evidence",
+                        "volume_guid_present",
+                        "present",
+                        source_types=[source_type],
+                        durability="durable",
+                        privacy_level="masked_only",
+                        masked_value=mask_guid(unique_id),
+                        fingerprint_hash=fingerprint_hash,
+                        fingerprint_version=fingerprint_version,
+                        message="Windows storage metadata confirmed the mounted volume GUID and masked it.",
+                    )
+                )
+
+        bus_type = str(physical_disk.get("BusType") or disk.get("BusType") or "").strip()
+        if bus_type:
+            evidence.append(
+                self._evidence(
+                    "device_evidence",
+                    "bus_type_present",
+                    "present",
+                    source_types=[source_type],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value=bus_type.upper(),
+                    message="Windows bus/interface evidence is present.",
+                )
+            )
+
+        media_type = str(physical_disk.get("MediaType") or "").strip()
+        if media_type:
+            evidence.append(
+                self._evidence(
+                    "device_evidence",
+                    "media_type_present",
+                    "present",
+                    source_types=[source_type],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value=media_type.upper(),
+                    message="Windows physical media-type evidence is present.",
+                )
+            )
+
+        friendly_name = " ".join(
+            value
+            for value in [
+                str(physical_disk.get("FriendlyName") or "").strip(),
+                str(disk.get("FriendlyName") or "").strip(),
+            ]
+            if value
+        )
+        if friendly_name and _CARD_READER_HINT_RE.search(friendly_name):
+            evidence.append(
+                self._evidence(
+                    "media_evidence",
+                    "card_reader_media_present",
+                    "present",
+                    source_types=[source_type],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value="card_reader",
+                    message="Windows storage metadata indicates SD, memory-card, or card-reader media.",
+                )
+            )
+
+        is_system = (
+            bool(disk.get("IsSystem"))
+            or bool(disk.get("IsBoot"))
+            or drive_letter.casefold() == os.environ.get("SystemDrive", "C:").rstrip(":").casefold()
+        )
+        if is_system:
+            evidence.append(
+                self._evidence(
+                    "device_evidence",
+                    "system_volume_present",
+                    "present",
+                    source_types=[source_type],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    display_value="system",
+                    message="Windows storage metadata indicates the active system volume.",
+                )
+            )
+
+        if partition:
+            evidence.append(
+                self._evidence(
+                    "device_evidence",
+                    "partition_metadata_present",
+                    "present",
+                    source_types=[source_type],
+                    durability="supporting",
+                    privacy_level="advanced_only",
+                    message="Windows partition metadata is present.",
+                )
+            )
+
+        return evidence, warnings
+
+    def _storage_metadata_blockers(
+        self,
+        *,
+        request: SourceIdentityProbeRequest,
+        drive: str | None,
+        path_status: PathProbeStatus,
+        evidence: list[SourceIdentityEvidenceItem],
+    ) -> list[SourceIdentityEvidenceItem]:
+        blockers: list[SourceIdentityEvidenceItem] = []
+        drive_type = _first_evidence_display_value(evidence, category="volume_evidence", code="drive_type_present")
+        has_volume_guid = any(item.category == "volume_evidence" and item.code == "volume_guid_present" for item in evidence)
+        if request.source_type in {"local", "external_device", "removable_media"} and (drive_type or "").casefold() == "cd-rom":
+            blockers.append(
+                self._evidence(
+                    "volume_evidence",
+                    "optical_media_not_supported",
+                    "blocked",
+                    source_types=[request.source_type],
+                    message="Optical media is not supported yet. Support for data CDs, DVDs, and Blu-ray discs will be added separately.",
+                )
+            )
+        if request.source_type == "removable_media" and _has_evidence_code(evidence, category="device_evidence", code="system_volume_present"):
+            blockers.append(
+                self._evidence(
+                    "device_evidence",
+                    "system_volume_requires_local",
+                    "blocked",
+                    source_types=[request.source_type],
+                    message="This location is the active Windows system volume. Use Local instead.",
+                )
+            )
+        if (
+            request.source_type == "removable_media"
+            and drive is not None
+            and not path_status.exists
+            and not has_volume_guid
+            and (drive_type or "").casefold() in {"removable", "cd-rom"}
+        ):
+            blockers.append(
+                self._evidence(
+                    "media_evidence",
+                    "no_readable_media_inserted",
+                    "blocked",
+                    source_types=[request.source_type],
+                    message="No readable media is inserted.",
+                )
+            )
+        return blockers
 
     def _collect_network_mapping_evidence(self) -> tuple[list[SourceIdentityEvidenceItem], list[SourceIdentityEvidenceItem]]:
         result = self._command_runner.run(["net", "use"], timeout_seconds=self._command_timeout_seconds)

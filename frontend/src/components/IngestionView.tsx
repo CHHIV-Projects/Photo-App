@@ -149,7 +149,7 @@ const OPERATOR_SOURCE_TYPE_OPTIONS: Array<{ value: OperatorSourceType; label: st
   { value: "external", label: "External" },
   { value: "nas", label: "NAS" },
   { value: "icloud", label: "iCloud" },
-  { value: "removable", label: "Removable - coming later", disabled: true },
+  { value: "removable", label: "Removable" },
   { value: "advanced", label: "Advanced / Legacy" },
 ];
 
@@ -443,6 +443,9 @@ function persistedSourceTypeForOperator(value: OperatorSourceType): SourceProfil
   if (value === "external") {
     return "external_drive";
   }
+  if (value === "removable") {
+    return "removable_media";
+  }
   if (value === "icloud") {
     return "cloud_export";
   }
@@ -462,14 +465,25 @@ function probeSourceTypeForOperator(value: OperatorSourceType): SourceIdentityPr
   if (value === "external") {
     return "external_device";
   }
+  if (value === "removable") {
+    return "removable_media";
+  }
   return null;
 }
 
 function sourceCreationTypeForOperator(value: OperatorSourceType): SourceCreationType | null {
-  if (value === "local" || value === "external" || value === "nas") {
+  if (value === "local" || value === "external" || value === "removable" || value === "nas") {
     return value;
   }
   return null;
+}
+
+function getSourceCreationDeviceLabel(value: OperatorSourceType): string {
+  return value === "removable" ? "Media Name" : "Device Name";
+}
+
+function getSourceCreationRootLabel(value: OperatorSourceType): string {
+  return value === "removable" ? "Root Relative to Media" : "Root Relative to Device";
 }
 
 const SOURCE_CREATION_STRUCTURED_DECISION_CODES = new Set([
@@ -547,9 +561,7 @@ function getCreateSourceIdentitySupport(value: OperatorSourceType): SourceIdenti
   return {
     supported: false,
     probeSourceType: null,
-    reason: value === "removable"
-      ? "Removable sources are coming later."
-      : "Source Identity Check is not available for this Advanced / Legacy source type.",
+    reason: "Source Identity Check is not available for this Advanced / Legacy source type.",
     note: "Generic durable identity is unavailable for this source type.",
   };
 }
@@ -575,6 +587,9 @@ function suggestSourceName(sourceType: OperatorSourceType, pathValue: string): s
   }
   if (sourceType === "external") {
     return leaf ? `External - ${leaf}` : "External Source";
+  }
+  if (sourceType === "removable") {
+    return leaf ? `Removable - ${leaf}` : "Removable Source";
   }
   if (sourceType === "local") {
     return leaf ? `Local - ${leaf}` : "Local Source";
@@ -625,6 +640,14 @@ function getSourceIdentityEnrollmentSupport(
       probeSourceType: "external_device",
       reason: null,
       note: "External durable identity can be checked after the profile is created.",
+    };
+  }
+  if (sourceType === "removable_media") {
+    return {
+      supported: true,
+      probeSourceType: "removable_media",
+      reason: null,
+      note: "Removable durable identity can be checked after the profile is created.",
     };
   }
   if (sourceType === "local_folder" && isUncPath(pathValue)) {
@@ -2028,11 +2051,6 @@ export default function IngestionView() {
     setSourceCreationResult(null);
     setCreatedIcloudSource(null);
 
-    if (createSourceForm.operatorSourceType === "removable") {
-      setSourceCreationError("Removable sources are coming later and cannot be created yet.");
-      return;
-    }
-
     if (createSourceForm.operatorSourceType === "icloud") {
       if (!deviceName) {
         setSourceCreationError("Device Name is required.");
@@ -2577,11 +2595,6 @@ export default function IngestionView() {
     if (editorMode === "create") {
       if (!trimmedLabel) {
         setEditorError("Source Name is required.");
-        return;
-      }
-
-      if (editorForm.operatorSourceType === "removable") {
-        setEditorError("Removable sources are coming later and cannot be created yet.");
         return;
       }
 
@@ -3825,7 +3838,7 @@ export default function IngestionView() {
                 <button
                   type="button"
                   className={styles.updateButton}
-                  disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || createSourceForm.operatorSourceType === "removable"}
+                  disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming"}
                   onClick={() => void handleCreateSource(false)}
                 >
                   {sourceCreationPhase === "planning"
@@ -3876,7 +3889,7 @@ export default function IngestionView() {
                   <div><span className={styles.detailLabel}>Identifier Type</span><span>{sourceCreationPlan.durable_identity_identifier_type ?? "-"}</span></div>
                   <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationPlan.durable_identity_identifier ?? "-"}</span></div>
                   <div>
-                    <span className={styles.detailLabel}>Root Relative to Device</span>
+                    <span className={styles.detailLabel}>{getSourceCreationRootLabel(sourceCreationPlan.recognized_source_type)}</span>
                     <span>{sourceCreationPlan.entire_endpoint_label ?? sourceCreationPlan.endpoint_relative_root}</span>
                   </div>
                   <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationPlan.observed_path}</span></div>
@@ -3923,11 +3936,11 @@ export default function IngestionView() {
                 {sourceCreationPlan.selected_existing_endpoint_id != null
                   && (
                   <div className={styles.createSourceDecision}>
-                    <span className={styles.detailLabel}>Device Name</span>
+                    <span className={styles.detailLabel}>{getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)}</span>
                     <p className={styles.helperText}>
                       Recognized Device: <strong>{sourceCreationPlan.device_name}</strong>
                     </p>
-                    <div className={styles.rowActions} role="group" aria-label="Device Name action">
+                    <div className={styles.rowActions} role="group" aria-label={`${getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)} action`}>
                       <button
                         type="button"
                         className={sourceCreationNamingAction === "use_existing" ? styles.updateButton : styles.button}
@@ -3948,7 +3961,7 @@ export default function IngestionView() {
                           setSourceCreationError(null);
                         }}
                       >
-                        Rename Device
+                        {sourceCreationPlan.recognized_source_type === "removable" ? "Rename Media" : "Rename Device"}
                       </button>
                       <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
                         Cancel
@@ -3956,7 +3969,7 @@ export default function IngestionView() {
                     </div>
                     {sourceCreationNamingAction === "rename_existing" && (
                       <label className={styles.formLabel}>
-                        New Device Name
+                        {sourceCreationPlan.recognized_source_type === "removable" ? "New Media Name" : "New Device Name"}
                         <input
                           className={styles.formInput}
                           autoComplete="off"
@@ -4005,12 +4018,12 @@ export default function IngestionView() {
                   && sourceCreationPlan.plan_status !== "blocked" && (
                   <div className={styles.createSourceDecision}>
                     <label className={styles.formLabel}>
-                      Device Name
+                      {getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)}
                       <input
                         className={styles.formInput}
                         autoComplete="off"
                         value={createSourceForm.sourceLabel}
-                        placeholder="Name this recognized device"
+                        placeholder={sourceCreationPlan.recognized_source_type === "removable" ? "Name this recognized medium" : "Name this recognized device"}
                         onChange={(event) => {
                           setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
                           setSourceCreationNamingAction("create_new");
@@ -4142,12 +4155,12 @@ export default function IngestionView() {
                   <span className={styles.okBadge}>Completed</span>
                 </div>
                 <div className={styles.creationResultGrid}>
-                  <div><span className={styles.detailLabel}>Device Name</span><span>{sourceCreationResult.device_name}</span></div>
+                  <div><span className={styles.detailLabel}>{getSourceCreationDeviceLabel(sourceCreationResult.recognized_source_type)}</span><span>{sourceCreationResult.device_name}</span></div>
                   <div><span className={styles.detailLabel}>Source Type</span><span>{getOperatorSourceTypeLabel(sourceCreationResult.recognized_source_type)}</span></div>
                   <div><span className={styles.detailLabel}>Durable Identity</span><span>{toDurableIdentityLabel(sourceCreationResult.durable_identity_status)}</span></div>
                   <div><span className={styles.detailLabel}>Identifier Type</span><span>{sourceCreationResult.durable_identity_identifier_type ?? "-"}</span></div>
                   <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationResult.durable_identity_identifier ?? "-"}</span></div>
-                  <div><span className={styles.detailLabel}>Root Relative to Device</span><span>{sourceCreationResult.entire_endpoint_label ?? sourceCreationResult.endpoint_relative_root}</span></div>
+                  <div><span className={styles.detailLabel}>{getSourceCreationRootLabel(sourceCreationResult.recognized_source_type)}</span><span>{sourceCreationResult.entire_endpoint_label ?? sourceCreationResult.endpoint_relative_root}</span></div>
                   <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationResult.observed_path}</span></div>
                   <div><span className={styles.detailLabel}>Source Name</span><span>{sourceCreationResult.source_display_name}</span></div>
                   <div><span className={styles.detailLabel}>Action Completed</span><span>{sourceCreationCompletedActionLabel(sourceCreationResult)}</span></div>

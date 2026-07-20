@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -209,6 +210,67 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         self.assertEqual(fingerprint.version, "source_endpoint_volume_guid_v2")
         self.assertEqual(fingerprint.strength, "strong")
         self.assertEqual(len(fingerprint.legacy_hashes), 1)
+
+    def test_powershell_storage_metadata_adds_usb_and_media_type_evidence(self) -> None:
+        payload = json.dumps(
+            {
+                "Volume": {
+                    "DriveLetter": "D",
+                    "DriveType": "Removable",
+                    "UniqueId": "\\\\?\\Volume{9cd1fa08-fccc-11ee-98fb-70d82340c017}\\",
+                },
+                "Partition": {"DriveLetter": "D", "DiskNumber": 3},
+                "Disk": {
+                    "Number": 3,
+                    "FriendlyName": "Generic Flash Disk",
+                    "BusType": "USB",
+                    "IsBoot": False,
+                    "IsSystem": False,
+                },
+                "PhysicalDisk": {
+                    "DeviceId": 3,
+                    "FriendlyName": "Generic Flash Disk",
+                    "BusType": "USB",
+                    "MediaType": "Unspecified",
+                },
+            }
+        )
+        results = {
+            ("powershell", "-NoProfile", "-Command", "$drive='D';$volume=Get-Volume -DriveLetter $drive -ErrorAction SilentlyContinue | Select-Object -First 1 DriveLetter,DriveType,UniqueId,Path,FileSystemType,FileSystemLabel;$partition=Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue | Select-Object -First 1 DriveLetter,DiskNumber,PartitionNumber,Type;$disk=$null;$physical=$null;if($partition){$disk=Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue | Select-Object -First 1 Number,FriendlyName,BusType,PartitionStyle,IsBoot,IsSystem,IsReadOnly,IsOffline;$physical=Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object DeviceId -eq $partition.DiskNumber | Select-Object -First 1 DeviceId,FriendlyName,BusType,MediaType,HealthStatus;}[pscustomobject]@{Volume=$volume;Partition=$partition;Disk=$disk;PhysicalDisk=$physical} | ConvertTo-Json -Compress -Depth 4"): CommandResult(
+                args=("powershell", "-NoProfile", "-Command", "$drive='D';$volume=Get-Volume -DriveLetter $drive -ErrorAction SilentlyContinue | Select-Object -First 1 DriveLetter,DriveType,UniqueId,Path,FileSystemType,FileSystemLabel;$partition=Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue | Select-Object -First 1 DriveLetter,DiskNumber,PartitionNumber,Type;$disk=$null;$physical=$null;if($partition){$disk=Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue | Select-Object -First 1 Number,FriendlyName,BusType,PartitionStyle,IsBoot,IsSystem,IsReadOnly,IsOffline;$physical=Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object DeviceId -eq $partition.DiskNumber | Select-Object -First 1 DeviceId,FriendlyName,BusType,MediaType,HealthStatus;}[pscustomobject]@{Volume=$volume;Partition=$partition;Disk=$disk;PhysicalDisk=$physical} | ConvertTo-Json -Compress -Depth 4"),
+                returncode=0,
+                stdout=payload,
+            ),
+        }
+        provider = _provider(readable_paths={"D:\\Photos"}, results=results)
+
+        response = provider.probe(
+            SourceIdentityProbeRequest(source_type="removable_media", observed_path="D:\\Photos")
+        )
+
+        self.assertIn("bus_type_present", [item.code for item in response.evidence_items])
+        self.assertIn("media_type_present", [item.code for item in response.evidence_items])
+
+    def test_removable_empty_slot_blocks_with_no_media_message(self) -> None:
+        results = {
+            ("cmd", "/c", "fsutil", "fsinfo", "drivetype", "H:"): CommandResult(
+                args=("cmd", "/c", "fsutil", "fsinfo", "drivetype", "H:"),
+                returncode=0,
+                stdout="H: - Removable Drive",
+            ),
+            ("powershell", "-NoProfile", "-Command", "$drive='H';$volume=Get-Volume -DriveLetter $drive -ErrorAction SilentlyContinue | Select-Object -First 1 DriveLetter,DriveType,UniqueId,Path,FileSystemType,FileSystemLabel;$partition=Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue | Select-Object -First 1 DriveLetter,DiskNumber,PartitionNumber,Type;$disk=$null;$physical=$null;if($partition){$disk=Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue | Select-Object -First 1 Number,FriendlyName,BusType,PartitionStyle,IsBoot,IsSystem,IsReadOnly,IsOffline;$physical=Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object DeviceId -eq $partition.DiskNumber | Select-Object -First 1 DeviceId,FriendlyName,BusType,MediaType,HealthStatus;}[pscustomobject]@{Volume=$volume;Partition=$partition;Disk=$disk;PhysicalDisk=$physical} | ConvertTo-Json -Compress -Depth 4"): CommandResult(
+                args=("powershell", "-NoProfile", "-Command", "$drive='H';$volume=Get-Volume -DriveLetter $drive -ErrorAction SilentlyContinue | Select-Object -First 1 DriveLetter,DriveType,UniqueId,Path,FileSystemType,FileSystemLabel;$partition=Get-Partition -DriveLetter $drive -ErrorAction SilentlyContinue | Select-Object -First 1 DriveLetter,DiskNumber,PartitionNumber,Type;$disk=$null;$physical=$null;if($partition){$disk=Get-Disk -Number $partition.DiskNumber -ErrorAction SilentlyContinue | Select-Object -First 1 Number,FriendlyName,BusType,PartitionStyle,IsBoot,IsSystem,IsReadOnly,IsOffline;$physical=Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object DeviceId -eq $partition.DiskNumber | Select-Object -First 1 DeviceId,FriendlyName,BusType,MediaType,HealthStatus;}[pscustomobject]@{Volume=$volume;Partition=$partition;Disk=$disk;PhysicalDisk=$physical} | ConvertTo-Json -Compress -Depth 4"),
+                returncode=0,
+                stdout="{}",
+            ),
+        }
+        provider = _provider(results=results)
+
+        response = provider.probe(
+            SourceIdentityProbeRequest(source_type="removable_media", observed_path="H:\\")
+        )
+
+        self.assertIn("no_readable_media_inserted", [item.code for item in response.blockers])
 
     def test_command_failures_are_summarized_not_crashes(self) -> None:
         results = {

@@ -188,7 +188,7 @@ class AdminSourceCreationApiTests(unittest.TestCase):
         self.assertEqual(self.db.scalar(select(func.count(IngestionSource.id))), 0)
 
     def test_generic_creation_rejects_provider_specific_and_unsupported_types(self) -> None:
-        for source_type in ("icloud", "removable"):
+        for source_type in ("icloud",):
             response = self.client.post(
                 "/api/admin/source-creation/plan",
                 json={
@@ -201,6 +201,21 @@ class AdminSourceCreationApiTests(unittest.TestCase):
 
         self.assertEqual(self.db.scalar(select(func.count(SourceEndpoint.id))), 0)
         self.assertEqual(self.db.scalar(select(func.count(IngestionSource.id))), 0)
+
+    def test_removable_plan_is_accepted(self) -> None:
+        request = {
+            "source_type": "removable",
+            "device_name": "Camera SD Card",
+            "naming_action": "create_new",
+            "observed_path": "H:\\DCIM",
+        }
+        with patch("app.api.admin.get_source_identity_probe_service", return_value=_FakeProbeService()):
+            response = self.client.post("/api/admin/source-creation/plan", json=request)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["recognized_source_type"], "removable")
+        self.assertEqual(payload["persisted_source_type"], "removable_media")
 
     def _override_db(self):
         yield self.db
