@@ -288,6 +288,40 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         self.assertEqual(fingerprint.strength, "strong")
         self.assertEqual(len(fingerprint.legacy_hashes), 1)
 
+    def test_local_probe_skips_powershell_storage_metadata_when_mountvol_guid_present(self) -> None:
+        results = {
+            ("cmd", "/c", "vol", "C:"): CommandResult(
+                args=("cmd", "/c", "vol", "C:"),
+                returncode=0,
+                stdout="Volume Serial Number is 1234-ABCD",
+            ),
+            ("cmd", "/c", "mountvol", "C:", "/L"): CommandResult(
+                args=("cmd", "/c", "mountvol", "C:", "/L"),
+                returncode=0,
+                stdout=r"\\?\Volume{12345678-90AB-CDEF-1234-567890ABCDEF}\\",
+            ),
+            ("cmd", "/c", "fsutil", "fsinfo", "drivetype", "C:"): CommandResult(
+                args=("cmd", "/c", "fsutil", "fsinfo", "drivetype", "C:"),
+                returncode=0,
+                stdout="C: - Fixed Drive",
+            ),
+        }
+        runner = _FakeCommandRunner(results)
+        provider = WindowsSourceIdentityProbeProvider(
+            command_runner=runner,
+            path_probe=_path_probe({"C:\\Users\\chhen\\Pictures\\Screenshots"}),
+            command_timeout_seconds=0.01,
+        )
+
+        response = provider.probe(
+            SourceIdentityProbeRequest(source_type="local", observed_path="C:\\Users\\chhen\\Pictures\\Screenshots")
+        )
+
+        self.assertEqual(response.probe_status, "completed")
+        self.assertIn("volume_guid_present", [item.code for item in response.evidence_items])
+        self.assertFalse(any(call[:3] == ("powershell", "-NoProfile", "-Command") for call in runner.calls))
+        self.assertNotIn(("cmd", "/c", "fsutil", "fsinfo", "volumeinfo", "C:"), runner.calls)
+
     def test_powershell_storage_metadata_adds_usb_and_media_type_evidence(self) -> None:
         payload = json.dumps(
             {
@@ -490,7 +524,7 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         self.assertIn("optical_manifest_partial_summary", [item.code for item in response.evidence_items])
         self.assertNotIn("optical_media_fingerprint_present", [item.code for item in response.evidence_items])
 
-    def test_command_failures_are_summarized_not_crashes(self) -> None:
+    def test_optional_command_failures_are_diagnostic_evidence_not_user_warnings(self) -> None:
         results = {
             ("cmd", "/c", "vol", "C:"): CommandResult(
                 args=("cmd", "/c", "vol", "C:"),
@@ -507,25 +541,27 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
                 returncode=None,
                 timed_out=True,
             ),
-            ("cmd", "/c", "fsutil", "fsinfo", "volumeinfo", "C:"): CommandResult(
-                args=("cmd", "/c", "fsutil", "fsinfo", "volumeinfo", "C:"),
-                returncode=2,
-                stderr="Unexpected non-zero exit.",
-            ),
         }
-        provider = _provider(readable_paths={"C:\\Photos"}, results=results)
+        runner = _FakeCommandRunner(results)
+        provider = WindowsSourceIdentityProbeProvider(
+            command_runner=runner,
+            path_probe=_path_probe({"C:\\Photos"}),
+            command_timeout_seconds=0.01,
+        )
 
         response = provider.probe(SourceIdentityProbeRequest(source_type="local", observed_path="C:\\Photos"))
-        warning_codes = {item.code for item in response.warnings}
-
-        self.assertIn("command_access_denied", warning_codes)
-        self.assertIn("command_unavailable", warning_codes)
-        self.assertIn("command_timeout", warning_codes)
-        self.assertIn("command_nonzero_exit", warning_codes)
+        evidence_codes = {item.code for item in response.evidence_items}
         warning_messages = [item.message or "" for item in response.warnings]
-        self.assertTrue(any("cmd /c fsutil fsinfo drivetype C:" in message for message in warning_messages))
-        self.assertTrue(any("cmd /c fsutil fsinfo volumeinfo C:" in message for message in warning_messages))
-        self.assertIn(response.probe_status, {"completed_with_warnings", "completed"})
+
+        self.assertIn("command_access_denied", evidence_codes)
+        self.assertIn("command_unavailable", evidence_codes)
+        self.assertIn("command_timeout", evidence_codes)
+        self.assertNotIn("command_access_denied", {item.code for item in response.warnings})
+        self.assertNotIn("command_unavailable", {item.code for item in response.warnings})
+        self.assertNotIn("command_timeout", {item.code for item in response.warnings})
+        self.assertFalse(any("cmd /c" in message or "powershell" in message for message in warning_messages))
+        self.assertNotIn(("cmd", "/c", "fsutil", "fsinfo", "volumeinfo", "C:"), runner.calls)
+        self.assertEqual(response.probe_status, "completed")
 
     def test_cloud_probe_does_not_probe_provider_credentials(self) -> None:
         runner = _FakeCommandRunner()

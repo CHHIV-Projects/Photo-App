@@ -459,9 +459,14 @@ class WindowsSourceIdentityProbeProvider:
             command_items, command_warnings = self._collect_drive_command_evidence(drive, request.source_type)
             evidence.extend(command_items)
             warnings.extend(command_warnings)
-            storage_items, storage_warnings = self._collect_storage_metadata_evidence(drive, request.source_type)
-            evidence.extend(storage_items)
-            warnings.extend(storage_warnings)
+            if request.source_type != "local" or not _has_evidence_code(
+                evidence,
+                category="volume_evidence",
+                code="volume_guid_present",
+            ):
+                storage_items, storage_warnings = self._collect_storage_metadata_evidence(drive, request.source_type)
+                evidence.extend(storage_items)
+                warnings.extend(storage_warnings)
 
         if drive and not mapped_unc_path and request.source_type == "optical_media":
             optical_items, optical_warnings, optical_blockers = self._collect_optical_media_evidence(
@@ -581,7 +586,6 @@ class WindowsSourceIdentityProbeProvider:
             ["cmd", "/c", "vol", drive],
             ["cmd", "/c", "mountvol", drive, "/L"],
             ["cmd", "/c", "fsutil", "fsinfo", "drivetype", drive],
-            ["cmd", "/c", "fsutil", "fsinfo", "volumeinfo", drive],
         ]
         evidence: list[SourceIdentityEvidenceItem] = []
         warnings: list[SourceIdentityEvidenceItem] = []
@@ -1241,10 +1245,9 @@ class WindowsSourceIdentityProbeProvider:
                 "command_timeout",
                 "warning",
                 source_types=[source_type],
-                message=f"Read-only command timed out: {command_name}",
+                message="Optional read-only Windows metadata command timed out.",
             )
             evidence.append(item)
-            warnings.append(item)
             return evidence, warnings
         if result.command_not_found:
             item = self._evidence(
@@ -1252,10 +1255,9 @@ class WindowsSourceIdentityProbeProvider:
                 "command_unavailable",
                 "warning",
                 source_types=[source_type],
-                message=f"Read-only command is unavailable: {command_name}",
+                message="Optional read-only Windows metadata command is unavailable.",
             )
             evidence.append(item)
-            warnings.append(item)
             return evidence, warnings
         if result.error:
             item = self._evidence(
@@ -1263,10 +1265,9 @@ class WindowsSourceIdentityProbeProvider:
                 "provider_error",
                 "warning",
                 source_types=[source_type],
-                message=f"Read-only command could not run: {command_name}",
+                message="Optional read-only Windows metadata command could not run.",
             )
             evidence.append(item)
-            warnings.append(item)
             return evidence, warnings
         if result.returncode not in (0, None):
             combined = result.combined_output.lower()
@@ -1276,10 +1277,9 @@ class WindowsSourceIdentityProbeProvider:
                 code,
                 "warning",
                 source_types=[source_type],
-                message=f"Read-only command returned non-zero status: {command_name}",
+                message="Optional read-only Windows metadata command returned a non-zero status.",
             )
             evidence.append(item)
-            warnings.append(item)
         return evidence, warnings
 
     def _parse_drive_command_output(
