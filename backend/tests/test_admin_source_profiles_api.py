@@ -47,6 +47,7 @@ class AdminSourceProfilesApiTests(unittest.TestCase):
                 source_type="cloud_export",
                 source_root_path="/exports/icloud_primary",
                 endpoint_id=8,
+                endpoint_alias="Primary iCloud",
                 endpoint_source_type="cloud",
                 profile_status="active",
                 cloud_provider="icloud",
@@ -66,6 +67,7 @@ class AdminSourceProfilesApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(len(payload["profiles"]), 1)
         self.assertEqual(payload["profiles"][0]["profile_status"], "active")
+        self.assertEqual(payload["profiles"][0]["endpoint_alias"], "Primary iCloud")
         self.assertEqual(payload["profiles"][0]["endpoint_source_type"], "cloud")
         mocked_service.assert_called_once()
         called_args, called_kwargs = mocked_service.call_args

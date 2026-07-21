@@ -24,6 +24,7 @@ import {
   probeSourceIdentity,
   runIcloudAcquisitionWithDetails,
   runIcloudStagingCleanupDryRun,
+  selectSourceProfile,
   SourceIntakeStartError,
   startSourceIntake,
   stopIcloudAcquisition,
@@ -50,6 +51,7 @@ import type {
   SourceProfilePathCheckResponse,
   SourceProfileReadinessResponse,
   SourceProfileReadinessStatus,
+  SourceSelectionResponse,
   SourceIntakeReportDetail,
   SourceIntakeReportSummary,
   SourceIntakeReadinessRejectionPayload,
@@ -119,6 +121,13 @@ type SourceIdentityEnrollmentSupport = {
   note: string;
 };
 
+type WorkbenchDeviceOption = {
+  key: string;
+  label: string;
+  meta: string;
+  profiles: SourceProfileSummary[];
+};
+
 type OperatorSourceType = "local" | "external" | "nas" | "removable" | "optical" | "icloud" | "advanced";
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
@@ -155,6 +164,7 @@ const OPERATOR_SOURCE_TYPE_OPTIONS: Array<{ value: OperatorSourceType; label: st
 ];
 
 const CREATE_SOURCE_TYPE_OPTIONS = OPERATOR_SOURCE_TYPE_OPTIONS.filter((option) => option.value !== "advanced");
+const SOURCE_SELECTOR_TYPE_OPTIONS = OPERATOR_SOURCE_TYPE_OPTIONS.filter((option) => option.value !== "advanced");
 
 const CLOUD_PROVIDER_OPTIONS: Array<{ value: SourceCloudProvider; label: string }> = [
   { value: "icloud", label: "iCloud" },
@@ -434,6 +444,18 @@ function isLocalOrExternalSource(sourceType: SourceProfileType): boolean {
 function isUncPath(pathValue: string | null | undefined): boolean {
   const normalized = (pathValue ?? "").trim().replace(/\//g, "\\");
   return normalized.startsWith("\\\\");
+}
+
+function parseUncServerShareLabel(pathValue: string | null | undefined): string | null {
+  const normalized = (pathValue ?? "").trim().replace(/\//g, "\\");
+  if (!normalized.startsWith("\\\\")) {
+    return null;
+  }
+  const [server, share] = normalized.split("\\").filter(Boolean);
+  if (!server || !share) {
+    return null;
+  }
+  return `\\\\${server}\\${share}`;
 }
 
 function isDriveLetterPath(pathValue: string | null | undefined): boolean {
@@ -891,28 +913,76 @@ function getSourceWorkflowPlaceholder(profile: SourceProfileSummary): string {
   if (sourceType === "advanced") {
     return "These sources are retained for history, diagnostics, or unsupported workflows.";
   }
-  return "Filesystem workflow actions will move here next: Check Readiness and Run Intake.";
+  return "Filesystem Source Intake handoff appears in Step 3 only after this Source is selected.";
 }
 
-function normalizeWorkbenchSearch(value: string | null | undefined): string {
-  return (value ?? "").trim().toLowerCase();
-}
-
-function matchesSourceSearch(profile: SourceProfileSummary, query: string): boolean {
-  const normalizedQuery = normalizeWorkbenchSearch(query);
-  if (!normalizedQuery) {
-    return true;
+function getWorkbenchDeviceKey(profile: SourceProfileSummary): string {
+  if (profile.endpoint_id != null) {
+    return `endpoint:${profile.endpoint_id}`;
   }
-  const searchValues = [
-    profile.source_label,
-    profile.source_root_path,
-    profile.managed_staging_path,
-    profile.cloud_provider,
-    profile.acquisition_method,
-    profile.account_username_masked,
-    getSourcePathOrProviderHint(profile),
-  ];
-  return searchValues.some((value) => normalizeWorkbenchSearch(value).includes(normalizedQuery));
+  if (isIcloudProfile(profile)) {
+    return `icloud:${profile.account_username_masked ?? profile.managed_staging_path ?? profile.source_root_path ?? profile.source_id}`;
+  }
+  return `legacy:${getOperatorSourceType(profile)}`;
+}
+
+function getWorkbenchDeviceLabel(profile: SourceProfileSummary): string {
+  if (isIcloudProfile(profile)) {
+    return profile.account_username_masked ? `iCloud ${profile.account_username_masked}` : "iCloud account";
+  }
+  if (profile.endpoint_id == null) {
+    return "Legacy source";
+  }
+  if (profile.endpoint_alias) {
+    return profile.endpoint_alias;
+  }
+  const operatorType = getOperatorSourceType(profile);
+  if (operatorType === "nas") {
+    return parseUncServerShareLabel(profile.source_root_path) ?? `NAS share #${profile.endpoint_id}`;
+  }
+  if (operatorType === "removable") {
+    return `Removable media #${profile.endpoint_id}`;
+  }
+  if (operatorType === "optical") {
+    return `Optical disc #${profile.endpoint_id}`;
+  }
+  return `${getOperatorSourceTypeLabel(operatorType)} endpoint #${profile.endpoint_id}`;
+}
+
+function getWorkbenchDeviceMeta(profile: SourceProfileSummary): string {
+  if (profile.endpoint_id == null) {
+    return "Path-only compatibility";
+  }
+  if (isIcloudProfile(profile)) {
+    return profile.managed_staging_path ?? "Provider-managed staging";
+  }
+  return profile.source_root_path ?? profile.endpoint_source_type ?? "Registered endpoint";
+}
+
+function getSourceSelectionStatusLabel(result: SourceSelectionResponse | null): string {
+  if (!result) {
+    return "Not selected";
+  }
+  if (result.result === "selected" && result.availability === "available") {
+    return "Selected";
+  }
+  if (result.availability === "unavailable") {
+    return "Unavailable";
+  }
+  return "Needs attention";
+}
+
+function getSourceSelectionBadgeClassName(result: SourceSelectionResponse | null): string {
+  if (!result) {
+    return styles.pendingBadge;
+  }
+  if (result.result === "selected" && result.availability === "available") {
+    return styles.okBadge;
+  }
+  if (result.availability === "unavailable") {
+    return styles.readinessBadgeNotReady;
+  }
+  return styles.pendingBadge;
 }
 
 function extractReportFilename(reportPath: string | null): string | null {
@@ -1250,9 +1320,11 @@ export default function IngestionView() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
   const [workbenchSourceType, setWorkbenchSourceType] = useState<OperatorSourceType>("local");
-  const [workbenchSearch, setWorkbenchSearch] = useState("");
-  const [showInactiveWorkbenchSources, setShowInactiveWorkbenchSources] = useState(false);
+  const [selectedWorkbenchDeviceKey, setSelectedWorkbenchDeviceKey] = useState<string | null>(null);
   const [selectedWorkbenchSourceId, setSelectedWorkbenchSourceId] = useState<number | null>(null);
+  const [sourceSelectionResult, setSourceSelectionResult] = useState<SourceSelectionResponse | null>(null);
+  const [sourceSelectionError, setSourceSelectionError] = useState<string | null>(null);
+  const [isSelectingSource, setIsSelectingSource] = useState(false);
   const [createSourceForm, setCreateSourceForm] = useState<EditorFormState>(initialFormState());
   const [sourceCreationPhase, setSourceCreationPhase] = useState<SourceCreationPhase>("idle");
   const [sourceCreationPlan, setSourceCreationPlan] = useState<SourceCreationPlanResponse | null>(null);
@@ -1704,37 +1776,103 @@ export default function IngestionView() {
   const workbenchProfiles = useMemo(() => {
     return profiles.filter((profile) => {
       const operatorSourceType = getOperatorSourceType(profile);
-      const isNonActive = profile.profile_status !== "active";
-      const matchesSourceType = workbenchSourceType === "advanced"
-        ? operatorSourceType === "advanced" || (showInactiveWorkbenchSources && isNonActive)
-        : operatorSourceType === workbenchSourceType;
-
-      if (!matchesSourceType) {
+      if (operatorSourceType === "advanced") {
         return false;
       }
-      if (!showInactiveWorkbenchSources && isNonActive) {
+      if (operatorSourceType !== workbenchSourceType) {
         return false;
       }
-      return matchesSourceSearch(profile, workbenchSearch);
+      if (profile.profile_status !== "active") {
+        return false;
+      }
+      return true;
     });
-  }, [profiles, showInactiveWorkbenchSources, workbenchSearch, workbenchSourceType]);
+  }, [profiles, workbenchSourceType]);
+
+  const workbenchSourceTypeOptions = useMemo(() => {
+    const represented = new Set<OperatorSourceType>();
+    for (const profile of profiles) {
+      if (profile.profile_status !== "active") {
+        continue;
+      }
+      const operatorSourceType = getOperatorSourceType(profile);
+      if (operatorSourceType !== "advanced") {
+        represented.add(operatorSourceType);
+      }
+    }
+    return SOURCE_SELECTOR_TYPE_OPTIONS.filter((option) => represented.has(option.value));
+  }, [profiles]);
+
+  const workbenchDevices = useMemo<WorkbenchDeviceOption[]>(() => {
+    const deviceMap = new Map<string, WorkbenchDeviceOption>();
+    for (const profile of workbenchProfiles) {
+      const key = getWorkbenchDeviceKey(profile);
+      const existing = deviceMap.get(key);
+      if (existing) {
+        existing.profiles.push(profile);
+        continue;
+      }
+      deviceMap.set(key, {
+        key,
+        label: getWorkbenchDeviceLabel(profile),
+        meta: getWorkbenchDeviceMeta(profile),
+        profiles: [profile],
+      });
+    }
+    return Array.from(deviceMap.values()).sort((left, right) => left.label.localeCompare(right.label));
+  }, [workbenchProfiles]);
+
+  const selectedWorkbenchDevice = useMemo(() => {
+    if (selectedWorkbenchDeviceKey == null) {
+      return null;
+    }
+    return workbenchDevices.find((device) => device.key === selectedWorkbenchDeviceKey) ?? null;
+  }, [selectedWorkbenchDeviceKey, workbenchDevices]);
+
+  const workbenchSourceOptions = useMemo(() => selectedWorkbenchDevice?.profiles ?? [], [selectedWorkbenchDevice]);
 
   const selectedWorkbenchProfile = useMemo(() => {
     if (selectedWorkbenchSourceId == null) {
       return null;
     }
-    return workbenchProfiles.find((profile) => profile.source_id === selectedWorkbenchSourceId) ?? null;
-  }, [selectedWorkbenchSourceId, workbenchProfiles]);
+    return workbenchSourceOptions.find((profile) => profile.source_id === selectedWorkbenchSourceId) ?? null;
+  }, [selectedWorkbenchSourceId, workbenchSourceOptions]);
+
+  useEffect(() => {
+    if (
+      workbenchSourceTypeOptions.length > 0
+      && !workbenchSourceTypeOptions.some((option) => option.value === workbenchSourceType)
+    ) {
+      setWorkbenchSourceType(workbenchSourceTypeOptions[0].value);
+      setSelectedWorkbenchDeviceKey(null);
+      setSelectedWorkbenchSourceId(null);
+    }
+  }, [workbenchSourceType, workbenchSourceTypeOptions]);
+
+  useEffect(() => {
+    if (
+      selectedWorkbenchDeviceKey != null
+      && workbenchDevices.some((device) => device.key === selectedWorkbenchDeviceKey)
+    ) {
+      return;
+    }
+    setSelectedWorkbenchDeviceKey(workbenchDevices[0]?.key ?? null);
+  }, [selectedWorkbenchDeviceKey, workbenchDevices]);
 
   useEffect(() => {
     if (
       selectedWorkbenchSourceId != null
-      && workbenchProfiles.some((profile) => profile.source_id === selectedWorkbenchSourceId)
+      && workbenchSourceOptions.some((profile) => profile.source_id === selectedWorkbenchSourceId)
     ) {
       return;
     }
-    setSelectedWorkbenchSourceId(workbenchProfiles[0]?.source_id ?? null);
-  }, [selectedWorkbenchSourceId, workbenchProfiles]);
+    setSelectedWorkbenchSourceId(workbenchSourceOptions[0]?.source_id ?? null);
+  }, [selectedWorkbenchSourceId, workbenchSourceOptions]);
+
+  useEffect(() => {
+    setSourceSelectionResult(null);
+    setSourceSelectionError(null);
+  }, [selectedWorkbenchDeviceKey, selectedWorkbenchSourceId, workbenchSourceType]);
 
   const managedStagingPreview = useMemo(() => {
     return computeManagedStagingPreview(editorForm.sourceLabel);
@@ -2289,6 +2427,23 @@ export default function IngestionView() {
     sourceCreationSourceName,
     sourceCreationUseRegisteredType,
   ]);
+
+  const handleSelectWorkbenchSource = useCallback(async () => {
+    if (!selectedWorkbenchProfile) {
+      return;
+    }
+    setIsSelectingSource(true);
+    setSourceSelectionError(null);
+    try {
+      const result = await selectSourceProfile({ source_profile_id: selectedWorkbenchProfile.source_id });
+      setSourceSelectionResult(result);
+    } catch (error) {
+      setSourceSelectionResult(null);
+      setSourceSelectionError(error instanceof Error ? error.message : "Failed to select Source.");
+    } finally {
+      setIsSelectingSource(false);
+    }
+  }, [selectedWorkbenchProfile]);
 
   const resetSourceIdentityEnrollmentState = useCallback(() => {
     setSourceIdentityEnrollRequested(false);
@@ -4254,12 +4409,21 @@ export default function IngestionView() {
           <div className={styles.workbenchControlGroup}>
             <span className={styles.detailLabel}>Source Type</span>
             <div className={styles.segmentedControl} role="group" aria-label="Source type">
-              {OPERATOR_SOURCE_TYPE_OPTIONS.map((option) => (
+              {workbenchSourceTypeOptions.length === 0 && (
+                <span className={styles.detailMeta}>No active selectable Sources</span>
+              )}
+              {workbenchSourceTypeOptions.map((option) => (
                 <button
                   key={option.value}
                   type="button"
                   className={`${styles.segmentButton} ${workbenchSourceType === option.value ? styles.segmentButtonActive : ""}`}
-                  onClick={() => setWorkbenchSourceType(option.value)}
+                  onClick={() => {
+                    setWorkbenchSourceType(option.value);
+                    setSelectedWorkbenchDeviceKey(null);
+                    setSelectedWorkbenchSourceId(null);
+                    setSourceSelectionResult(null);
+                    setSourceSelectionError(null);
+                  }}
                   aria-pressed={workbenchSourceType === option.value}
                   disabled={option.disabled}
                   title={option.disabled ? "Coming later" : undefined}
@@ -4271,13 +4435,28 @@ export default function IngestionView() {
           </div>
 
           <label className={styles.formLabel}>
-            Search Sources
-            <input
+            Device
+            <select
               className={styles.formInput}
-              value={workbenchSearch}
-              onChange={(event) => setWorkbenchSearch(event.target.value)}
-              placeholder="Search label, path, provider, or masked account"
-            />
+              value={selectedWorkbenchDeviceKey ?? ""}
+              onChange={(event) => {
+                setSelectedWorkbenchDeviceKey(event.target.value || null);
+                setSelectedWorkbenchSourceId(null);
+                setSourceSelectionResult(null);
+                setSourceSelectionError(null);
+              }}
+              disabled={workbenchDevices.length === 0}
+            >
+              {workbenchDevices.length === 0 ? (
+                <option value="">No matching devices</option>
+              ) : (
+                workbenchDevices.map((device) => (
+                  <option key={device.key} value={device.key}>
+                    {device.label} ({device.profiles.length})
+                  </option>
+                ))
+              )}
+            </select>
           </label>
 
           <label className={styles.formLabel}>
@@ -4285,35 +4464,29 @@ export default function IngestionView() {
             <select
               className={styles.formInput}
               value={selectedWorkbenchSourceId ?? ""}
-              onChange={(event) => setSelectedWorkbenchSourceId(event.target.value ? Number(event.target.value) : null)}
-              disabled={workbenchProfiles.length === 0}
+              onChange={(event) => {
+                setSelectedWorkbenchSourceId(event.target.value ? Number(event.target.value) : null);
+                setSourceSelectionResult(null);
+                setSourceSelectionError(null);
+              }}
+              disabled={workbenchSourceOptions.length === 0}
             >
-              {workbenchProfiles.length === 0 ? (
+              {workbenchSourceOptions.length === 0 ? (
                 <option value="">No matching sources</option>
               ) : (
-                workbenchProfiles.map((profile) => (
+                workbenchSourceOptions.map((profile) => (
                   <option key={profile.source_id} value={profile.source_id}>
-                    {profile.source_label} - {getSourcePathOrProviderHint(profile)}
+                    {profile.source_label}
                   </option>
                 ))
               )}
             </select>
           </label>
-
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={showInactiveWorkbenchSources}
-              onChange={(event) => setShowInactiveWorkbenchSources(event.target.checked)}
-            />
-            Show inactive / legacy sources
-          </label>
         </div>
 
         {workbenchProfiles.length === 0 ? (
           <p className={styles.empty}>
-            No {showInactiveWorkbenchSources ? "" : "active "}
-            {getOperatorSourceTypeLabel(workbenchSourceType)} sources found. Create a Source, adjust search, or show inactive / legacy sources.
+            No active {getOperatorSourceTypeLabel(workbenchSourceType)} sources found. Create a Source or choose another Source Type.
           </p>
         ) : selectedWorkbenchProfile ? (
           <div className={styles.workbenchSummary}>
@@ -4329,48 +4502,76 @@ export default function IngestionView() {
                 <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(selectedWorkbenchProfile)}>
                   Manage
                 </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={() => void handleSelectWorkbenchSource()}
+                  disabled={isSelectingSource}
+                >
+                  {isSelectingSource
+                    ? workbenchSourceType === "optical" ? "Checking optical disc..." : "Selecting..."
+                    : "Select Source"}
+                </button>
               </div>
             </div>
 
             <div className={styles.detailGrid}>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Type</span>
-                <span>{getOperatorSourceTypeLabel(getOperatorSourceType(selectedWorkbenchProfile))}</span>
-                <span className={styles.detailMeta}>Stored type: {selectedWorkbenchProfile.source_type}</span>
+                <span className={styles.detailLabel}>Device</span>
+                <span>{selectedWorkbenchDevice?.label ?? "-"}</span>
+                <span className={styles.detailMeta}>{selectedWorkbenchDevice?.meta ?? "No device selected"}</span>
               </div>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Path / Provider</span>
-                <span>{getSourcePathOrProviderHint(selectedWorkbenchProfile)}</span>
+                <span className={styles.detailLabel}>Read-only Source Root</span>
+                <input
+                  className={`${styles.formInput} ${styles.readOnlyInput}`}
+                  value={sourceSelectionResult?.selected_source_context?.root_display ?? getSourcePathOrProviderHint(selectedWorkbenchProfile)}
+                  readOnly
+                />
                 {selectedWorkbenchProfile.cloud_provider && (
                   <span className={styles.detailMeta}>Provider: {formatSourceProvider(selectedWorkbenchProfile.cloud_provider)}</span>
                 )}
+                {!selectedWorkbenchProfile.cloud_provider && selectedWorkbenchProfile.endpoint_relative_root != null && (
+                  <span className={styles.detailMeta}>Relative root: {selectedWorkbenchProfile.endpoint_relative_root || "Entire endpoint"}</span>
+                )}
               </div>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Durable Identity</span>
-                <span className={getSourceIdentityBadgeClassName(selectedWorkbenchProfile, selectedWorkbenchReadinessResult)}>
-                  {getSourceIdentityDisplay(selectedWorkbenchProfile, selectedWorkbenchReadinessResult)}
+                <span className={styles.detailLabel}>Selection</span>
+                <span className={getSourceSelectionBadgeClassName(sourceSelectionResult)}>
+                  {getSourceSelectionStatusLabel(sourceSelectionResult)}
                 </span>
                 <span className={styles.detailMeta}>
-                  {getSourceIdentityMeta(selectedWorkbenchProfile, selectedWorkbenchReadinessResult)}
+                  {sourceSelectionError ?? sourceSelectionResult?.message ?? "Select Source to verify availability and durable identity."}
                 </span>
-              </div>
-              <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Readiness</span>
-                <span>
-                  {selectedWorkbenchReadinessResult
-                    ? toSourceProfileReadinessLabel(selectedWorkbenchReadinessResult.readiness_status)
-                    : "Not checked in this view"}
-                </span>
-                <span className={styles.detailMeta}>
-                  {selectedWorkbenchReadinessResult?.operator_message ?? "Open Details to run the manual readiness check."}
-                </span>
+                {sourceSelectionResult?.retry_guidance && (
+                  <span className={styles.detailMeta}>{sourceSelectionResult.retry_guidance}</span>
+                )}
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Workflow</span>
-                <span>{getSourceWorkflowDisplay(selectedWorkbenchProfile)}</span>
+                <span>{sourceSelectionResult?.workflow_kind === "icloud_intake" ? "iCloud Intake" : getSourceWorkflowDisplay(selectedWorkbenchProfile)}</span>
                 <span className={styles.detailMeta}>{getSourceWorkflowPlaceholder(selectedWorkbenchProfile)}</span>
               </div>
             </div>
+            {sourceSelectionResult && (
+              <details className={styles.advancedDetails}>
+                <summary>Advanced Details</summary>
+                <pre className={styles.advancedDetailsText}>{JSON.stringify({
+                  selected_source_context: sourceSelectionResult.selected_source_context,
+                  advanced_details: sourceSelectionResult.advanced_details,
+                }, null, 2)}</pre>
+              </details>
+            )}
+            {sourceSelectionResult?.result === "selected"
+              && sourceSelectionResult.availability === "available"
+              && sourceSelectionResult.workflow_kind
+              && sourceSelectionResult.selected_source_context && (
+                <div className={styles.stepPlaceholder}>
+                  <span className={styles.detailLabel}>Step 3</span>
+                  <span>{sourceSelectionResult.workflow_kind === "icloud_intake" ? "iCloud Intake" : "Filesystem Source Intake"}</span>
+                  <span className={styles.detailMeta}>Ready for the next milestone handoff. No intake, acquisition, import, or cleanup operation is started from this selector.</span>
+                </div>
+              )}
           </div>
         ) : null}
       </section>

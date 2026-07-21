@@ -247,7 +247,7 @@
 .workbenchControls {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(260px, 1.2fr) minmax(220px, 1fr) minmax(240px, 1.1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   align-items: end;
 }
 
@@ -361,6 +361,16 @@
   align-items: flex-start;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.stepPlaceholder {
+  display: grid;
+  gap: 4px;
+  border: 1px dashed #9fb5c9;
+  border-radius: 10px;
+  background: #f6fbff;
+  padding: 12px;
+  color: #1d2b39;
 }
 
 .errorDetails {

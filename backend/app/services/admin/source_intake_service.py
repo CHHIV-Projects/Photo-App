@@ -195,6 +195,7 @@ def _to_source_profile_summary(
         source_root_path=source.source_root_path,
         endpoint_relative_root=source.endpoint_relative_root,
         endpoint_id=source.endpoint_id,
+        endpoint_alias=source.source_endpoint.alias if source.source_endpoint is not None else None,
         endpoint_source_type=source.source_endpoint.source_type if source.source_endpoint is not None else None,
         profile_status=source.profile_status,
         cloud_provider=source.cloud_provider,

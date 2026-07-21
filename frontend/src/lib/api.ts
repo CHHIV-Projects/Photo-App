@@ -27,6 +27,8 @@ import type {
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
   SourceProfileReadinessResponse,
+  SourceSelectionRequest,
+  SourceSelectionResponse,
   SourceProfileStatus,
   SourceProfilesResponse,
   SourceProfileStagingFolderCreateResponse,
@@ -1074,6 +1076,15 @@ export function confirmSourceCreation(
   payload: SourceCreationConfirmRequest,
 ): Promise<SourceCreationConfirmResponse> {
   return apiRequest<SourceCreationConfirmResponse>("/api/admin/source-creation/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function selectSourceProfile(
+  payload: SourceSelectionRequest,
+): Promise<SourceSelectionResponse> {
+  return apiRequest<SourceSelectionResponse>("/api/admin/source-selection/select", {
     method: "POST",
     body: JSON.stringify(payload),
   });

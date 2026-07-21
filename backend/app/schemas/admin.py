@@ -283,6 +283,7 @@ class SourceProfileSummary(BaseModel):
     source_root_path: str | None = None
     endpoint_relative_root: str | None = None
     endpoint_id: int | None = None
+    endpoint_alias: str | None = None
     endpoint_source_type: str | None = None
     profile_status: str
     cloud_provider: str | None = None

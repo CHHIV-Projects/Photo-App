@@ -22,8 +22,15 @@ from app.services.source_identity.probe_schema import (
 from app.services.source_identity.probe_service import SourceIdentityProbeService
 from app.services.source_identity.readiness_schema import SourceProfileReadinessResponse
 from app.services.source_identity.readiness_service import SourceProfileReadinessService
+from app.services.source_identity.source_selection_schema import (
+    SelectedSourceContext,
+    SourceSelectionRequest,
+    SourceSelectionResponse,
+)
+from app.services.source_identity.source_selection_service import SourceSelectionService
 
 __all__ = [
+    "SelectedSourceContext",
     "SourceCreationConfirmRequest",
     "SourceCreationConfirmResponse",
     "SourceCreationPlanRequest",
@@ -33,6 +40,9 @@ __all__ = [
     "SourceIdentityProbeRequest",
     "SourceIdentityProbeResponse",
     "SourceIdentityProbeService",
+    "SourceSelectionRequest",
+    "SourceSelectionResponse",
+    "SourceSelectionService",
     "SourceProfileReadinessResponse",
     "SourceProfileReadinessService",
     "SourceEndpointEnrollmentConfirmRequest",

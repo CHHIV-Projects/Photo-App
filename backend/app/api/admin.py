@@ -210,6 +210,9 @@ from app.services.source_identity import (
     SourceIdentityProbeRequest,
     SourceIdentityProbeResponse,
     SourceIdentityProbeService,
+    SourceSelectionRequest,
+    SourceSelectionResponse,
+    SourceSelectionService,
 )
 from app.services.admin.ingestion_operation_guardrail_service import (
     IngestionOperationGuardrailSnapshot,
@@ -251,6 +254,14 @@ def get_source_creation_service(db: Session) -> SourceCreationService:
 def get_source_profile_readiness_service(db: Session) -> SourceProfileReadinessService:
     """Return a read-only Source Profile readiness service."""
     return SourceProfileReadinessService(
+        db_session=db,
+        probe_service=get_source_identity_probe_service(),
+    )
+
+
+def get_source_selection_service(db: Session) -> SourceSelectionService:
+    """Return a read-only Source Selection orchestration service."""
+    return SourceSelectionService(
         db_session=db,
         probe_service=get_source_identity_probe_service(),
     )
@@ -1807,6 +1818,21 @@ def post_source_creation_confirm(
 ) -> SourceCreationConfirmResponse:
     """Confirm and atomically persist a drive-agnostic filesystem Source."""
     return get_source_creation_service(db).confirm(body)
+
+
+@router.post("/source-selection/select", response_model=SourceSelectionResponse)
+def post_source_selection_select(
+    body: SourceSelectionRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceSelectionResponse | JSONResponse:
+    """Select and verify a Source Profile without mutating metadata."""
+    try:
+        return get_source_selection_service(db).select_source(body)
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
 
 
 @router.get("/source-intake/sources", response_model=SourceIntakeSourcesResponse)

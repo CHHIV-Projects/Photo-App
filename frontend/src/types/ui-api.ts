@@ -1257,6 +1257,7 @@ export interface SourceProfileSummary {
   source_root_path: string | null;
   endpoint_relative_root: string | null;
   endpoint_id: number | null;
+  endpoint_alias: string | null;
   endpoint_source_type: SourceIdentityProbeSourceType | null;
   profile_status: SourceProfileStatus;
   cloud_provider: SourceCloudProvider | null;
@@ -1412,6 +1413,48 @@ export interface SourceProfileReadinessResponse {
   probe_summary: Record<string, unknown>;
   observed_path_summary: Record<string, unknown>;
   access_node_summary: Record<string, unknown>;
+  advanced_details: Record<string, unknown>;
+}
+
+export type SourceSelectionResult = "selected" | "not_selected";
+export type SourceSelectionAvailability = "available" | "unavailable" | "needs_attention";
+export type SourceSelectionWorkflowKind = "filesystem_source_intake" | "icloud_intake";
+
+export interface SourceSelectionRequest {
+  source_profile_id: number;
+}
+
+export interface SelectedSourceContext {
+  source_profile_id: number;
+  source_endpoint_id: number | null;
+  source_type: string | null;
+  friendly_source_type: string;
+  device_label: string;
+  source_name: string;
+  profile_status: string;
+  endpoint_status: string | null;
+  endpoint_relative_root: string | null;
+  configured_source_root: string | null;
+  resolved_source_root: string | null;
+  resolved_endpoint_path: string | null;
+  root_display: string;
+  durable_identity_status: SourceDurableIdentityStatus;
+  identity_match_status: string;
+  availability: SourceSelectionAvailability;
+  workflow_kind: SourceSelectionWorkflowKind;
+  provider_context: Record<string, unknown> | null;
+  selected_at: string;
+  selection_version: string;
+  selection_fingerprint: string | null;
+}
+
+export interface SourceSelectionResponse {
+  result: SourceSelectionResult;
+  availability: SourceSelectionAvailability;
+  workflow_kind: SourceSelectionWorkflowKind | null;
+  selected_source_context: SelectedSourceContext | null;
+  message: string;
+  retry_guidance: string | null;
   advanced_details: Record<string, unknown>;
 }
 
