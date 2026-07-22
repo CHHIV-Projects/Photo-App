@@ -157,6 +157,39 @@ class SourceIntakeLaunchReadinessGuardTests(unittest.TestCase):
         self.assertIn("Drop zone is not empty", str(raised.exception))
         self.assert_non_mutating(expected_endpoint_id=None)
 
+    def test_runtime_root_override_launches_without_rewriting_stored_source_root(self) -> None:
+        runtime_root = self.root / "runtime-source"
+        runtime_root.mkdir()
+        old_root = self.root / "missing-old-drive" / "source"
+        self.source.source_root_path = str(old_root)
+        self.source.source_root_path_normalized = str(old_root).casefold()
+        self.db.commit()
+        fake = _FakeReadinessService(self._readiness("ready", can_run=True, requires_ack=False))
+
+        with patch("app.services.admin.source_intake_execution_service.threading.Thread", _FakeThread), patch(
+            "app.services.admin.source_intake_execution_service.resolve_runtime_path",
+            return_value=self.drop_zone,
+        ):
+            snapshot = start_source_intake(
+                self.db,
+                ingestion_source_id=self.source.id,
+                source_intake_limit=None,
+                ingest_batch_size=50,
+                readiness_acknowledged=False,
+                readiness_service=fake,
+                runtime_source_root_path=str(runtime_root),
+                selection_verified_identity=True,
+            )
+
+        self.assertEqual(snapshot.status, "running")
+        self.assertEqual(snapshot.source_root_path, str(runtime_root.resolve()))
+        self.assertEqual(_FakeThread.instances[0].args[1], str(runtime_root.resolve()))
+        self.db.expire_all()
+        source = self.db.get(IngestionSource, self.source.id)
+        self.assertIsNotNone(source)
+        self.assertEqual(source.source_root_path, str(old_root))
+        self.assertEqual(self.db.scalar(select(func.count(SourceEndpointObservedPath.id))), 0)
+
     def _start(
         self,
         readiness_service: _FakeReadinessService,

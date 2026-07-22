@@ -166,6 +166,32 @@
   font-size: 0.98rem;
 }
 
+.runOptionsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.successText {
+  margin: 0;
+  border: 1px solid #b7dcc2;
+  background: #eefaf1;
+  color: #1d6a36;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
+.errorText {
+  margin: 0;
+  border: 1px solid #e7bcc3;
+  background: #fff2f4;
+  color: #8f2333;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
 .runStatusBadge {
   display: inline-block;
   border-radius: 999px;

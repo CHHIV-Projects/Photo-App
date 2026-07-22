@@ -1458,6 +1458,50 @@ export interface SourceSelectionResponse {
   advanced_details: Record<string, unknown>;
 }
 
+export interface RunIngestionFilesystemOptions {
+  source_intake_limit?: number | null;
+  ingest_batch_size?: number | null;
+  acknowledge_legacy_or_review?: boolean;
+}
+
+export interface RunIngestionIcloudOptions {
+  target_logical_items?: number | null;
+}
+
+export interface RunIngestionDispatchRequest {
+  source_profile_id: number;
+  selection_fingerprint?: string | null;
+  filesystem_options?: RunIngestionFilesystemOptions | null;
+  icloud_options?: RunIngestionIcloudOptions | null;
+}
+
+export type RunIngestionDispatchResult =
+  | "started"
+  | "action_completed"
+  | "blocked"
+  | "stale_selection"
+  | "no_action_available";
+
+export type RunIngestionDispatchAction =
+  | "source_intake_started"
+  | "icloud_prepare_started"
+  | "icloud_import_started"
+  | "icloud_import_resumed"
+  | "icloud_import_advanced"
+  | "none";
+
+export interface RunIngestionDispatchResponse {
+  result: RunIngestionDispatchResult;
+  workflow_kind: SourceSelectionWorkflowKind | null;
+  action: RunIngestionDispatchAction;
+  message: string;
+  next_action: string | null;
+  source_profile_id: number;
+  underlying_run_id: number | null;
+  status: string | null;
+  workflow_payload: Record<string, unknown>;
+}
+
 export interface SourceProfilesResponse {
   generated_at: string;
   profiles: SourceProfileSummary[];

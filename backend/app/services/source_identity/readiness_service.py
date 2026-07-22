@@ -37,9 +37,11 @@ class SourceProfileReadinessService:
         self,
         db_session: Session,
         probe_service: SourceIdentityProbeService | None = None,
+        runtime_source_root_overrides: dict[int, str] | None = None,
     ) -> None:
         self._db = db_session
         self._probe_service = probe_service or SourceIdentityProbeService()
+        self._runtime_source_root_overrides = runtime_source_root_overrides or {}
 
     def check_readiness(self, source_profile_id: int) -> SourceProfileReadinessResponse:
         """Return a read-only readiness result for one Source Profile."""
@@ -47,7 +49,10 @@ class SourceProfileReadinessService:
         if source is None:
             raise LookupError("Source profile not found.")
 
-        effective_path, path_kind = _effective_path(source)
+        effective_path, path_kind = _effective_path(
+            source,
+            runtime_source_root_override=self._runtime_source_root_overrides.get(source_profile_id),
+        )
         mapped_type = _map_source_type(source.source_type, effective_path)
 
         if mapped_type == "provider_specific":
@@ -390,9 +395,15 @@ def _map_source_type(source_type: str | None, path: str | None) -> SourceIdentit
     return "unsupported"
 
 
-def _effective_path(source: IngestionSource) -> tuple[str | None, str]:
+def _effective_path(
+    source: IngestionSource,
+    *,
+    runtime_source_root_override: str | None = None,
+) -> tuple[str | None, str]:
     if source.source_type == "cloud_export" and source.cloud_provider == "icloud" and source.managed_staging_path:
         return source.managed_staging_path, "managed_staging_path"
+    if runtime_source_root_override:
+        return runtime_source_root_override, "runtime_source_root"
     if source.source_root_path:
         return source.source_root_path, "source_root_path"
     if source.managed_staging_path:

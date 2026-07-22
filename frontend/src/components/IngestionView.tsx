@@ -8,6 +8,7 @@ import {
   createSourceProfile,
   createSourceProfileStagingFolder,
   confirmSourceEndpointEnrollment,
+  dispatchRunIngestion,
   getIcloudAcquisitionStatus,
   getIcloudStagingCleanupStatus,
   getIcloudStagingCleanupReadiness,
@@ -51,6 +52,7 @@ import type {
   SourceProfilePathCheckResponse,
   SourceProfileReadinessResponse,
   SourceProfileReadinessStatus,
+  RunIngestionDispatchResponse,
   SourceSelectionResponse,
   SourceIntakeReportDetail,
   SourceIntakeReportSummary,
@@ -1325,6 +1327,8 @@ export default function IngestionView() {
   const [sourceSelectionResult, setSourceSelectionResult] = useState<SourceSelectionResponse | null>(null);
   const [sourceSelectionError, setSourceSelectionError] = useState<string | null>(null);
   const [isSelectingSource, setIsSelectingSource] = useState(false);
+  const [runIngestionDispatchResult, setRunIngestionDispatchResult] = useState<RunIngestionDispatchResponse | null>(null);
+  const [runIngestionDispatchError, setRunIngestionDispatchError] = useState<string | null>(null);
   const [createSourceForm, setCreateSourceForm] = useState<EditorFormState>(initialFormState());
   const [sourceCreationPhase, setSourceCreationPhase] = useState<SourceCreationPhase>("idle");
   const [sourceCreationPlan, setSourceCreationPlan] = useState<SourceCreationPlanResponse | null>(null);
@@ -1593,6 +1597,11 @@ export default function IngestionView() {
   useEffect(() => {
     void loadProfiles({ clearRowErrors: true });
   }, [loadProfiles]);
+
+  useEffect(() => {
+    setRunIngestionDispatchResult(null);
+    setRunIngestionDispatchError(null);
+  }, [workbenchSourceType, selectedWorkbenchDeviceKey, selectedWorkbenchSourceId]);
 
   const loadSourceIntakeStatus = useCallback(async () => {
     try {
@@ -2434,6 +2443,8 @@ export default function IngestionView() {
     }
     setIsSelectingSource(true);
     setSourceSelectionError(null);
+    setRunIngestionDispatchResult(null);
+    setRunIngestionDispatchError(null);
     try {
       const result = await selectSourceProfile({ source_profile_id: selectedWorkbenchProfile.source_id });
       setSourceSelectionResult(result);
@@ -2444,6 +2455,58 @@ export default function IngestionView() {
       setIsSelectingSource(false);
     }
   }, [selectedWorkbenchProfile]);
+
+  const handleDispatchFilesystemRunIngestion = useCallback(async () => {
+    const context = sourceSelectionResult?.selected_source_context;
+    if (!context || sourceSelectionResult?.workflow_kind !== "filesystem_source_intake") {
+      return;
+    }
+    if (runLimitValidationError || runBatchSizeValidationError) {
+      setRunOptionsError(runLimitValidationError ?? runBatchSizeValidationError);
+      return;
+    }
+
+    const sourceIntakeLimit = normalizedRunLimitInput ? Number(normalizedRunLimitInput) : null;
+    const ingestBatchSize = Number(normalizedRunBatchSizeInput);
+    setIsRunActionLoading(true);
+    setRunOptionsError(null);
+    setRunIngestionDispatchError(null);
+    setRunIngestionDispatchResult(null);
+    try {
+      const response = await dispatchRunIngestion({
+        source_profile_id: context.source_profile_id,
+        selection_fingerprint: context.selection_fingerprint,
+        filesystem_options: {
+          source_intake_limit: sourceIntakeLimit,
+          ingest_batch_size: ingestBatchSize,
+          acknowledge_legacy_or_review: runReadinessAcknowledged,
+        },
+      });
+      setRunIngestionDispatchResult(response);
+      if (response.result === "started") {
+        setBanner({ kind: "success", message: response.message });
+        await loadSourceIntakeStatus();
+        await loadSourceIntakeReports();
+      } else {
+        setBanner({ kind: "error", message: response.next_action ? `${response.message} ${response.next_action}` : response.message });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to run ingestion.";
+      setRunIngestionDispatchError(message);
+      setBanner({ kind: "error", message });
+    } finally {
+      setIsRunActionLoading(false);
+    }
+  }, [
+    loadSourceIntakeReports,
+    loadSourceIntakeStatus,
+    normalizedRunBatchSizeInput,
+    normalizedRunLimitInput,
+    runBatchSizeValidationError,
+    runLimitValidationError,
+    runReadinessAcknowledged,
+    sourceSelectionResult,
+  ]);
 
   const resetSourceIdentityEnrollmentState = useCallback(() => {
     setSourceIdentityEnrollRequested(false);
@@ -4425,7 +4488,7 @@ export default function IngestionView() {
                     setSourceSelectionError(null);
                   }}
                   aria-pressed={workbenchSourceType === option.value}
-                  disabled={option.disabled}
+                  disabled={option.disabled || isSourceIntakeActive}
                   title={option.disabled ? "Coming later" : undefined}
                 >
                   {option.label}
@@ -4445,7 +4508,7 @@ export default function IngestionView() {
                 setSourceSelectionResult(null);
                 setSourceSelectionError(null);
               }}
-              disabled={workbenchDevices.length === 0}
+              disabled={workbenchDevices.length === 0 || isSourceIntakeActive}
             >
               {workbenchDevices.length === 0 ? (
                 <option value="">No matching devices</option>
@@ -4469,7 +4532,7 @@ export default function IngestionView() {
                 setSourceSelectionResult(null);
                 setSourceSelectionError(null);
               }}
-              disabled={workbenchSourceOptions.length === 0}
+              disabled={workbenchSourceOptions.length === 0 || isSourceIntakeActive}
             >
               {workbenchSourceOptions.length === 0 ? (
                 <option value="">No matching sources</option>
@@ -4506,7 +4569,7 @@ export default function IngestionView() {
                   type="button"
                   className={styles.button}
                   onClick={() => void handleSelectWorkbenchSource()}
-                  disabled={isSelectingSource}
+                  disabled={isSelectingSource || isSourceIntakeActive}
                 >
                   {isSelectingSource
                     ? workbenchSourceType === "optical" ? "Checking optical disc..." : "Selecting..."
@@ -4565,18 +4628,140 @@ export default function IngestionView() {
             {sourceSelectionResult?.result === "selected"
               && sourceSelectionResult.availability === "available"
               && sourceSelectionResult.workflow_kind
-              && sourceSelectionResult.selected_source_context && (
+              && sourceSelectionResult.selected_source_context ? (
+                sourceSelectionResult.workflow_kind === "icloud_intake" ? (
+                  <IcloudRunWorkflowPanel
+                    selectedSourceId={sourceSelectionResult.selected_source_context.source_profile_id}
+                    selectedSourceLabel={sourceSelectionResult.selected_source_context.source_name}
+                    selectedSourceContext={sourceSelectionResult.selected_source_context}
+                    onActionComplete={() => {
+                      void loadProfiles({ refreshOnly: true, resetBanner: false });
+                    }}
+                  />
+                ) : (
+                  <section className={styles.runPanel} aria-label="Filesystem Source Intake Step 3">
+                    <div className={styles.runPanelHeader}>
+                      <div>
+                        <h3 className={styles.runPanelTitle}>Filesystem Source Intake</h3>
+                        <p className={styles.helperText}>Run ingestion for the selected Source. The backend will revalidate the Source before launch.</p>
+                      </div>
+                    </div>
+
+                    {["NAS", "Optical"].includes(sourceSelectionResult.selected_source_context.friendly_source_type) ? (
+                      <div className={styles.stepPlaceholder}>
+                        <span className={styles.detailLabel}>Step 3</span>
+                        <span>{sourceSelectionResult.selected_source_context.friendly_source_type} Run Ingestion is not enabled yet.</span>
+                        <span className={styles.detailMeta}>This Source may remain selectable for identity verification, but no normal ingestion action is exposed for this source type in this milestone.</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className={styles.detailGrid}>
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Source</span>
+                            <span>{sourceSelectionResult.selected_source_context.source_name}</span>
+                            <span className={styles.detailMeta}>{sourceSelectionResult.selected_source_context.friendly_source_type}</span>
+                          </div>
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Device / Media</span>
+                            <span>{sourceSelectionResult.selected_source_context.device_label}</span>
+                            <span className={styles.detailMeta}>Identity: {sourceSelectionResult.selected_source_context.identity_match_status}</span>
+                          </div>
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Resolved Source Root</span>
+                            <input
+                              className={`${styles.formInput} ${styles.readOnlyInput}`}
+                              value={sourceSelectionResult.selected_source_context.root_display}
+                              readOnly
+                            />
+                            <span className={styles.detailMeta}>Read-only; execution revalidates this root before launch.</span>
+                          </div>
+                        </div>
+
+                        <div className={styles.runOptionsGrid}>
+                          <label className={styles.formLabel}>
+                            Total Limit
+                            <input
+                              className={styles.formInput}
+                              value={runLimitInput}
+                              onChange={(event) => setRunLimitInput(event.target.value)}
+                              placeholder="No limit"
+                              disabled={isSourceIntakeActive || isRunActionLoading}
+                            />
+                          </label>
+                          <label className={styles.formLabel}>
+                            Batch Size
+                            <input
+                              className={styles.formInput}
+                              value={runBatchSizeInput}
+                              onChange={(event) => setRunBatchSizeInput(event.target.value)}
+                              disabled={isSourceIntakeActive || isRunActionLoading}
+                            />
+                          </label>
+                        </div>
+
+                        {sourceSelectionResult.selected_source_context.source_endpoint_id == null && (
+                          <label className={styles.checkboxLabel}>
+                            <input
+                              type="checkbox"
+                              checked={runReadinessAcknowledged}
+                              onChange={(event) => setRunReadinessAcknowledged(event.target.checked)}
+                              disabled={isSourceIntakeActive || isRunActionLoading}
+                            />
+                            I reviewed this compatibility Source and want to run Source Intake if backend readiness permits it.
+                          </label>
+                        )}
+
+                        {(runLimitValidationError || runBatchSizeValidationError || runOptionsError || runIngestionDispatchError) && (
+                          <p className={styles.errorText}>
+                            {runLimitValidationError ?? runBatchSizeValidationError ?? runOptionsError ?? runIngestionDispatchError}
+                          </p>
+                        )}
+                        {runIngestionDispatchResult && (
+                          <p className={runIngestionDispatchResult.result === "started" ? styles.successText : styles.inlineWarning}>
+                            {runIngestionDispatchResult.next_action
+                              ? `${runIngestionDispatchResult.message} ${runIngestionDispatchResult.next_action}`
+                              : runIngestionDispatchResult.message}
+                          </p>
+                        )}
+
+                        <div className={styles.rowActions}>
+                          <button
+                            type="button"
+                            className={styles.runButton}
+                            onClick={() => void handleDispatchFilesystemRunIngestion()}
+                            disabled={
+                              isRunActionLoading
+                              || isSourceIntakeActive
+                              || Boolean(runLimitValidationError || runBatchSizeValidationError)
+                            }
+                          >
+                            {isRunActionLoading ? "Starting..." : "Run Ingestion"}
+                          </button>
+                          {isSourceIntakeActive && (
+                            <button
+                              type="button"
+                              className={styles.stopButton}
+                              onClick={() => void handleRequestStop()}
+                              disabled={isRunActionLoading || sourceIntakeStatus?.status === "stop_requested"}
+                            >
+                              {sourceIntakeStatus?.status === "stop_requested" ? "Stop Requested" : "Request Stop"}
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </section>
+                )
+              ) : (
                 <div className={styles.stepPlaceholder}>
                   <span className={styles.detailLabel}>Step 3</span>
-                  <span>{sourceSelectionResult.workflow_kind === "icloud_intake" ? "iCloud Intake" : "Filesystem Source Intake"}</span>
-                  <span className={styles.detailMeta}>Ready for the next milestone handoff. No intake, acquisition, import, or cleanup operation is started from this selector.</span>
+                  <span>Select and verify a Source to continue.</span>
+                  <span className={styles.detailMeta}>No Run Ingestion action is available until Source Selection succeeds.</span>
                 </div>
               )}
           </div>
         ) : null}
       </section>
-
-      <IcloudRunWorkflowPanel />
 
       {sourceIntakeStatus && isSourceIntakeActive && (
         <section className={styles.runPanel}>
@@ -4831,30 +5016,7 @@ export default function IngestionView() {
                     </td>
                     <td>
                       <div className={styles.rowActions}>
-                        {(() => {
-                          const disabledReason = getRunDisabledReason(profile);
-                          const isDisabledForActiveRun = isSourceIntakeActive && disabledReason == null;
-                          const effectiveReason = isDisabledForActiveRun
-                            ? "Another Source Intake run is already active."
-                            : disabledReason;
-                          const rowRunError = rowRunErrors[profile.source_id];
-                          const isChecking = runPreflightSourceId === profile.source_id;
-
-                          return (
-                            <>
-                              <button
-                                type="button"
-                                className={styles.runButton}
-                                onClick={() => void handleRunIntakeClick(profile)}
-                                disabled={Boolean(effectiveReason) || isChecking || isRunActionLoading}
-                              >
-                                {isChecking ? "Checking..." : "Run Intake"}
-                              </button>
-                              {effectiveReason && <span className={styles.disabledReason}>{effectiveReason}</span>}
-                              {rowRunError && <span className={styles.rowError}>{rowRunError}</span>}
-                            </>
-                          );
-                        })()}
+                        <span className={styles.disabledReason}>Use Source Selector Step 3 to run ingestion.</span>
                         <button type="button" className={styles.updateButton} onClick={() => openDetailsDrawer(profile)}>
                           Details
                         </button>

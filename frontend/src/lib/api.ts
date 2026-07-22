@@ -27,6 +27,8 @@ import type {
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
   SourceProfileReadinessResponse,
+  RunIngestionDispatchRequest,
+  RunIngestionDispatchResponse,
   SourceSelectionRequest,
   SourceSelectionResponse,
   SourceProfileStatus,
@@ -1085,6 +1087,15 @@ export function selectSourceProfile(
   payload: SourceSelectionRequest,
 ): Promise<SourceSelectionResponse> {
   return apiRequest<SourceSelectionResponse>("/api/admin/source-selection/select", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function dispatchRunIngestion(
+  payload: RunIngestionDispatchRequest,
+): Promise<RunIngestionDispatchResponse> {
+  return apiRequest<RunIngestionDispatchResponse>("/api/admin/run-ingestion/dispatch", {
     method: "POST",
     body: JSON.stringify(payload),
   });

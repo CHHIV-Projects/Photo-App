@@ -38,6 +38,8 @@ from app.schemas.admin import (
     SourceIntakeRunResponse,
     SourceIntakeStatusSchema,
     SourceIntakeStopResponse,
+    RunIngestionDispatchRequest,
+    RunIngestionDispatchResponse,
     SourceProfileCreateRequest,
     SourceProfileCreateResponse,
     SourceProfileDetail,
@@ -112,6 +114,10 @@ from app.services.ingestion.ingestion_context_service import normalize_source_la
 from app.services.admin.source_intake_execution_service import (
     SourceIntakeAlreadyRunningError,
     SourceIntakeReadinessBlockedError,
+)
+from app.services.admin.run_ingestion_dispatch_service import (
+    RunIngestionDispatchError,
+    RunIngestionDispatchService,
 )
 from app.services.duplicates.processing_service import (
     DuplicateProcessingAlreadyRunningError,
@@ -1833,6 +1839,27 @@ def post_source_selection_select(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"detail": "Source profile not found."},
         )
+
+
+@router.post("/run-ingestion/dispatch", response_model=RunIngestionDispatchResponse)
+def dispatch_run_ingestion(
+    body: RunIngestionDispatchRequest,
+    db: Session = Depends(get_db_session),
+) -> RunIngestionDispatchResponse | JSONResponse:
+    """Revalidate Source Selection and dispatch the selected Step 3 ingestion action."""
+    with protected_ingestion_operation_start(db):
+        try:
+            return RunIngestionDispatchService(db).dispatch(body)
+        except LookupError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"detail": "Source profile not found.", "error_code": "SOURCE_PROFILE_NOT_FOUND"},
+            )
+        except RunIngestionDispatchError as exc:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": str(exc), "error_code": exc.code},
+            )
 
 
 @router.get("/source-intake/sources", response_model=SourceIntakeSourcesResponse)

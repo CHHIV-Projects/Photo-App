@@ -196,6 +196,8 @@ def start_source_intake(
     readiness_acknowledged: bool = False,
     created_by: str = "admin_api",
     readiness_service: _ReadinessService | None = None,
+    runtime_source_root_path: str | None = None,
+    selection_verified_identity: bool = False,
 ) -> SourceIntakeStatusSnapshot:
     """Validate, create a run row, and launch the background thread."""
     ensure_source_intake_schema(db_session)
@@ -210,17 +212,25 @@ def start_source_intake(
     if source is None:
         raise ValueError(f"Ingestion source {ingestion_source_id} not found.")
 
-    readiness = (readiness_service or SourceProfileReadinessService(db_session)).check_readiness(ingestion_source_id)
-    _enforce_readiness_for_launch(readiness, readiness_acknowledged=readiness_acknowledged)
+    effective_readiness_service = readiness_service or SourceProfileReadinessService(
+        db_session,
+        runtime_source_root_overrides={ingestion_source_id: runtime_source_root_path} if runtime_source_root_path else None,
+    )
+    readiness = effective_readiness_service.check_readiness(ingestion_source_id)
+    _enforce_readiness_for_launch(
+        readiness,
+        readiness_acknowledged=readiness_acknowledged,
+        selection_verified_identity=selection_verified_identity,
+    )
 
-    source_root_path = source.source_root_path or ""
+    source_root_path = runtime_source_root_path or source.source_root_path or ""
     if not source_root_path.strip():
         raise ValueError("Source has no root path configured.")
 
     _project_root = Path(__file__).resolve().parents[4]
     raw_path = Path(source_root_path).expanduser()
     resolved_path = raw_path.resolve() if raw_path.is_absolute() else (_project_root / raw_path).resolve()
-    if not resolved_path.exists():
+    if runtime_source_root_path is None and not resolved_path.exists():
         fallback_path = _legacy_backend_storage_fallback(resolved_path)
         if fallback_path is not None and fallback_path.exists():
             resolved_path = fallback_path
@@ -275,12 +285,15 @@ def _enforce_readiness_for_launch(
     readiness: SourceProfileReadinessResponse,
     *,
     readiness_acknowledged: bool,
+    selection_verified_identity: bool = False,
 ) -> None:
     """Apply launch policy for generic operator-initiated Source Intake."""
     if readiness.can_run_source_intake and not readiness.requires_operator_acknowledgment:
         return
 
     if readiness.can_run_source_intake and readiness.requires_operator_acknowledgment:
+        if selection_verified_identity and readiness.endpoint_id is not None:
+            return
         if readiness_acknowledged:
             return
         raise SourceIntakeReadinessBlockedError(

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   advanceIcloudIntakeImport,
+  dispatchRunIngestion,
   getIcloudIntakeImportStatus,
   getSourceProfileDeferredAssets,
   getSourceProfiles,
@@ -14,6 +15,7 @@ import {
 import type {
   IcloudIntakeImportStatus,
   IcloudHistoricalRoutineRefreshResponse,
+  SelectedSourceContext,
   SourceProfileDeferredAssetItem,
   SourceProfileSummary,
 } from "@/types/ui-api";
@@ -23,6 +25,13 @@ import styles from "./icloud-run-workflow-panel.module.css";
 type RunPhase = "idle" | "refreshing" | "running" | "failed";
 
 const INVENTORY_REFRESH_CAP = 10000;
+
+interface IcloudRunWorkflowPanelProps {
+  selectedSourceId?: number | null;
+  selectedSourceLabel?: string | null;
+  selectedSourceContext?: SelectedSourceContext | null;
+  onActionComplete?: () => void;
+}
 
 function isIcloudProfile(profile: SourceProfileSummary): boolean {
   return profile.source_type === "cloud_export" && profile.cloud_provider === "icloud";
@@ -70,9 +79,14 @@ function Metric({ label, value }: { label: string; value: string | number | null
   );
 }
 
-export default function IcloudRunWorkflowPanel(): JSX.Element {
+export default function IcloudRunWorkflowPanel({
+  selectedSourceId: controlledSourceId = null,
+  selectedSourceLabel = null,
+  selectedSourceContext = null,
+  onActionComplete,
+}: IcloudRunWorkflowPanelProps = {}): JSX.Element {
   const [profiles, setProfiles] = useState<SourceProfileSummary[]>([]);
-  const [selectedSourceId, setSelectedSourceId] = useState<number | null>(null);
+  const [internalSelectedSourceId, setInternalSelectedSourceId] = useState<number | null>(null);
   const [status, setStatus] = useState<IcloudIntakeImportStatus | null>(null);
   const [refreshResult, setRefreshResult] = useState<IcloudHistoricalRoutineRefreshResponse | null>(null);
   const [runResult, setRunResult] = useState<IcloudIntakeImportStatus | null>(null);
@@ -84,10 +98,13 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
   const [isLoadingDeferred, setIsLoadingDeferred] = useState(false);
 
   const icloudProfiles = useMemo(() => profiles.filter(isIcloudProfile), [profiles]);
+  const selectedSourceId = controlledSourceId ?? internalSelectedSourceId;
+  const isControlledSource = controlledSourceId != null;
   const selectedProfile = useMemo(
     () => icloudProfiles.find((profile) => profile.source_id === selectedSourceId) ?? null,
     [icloudProfiles, selectedSourceId],
   );
+  const selectedDisplayLabel = selectedProfile?.source_label ?? selectedSourceLabel ?? selectedSourceContext?.source_name ?? "Selected iCloud Source";
   const isBusy = phase === "refreshing" || phase === "running";
   const displayedResult = runResult ?? (status?.import_run_id ? status : null);
   const hasPreparedCandidates = Boolean(status && (status.can_start_import || status.can_resume_import || status.can_advance_import || status.logical_candidates_ready > 0));
@@ -97,7 +114,7 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
       && status.import_stop_reason === "partial_item_failed"
       && status.local_staging_file_count > 0,
   );
-  const unavailableReason = !selectedProfile
+  const unavailableReason = !selectedSourceId
     ? "Select an active iCloud Source Profile."
     : !hasPreparedCandidates && !status?.resume_available
       ? "Refresh / Prepare Next 1000 before importing."
@@ -120,7 +137,7 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
       const response = await getSourceProfiles({ status: "active", includeUsername: false });
       const nextProfiles = response.profiles.filter(isIcloudProfile);
       setProfiles(response.profiles);
-      setSelectedSourceId((current) => current ?? nextProfiles[0]?.source_id ?? null);
+      setInternalSelectedSourceId((current) => current ?? nextProfiles[0]?.source_id ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load iCloud source profiles.");
     } finally {
@@ -146,8 +163,11 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    if (isControlledSource) {
+      return;
+    }
     void loadProfiles();
-  }, [loadProfiles]);
+  }, [isControlledSource, loadProfiles]);
 
   useEffect(() => {
     if (!selectedSourceId) {
@@ -161,6 +181,33 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
     void refreshStatus(selectedSourceId);
     void loadDeferredRows(selectedSourceId);
   }, [loadDeferredRows, refreshStatus, selectedSourceId]);
+
+  async function handleSelectedSourceDispatch(): Promise<void> {
+    if (!selectedSourceId) {
+      return;
+    }
+    setPhase("running");
+    setError(null);
+    setMessage(null);
+    setRunResult(null);
+    try {
+      const response = await dispatchRunIngestion({
+        source_profile_id: selectedSourceId,
+        selection_fingerprint: selectedSourceContext?.selection_fingerprint ?? null,
+        icloud_options: {
+          target_logical_items: null,
+        },
+      });
+      setMessage(response.next_action ? `${response.message} ${response.next_action}` : response.message);
+      await refreshStatus(selectedSourceId);
+      await loadDeferredRows(selectedSourceId);
+      onActionComplete?.();
+      setPhase("idle");
+    } catch (err) {
+      setPhase("failed");
+      setError(err instanceof Error ? err.message : "iCloud action failed.");
+    }
+  }
 
   async function handleRefreshInventory(): Promise<void> {
     if (!selectedSourceId) {
@@ -238,23 +285,32 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
         </div>
       </div>
 
-      <div className={styles.controls}>
-        <label className={styles.field}>
-          Source Profile
-          <select
-            value={selectedSourceId ?? ""}
-            disabled={isLoadingProfiles || isBusy}
-            onChange={(event) => setSelectedSourceId(event.target.value ? Number(event.target.value) : null)}
-          >
-            {icloudProfiles.length === 0 && <option value="">No active iCloud profiles</option>}
-            {icloudProfiles.map((profile) => (
-              <option key={profile.source_id} value={profile.source_id}>
-                {profile.source_label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      {isControlledSource ? (
+        <div className={styles.controls}>
+          <div className={styles.field}>
+            Source Profile
+            <strong>{selectedDisplayLabel}</strong>
+          </div>
+        </div>
+      ) : (
+        <div className={styles.controls}>
+          <label className={styles.field}>
+            Source Profile
+            <select
+              value={selectedSourceId ?? ""}
+              disabled={isLoadingProfiles || isBusy}
+              onChange={(event) => setInternalSelectedSourceId(event.target.value ? Number(event.target.value) : null)}
+            >
+              {icloudProfiles.length === 0 && <option value="">No active iCloud profiles</option>}
+              {icloudProfiles.map((profile) => (
+                <option key={profile.source_id} value={profile.source_id}>
+                  {profile.source_label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
 
       {status && (
         <div className={styles.metricsGrid}>
@@ -266,12 +322,20 @@ export default function IcloudRunWorkflowPanel(): JSX.Element {
       )}
 
       <div className={styles.actionRow}>
-        <button className={styles.secondaryButton} type="button" disabled={!selectedSourceId || isBusy} onClick={handleRefreshInventory}>
-          {phase === "refreshing" ? "Preparing..." : "Refresh / Prepare Next 1000"}
-        </button>
-        <button className={styles.primaryButton} type="button" disabled={!canRunBackfill} onClick={handleRunBackfill}>
-          {phase === "running" ? "Importing..." : status?.can_resume_import ? "Resume Interrupted Import" : "Import Next 1000"}
-        </button>
+        {isControlledSource ? (
+          <button className={styles.primaryButton} type="button" disabled={!selectedSourceId || isBusy || status?.available_inventory === "no"} onClick={handleSelectedSourceDispatch}>
+            {phase === "running" ? "Working..." : status?.can_resume_import ? "Resume Interrupted Import" : status?.can_advance_import ? "Continue Import" : status?.can_start_import ? "Import Next 1000" : "Prepare Next 1000"}
+          </button>
+        ) : (
+          <>
+            <button className={styles.secondaryButton} type="button" disabled={!selectedSourceId || isBusy} onClick={handleRefreshInventory}>
+              {phase === "refreshing" ? "Preparing..." : "Refresh / Prepare Next 1000"}
+            </button>
+            <button className={styles.primaryButton} type="button" disabled={!canRunBackfill} onClick={handleRunBackfill}>
+              {phase === "running" ? "Importing..." : status?.can_resume_import ? "Resume Interrupted Import" : "Import Next 1000"}
+            </button>
+          </>
+        )}
         {unavailableReason && <span className={styles.metaLine}>{unavailableReason}</span>}
         {canResumePartialAcquisition && <span className={styles.metaLine}>Resume will first discard verified partial-acquisition staging files.</span>}
       </div>
