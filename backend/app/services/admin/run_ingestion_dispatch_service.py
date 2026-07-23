@@ -7,11 +7,15 @@ authorities without creating new selected-source persistence.
 
 from __future__ import annotations
 
+import ntpath
+import re
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.models.ingestion_source import IngestionSource
+from app.models.source_endpoint import SourceEndpoint
 from app.schemas.admin import (
     RunIngestionDispatchRequest,
     RunIngestionDispatchResponse,
@@ -31,13 +35,14 @@ from app.services.icloud_historical_routine_service import (
     start_icloud_intake_import,
 )
 from app.services.source_identity import SourceIdentityProbeService, SourceSelectionRequest, SourceSelectionService
+from app.services.source_identity.identity_fingerprint import parse_unc_server_share
 from app.services.source_identity.source_selection_schema import SourceSelectionResponse
 
 
 DEFAULT_FILESYSTEM_BATCH_SIZE = 500
 DEFAULT_ICLOUD_INTERNAL_BATCH_SIZE = 100
 ICLOUD_PREPARE_SCAN_CAP = 10000
-_ENABLED_FILESYSTEM_FRIENDLY_TYPES = {"Local", "External", "Removable"}
+_ENABLED_FILESYSTEM_FRIENDLY_TYPES = {"Local", "External", "Removable", "NAS"}
 
 
 class RunIngestionDispatchError(ValueError):
@@ -155,17 +160,6 @@ class RunIngestionDispatchService:
         context = selection.selected_source_context
         assert context is not None
 
-        if context.friendly_source_type == "NAS":
-            return RunIngestionDispatchResponse(
-                result="blocked",
-                workflow_kind="filesystem_source_intake",
-                action="none",
-                message="NAS Run Ingestion is not enabled in the normal Step 3 workflow yet.",
-                next_action="Use an approved management or future NAS validation workflow.",
-                source_profile_id=request.source_profile_id,
-                status="nas_not_enabled",
-                workflow_payload={"selection": _safe_payload(selection)},
-            )
         if context.friendly_source_type == "Optical":
             return RunIngestionDispatchResponse(
                 result="blocked",
@@ -188,6 +182,11 @@ class RunIngestionDispatchService:
                 status="source_type_not_enabled",
                 workflow_payload={"selection": _safe_payload(selection)},
             )
+
+        if context.friendly_source_type == "NAS":
+            nas_blocked = self._validate_nas_runtime_root(request, selection)
+            if nas_blocked is not None:
+                return nas_blocked
 
         runtime_root = context.resolved_source_root
         if not runtime_root:
@@ -278,6 +277,123 @@ class RunIngestionDispatchService:
             status=snapshot.status,
             workflow_payload={"current": _safe_payload(snapshot), "selection": _safe_payload(selection)},
         )
+
+    def _validate_nas_runtime_root(
+        self,
+        request: RunIngestionDispatchRequest,
+        selection: SourceSelectionResponse,
+    ) -> RunIngestionDispatchResponse | None:
+        context = selection.selected_source_context
+        assert context is not None
+
+        source = self._db.get(IngestionSource, request.source_profile_id)
+        if source is None:
+            raise LookupError("Source profile not found.")
+        if source.profile_status != "active":
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="Only active NAS Sources can run ingestion.",
+                next_action="Review the Source status, then select it again.",
+                status="source_profile_inactive",
+            )
+        if source.endpoint_id is None:
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="NAS Run Ingestion requires a linked Source Endpoint.",
+                next_action="Create or repair the NAS Source through the normal Source workflow.",
+                status="nas_endpoint_missing",
+            )
+        if context.source_endpoint_id != source.endpoint_id:
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="The selected NAS endpoint changed after Source Selection.",
+                next_action="Select Source again before running ingestion.",
+                status="nas_endpoint_stale",
+            )
+
+        endpoint = self._db.get(SourceEndpoint, source.endpoint_id)
+        if endpoint is None:
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="The linked NAS Source Endpoint was not found.",
+                next_action="Review or repair the Source endpoint link.",
+                status="nas_endpoint_not_found",
+            )
+        if endpoint.status != "active":
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="Only active NAS Source Endpoints can run ingestion.",
+                next_action="Review the NAS endpoint status, then select the Source again.",
+                status="nas_endpoint_inactive",
+            )
+        if endpoint.source_type != "nas":
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="The linked endpoint is not a NAS endpoint.",
+                next_action="Review or repair the Source endpoint link before running ingestion.",
+                status="nas_endpoint_type_mismatch",
+            )
+        if context.identity_match_status != "matched":
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="NAS identity must be matched before running ingestion.",
+                next_action="Select Source again after confirming the NAS share is available.",
+                status="nas_identity_not_matched",
+            )
+
+        endpoint_root = _canonical_unc_share(context.resolved_endpoint_path)
+        runtime_root = _normalize_unc_path(context.resolved_source_root)
+        if endpoint_root is None:
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="The selected NAS endpoint did not resolve to a valid UNC server/share.",
+                next_action="Confirm the NAS Source uses a canonical UNC share, then select it again.",
+                status="nas_endpoint_unc_invalid",
+            )
+        if runtime_root is None:
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="The selected NAS Source Root did not resolve to a valid UNC path.",
+                next_action="Confirm the NAS Source Root is a UNC path and select it again.",
+                status="nas_runtime_root_unc_invalid",
+            )
+
+        expected_root = _join_unc_root(endpoint_root, source.endpoint_relative_root or "")
+        if expected_root is None:
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="The NAS Source Root would leave the endpoint share boundary.",
+                next_action="Review the Source endpoint-relative root before running ingestion.",
+                status="nas_runtime_root_outside_share",
+            )
+        if not _same_unc_path(runtime_root, expected_root):
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="The selected NAS Source Root no longer matches the linked endpoint and relative root.",
+                next_action="Select Source again after confirming the NAS Source details.",
+                status="nas_runtime_root_mismatch",
+            )
+        if not _is_within_unc_share(runtime_root, endpoint_root):
+            return _nas_blocked(
+                request.source_profile_id,
+                selection,
+                message="The NAS Source Root is outside the linked server/share boundary.",
+                next_action="Review the NAS Source root before running ingestion.",
+                status="nas_runtime_root_outside_share",
+            )
+
+        return None
 
     def _dispatch_icloud(
         self,
@@ -400,6 +516,76 @@ def _icloud_response(
         status=status,
         workflow_payload={"current": _safe_payload(payload)},
     )
+
+
+def _nas_blocked(
+    source_profile_id: int,
+    selection: SourceSelectionResponse,
+    *,
+    message: str,
+    next_action: str,
+    status: str,
+) -> RunIngestionDispatchResponse:
+    return RunIngestionDispatchResponse(
+        result="blocked",
+        workflow_kind="filesystem_source_intake",
+        action="none",
+        message=message,
+        next_action=next_action,
+        source_profile_id=source_profile_id,
+        status=status,
+        workflow_payload={"selection": _safe_payload(selection)},
+    )
+
+
+def _canonical_unc_share(path: str | None) -> str | None:
+    server_share = parse_unc_server_share(path)
+    if server_share is None:
+        return None
+    server, share = server_share
+    return f"\\\\{server}\\{share}"
+
+
+def _normalize_unc_path(path: str | None) -> str | None:
+    if parse_unc_server_share(path) is None:
+        return None
+    normalized = ntpath.normpath((path or "").replace("/", "\\"))
+    if parse_unc_server_share(normalized) is None:
+        return None
+    return normalized.rstrip("\\")
+
+
+def _join_unc_root(endpoint_root: str, endpoint_relative_root: str) -> str | None:
+    endpoint = _canonical_unc_share(endpoint_root)
+    if endpoint is None:
+        return None
+    relative = (endpoint_relative_root or "").strip("\\/")
+    if not relative:
+        return endpoint
+    if any(part == ".." for part in re.split(r"[\\/]+", relative)):
+        return None
+    joined = _normalize_unc_path(f"{endpoint}\\{relative}")
+    if joined is None or not _is_within_unc_share(joined, endpoint):
+        return None
+    return joined
+
+
+def _is_within_unc_share(path: str, endpoint_root: str) -> bool:
+    normalized_path = _normalize_unc_path(path)
+    normalized_endpoint = _canonical_unc_share(endpoint_root)
+    if normalized_path is None or normalized_endpoint is None:
+        return False
+    left = normalized_path.casefold()
+    right = normalized_endpoint.rstrip("\\").casefold()
+    return left == right or left.startswith(f"{right}\\")
+
+
+def _same_unc_path(left: str, right: str) -> bool:
+    normalized_left = _normalize_unc_path(left)
+    normalized_right = _normalize_unc_path(right)
+    if normalized_left is None or normalized_right is None:
+        return False
+    return normalized_left.casefold() == normalized_right.casefold()
 
 
 def _safe_payload(value: Any) -> dict[str, Any]:

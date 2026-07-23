@@ -4647,11 +4647,11 @@ export default function IngestionView() {
                       </div>
                     </div>
 
-                    {["NAS", "Optical"].includes(sourceSelectionResult.selected_source_context.friendly_source_type) ? (
+                    {sourceSelectionResult.selected_source_context.friendly_source_type === "Optical" ? (
                       <div className={styles.stepPlaceholder}>
                         <span className={styles.detailLabel}>Step 3</span>
-                        <span>{sourceSelectionResult.selected_source_context.friendly_source_type} Run Ingestion is not enabled yet.</span>
-                        <span className={styles.detailMeta}>This Source may remain selectable for identity verification, but no normal ingestion action is exposed for this source type in this milestone.</span>
+                        <span>Optical Run Ingestion is not enabled yet.</span>
+                        <span className={styles.detailMeta}>This Source may remain selectable for identity verification, but no normal ingestion action is exposed for Optical sources in this milestone.</span>
                       </div>
                     ) : (
                       <>
