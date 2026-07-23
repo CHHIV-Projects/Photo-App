@@ -109,7 +109,7 @@ type EditorFormState = {
 };
 
 type SourceIdentityEnrollmentPhase = "idle" | "planning" | "review" | "confirming" | "complete";
-type SourceCreationPhase = "idle" | "planning" | "review" | "confirming" | "complete";
+type SourceCreationPhase = "idle" | "planning" | "review" | "confirming" | "selecting_existing" | "complete";
 
 type SourceIdentityPlanOutcome = {
   plan: SourceEndpointEnrollmentPlanResponse;
@@ -2381,6 +2381,165 @@ export default function IngestionView() {
     sourceCreationUseRegisteredType,
   ]);
 
+  const handleUseOpticalDisc = useCallback(async () => {
+    const discName = createSourceForm.sourceLabel.trim();
+    const observedPath = createSourceForm.sourceRootPath.trim();
+    setSourceCreationError(null);
+    setSourceCreationResult(null);
+    setCreatedIcloudSource(null);
+    setSourceSelectionError(null);
+    setSourceSelectionResult(null);
+    setRunIngestionDispatchResult(null);
+    setRunIngestionDispatchError(null);
+
+    if (!observedPath) {
+      setSourceCreationError("Current Optical path is required.");
+      return;
+    }
+    if (!discName) {
+      setSourceCreationError("Friendly disc name is required.");
+      return;
+    }
+
+    const request = {
+      source_type: "optical" as const,
+      observed_path: observedPath,
+      source_name: discName,
+      device_name: discName,
+      naming_action: "create_new" as const,
+      selected_existing_endpoint_id: null,
+      selected_canonical_source_id: null,
+      duplicate_source_ids_to_inactivate: [],
+      use_registered_source_type: true,
+      operator_review_acknowledged: false,
+    };
+
+    setSourceCreationPhase("planning");
+    try {
+      const plan = await planSourceCreation(request);
+      setSourceCreationPlan(plan);
+      setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationSelectedCanonicalSourceId(plan.selected_canonical_source_id);
+      setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
+      setSourceCreationNamingAction(plan.selected_existing_endpoint_id == null ? "create_new" : "use_existing");
+      setSourceCreationUseRegisteredType(!plan.source_type_mismatch);
+      setSourceCreationReviewAcknowledged(false);
+
+      if (
+        plan.source_action === "reuse_existing_source"
+        && plan.existing_source_profile_id != null
+        && plan.durable_identity_status === "verified"
+      ) {
+        setSourceCreationPhase("selecting_existing");
+        setWorkbenchSourceType("optical");
+        if (plan.selected_existing_endpoint_id != null) {
+          setSelectedWorkbenchDeviceKey(`endpoint:${plan.selected_existing_endpoint_id}`);
+        }
+        setSelectedWorkbenchSourceId(plan.existing_source_profile_id);
+        await loadProfiles({ refreshOnly: true, resetBanner: false });
+
+        try {
+          const selection = await selectSourceProfile({ source_profile_id: plan.existing_source_profile_id });
+          setSourceSelectionResult(selection);
+          if (selection.result === "selected" && selection.availability === "available") {
+            const enteredNameNotice = discName !== plan.device_name && discName !== plan.source_display_name
+              ? ` Entered name "${discName}" was not applied.`
+              : "";
+            setBanner({
+              kind: "success",
+              message: `Disc already known as device "${plan.device_name}" and Source "${plan.source_display_name}". Existing Optical Source selected for Source Intake.${enteredNameNotice}`,
+            });
+            window.setTimeout(() => {
+              clearSourceCreationInputsAfterSuccess();
+              setSourceCreationPhase("idle");
+            }, 2500);
+          } else {
+            setSourceCreationPhase("review");
+            setSourceCreationError(
+              `Existing Optical Source was found, but automatic selection did not complete. ${
+                selection.message ?? "Select the Source from Step 2."
+              }`,
+            );
+          }
+        } catch (selectionError) {
+          setSourceCreationPhase("review");
+          setSourceCreationError(
+            `Existing Optical Source was found, but automatic selection did not complete. ${
+              selectionError instanceof Error ? selectionError.message : "Select the Source from Step 2."
+            }`,
+          );
+        }
+        return;
+      }
+
+      if (plan.plan_status === "blocked" || plan.plan_status === "needs_review") {
+        setSourceCreationPhase("review");
+        setSourceCreationError(null);
+        return;
+      }
+
+      const confirmRequest = {
+        ...request,
+        source_name: discName,
+        device_name: plan.selected_existing_endpoint_id == null ? discName : null,
+        naming_action: (plan.selected_existing_endpoint_id == null ? "create_new" : "use_existing") as SourceCreationNameAction,
+        selected_existing_endpoint_id: plan.selected_existing_endpoint_id,
+        selected_canonical_source_id: plan.selected_canonical_source_id,
+        duplicate_source_ids_to_inactivate: plan.duplicate_source_ids_to_inactivate,
+        use_registered_source_type: !plan.source_type_mismatch,
+        plan_fingerprint: plan.plan_fingerprint,
+        operator_confirmed: true,
+      };
+
+      setSourceCreationPhase("confirming");
+      const result = await confirmSourceCreation(confirmRequest);
+      setSourceCreationResult(result);
+      if (result.creation_status !== "completed" || result.source_profile_id == null) {
+        setSourceCreationPhase("review");
+        setSourceCreationError(result.blockers[0]?.message ?? "Optical Source creation did not complete.");
+        return;
+      }
+
+      setSourceCreationPhase("complete");
+      setWorkbenchSourceType("optical");
+      if (result.source_endpoint_id != null) {
+        setSelectedWorkbenchDeviceKey(`endpoint:${result.source_endpoint_id}`);
+      }
+      setSelectedWorkbenchSourceId(result.source_profile_id);
+      await loadProfiles({ refreshOnly: true, resetBanner: false });
+
+      try {
+        const selection = await selectSourceProfile({ source_profile_id: result.source_profile_id });
+        setSourceSelectionResult(selection);
+        if (selection.result === "selected" && selection.availability === "available") {
+          clearSourceCreationInputsAfterSuccess();
+          setBanner({
+            kind: "success",
+            message: `Optical disc ready for Source Intake: ${result.device_name}`,
+          });
+        } else {
+          setSourceCreationError(
+            `Optical Source was created, but automatic selection did not complete. ${selection.message ?? "Select the Source from Step 2."}`,
+          );
+        }
+      } catch (selectionError) {
+        setSourceCreationError(
+          `Optical Source was created, but automatic selection did not complete. ${
+            selectionError instanceof Error ? selectionError.message : "Select the new Source from Step 2."
+          }`,
+        );
+      }
+    } catch (error) {
+      setSourceCreationPhase("idle");
+      setSourceCreationError(error instanceof Error ? error.message : "Failed to use Optical disc.");
+    }
+  }, [
+    clearSourceCreationInputsAfterSuccess,
+    createSourceForm.sourceLabel,
+    createSourceForm.sourceRootPath,
+    loadProfiles,
+  ]);
+
   const handleReviewDuplicateResolution = useCallback(async () => {
     if (!sourceCreationPlan) {
       setSourceCreationError("Identify the location before reviewing duplicate resolution.");
@@ -3974,7 +4133,7 @@ export default function IngestionView() {
                     type="button"
                     className={`${styles.segmentButton} ${createSourceForm.operatorSourceType === option.value ? styles.segmentButtonActive : ""}`}
                     aria-pressed={createSourceForm.operatorSourceType === option.value}
-                    disabled={option.disabled || sourceCreationPhase === "planning" || sourceCreationPhase === "confirming"}
+                    disabled={option.disabled || sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
                     title={option.disabled ? "Coming later" : undefined}
                     onClick={() => {
                       resetSourceCreationOutcome();
@@ -4000,7 +4159,7 @@ export default function IngestionView() {
                     className={styles.formInput}
                     autoComplete="off"
                     value={createSourceForm.sourceLabel}
-                    disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming"}
+                    disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
                     placeholder="Family iCloud"
                     onChange={(event) => {
                       resetSourceCreationOutcome();
@@ -4010,13 +4169,35 @@ export default function IngestionView() {
                 </label>
               )}
 
+              {createSourceForm.operatorSourceType === "optical" && (
+                <>
+                  <label className={styles.formLabel}>
+                    Friendly Disc Name
+                    <input
+                      className={styles.formInput}
+                      autoComplete="off"
+                      value={createSourceForm.sourceLabel}
+                      disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                      placeholder="Family Archive Disc 1"
+                      onChange={(event) => {
+                        resetSourceCreationOutcome();
+                        setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                      }}
+                    />
+                  </label>
+                  <p className={styles.helperText}>
+                    Insert a filesystem-readable data disc, enter its current drive path and a friendly name, then use the disc for ingestion.
+                  </p>
+                </>
+              )}
+
               {createSourceForm.operatorSourceType !== "icloud" && (
                 <label className={styles.formLabel}>
-                  Root Path or Mount Point
+                  {createSourceForm.operatorSourceType === "optical" ? "Current Optical Path" : "Root Path or Mount Point"}
                   <input
                     className={styles.formInput}
                     value={createSourceForm.sourceRootPath}
-                    disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming"}
+                    disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
                     placeholder={createSourceForm.operatorSourceType === "nas"
                       ? "\\\\server\\share\\folder"
                       : createSourceForm.operatorSourceType === "optical"
@@ -4088,23 +4269,69 @@ export default function IngestionView() {
                 <button
                   type="button"
                   className={styles.updateButton}
-                  disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming"}
-                  onClick={() => void handleCreateSource(false)}
+                  disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                  onClick={() => {
+                    if (createSourceForm.operatorSourceType === "optical") {
+                      void handleUseOpticalDisc();
+                      return;
+                    }
+                    void handleCreateSource(false);
+                  }}
                 >
                   {sourceCreationPhase === "planning"
                     ? "Identifying..."
                     : sourceCreationPhase === "confirming"
                       ? "Creating..."
+                      : sourceCreationPhase === "selecting_existing"
+                        ? "Selecting Existing Source..."
                       : createSourceForm.operatorSourceType === "icloud"
                         ? "Create Source"
-                        : "Identify Location"}
+                        : createSourceForm.operatorSourceType === "optical"
+                          ? "Use This Disc"
+                          : "Identify Location"}
                 </button>
               </div>
             </div>
 
             {sourceCreationError && <p className={styles.bannerError}>{sourceCreationError}</p>}
 
-            {sourceCreationPlan && !sourceCreationResult && (
+            {sourceCreationPlan && !sourceCreationResult && sourceCreationPhase === "selecting_existing" && (
+              <section className={styles.creationReview} aria-label="Existing Optical Source selected">
+                <div className={styles.workbenchSummaryHeader}>
+                  <div>
+                    <h4 className={styles.detailHeading}>Optical disc already known</h4>
+                    <p className={styles.helperText}>
+                      This disc matches an existing Optical identity. The existing Source is being selected; confirm the Source Selector and Step 3 update below.
+                    </p>
+                  </div>
+                  <span className={styles.pendingBadge}>known disc</span>
+                </div>
+                <div className={styles.creationResultGrid}>
+                  <div>
+                    <span className={styles.detailLabel}>Existing Device Name</span>
+                    <span>{sourceCreationPlan.device_name}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Existing Source Name</span>
+                    <span>{sourceCreationPlan.source_display_name}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Entered Friendly Name</span>
+                    <span>{createSourceForm.sourceLabel.trim() || "-"}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Durable Identity</span>
+                    <span className={durableIdentityBadgeClassName(sourceCreationPlan.durable_identity_status)}>
+                      {toDurableIdentityLabel(sourceCreationPlan.durable_identity_status)}
+                    </span>
+                  </div>
+                  <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationPlan.durable_identity_identifier ?? "-"}</span></div>
+                  <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationPlan.observed_path}</span></div>
+                </div>
+              </section>
+            )}
+
+            {sourceCreationPlan && !sourceCreationResult && sourceCreationPhase !== "selecting_existing" && (
               <section className={styles.creationReview} aria-label="Create Source review">
                 <div className={styles.workbenchSummaryHeader}>
                   <div>

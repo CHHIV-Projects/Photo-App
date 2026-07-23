@@ -383,6 +383,25 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         self.assertEqual(result.result, "blocked")
         self.assertEqual(result.status, "optical_fingerprint_incomplete")
 
+    def test_legacy_v1_optical_source_blocks_with_recreate_guidance(self) -> None:
+        source, endpoint = self._optical_source(fingerprint_version="optical_media_fingerprint_v1")
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="E:\\",
+            endpoint_relative_root="",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "optical_fingerprint_v1_legacy")
+        self.assertIn("earlier v1 identity format", result.message)
+
     def test_optical_identity_not_matched_blocks_launch(self) -> None:
         source, endpoint = self._optical_source()
         selection = self._selection(
@@ -683,7 +702,7 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         profile_status: str = "active",
         endpoint_status: str = "active",
         fingerprint_hash: str | None = "sha256:optical-test",
-        fingerprint_version: str | None = "optical_media_fingerprint_v1",
+        fingerprint_version: str | None = "optical_media_fingerprint_v2",
     ) -> tuple[IngestionSource, SourceEndpoint]:
         endpoint = SourceEndpoint(
             source_type="optical_media",

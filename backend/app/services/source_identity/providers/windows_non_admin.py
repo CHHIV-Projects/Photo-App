@@ -24,7 +24,10 @@ from app.services.source_identity.probe_schema import (
     SourceIdentitySourceType,
     SourceRootCandidate,
 )
-from app.services.source_identity.identity_fingerprint import optical_media_fingerprint, volume_guid_fingerprint
+from app.services.source_identity.identity_fingerprint import (
+    optical_media_fingerprint_v2,
+    volume_guid_fingerprint,
+)
 from app.services.source_identity.providers.base import CommandResult, CommandRunner
 
 
@@ -1043,8 +1046,8 @@ class WindowsSourceIdentityProbeProvider:
             blockers.append(blocker)
             return evidence, warnings, blockers
 
-        fingerprint_payload = _optical_fingerprint_payload(metadata, manifest)
-        fingerprint_hash, fingerprint_version = optical_media_fingerprint(fingerprint_payload)
+        fingerprint_payload = _optical_fingerprint_v2_payload(metadata, manifest)
+        fingerprint_hash, fingerprint_version = optical_media_fingerprint_v2(fingerprint_payload)
         evidence.append(
             self._evidence(
                 "media_evidence",
@@ -1783,6 +1786,26 @@ def _optical_fingerprint_payload(
             "file_count": manifest.file_count,
             "directory_count": manifest.directory_count,
             "timestamps_included": manifest.timestamps_included,
+        },
+    }
+
+
+def _optical_fingerprint_v2_payload(
+    metadata: _OpticalMediaMetadata,
+    manifest: _OpticalManifestResult,
+) -> dict[str, Any]:
+    return {
+        "algorithm": "optical_media_fingerprint_v2",
+        "disc_metadata": {
+            "filesystem_type": _normalized_payload_text(metadata.filesystem_type),
+            "volume_label": _normalized_payload_text(metadata.volume_label),
+            "volume_serial": _normalized_payload_text(metadata.volume_serial),
+            "total_size": metadata.total_size,
+        },
+        "manifest": {
+            "entries": _strip_manifest_timestamps(manifest.entries),
+            "file_count": manifest.file_count,
+            "directory_count": manifest.directory_count,
         },
     }
 

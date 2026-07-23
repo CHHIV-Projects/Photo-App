@@ -16,6 +16,8 @@ from app.services.source_identity.probe_schema import (
 FINGERPRINT_VERSION = "source_endpoint_identity_v1"
 VOLUME_GUID_FINGERPRINT_VERSION = "source_endpoint_volume_guid_v2"
 OPTICAL_MEDIA_FINGERPRINT_VERSION = "optical_media_fingerprint_v1"
+OPTICAL_MEDIA_FINGERPRINT_V2_VERSION = "optical_media_fingerprint_v2"
+CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION = OPTICAL_MEDIA_FINGERPRINT_V2_VERSION
 FINGERPRINT_HASH_PREFIX = "sha256:"
 STRONG_FINGERPRINT_STRENGTHS = {"strong"}
 
@@ -40,7 +42,10 @@ def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintRes
                 and item.status == "present"
                 and item.durability == "durable"
                 and item.fingerprint_hash
-                and item.fingerprint_version == OPTICAL_MEDIA_FINGERPRINT_VERSION
+                and item.fingerprint_version in {
+                    OPTICAL_MEDIA_FINGERPRINT_VERSION,
+                    OPTICAL_MEDIA_FINGERPRINT_V2_VERSION,
+                }
             ):
                 return FingerprintResult(
                     hash_value=item.fingerprint_hash,
@@ -90,10 +95,18 @@ def volume_guid_fingerprint(volume_guid: str) -> tuple[str, str]:
 
 
 def optical_media_fingerprint(payload: dict[str, Any]) -> tuple[str, str]:
-    """Hash a complete metadata-only optical media identity payload."""
+    """Hash a complete v1 metadata-only optical media identity payload."""
     return (
         _versioned_hash_for(OPTICAL_MEDIA_FINGERPRINT_VERSION, [stable_hash(payload)]),
         OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    )
+
+
+def optical_media_fingerprint_v2(payload: dict[str, Any]) -> tuple[str, str]:
+    """Hash a stable v2 metadata-only optical media identity payload."""
+    return (
+        _versioned_hash_for(OPTICAL_MEDIA_FINGERPRINT_V2_VERSION, [stable_hash(payload)]),
+        OPTICAL_MEDIA_FINGERPRINT_V2_VERSION,
     )
 
 

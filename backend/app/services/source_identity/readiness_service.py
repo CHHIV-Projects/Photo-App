@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import SourceEndpoint
 from app.services.source_identity.durable_identity import summarize_durable_identity
-from app.services.source_identity.identity_fingerprint import OPTICAL_MEDIA_FINGERPRINT_VERSION, fingerprint_from_probe
+from app.services.source_identity.identity_fingerprint import (
+    CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    fingerprint_from_probe,
+)
 from app.services.source_identity.probe_schema import (
     SourceIdentityProbeRequest,
     SourceIdentityProbeResponse,
@@ -162,10 +166,32 @@ class SourceProfileReadinessService:
             )
 
         fingerprint = fingerprint_from_probe(probe)
+        if mapped_type == "optical_media" and endpoint.identity_fingerprint_version == OPTICAL_MEDIA_FINGERPRINT_VERSION:
+            return self._response(
+                source,
+                endpoint=endpoint,
+                probe=probe,
+                readiness_status="blocked",
+                identity_match_status="mismatch",
+                can_run_source_intake=False,
+                hard_block=True,
+                operator_message="This Optical Source uses the earlier v1 identity format. Recreate the Optical Source to use the stable v2 identity.",
+                recommended_next_action="Recreate this Optical Source using the current Optical workflow.",
+                blockers=[
+                    _message(
+                        "optical_fingerprint_v1_legacy",
+                        "This Optical Source uses the earlier v1 identity format. Recreate the Optical Source to use the stable v2 identity.",
+                    )
+                ],
+                warnings=_probe_warning_messages(probe),
+                current_fingerprint_strength=fingerprint.strength,
+                fingerprint_match=False,
+            )
+
         if mapped_type == "optical_media" and (
             not endpoint.identity_fingerprint_hash
-            or endpoint.identity_fingerprint_version != OPTICAL_MEDIA_FINGERPRINT_VERSION
-            or fingerprint.version != OPTICAL_MEDIA_FINGERPRINT_VERSION
+            or endpoint.identity_fingerprint_version != CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION
+            or fingerprint.version != CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION
         ):
             return self._response(
                 source,

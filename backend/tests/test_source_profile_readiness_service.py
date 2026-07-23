@@ -13,7 +13,12 @@ from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
 from app.models.source_intake_run import SourceIntakeRun
-from app.services.source_identity.identity_fingerprint import fingerprint_from_probe, optical_media_fingerprint, volume_guid_fingerprint
+from app.services.source_identity.identity_fingerprint import (
+    fingerprint_from_probe,
+    optical_media_fingerprint,
+    optical_media_fingerprint_v2,
+    volume_guid_fingerprint,
+)
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
     SourceIdentityEvidenceItem,
@@ -187,6 +192,37 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertFalse(result.can_run_source_intake)
         self.assertTrue(result.hard_block)
         self.assertEqual(result.blockers[0].code, "optical_fingerprint_incomplete")
+
+    def test_legacy_v1_optical_endpoint_returns_recreate_guidance(self) -> None:
+        response = _optical_probe_response(path="E:\\")
+        legacy_hash, legacy_version = optical_media_fingerprint(
+            {
+                "algorithm": "optical_media_fingerprint_v1",
+                "disc_metadata": {
+                    "filesystem_type": "udf",
+                    "volume_serial": "7967c7ec",
+                    "used_size": 42,
+                },
+                "manifest": {
+                    "entries": [{"relative_path": "ordinary.txt", "entry_type": "file", "file_size": 42}],
+                    "file_count": 1,
+                    "directory_count": 0,
+                    "timestamps_included": False,
+                },
+            }
+        )
+        endpoint = self._add_endpoint_from_probe(response)
+        endpoint.identity_fingerprint_hash = legacy_hash
+        endpoint.identity_fingerprint_version = legacy_version
+        self.db.commit()
+        source = self._add_source(source_type="optical_media", path="E:\\", endpoint_id=endpoint.id)
+
+        result = SourceProfileReadinessService(self.db, _FakeProbeService(response)).check_readiness(source.id)
+
+        self.assertEqual(result.readiness_status, "blocked")
+        self.assertEqual(result.identity_match_status, "mismatch")
+        self.assertEqual(result.blockers[0].code, "optical_fingerprint_v1_legacy")
+        self.assertIn("earlier v1 identity format", result.operator_message)
 
     def test_enrolled_endpoint_fingerprint_mismatch_returns_blocked(self) -> None:
         endpoint = self._add_endpoint_from_probe(_probe_response(source_type="external_device", masked_value="volume-a"))
@@ -459,15 +495,14 @@ def _optical_probe_response(
     manifest_name: str = "ordinary.txt",
     safe_to_run: bool | str = "not_applicable",
 ) -> SourceIdentityProbeResponse:
-    fingerprint_hash, fingerprint_version = optical_media_fingerprint(
+    fingerprint_hash, fingerprint_version = optical_media_fingerprint_v2(
         {
-            "algorithm": "optical_media_fingerprint_v1",
+            "algorithm": "optical_media_fingerprint_v2",
             "disc_metadata": {
                 "filesystem_type": "udf",
                 "volume_label": None,
                 "volume_serial": "7967c7ec",
                 "total_size": 736960512,
-                "used_size": 30871552,
             },
             "manifest": {
                 "entries": [
@@ -475,7 +510,6 @@ def _optical_probe_response(
                 ],
                 "file_count": 1,
                 "directory_count": 0,
-                "timestamps_included": False,
             },
         }
     )

@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointAliasEvent, SourceEndpointObservedPath
 from app.schemas.admin import IcloudReadinessOperationConflicts, IcloudReadinessReason, IcloudSourceReadinessResponse
-from app.services.source_identity.identity_fingerprint import fingerprint_from_probe, optical_media_fingerprint, volume_guid_fingerprint
+from app.services.source_identity.identity_fingerprint import fingerprint_from_probe, optical_media_fingerprint_v2, volume_guid_fingerprint
+from app.services.source_identity.identity_fingerprint import optical_media_fingerprint
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
     SourceIdentityEvidenceItem,
@@ -303,6 +304,34 @@ class SourceSelectionServiceTests(unittest.TestCase):
         self.assertIn("not currently available", result.message)
         self.assertNotIn("does not match", result.message)
 
+    def test_legacy_v1_optical_source_returns_recreate_guidance(self) -> None:
+        probe = _optical_probe("E:\\")
+        legacy_hash, legacy_version = optical_media_fingerprint(
+            {
+                "algorithm": "optical_media_fingerprint_v1",
+                "disc_metadata": {
+                    "filesystem_type": "udf",
+                    "volume_serial": "7967c7ec",
+                    "used_size": 42,
+                },
+                "manifest": {
+                    "entries": [{"relative_path": "ordinary.txt", "entry_type": "file", "file_size": 42}],
+                    "file_count": 1,
+                    "directory_count": 0,
+                    "timestamps_included": False,
+                },
+            }
+        )
+        endpoint = self._endpoint("optical_media", "Legacy Disc", legacy_hash, legacy_version)
+        source = self._source("Legacy Disc", "optical_media", "E:\\", endpoint_id=endpoint.id, endpoint_relative_root="")
+        fake = _FakeProbeService({"E:\\": probe})
+
+        result = SourceSelectionService(self.db, fake).select_source(SourceSelectionRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "not_selected")
+        self.assertEqual(result.availability, "needs_attention")
+        self.assertIn("earlier v1 identity format", result.message)
+
     def test_nas_unc_source_selects_with_canonical_share_identity(self) -> None:
         probe = _nas_probe(r"\\HENDERSON-NAS\Photos\Family")
         fingerprint = fingerprint_from_probe(probe)
@@ -549,15 +578,14 @@ def _volume_probe(source_type: str, path: str, guid: str, *, safe_to_run: bool |
 
 
 def _optical_probe(path: str) -> SourceIdentityProbeResponse:
-    fingerprint_hash, fingerprint_version = optical_media_fingerprint(
+    fingerprint_hash, fingerprint_version = optical_media_fingerprint_v2(
         {
-            "algorithm": "optical_media_fingerprint_v1",
+            "algorithm": "optical_media_fingerprint_v2",
             "disc_metadata": {"filesystem_type": "udf", "volume_serial": "7967c7ec"},
             "manifest": {
                 "entries": [{"relative_path": "ordinary.txt", "entry_type": "file", "file_size": 42}],
                 "file_count": 1,
                 "directory_count": 0,
-                "timestamps_included": False,
             },
         }
     )

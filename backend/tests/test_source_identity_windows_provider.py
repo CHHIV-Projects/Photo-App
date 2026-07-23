@@ -402,7 +402,7 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         self.assertIn("optical_manifest_complete", codes)
         self.assertIn("optical_media_fingerprint_present", codes)
         self.assertEqual(fingerprint.strength, "strong")
-        self.assertEqual(fingerprint.version, "optical_media_fingerprint_v1")
+        self.assertEqual(fingerprint.version, "optical_media_fingerprint_v2")
         self.assertEqual(durable_identity.status, "verified")
         self.assertEqual(durable_identity.identifier_type, "Optical media fingerprint")
         self.assertNotIn("ordinary.txt", response.model_dump_json())
@@ -424,6 +424,49 @@ class WindowsSourceIdentityProbeProviderTests(unittest.TestCase):
         f_response = f_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="F:\\"))
 
         self.assertEqual(fingerprint_from_probe(e_response).hash_value, fingerprint_from_probe(f_response).hash_value)
+
+    def test_optical_fingerprint_v2_excludes_free_space_and_used_size(self) -> None:
+        first_provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(free_space=706088960),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(),
+        )
+        second_provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(free_space=691892224),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(),
+        )
+
+        first = first_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+        second = second_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+
+        self.assertEqual(fingerprint_from_probe(first).version, "optical_media_fingerprint_v2")
+        self.assertEqual(fingerprint_from_probe(first).hash_value, fingerprint_from_probe(second).hash_value)
+
+    def test_optical_fingerprint_v2_excludes_file_and_directory_timestamps(self) -> None:
+        first_entries = (
+            {"relative_path": "folder", "entry_type": "directory", "last_write_time_ns": 100},
+            {"relative_path": "folder\\ordinary.txt", "entry_type": "file", "file_size": 42, "last_write_time_ns": 200},
+        )
+        second_entries = (
+            {"relative_path": "folder", "entry_type": "directory", "last_write_time_ns": 300},
+            {"relative_path": "folder\\ordinary.txt", "entry_type": "file", "file_size": 42, "last_write_time_ns": 400},
+        )
+        first_provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(first_entries, root_names=("folder",)),
+        )
+        second_provider = _provider(
+            readable_paths={"E:\\"},
+            results=_optical_metadata_results(),
+            optical_manifest_reader=lambda root_path, *, timeout_seconds: _optical_manifest(second_entries, root_names=("folder",)),
+        )
+
+        first = first_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+        second = second_provider.probe(SourceIdentityProbeRequest(source_type="optical_media", observed_path="E:\\"))
+
+        self.assertEqual(fingerprint_from_probe(first).hash_value, fingerprint_from_probe(second).hash_value)
 
     def test_different_optical_manifest_changes_fingerprint(self) -> None:
         first_provider = _provider(

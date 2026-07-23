@@ -20,7 +20,12 @@ from app.models.source_endpoint import SourceEndpoint, SourceEndpointObservedPat
 from app.schemas.admin import IcloudSourceReadinessResponse
 from app.services.ingestion.ingestion_context_service import normalize_source_root_path
 from app.services.source_identity.durable_identity import DurableIdentityStatus, summarize_durable_identity
-from app.services.source_identity.identity_fingerprint import fingerprint_from_probe, parse_unc_server_share, stable_hash
+from app.services.source_identity.identity_fingerprint import (
+    OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    fingerprint_from_probe,
+    parse_unc_server_share,
+    stable_hash,
+)
 from app.services.source_identity.probe_schema import SourceIdentityProbeRequest, SourceIdentityProbeResponse
 from app.services.source_identity.probe_service import SourceIdentityProbeService
 from app.services.source_identity.source_selection_schema import (
@@ -142,6 +147,7 @@ class SourceSelectionService:
         attempted_paths: list[str] = []
         saw_unavailable = False
         saw_mismatch = False
+        saw_legacy_optical_v1 = False
         attention_reason: str | None = None
 
         for candidate_path in self._candidate_paths(source, endpoint):
@@ -152,6 +158,9 @@ class SourceSelectionService:
                 continue
 
             identity_status = _identity_match_status(endpoint, probe)
+            if identity_status == "legacy_optical_v1":
+                saw_legacy_optical_v1 = True
+                continue
             if identity_status == "mismatch":
                 saw_mismatch = True
                 continue
@@ -170,6 +179,9 @@ class SourceSelectionService:
                 attempted_paths.append(resolved_root)
 
             root_identity_status = _identity_match_status(endpoint, root_probe)
+            if root_identity_status == "legacy_optical_v1":
+                saw_legacy_optical_v1 = True
+                continue
             if root_identity_status == "mismatch":
                 saw_mismatch = True
                 continue
@@ -220,6 +232,17 @@ class SourceSelectionService:
                 },
             )
 
+        if saw_legacy_optical_v1:
+            return self._not_selected(
+                availability="needs_attention",
+                message="This Optical Source uses the earlier v1 identity format. Recreate the Optical Source to use the stable v2 identity.",
+                retry_guidance="Use the current Optical workflow to recreate this disc Source.",
+                advanced_details={
+                    **_base_advanced_details(source, endpoint, friendly_type),
+                    "attempted_paths": _dedupe(attempted_paths),
+                    "legacy_reason": "optical_media_fingerprint_v1",
+                },
+            )
         if saw_mismatch:
             return self._not_selected(
                 availability="unavailable",
@@ -694,6 +717,8 @@ def enumerate_windows_mounted_volume_candidates() -> list[MountedVolumeCandidate
 
 def _identity_match_status(endpoint: SourceEndpoint, probe: SourceIdentityProbeResponse) -> str:
     fingerprint = fingerprint_from_probe(probe)
+    if endpoint.source_type == "optical_media" and endpoint.identity_fingerprint_version == OPTICAL_MEDIA_FINGERPRINT_VERSION:
+        return "legacy_optical_v1"
     if endpoint.identity_fingerprint_hash and fingerprint.hash_value == endpoint.identity_fingerprint_hash:
         return "matched"
     if endpoint.identity_fingerprint_hash and endpoint.identity_fingerprint_hash in fingerprint.legacy_hashes:

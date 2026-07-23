@@ -26,7 +26,7 @@ from app.services.source_identity.creation_schema import (
 from app.services.source_identity.creation_service import SourceCreationService
 from app.services.source_identity.identity_fingerprint import (
     fingerprint_from_probe,
-    optical_media_fingerprint,
+    optical_media_fingerprint_v2,
     volume_guid_fingerprint,
 )
 from app.services.source_identity.probe_schema import (
@@ -216,7 +216,7 @@ class SourceCreationServiceTests(unittest.TestCase):
         self.assertEqual(source.endpoint_relative_root, "")
         self.assertEqual(endpoint.source_type, "optical_media")
         self.assertEqual(endpoint.identity_fingerprint_hash, fingerprint_from_probe(probe).hash_value)
-        self.assertEqual(endpoint.identity_fingerprint_version, "optical_media_fingerprint_v1")
+        self.assertEqual(endpoint.identity_fingerprint_version, "optical_media_fingerprint_v2")
 
     def test_optical_subfolder_reuses_disc_endpoint_and_exact_source(self) -> None:
         whole_path = "E:\\"
@@ -1637,15 +1637,14 @@ def _optical_probe(
     boundary: str,
     manifest_name: str = "ordinary.txt",
 ) -> SourceIdentityProbeResponse:
-    fingerprint_hash, fingerprint_version = optical_media_fingerprint(
+    fingerprint_hash, fingerprint_version = optical_media_fingerprint_v2(
         {
-            "algorithm": "optical_media_fingerprint_v1",
+            "algorithm": "optical_media_fingerprint_v2",
             "disc_metadata": {
                 "filesystem_type": "udf",
                 "volume_label": None,
                 "volume_serial": "7967c7ec",
                 "total_size": 736960512,
-                "used_size": 30871552,
             },
             "manifest": {
                 "entries": [
@@ -1653,7 +1652,6 @@ def _optical_probe(
                 ],
                 "file_count": 1,
                 "directory_count": 0,
-                "timestamps_included": False,
             },
         }
     )

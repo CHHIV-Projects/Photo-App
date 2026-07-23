@@ -22,7 +22,7 @@ from app.models.source_endpoint import (
     SourceEndpointAliasEvent,
     SourceEndpointObservedPath,
 )
-from app.services.source_identity.identity_fingerprint import optical_media_fingerprint, volume_guid_fingerprint
+from app.services.source_identity.identity_fingerprint import optical_media_fingerprint_v2, volume_guid_fingerprint
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
     SourceIdentityEvidenceItem,
@@ -35,15 +35,14 @@ from app.services.source_identity.probe_schema import (
 class _FakeProbeService:
     def probe(self, request: SourceIdentityProbeRequest) -> SourceIdentityProbeResponse:
         if request.source_type == "optical_media":
-            fingerprint_hash, fingerprint_version = optical_media_fingerprint(
+            fingerprint_hash, fingerprint_version = optical_media_fingerprint_v2(
                 {
-                    "algorithm": "optical_media_fingerprint_v1",
+                    "algorithm": "optical_media_fingerprint_v2",
                     "disc_metadata": {"filesystem_type": "udf", "volume_serial": "7967c7ec"},
                     "manifest": {
                         "entries": [{"relative_path": "ordinary.txt", "entry_type": "file", "file_size": 42}],
                         "file_count": 1,
                         "directory_count": 0,
-                        "timestamps_included": False,
                     },
                 }
             )

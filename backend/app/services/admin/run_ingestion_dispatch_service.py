@@ -35,7 +35,11 @@ from app.services.icloud_historical_routine_service import (
     start_icloud_intake_import,
 )
 from app.services.source_identity import SourceIdentityProbeService, SourceSelectionRequest, SourceSelectionService
-from app.services.source_identity.identity_fingerprint import OPTICAL_MEDIA_FINGERPRINT_VERSION, parse_unc_server_share
+from app.services.source_identity.identity_fingerprint import (
+    CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    parse_unc_server_share,
+)
 from app.services.source_identity.source_selection_schema import SourceSelectionResponse
 
 
@@ -457,7 +461,15 @@ class RunIngestionDispatchService:
                 next_action="Review or repair the Source endpoint link before running ingestion.",
                 status="optical_endpoint_type_mismatch",
             )
-        if not endpoint.identity_fingerprint_hash or endpoint.identity_fingerprint_version != OPTICAL_MEDIA_FINGERPRINT_VERSION:
+        if endpoint.identity_fingerprint_version == OPTICAL_MEDIA_FINGERPRINT_VERSION:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="This Optical Source uses the earlier v1 identity format. Recreate the Optical Source to use the stable v2 identity.",
+                next_action="Recreate this Optical Source using the current Optical workflow.",
+                status="optical_fingerprint_v1_legacy",
+            )
+        if not endpoint.identity_fingerprint_hash or endpoint.identity_fingerprint_version != CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION:
             return _optical_blocked(
                 request.source_profile_id,
                 selection,
