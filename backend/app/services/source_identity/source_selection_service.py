@@ -31,7 +31,15 @@ from app.services.source_identity.source_selection_schema import (
 
 
 _ACTIVE_PROFILE_STATUS = "active"
-_PATH_UNAVAILABLE_CODES = {"access_denied", "path_not_found", "path_not_readable", "source_root_invalid"}
+_PATH_UNAVAILABLE_CODES = {
+    "access_denied",
+    "blank_or_unreadable_optical_media",
+    "no_readable_optical_media_inserted",
+    "optical_drive_unverified",
+    "path_not_found",
+    "path_not_readable",
+    "source_root_invalid",
+}
 _COMPLETED_PROBE_STATUSES = {"completed", "completed_with_warnings"}
 _BENIGN_ICLOUD_WARNING_CODES = {"AUTH_UNKNOWN", "NO_RECENT_ACQUISITION", "STAGING_FOLDER_MISSING", "SOURCE_REGISTRATION_UNKNOWN"}
 _VOLUME_GUID_RE = re.compile(r"Volume\{([^}]+)\}", re.IGNORECASE)

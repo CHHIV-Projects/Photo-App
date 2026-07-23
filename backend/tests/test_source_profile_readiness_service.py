@@ -13,7 +13,7 @@ from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
 from app.models.source_intake_run import SourceIntakeRun
-from app.services.source_identity.identity_fingerprint import fingerprint_from_probe, volume_guid_fingerprint
+from app.services.source_identity.identity_fingerprint import fingerprint_from_probe, optical_media_fingerprint, volume_guid_fingerprint
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
     SourceIdentityEvidenceItem,
@@ -141,6 +141,52 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertEqual(result.durable_identity_status, "verified")
         self.assertEqual(result.durable_identity_identifier_type, "Volume GUID")
         self.assert_non_mutating(source.id, expected_endpoint_id=endpoint.id)
+
+    def test_current_format_optical_endpoint_exact_match_returns_ready(self) -> None:
+        response = _optical_probe_response(path="E:\\")
+        endpoint = self._add_endpoint_from_probe(response)
+        source = self._add_source(source_type="optical_media", path="E:\\", endpoint_id=endpoint.id)
+        fake = _FakeProbeService(response)
+
+        result = SourceProfileReadinessService(self.db, fake).check_readiness(source.id)
+
+        self.assertEqual(fake.requests[0].source_type, "optical_media")
+        self.assertEqual(result.readiness_status, "ready")
+        self.assertEqual(result.identity_match_status, "matched")
+        self.assertTrue(result.can_run_source_intake)
+        self.assertFalse(result.requires_operator_acknowledgment)
+        self.assertFalse(result.hard_block)
+        self.assertEqual(result.durable_identity_status, "verified")
+        self.assertEqual(result.durable_identity_identifier_type, "Optical media fingerprint")
+        self.assert_non_mutating(source.id, expected_endpoint_id=endpoint.id)
+
+    def test_optical_endpoint_needs_review_evidence_blocks_source_intake(self) -> None:
+        response = _optical_probe_response(path="E:\\", safe_to_run="needs_review")
+        endpoint = self._add_endpoint_from_probe(response)
+        source = self._add_source(source_type="optical_media", path="E:\\", endpoint_id=endpoint.id)
+
+        result = SourceProfileReadinessService(self.db, _FakeProbeService(response)).check_readiness(source.id)
+
+        self.assertEqual(result.readiness_status, "blocked")
+        self.assertEqual(result.identity_match_status, "mismatch")
+        self.assertFalse(result.can_run_source_intake)
+        self.assertTrue(result.hard_block)
+        self.assertEqual(result.blockers[0].code, "optical_identity_not_matched")
+
+    def test_optical_endpoint_incomplete_fingerprint_blocks_source_intake(self) -> None:
+        response = _optical_probe_response(path="E:\\")
+        endpoint = self._add_endpoint_from_probe(response)
+        endpoint.identity_fingerprint_version = "source_endpoint_identity_v1"
+        self.db.commit()
+        source = self._add_source(source_type="optical_media", path="E:\\", endpoint_id=endpoint.id)
+
+        result = SourceProfileReadinessService(self.db, _FakeProbeService(response)).check_readiness(source.id)
+
+        self.assertEqual(result.readiness_status, "blocked")
+        self.assertEqual(result.identity_match_status, "mismatch")
+        self.assertFalse(result.can_run_source_intake)
+        self.assertTrue(result.hard_block)
+        self.assertEqual(result.blockers[0].code, "optical_fingerprint_incomplete")
 
     def test_enrolled_endpoint_fingerprint_mismatch_returns_blocked(self) -> None:
         endpoint = self._add_endpoint_from_probe(_probe_response(source_type="external_device", masked_value="volume-a"))
@@ -404,6 +450,67 @@ def _probe_response(
         safe_to_run=safe_to_run,
         blockers=blockers,
         warnings=warnings,
+    )
+
+
+def _optical_probe_response(
+    *,
+    path: str = "E:\\",
+    manifest_name: str = "ordinary.txt",
+    safe_to_run: bool | str = "not_applicable",
+) -> SourceIdentityProbeResponse:
+    fingerprint_hash, fingerprint_version = optical_media_fingerprint(
+        {
+            "algorithm": "optical_media_fingerprint_v1",
+            "disc_metadata": {
+                "filesystem_type": "udf",
+                "volume_label": None,
+                "volume_serial": "7967c7ec",
+                "total_size": 736960512,
+                "used_size": 30871552,
+            },
+            "manifest": {
+                "entries": [
+                    {"relative_path": manifest_name, "entry_type": "file", "file_size": 42},
+                ],
+                "file_count": 1,
+                "directory_count": 0,
+                "timestamps_included": False,
+            },
+        }
+    )
+    evidence = [
+        SourceIdentityEvidenceItem(
+            category="media_evidence",
+            code="optical_manifest_complete",
+            status="present",
+            durability="supporting",
+            privacy_level="advanced_only",
+            source_types=["optical_media"],
+            display_value="files=1;directories=0;timestamps=excluded;elapsed_seconds=0.003",
+            message="Complete metadata-only optical directory manifest was enumerated.",
+            provider_name="fake_probe",
+        ),
+        SourceIdentityEvidenceItem(
+            category="media_evidence",
+            code="optical_media_fingerprint_present",
+            status="present",
+            durability="durable",
+            privacy_level="masked_only",
+            source_types=["optical_media"],
+            masked_value=f"sha256:...{fingerprint_hash[-12:]}",
+            fingerprint_hash=fingerprint_hash,
+            fingerprint_version=fingerprint_version,
+            message="Complete metadata-only inserted-disc fingerprint is present and masked.",
+            provider_name="fake_probe",
+        ),
+    ]
+    return _probe_response(
+        source_type="optical_media",
+        path=path,
+        boundary="optical_media_root",
+        evidence_items=evidence,
+        safe_to_run=safe_to_run,
     )
 
 

@@ -35,14 +35,14 @@ from app.services.icloud_historical_routine_service import (
     start_icloud_intake_import,
 )
 from app.services.source_identity import SourceIdentityProbeService, SourceSelectionRequest, SourceSelectionService
-from app.services.source_identity.identity_fingerprint import parse_unc_server_share
+from app.services.source_identity.identity_fingerprint import OPTICAL_MEDIA_FINGERPRINT_VERSION, parse_unc_server_share
 from app.services.source_identity.source_selection_schema import SourceSelectionResponse
 
 
 DEFAULT_FILESYSTEM_BATCH_SIZE = 500
 DEFAULT_ICLOUD_INTERNAL_BATCH_SIZE = 100
 ICLOUD_PREPARE_SCAN_CAP = 10000
-_ENABLED_FILESYSTEM_FRIENDLY_TYPES = {"Local", "External", "Removable", "NAS"}
+_ENABLED_FILESYSTEM_FRIENDLY_TYPES = {"Local", "External", "Removable", "NAS", "Optical"}
 
 
 class RunIngestionDispatchError(ValueError):
@@ -160,17 +160,6 @@ class RunIngestionDispatchService:
         context = selection.selected_source_context
         assert context is not None
 
-        if context.friendly_source_type == "Optical":
-            return RunIngestionDispatchResponse(
-                result="blocked",
-                workflow_kind="filesystem_source_intake",
-                action="none",
-                message="Optical Run Ingestion is not enabled in the normal Step 3 workflow yet.",
-                next_action="Use a future Optical execution workflow after validation.",
-                source_profile_id=request.source_profile_id,
-                status="optical_not_enabled",
-                workflow_payload={"selection": _safe_payload(selection)},
-            )
         if context.friendly_source_type not in _ENABLED_FILESYSTEM_FRIENDLY_TYPES and context.source_endpoint_id is not None:
             return RunIngestionDispatchResponse(
                 result="blocked",
@@ -187,6 +176,10 @@ class RunIngestionDispatchService:
             nas_blocked = self._validate_nas_runtime_root(request, selection)
             if nas_blocked is not None:
                 return nas_blocked
+        if context.friendly_source_type == "Optical":
+            optical_blocked = self._validate_optical_runtime_root(request, selection)
+            if optical_blocked is not None:
+                return optical_blocked
 
         runtime_root = context.resolved_source_root
         if not runtime_root:
@@ -395,6 +388,139 @@ class RunIngestionDispatchService:
 
         return None
 
+    def _validate_optical_runtime_root(
+        self,
+        request: RunIngestionDispatchRequest,
+        selection: SourceSelectionResponse,
+    ) -> RunIngestionDispatchResponse | None:
+        context = selection.selected_source_context
+        assert context is not None
+
+        source = self._db.get(IngestionSource, request.source_profile_id)
+        if source is None:
+            raise LookupError("Source profile not found.")
+        if source.profile_status != "active":
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="Only active Optical Sources can run ingestion.",
+                next_action="Review the Source status, then select it again.",
+                status="source_profile_inactive",
+            )
+        if source.endpoint_id is None:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="Optical Run Ingestion requires a linked Optical Source Endpoint.",
+                next_action="Create or repair the Optical Source through the normal Source workflow.",
+                status="optical_endpoint_missing",
+            )
+        if source.endpoint_relative_root is None:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="This linked legacy Optical Source needs identity review before it can run ingestion.",
+                next_action="Create a current-format Optical Source through the normal Source workflow.",
+                status="optical_legacy_source",
+            )
+        if context.source_endpoint_id != source.endpoint_id:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The selected Optical endpoint changed after Source Selection.",
+                next_action="Select Source again before running ingestion.",
+                status="optical_endpoint_stale",
+            )
+
+        endpoint = self._db.get(SourceEndpoint, source.endpoint_id)
+        if endpoint is None:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The linked Optical Source Endpoint was not found.",
+                next_action="Review or repair the Source endpoint link.",
+                status="optical_endpoint_not_found",
+            )
+        if endpoint.status != "active":
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="Only active Optical Source Endpoints can run ingestion.",
+                next_action="Review the Optical endpoint status, then select the Source again.",
+                status="optical_endpoint_inactive",
+            )
+        if endpoint.source_type != "optical_media":
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The linked endpoint is not an Optical media endpoint.",
+                next_action="Review or repair the Source endpoint link before running ingestion.",
+                status="optical_endpoint_type_mismatch",
+            )
+        if not endpoint.identity_fingerprint_hash or endpoint.identity_fingerprint_version != OPTICAL_MEDIA_FINGERPRINT_VERSION:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The linked Optical endpoint does not have a complete current optical media fingerprint.",
+                next_action="Create or re-enroll the Optical Source through the normal Source workflow.",
+                status="optical_fingerprint_incomplete",
+            )
+        if context.identity_match_status != "matched" or context.durable_identity_status != "verified":
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The inserted Optical disc identity must be completely verified before running ingestion.",
+                next_action="Insert the correct Optical disc and select Source again.",
+                status="optical_identity_not_matched",
+            )
+
+        media_root = _normalize_drive_root(context.resolved_endpoint_path)
+        runtime_root = _normalize_local_path(context.resolved_source_root)
+        if media_root is None:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The selected Optical media root did not resolve to a valid drive root.",
+                next_action="Insert the correct Optical disc and select Source again.",
+                status="optical_media_root_invalid",
+            )
+        if runtime_root is None:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The selected Optical Source Root did not resolve to a valid local path.",
+                next_action="Insert the correct Optical disc and select Source again.",
+                status="optical_runtime_root_invalid",
+            )
+
+        expected_root = _join_local_root(media_root, source.endpoint_relative_root)
+        if expected_root is None:
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The Optical Source Root would leave the inserted media boundary.",
+                next_action="Review the Optical Source endpoint-relative root before running ingestion.",
+                status="optical_runtime_root_outside_media",
+            )
+        if not _same_local_path(runtime_root, expected_root):
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The selected Optical Source Root no longer matches the linked media and relative root.",
+                next_action="Select Source again after confirming the correct disc is inserted.",
+                status="optical_runtime_root_mismatch",
+            )
+        if not _is_within_local_root(runtime_root, media_root):
+            return _optical_blocked(
+                request.source_profile_id,
+                selection,
+                message="The Optical Source Root is outside the inserted media boundary.",
+                next_action="Review the Optical Source root before running ingestion.",
+                status="optical_runtime_root_outside_media",
+            )
+
+        return None
+
     def _dispatch_icloud(
         self,
         request: RunIngestionDispatchRequest,
@@ -538,6 +664,26 @@ def _nas_blocked(
     )
 
 
+def _optical_blocked(
+    source_profile_id: int,
+    selection: SourceSelectionResponse,
+    *,
+    message: str,
+    next_action: str,
+    status: str,
+) -> RunIngestionDispatchResponse:
+    return RunIngestionDispatchResponse(
+        result="blocked",
+        workflow_kind="filesystem_source_intake",
+        action="none",
+        message=message,
+        next_action=next_action,
+        source_profile_id=source_profile_id,
+        status=status,
+        workflow_payload={"selection": _safe_payload(selection)},
+    )
+
+
 def _canonical_unc_share(path: str | None) -> str | None:
     server_share = parse_unc_server_share(path)
     if server_share is None:
@@ -583,6 +729,59 @@ def _is_within_unc_share(path: str, endpoint_root: str) -> bool:
 def _same_unc_path(left: str, right: str) -> bool:
     normalized_left = _normalize_unc_path(left)
     normalized_right = _normalize_unc_path(right)
+    if normalized_left is None or normalized_right is None:
+        return False
+    return normalized_left.casefold() == normalized_right.casefold()
+
+
+def _normalize_drive_root(path: str | None) -> str | None:
+    normalized = _normalize_local_path(path)
+    if normalized is None:
+        return None
+    drive, tail = ntpath.splitdrive(normalized)
+    if not drive or tail not in {"\\", ""}:
+        return None
+    return f"{drive.upper()}\\"
+
+
+def _normalize_local_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    normalized = ntpath.normpath(path.replace("/", "\\"))
+    drive, _tail = ntpath.splitdrive(normalized)
+    if not drive or drive.startswith("\\\\"):
+        return None
+    return normalized.rstrip("\\") if normalized.rstrip("\\") else normalized
+
+
+def _join_local_root(root: str, endpoint_relative_root: str) -> str | None:
+    media_root = _normalize_drive_root(root)
+    if media_root is None:
+        return None
+    relative = (endpoint_relative_root or "").strip("\\/")
+    if not relative:
+        return media_root
+    if any(part == ".." for part in re.split(r"[\\/]+", relative)):
+        return None
+    joined = _normalize_local_path(f"{media_root}{relative}")
+    if joined is None or not _is_within_local_root(joined, media_root):
+        return None
+    return joined
+
+
+def _is_within_local_root(path: str, root: str) -> bool:
+    normalized_path = _normalize_local_path(path)
+    normalized_root = _normalize_drive_root(root)
+    if normalized_path is None or normalized_root is None:
+        return False
+    left = normalized_path.casefold()
+    right = normalized_root.rstrip("\\").casefold()
+    return left == right or left.startswith(f"{right}\\")
+
+
+def _same_local_path(left: str, right: str) -> bool:
+    normalized_left = _normalize_local_path(left)
+    normalized_right = _normalize_local_path(right)
     if normalized_left is None or normalized_right is None:
         return False
     return normalized_left.casefold() == normalized_right.casefold()

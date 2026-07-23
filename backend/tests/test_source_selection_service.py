@@ -289,6 +289,20 @@ class SourceSelectionServiceTests(unittest.TestCase):
         self.assertEqual(result.selected_source_context.friendly_source_type, "Optical")
         self.assertEqual(result.selected_source_context.durable_identity_status, "verified")
 
+    def test_optical_drive_unverified_is_unavailable_not_wrong_disc(self) -> None:
+        enrolled_probe = _optical_probe("E:\\")
+        fingerprint = fingerprint_from_probe(enrolled_probe)
+        endpoint = self._endpoint("optical_media", "Validation Disc", fingerprint.hash_value, fingerprint.version)
+        source = self._source("Whole Disc", "optical_media", "E:\\", endpoint_id=endpoint.id, endpoint_relative_root="")
+        fake = _FakeProbeService({"E:\\": _optical_drive_unverified_probe("E:\\")})
+
+        result = SourceSelectionService(self.db, fake).select_source(SourceSelectionRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "not_selected")
+        self.assertEqual(result.availability, "unavailable")
+        self.assertIn("not currently available", result.message)
+        self.assertNotIn("does not match", result.message)
+
     def test_nas_unc_source_selects_with_canonical_share_identity(self) -> None:
         probe = _nas_probe(r"\\HENDERSON-NAS\Photos\Family")
         fingerprint = fingerprint_from_probe(probe)
@@ -627,6 +641,38 @@ def _unavailable_probe(source_type: str, path: str) -> SourceIdentityProbeRespon
             root_reason="missing",
         ),
         evidence_items=[],
+        confidence_tier="unavailable_not_connected",
+        safe_to_run=False,
+        blockers=[blocker],
+    )
+
+
+def _optical_drive_unverified_probe(path: str) -> SourceIdentityProbeResponse:
+    blocker = SourceIdentityEvidenceItem(
+        category="volume_evidence",
+        code="optical_drive_unverified",
+        status="blocked",
+        durability="unknown",
+        privacy_level="advanced_only",
+        source_types=["optical_media"],
+        message="Windows could not verify that the selected path is an optical drive.",
+    )
+    return SourceIdentityProbeResponse(
+        probe_status="blocked",
+        source_type="optical_media",
+        os_family="windows",
+        provider_name="fake_probe",
+        provider_version="1",
+        access_node_summary=AccessNodeSummary(label="Test Windows PC", os_family="windows"),
+        observed_path=path,
+        normalized_observed_path=path.casefold(),
+        source_root_candidate=SourceRootCandidate(
+            path=path,
+            is_valid_source_root_candidate=True,
+            filesystem_boundary_type="optical_media_root",
+            root_reason="test",
+        ),
+        evidence_items=[blocker],
         confidence_tier="unavailable_not_connected",
         safe_to_run=False,
         blockers=[blocker],

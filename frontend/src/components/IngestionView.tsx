@@ -4647,14 +4647,7 @@ export default function IngestionView() {
                       </div>
                     </div>
 
-                    {sourceSelectionResult.selected_source_context.friendly_source_type === "Optical" ? (
-                      <div className={styles.stepPlaceholder}>
-                        <span className={styles.detailLabel}>Step 3</span>
-                        <span>Optical Run Ingestion is not enabled yet.</span>
-                        <span className={styles.detailMeta}>This Source may remain selectable for identity verification, but no normal ingestion action is exposed for Optical sources in this milestone.</span>
-                      </div>
-                    ) : (
-                      <>
+                    <>
                         <div className={styles.detailGrid}>
                           <div className={styles.detailCard}>
                             <span className={styles.detailLabel}>Source</span>
@@ -4748,8 +4741,7 @@ export default function IngestionView() {
                             </button>
                           )}
                         </div>
-                      </>
-                    )}
+                    </>
                   </section>
                 )
               ) : (

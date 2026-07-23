@@ -285,15 +285,254 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         self.assertEqual(result.status, "operation_conflict")
         mocked_start.assert_not_called()
 
-    def test_optical_selection_remains_blocked(self) -> None:
-        selection = self._selection(friendly_type="Optical", source_type="optical_media", resolved_root="E:\\")
+    def test_optical_selection_dispatches_filesystem_source_intake_with_runtime_root(self) -> None:
+        source, endpoint = self._optical_source(stored_root="D:\\", relative_root="Disc photos")
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="E:\\Disc photos",
+            endpoint_relative_root="Disc photos",
+            fingerprint="optical-fp",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+        snapshot = SimpleNamespace(run_id=125, status="running")
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot", return_value=SimpleNamespace(blocked=False)), patch(
+            "app.services.admin.run_ingestion_dispatch_service.start_source_intake",
+            return_value=snapshot,
+        ) as mocked_start:
+            result = service.dispatch(
+                RunIngestionDispatchRequest(
+                    source_profile_id=source.id,
+                    selection_fingerprint="optical-fp",
+                    filesystem_options=RunIngestionFilesystemOptions(source_intake_limit=3, ingest_batch_size=2),
+                )
+            )
+
+        self.assertEqual(result.result, "started")
+        self.assertEqual(result.action, "source_intake_started")
+        mocked_start.assert_called_once()
+        kwargs = mocked_start.call_args.kwargs
+        self.assertEqual(kwargs["ingestion_source_id"], source.id)
+        self.assertEqual(kwargs["runtime_source_root_path"], "E:\\Disc photos")
+        self.assertNotEqual(kwargs["runtime_source_root_path"], "D:\\")
+        self.assertTrue(kwargs["selection_verified_identity"])
+        self.db.expire_all()
+        stored = self.db.get(IngestionSource, source.id)
+        self.assertEqual(stored.source_root_path, "D:\\")
+        self.assertEqual(self.db.scalar(select(func.count(SourceEndpointObservedPath.id))), 0)
+
+    def test_optical_dispatch_reruns_source_selection(self) -> None:
+        source, endpoint = self._optical_source()
+        fake_selection = _FakeSelectionService(
+            self._selection(
+                source_profile_id=source.id,
+                endpoint_id=endpoint.id,
+                friendly_type="Optical",
+                source_type="optical_media",
+                resolved_endpoint_path="E:\\",
+                resolved_root="E:\\",
+                endpoint_relative_root="",
+            )
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=fake_selection)
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot", return_value=SimpleNamespace(blocked=True)):
+            service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(fake_selection.calls, [source.id])
+
+    def test_optical_fingerprint_incomplete_blocks_launch(self) -> None:
+        source, endpoint = self._optical_source(fingerprint_hash=None, fingerprint_version=None)
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="E:\\",
+            endpoint_relative_root="",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.start_source_intake") as mocked_start:
+            result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "optical_fingerprint_incomplete")
+        mocked_start.assert_not_called()
+
+    def test_optical_wrong_fingerprint_version_blocks_launch(self) -> None:
+        source, endpoint = self._optical_source(fingerprint_version="source_endpoint_identity_v1")
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="E:\\",
+            endpoint_relative_root="",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "optical_fingerprint_incomplete")
+
+    def test_optical_identity_not_matched_blocks_launch(self) -> None:
+        source, endpoint = self._optical_source()
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="E:\\",
+            endpoint_relative_root="",
+            identity_match_status="needs_attention",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.start_source_intake") as mocked_start:
+            result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "optical_identity_not_matched")
+        mocked_start.assert_not_called()
+
+    def test_optical_media_swap_or_wrong_disc_blocks_before_launch(self) -> None:
+        selection = SourceSelectionResponse(
+            result="not_selected",
+            availability="unavailable",
+            workflow_kind=None,
+            selected_source_context=None,
+            message="The inserted disc does not match this Source.",
+            retry_guidance="Insert the Optical disc associated with this Source, then select Source again.",
+        )
         service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
 
         with patch("app.services.admin.run_ingestion_dispatch_service.start_source_intake") as mocked_start:
             result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=88))
 
         self.assertEqual(result.result, "blocked")
-        self.assertEqual(result.status, "optical_not_enabled")
+        self.assertEqual(result.status, "unavailable")
+        mocked_start.assert_not_called()
+
+    def test_optical_no_disc_or_unreadable_disc_blocks_before_launch(self) -> None:
+        selection = SourceSelectionResponse(
+            result="not_selected",
+            availability="needs_attention",
+            workflow_kind=None,
+            selected_source_context=None,
+            message="Photo Organizer cannot read this Optical disc.",
+            retry_guidance="Insert a supported filesystem-readable Optical data disc and select Source again.",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=88))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "needs_attention")
+
+    def test_optical_path_traversal_outside_media_is_rejected(self) -> None:
+        source, endpoint = self._optical_source(relative_root=r"..\Other")
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="F:\\Other",
+            endpoint_relative_root=r"..\Other",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.start_source_intake") as mocked_start:
+            result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "optical_runtime_root_outside_media")
+        mocked_start.assert_not_called()
+
+    def test_optical_missing_configured_subfolder_blocks_before_launch(self) -> None:
+        source, endpoint = self._optical_source(relative_root="Missing")
+        selection = SourceSelectionResponse(
+            result="not_selected",
+            availability="needs_attention",
+            workflow_kind=None,
+            selected_source_context=None,
+            message="Optical disc was recognized, but its Source Root is missing or unreadable.",
+            retry_guidance="Restore the configured Source Root on the connected media, then select Source again.",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.start_source_intake") as mocked_start:
+            result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "needs_attention")
+        mocked_start.assert_not_called()
+
+    def test_optical_inactive_source_profile_is_blocked(self) -> None:
+        source, endpoint = self._optical_source(profile_status="inactive")
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="E:\\",
+            endpoint_relative_root="",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "source_profile_inactive")
+
+    def test_optical_inactive_endpoint_is_blocked(self) -> None:
+        source, endpoint = self._optical_source(endpoint_status="inactive")
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="E:\\",
+            endpoint_relative_root="",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "optical_endpoint_inactive")
+
+    def test_optical_operation_conflict_remains_enforced(self) -> None:
+        source, endpoint = self._optical_source()
+        selection = self._selection(
+            source_profile_id=source.id,
+            endpoint_id=endpoint.id,
+            friendly_type="Optical",
+            source_type="optical_media",
+            resolved_endpoint_path="E:\\",
+            resolved_root="E:\\",
+            endpoint_relative_root="",
+        )
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(selection))
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot", return_value=SimpleNamespace(blocked=True)), patch(
+            "app.services.admin.run_ingestion_dispatch_service.start_source_intake"
+        ) as mocked_start:
+            result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.status, "operation_conflict")
         mocked_start.assert_not_called()
 
     def test_icloud_options_are_rejected_for_filesystem_workflow(self) -> None:
@@ -371,6 +610,8 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         resolved_endpoint_path: str = "E:\\",
         endpoint_relative_root: str = "Pictures",
         fingerprint: str = "fp",
+        durable_identity_status: str = "verified",
+        identity_match_status: str = "matched",
     ) -> SourceSelectionResponse:
         return SourceSelectionResponse(
             result="selected",
@@ -390,8 +631,8 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
                 resolved_source_root=resolved_root,
                 resolved_endpoint_path=resolved_endpoint_path,
                 root_display=resolved_root,
-                durable_identity_status="verified",
-                identity_match_status="matched",
+                durable_identity_status=durable_identity_status,
+                identity_match_status=identity_match_status,
                 availability="available",
                 workflow_kind="filesystem_source_intake",
                 selection_fingerprint=fingerprint,
@@ -422,6 +663,43 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
             source_label="NAS Camera Imports",
             source_label_normalized="nas camera imports",
             source_type="local_folder",
+            source_root_path=stored_root,
+            source_root_path_normalized=stored_root.casefold(),
+            endpoint_relative_root=relative_root,
+            profile_status=profile_status,
+            endpoint_id=endpoint.id,
+        )
+        self.db.add(source)
+        self.db.commit()
+        self.db.refresh(source)
+        self.db.refresh(endpoint)
+        return source, endpoint
+
+    def _optical_source(
+        self,
+        *,
+        stored_root: str = "E:\\",
+        relative_root: str = "",
+        profile_status: str = "active",
+        endpoint_status: str = "active",
+        fingerprint_hash: str | None = "sha256:optical-test",
+        fingerprint_version: str | None = "optical_media_fingerprint_v1",
+    ) -> tuple[IngestionSource, SourceEndpoint]:
+        endpoint = SourceEndpoint(
+            source_type="optical_media",
+            alias="Validation Optical Disc",
+            alias_normalized="validation optical disc",
+            status=endpoint_status,
+            identity_fingerprint_hash=fingerprint_hash,
+            identity_fingerprint_version=fingerprint_version,
+            identity_confidence="strong_match",
+        )
+        self.db.add(endpoint)
+        self.db.flush()
+        source = IngestionSource(
+            source_label="Validation Optical Source",
+            source_label_normalized="validation optical source",
+            source_type="optical_media",
             source_root_path=stored_root,
             source_root_path_normalized=stored_root.casefold(),
             endpoint_relative_root=relative_root,

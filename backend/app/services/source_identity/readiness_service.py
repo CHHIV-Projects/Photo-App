@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import SourceEndpoint
 from app.services.source_identity.durable_identity import summarize_durable_identity
-from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
+from app.services.source_identity.identity_fingerprint import OPTICAL_MEDIA_FINGERPRINT_VERSION, fingerprint_from_probe
 from app.services.source_identity.probe_schema import (
     SourceIdentityProbeRequest,
     SourceIdentityProbeResponse,
@@ -27,7 +27,15 @@ from app.services.source_identity.readiness_schema import (
 
 _ProbeMapping = Literal["provider_specific", "unsupported"]
 _COMPLETED_PROBE_STATUSES = {"completed", "completed_with_warnings"}
-_PATH_UNAVAILABLE_CODES = {"access_denied", "path_not_found", "path_not_readable", "source_root_invalid"}
+_PATH_UNAVAILABLE_CODES = {
+    "access_denied",
+    "blank_or_unreadable_optical_media",
+    "no_readable_optical_media_inserted",
+    "optical_drive_unverified",
+    "path_not_found",
+    "path_not_readable",
+    "source_root_invalid",
+}
 
 
 class SourceProfileReadinessService:
@@ -73,7 +81,7 @@ class SourceProfileReadinessService:
                 identity_match_status="unsupported",
                 code="unsupported_source_type",
                 message="This Source Profile type is not supported by generic readiness.",
-                recommended_next_action="Use a supported local, external, removable, or NAS Source Profile.",
+                recommended_next_action="Use a supported local, external, removable, NAS, or Optical Source Profile.",
             )
 
         if not effective_path:
@@ -154,6 +162,31 @@ class SourceProfileReadinessService:
             )
 
         fingerprint = fingerprint_from_probe(probe)
+        if mapped_type == "optical_media" and (
+            not endpoint.identity_fingerprint_hash
+            or endpoint.identity_fingerprint_version != OPTICAL_MEDIA_FINGERPRINT_VERSION
+            or fingerprint.version != OPTICAL_MEDIA_FINGERPRINT_VERSION
+        ):
+            return self._response(
+                source,
+                endpoint=endpoint,
+                probe=probe,
+                readiness_status="blocked",
+                identity_match_status="mismatch",
+                can_run_source_intake=False,
+                hard_block=True,
+                operator_message="Optical Source Intake requires complete current optical media fingerprint evidence.",
+                recommended_next_action="Create or re-enroll the Optical Source through the normal Source workflow.",
+                blockers=[
+                    _message(
+                        "optical_fingerprint_incomplete",
+                        "Optical Source Intake requires complete current optical media fingerprint evidence.",
+                    )
+                ],
+                warnings=_probe_warning_messages(probe),
+                current_fingerprint_strength=fingerprint.strength,
+                fingerprint_match=False,
+            )
         fingerprint_match = (
             bool(endpoint.identity_fingerprint_hash)
             and bool(fingerprint.hash_value)
@@ -192,7 +225,11 @@ class SourceProfileReadinessService:
                 fingerprint_match=False,
             )
 
-        if fingerprint_match and fingerprint.strength == "strong" and probe.safe_to_run is True:
+        safe_to_run_allows_launch = probe.safe_to_run is True or (
+            mapped_type == "optical_media" and probe.safe_to_run == "not_applicable"
+        )
+
+        if fingerprint_match and fingerprint.strength == "strong" and safe_to_run_allows_launch:
             return self._response(
                 source,
                 endpoint=endpoint,
@@ -207,6 +244,28 @@ class SourceProfileReadinessService:
                 warnings=_probe_warning_messages(probe),
                 current_fingerprint_strength=fingerprint.strength,
                 fingerprint_match=True,
+            )
+
+        if mapped_type == "optical_media":
+            return self._response(
+                source,
+                endpoint=endpoint,
+                probe=probe,
+                readiness_status="blocked",
+                identity_match_status="mismatch",
+                can_run_source_intake=False,
+                hard_block=True,
+                operator_message="The inserted Optical disc identity must exactly match before Source Intake can run.",
+                recommended_next_action="Insert the correct Optical disc and select Source again.",
+                blockers=[
+                    _message(
+                        "optical_identity_not_matched",
+                        "The inserted Optical disc identity must exactly match before Source Intake can run.",
+                    )
+                ],
+                warnings=_probe_warning_messages(probe),
+                current_fingerprint_strength=fingerprint.strength,
+                fingerprint_match=fingerprint_match,
             )
 
         warning = _message(
@@ -392,6 +451,8 @@ def _map_source_type(source_type: str | None, path: str | None) -> SourceIdentit
         return "removable_media"
     if normalized == "nas":
         return "nas"
+    if normalized == "optical_media":
+        return "optical_media"
     return "unsupported"
 
 
