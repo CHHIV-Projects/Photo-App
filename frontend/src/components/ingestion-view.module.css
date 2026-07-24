@@ -1,6 +1,8 @@
 .root {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
+  min-width: 0;
 }
 
 .header {
@@ -164,6 +166,32 @@
   font-size: 0.98rem;
 }
 
+.runOptionsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.successText {
+  margin: 0;
+  border: 1px solid #b7dcc2;
+  background: #eefaf1;
+  color: #1d6a36;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
+.errorText {
+  margin: 0;
+  border: 1px solid #e7bcc3;
+  background: #fff2f4;
+  color: #8f2333;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
 .runStatusBadge {
   display: inline-block;
   border-radius: 999px;
@@ -223,6 +251,154 @@
   font-size: 0.84rem;
 }
 
+.workbenchPanel {
+  border: 1px solid #bfd0df;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+}
+
+.workbenchHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.workbenchControls {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: end;
+}
+
+.workbenchControls > * {
+  min-width: 0;
+}
+
+.workbenchControlGroup {
+  display: grid;
+  gap: 6px;
+}
+
+.createSourceBody {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.createSourceControls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 12px;
+  align-items: end;
+  min-width: 0;
+}
+
+.createSourceControls > * {
+  min-width: 0;
+}
+
+.createSourceAction {
+  display: flex;
+  align-items: flex-end;
+  min-height: 38px;
+}
+
+.creationReview {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid #cfdce8;
+  padding-top: 14px;
+  min-width: 0;
+}
+
+.createSourceDecision {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 1px solid #d7e1ea;
+}
+
+.creationResultGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #d7e1ea;
+  border-radius: 8px;
+  background: #d7e1ea;
+}
+
+.creationResultGrid > div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  background: #ffffff;
+  padding: 10px;
+  overflow-wrap: anywhere;
+}
+
+.segmentedControl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.segmentButton {
+  border: 1px solid #b7cadb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #314152;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.segmentButtonActive {
+  border-color: #5f8eb8;
+  background: #dbeaf8;
+  color: #0f436a;
+}
+
+.workbenchSummary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  border: 1px solid #d7e1ea;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 12px;
+  min-width: 0;
+}
+
+.workbenchSummaryHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stepPlaceholder {
+  display: grid;
+  gap: 4px;
+  border: 1px dashed #9fb5c9;
+  border-radius: 10px;
+  background: #f6fbff;
+  padding: 12px;
+  color: #1d2b39;
+}
+
 .errorDetails {
   border: 1px solid #e7bcc3;
   border-radius: 10px;
@@ -241,6 +417,33 @@
   white-space: pre-wrap;
   color: #6c2430;
   font-size: 0.82rem;
+}
+
+.advancedDetails {
+  border: 1px solid #d7e1ea;
+  border-radius: 10px;
+  background: #f9fbfd;
+  padding: 10px 12px;
+}
+
+.advancedDetails summary {
+  cursor: pointer;
+  color: #103d60;
+  font-weight: 700;
+}
+
+.advancedDetailsText {
+  margin: 8px 0 0;
+  max-height: 22rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #314152;
+  padding: 10px;
+  font-size: 0.78rem;
 }
 
 .tableWrap {
@@ -514,6 +717,9 @@
   color: #1d2b39;
   padding: 9px 10px;
   font: inherit;
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
 }
 
 .formInput:read-only {
@@ -737,4 +943,18 @@
   border: 1px solid #c8d4df;
   background: #f4f7fa;
   color: #516274;
+}
+
+@media (max-width: 820px) {
+  .root {
+    overflow-x: clip;
+  }
+
+  .workbenchControls {
+    grid-template-columns: 1fr;
+  }
+
+  .createSourceControls {
+    grid-template-columns: 1fr;
+  }
 }

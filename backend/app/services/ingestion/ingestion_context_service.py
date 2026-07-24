@@ -18,6 +18,8 @@ from app.models.ingestion_source import IngestionSource
 KNOWN_SOURCE_TYPES = {
     "local_folder",
     "external_drive",
+    "removable_media",
+    "optical_media",
     "cloud_export",
     "scan_batch",
     "other",

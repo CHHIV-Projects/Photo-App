@@ -68,6 +68,7 @@ class IcloudStagingCleanupExecutionServiceTests(unittest.TestCase):
         self.patches = [
             patch.object(cleanup, "_resolve_exports_root", return_value=self.exports_root),
             patch.object(cleanup, "_resolve_vault_root", return_value=self.vault_root),
+            patch.object(cleanup, "_cleanup_reports_dir", return_value=self.reports_root),
             patch.object(cleanup, "resolve_icloud_staging_path", return_value=self.staging_root),
             patch.object(cleanup, "_collect_report_evidence", return_value=(set(), set())),
             patch.object(cleanup, "SessionLocal", self.session_factory),
@@ -268,6 +269,45 @@ class IcloudStagingCleanupExecutionServiceTests(unittest.TestCase):
                 explicit_confirmation=cleanup.EXECUTION_CONFIRMATION_PHRASE,
             )
         self.assertEqual(raised.exception.code, "DRY_RUN_ALREADY_CONSUMED")
+
+    def test_reconcile_completed_report_repairs_stale_running_dry_run_row(self) -> None:
+        self._add_verified_file()
+        plan = cleanup._build_cleanup_plan(self.db, source=self._validated_source())
+        stale = self._add_run(dry_run=True, status="running", fingerprint=None)
+        stale.eligible_count = 0
+        stale.report_path = None
+        stale.current_stage = "planning"
+        self.db.commit()
+        report_path = self.reports_root / f"icloud_cleanup_20260716_020803_run{stale.id}.json"
+        report_path.write_text(
+            cleanup.json.dumps(
+                cleanup._report_payload(
+                    run_id=stale.id,
+                    plan=plan,
+                    dry_run=True,
+                    status="completed",
+                    started_at=datetime.now(UTC),
+                    authorized_dry_run_id=None,
+                    deleted=[],
+                    execution_issues=[],
+                    journal_path=None,
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        reconciled = cleanup.reconcile_completed_cleanup_reports(self.db, source_id=self.source.id)
+
+        self.assertEqual(reconciled, 1)
+        self.db.expire_all()
+        result = self.db.get(IcloudStagingCleanupRun, stale.id)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.current_stage, "completed")
+        self.assertEqual(result.eligible_count, 1)
+        self.assertEqual(result.skipped_count, 0)
+        self.assertEqual(result.report_path, str(report_path))
+        self.assertEqual(result.manifest_fingerprint, plan.manifest_fingerprint)
+        self.assertIsNotNone(result.preview_expires_at)
 
     def test_execution_rejects_stale_preview_and_wrong_phrase(self) -> None:
         dry_run = self._add_run(dry_run=True, fingerprint="b" * 64)

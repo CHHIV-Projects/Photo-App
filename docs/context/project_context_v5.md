@@ -2,15 +2,15 @@
 
 ## Document Status
 
-**Version:** v4  
-**Project phase:** Post-12.62.10.1  
-**Current emphasis:** Source Profiles, guided ingestion, iCloud acquisition validation, Photo Review, curation workflows, and preparation for v1.0 production hardening.
+**Version:** v5  
+**Project phase:** Post-12.62.29.3  
+**Current emphasis:** v1.0 stabilization, documentation alignment, unified source identity design, external/local/NAS intake redesign, and continued Photo Review / curation workflow refinement.
 
 ---
 
 ## 1. Overview
 
-Photo Organizer is a local-first photo organization system focused on safe ingestion, deduplication, metadata canonicalization, and human-in-the-loop curation across photos, videos, faces, events, places, albums, collections, and source provenance.
+Photo Organizer is a local-first photo organization system focused on safe ingestion, deduplication, metadata canonicalization, and human-in-the-loop curation across photos, videos, faces, people, events, places, albums, collections, visual enrichment, and source provenance.
 
 The system is designed around several core principles:
 
@@ -26,19 +26,25 @@ The system is designed around several core principles:
 
 - Require explicit user/operator confirmation for risky actions.
 
-- Use AI and enrichment tools as evidence sources, not automatic truth.
+- Use AI, provider output, computer vision, geocoding, and enrichment tools as evidence sources, not automatic truth.
 
-The project has evolved from a basic ingestion/deduplication pipeline into a broader workbench for family photo organization. It now includes:
+- Separate durable archival truth from temporary staging, helper output, and runtime reports.
+
+The project has evolved from a basic ingestion/deduplication pipeline into a broader local-first workbench for family photo organization.
+
+It now includes:
 
 - Source Profiles for local, external, and cloud-staged sources.
 
-- Guided local/external Source Intake from the Ingestion tab.
+- Local/external Source Intake from the Ingestion tab.
 
-- Guided iCloud acquisition using `icloudpd`.
+- Unified iCloud Intake using `icloudpd`.
 
-- iCloud Source Intake handoff and workflow summary.
+- Durable iCloud prepare/import workflow with exact candidate snapshots.
 
-- iCloud cleanup dry-run safety checks.
+- Durable iCloud import run/chunk ledger with resume support.
+
+- Guarded iCloud staging cleanup execution inside the safe intake path.
 
 - Photo Review as the primary browsing/review surface.
 
@@ -46,7 +52,11 @@ The project has evolved from a basic ingestion/deduplication pipeline into a bro
 
 - Admin/background operations for heavier processing and diagnostics.
 
-The current iCloud flow is operationally validated but intentionally conservative. It is safe and robust, but the UI still exposes too much backend detail. A future milestone should simplify and unify the local/cloud intake experience.
+- Structured milestone workflow and coding-agent rules for safer AI-assisted development.
+
+The current iCloud flow is good enough for v1.0. Performance improvement remains parked, but the core safety and operator workflow are validated through a successful full 1000-logical-asset live intake run.
+
+The next major product area is external/local/NAS source identity and intake workflow redesign.
 
 ---
 
@@ -102,7 +112,7 @@ The current iCloud flow is operationally validated but intentionally conservativ
 
 - NAS-oriented production deployment path planned
 
-- Future small server / mini-server deployment path under consideration
+- Future mini-server deployment path planned for app/runtime/AI services
 
 ---
 
@@ -111,7 +121,7 @@ The current iCloud flow is operationally validated but intentionally conservativ
 ```text
 backend/
   app/
-    models/        # assets, provenance, sources, faces, people, events, albums, places, enrichment
+    models/        # assets, provenance, sources, faces, people, events, albums, places, enrichment, intake state
     services/      # ingestion, metadata, duplicates, vision, admin workflows, source profiles, acquisition
     api/           # REST endpoints
     core/          # configuration
@@ -122,18 +132,19 @@ frontend/
   src/             # Next.js application
 
 storage/
-  vault/                 # immutable canonical storage
-  drop_zone/             # internal ingestion staging
-  exports/icloud/        # iCloud acquisition staging per source profile
-  quarantine/            # rejected/failed staging material
-  logs/                  # operational reports and run artifacts
-  review/                # face crops and review assets
-  previews/              # generated display previews
-  thumbnails/            # reserved / future use
-  visual_enrichment/     # derivative/enrichment working material where applicable
+  vault/                         # immutable canonical storage
+  drop_zone/                     # internal ingestion staging
+  exports/icloud/                # iCloud acquisition staging per source profile
+  quarantine/                    # rejected/failed staging material
+  logs/                          # operational reports and run artifacts
+  logs/icloud_intake_import_reports/
+  review/                        # face crops and review assets
+  previews/                      # generated display previews
+  thumbnails/                    # reserved / future use
+  visual_enrichment/             # derivative/enrichment working material where applicable
 
 docker/
-  docker-compose.yml     # PostgreSQL + Redis services
+  docker-compose.yml             # PostgreSQL + Redis services
 ```
 
 The Vault is immutable canonical storage. Cloud acquisition staging is not the Vault. Drop Zone is internal ingestion staging. `storage/exports/icloud/<source-profile-slug>/` is temporary local iCloud acquisition staging.
@@ -146,7 +157,7 @@ The Vault is immutable canonical storage. Cloud acquisition staging is not the V
 
 Source Intake remains the only authority for ingesting files into the canonical pipeline.
 
-Cloud acquisition tools, including `icloudpd`, may download files only into external staging locations. They must not write directly to:
+Cloud acquisition tools, including `icloudpd`, may download files only into managed staging locations. They must not directly write to:
 
 ```text
 Drop Zone
@@ -156,11 +167,13 @@ Provenance records
 Canonical metadata records
 ```
 
+Source Intake performs the canonical file movement, Vault write, asset/provenance creation, metadata extraction, and related ingestion behavior.
+
 ### Non-Destructive Storage
 
 Original source media is never modified.
 
-The Vault stores canonical media files by content identity. All review, preview, metadata, and enrichment actions operate through database records, derivative files, or user-approved relationships.
+The Vault stores canonical media files by content identity. Review, preview, metadata, enrichment, face, duplicate, and grouping actions operate through database records, derivative files, or user-approved relationships.
 
 ### Provenance Preservation
 
@@ -178,13 +191,15 @@ The system preserves source lineage for assets. Provenance is central to:
 
 - Future source-aware organization
 
+- Explaining where each known asset came from
+
 ### Human-in-the-Loop Curation
 
 Automated and AI-assisted systems can generate candidates, observations, suggestions, and evidence, but user-controlled workflows decide final identity, grouping, labels, and corrections.
 
 ### Safety Before Automation
 
-Cleanup, propagation, merge, and assignment actions should be previewed, reversible where practical, and explicitly confirmed.
+Cleanup, propagation, merge, assignment, destructive, and source-identity actions should be previewed, bounded, reversible where practical, logged, and explicitly confirmed.
 
 ---
 
@@ -193,7 +208,7 @@ Cleanup, propagation, merge, and assignment actions should be previewed, reversi
 ### Local / External Source Path
 
 ```text
-Local or external source
+Local folder / external drive / removable media / NAS share
   -> Source Profile
   -> Source Intake
   -> Drop Zone
@@ -204,29 +219,35 @@ Local or external source
   -> Photo Review and curation
 ```
 
-Local/external Source Intake is now available from the Ingestion tab using Source Profiles.
+Local/external Source Intake is available from the Ingestion tab using Source Profiles.
+
+Current limitation:
+
+The local/external model still needs stronger source identity. Drive letters and transient paths are not durable identifiers. Future work should identify external devices and volumes by stable identifiers where available.
 
 ### iCloud Source Path
 
 ```text
 iCloud Source Profile
-  -> readiness / staging validation
-  -> icloudpd acquisition
-  -> storage/exports/icloud/<source-profile-slug>/
+  -> Refresh / Prepare Next 1000
+  -> durable prepared candidate snapshot
+  -> Import Next 1000
+  -> durable import run/chunk ledger
+  -> icloudpd acquisition into managed staging
   -> Source Intake handoff
   -> Drop Zone
   -> Vault + DB + Provenance
-  -> workflow summary
-  -> cleanup dry run
-  -> review / post-intake processing
+  -> guarded local staging cleanup
+  -> report + review / post-intake processing
 ```
 
-Important rule:
+Important rules:
 
 ```text
 icloudpd downloads to staging only.
 Source Intake imports staged files into Photo Organizer.
-Cleanup dry run evaluates local staging cleanup safety only.
+Cleanup acts only on verified local staging files.
+No remote iCloud deletion is performed.
 ```
 
 ### Post-Intake Processing
@@ -249,7 +270,7 @@ Post-intake processing can include:
 
 - Photo Review curation
 
-Some processing is synchronous during ingestion; heavier or optional work is operator/admin-triggered.
+Some processing is synchronous during ingestion. Heavier or optional work is operator/admin-triggered or suitable for background execution.
 
 ---
 
@@ -265,7 +286,7 @@ Source lineage record connecting an asset to a source identity and source-relati
 
 ### Source Profile
 
-User-facing operational source record used to manage local, external, and cloud-staged intake workflows.
+User-facing operational source record used to manage local, external, NAS/network, and cloud-staged intake workflows.
 
 A Source Profile may represent:
 
@@ -273,15 +294,42 @@ A Source Profile may represent:
 
 - External drive
 
+- Removable media
+
+- Network share / NAS source
+
 - Cloud export/staging root
 
 - iCloud managed acquisition staging profile
 
-Source Profiles are now the primary user-facing concept. Legacy/source-registry identity remains a backend compatibility layer.
+Source Profiles are now the primary user-facing source concept. Legacy/source-registry identity remains a backend compatibility layer.
+
+### Source Device / Endpoint Identity
+
+Future source identity work should introduce or formalize a machine-readable identity layer beneath Source Profile.
+
+The goal is to avoid treating display names, drive letters, or transient mount paths as durable identity.
+
+Potential identity evidence includes:
+
+```text
+device serial number
+USB VID / PID
+volume serial number
+filesystem UUID / volume UUID
+optical media/session identity
+network server/share identity
+NAS/share identifier
+observed mount/path history
+```
+
+The user-facing alias/name should live at the Source Profile level. Machine-readable identity and provenance should be anchored at the device/endpoint/volume identity level where possible.
 
 ### Ingestion Source / Source Registry
 
 Backend identity layer used by Source Intake and provenance systems. It supports source labels, source types, root paths, account-related non-secret fields, and compatibility with older ingestion workflows.
+
+Future source identity work may refine the relationship between Source Profile, Source Device/Endpoint, Ingestion Source, and Provenance.
 
 ### Source Intake
 
@@ -291,9 +339,44 @@ Authoritative ingestion workflow that scans a registered/profiled source, stages
 
 A Source Profile whose files originate from a cloud provider but are staged locally before Source Intake.
 
-### iCloud Acquisition
+### iCloud Intake
 
-Download-only acquisition step using `icloudpd`. It downloads selected iCloud media into the Source Profile’s managed staging folder.
+Unified iCloud operator workflow:
+
+```text
+Refresh / Prepare Next 1000
+Import Next 1000
+```
+
+Refresh prepares exact candidate sets.
+
+Import consumes the prepared set through durable chunked execution, Source Intake, and guarded cleanup.
+
+Early in source setup, this behaves like historical backfill. After the iCloud source is fully accounted for, the same workflow naturally behaves like new/current iCloud import because only newly added unknown remote identities remain.
+
+### Prepared Candidate Snapshot
+
+Durable snapshot of exact iCloud logical candidates prepared for import.
+
+It separates:
+
+```text
+what should be imported
+```
+
+from:
+
+```text
+the act of importing it
+```
+
+This avoids hidden recalculation and makes import behavior explainable.
+
+### Durable Import Run / Chunk Ledger
+
+Durable iCloud Intake execution ledger that tracks import runs and chunks.
+
+Each chunk can be advanced, persisted, reported, and resumed without depending on one fragile long HTTP request.
 
 ### Account Username
 
@@ -301,7 +384,7 @@ Non-secret iCloud account identifier associated with a source. It is used for op
 
 ### Managed Staging Folder
 
-A system-managed local folder used by iCloud acquisition:
+System-managed local folder used by iCloud acquisition:
 
 ```text
 storage/exports/icloud/<source-profile-slug>/
@@ -333,7 +416,7 @@ Examples include:
 
 ### Live Photo Pair
 
-Relationship between a still photo and its motion companion, including icloudpd `_HEVC.MOV` naming support.
+Relationship between a still photo and its motion companion, including `icloudpd` `_HEVC.MOV` naming support.
 
 ### Duplicate Lineage
 
@@ -361,15 +444,17 @@ Current state:
 
 - Local/external Source Intake can be launched from the Ingestion tab.
 
-- iCloud profiles have guided readiness, acquisition, Source Intake handoff, workflow summary, and cleanup dry-run support.
-
-- Local Source Profile regression has passed after iCloud additions.
+- iCloud profiles use unified iCloud Intake.
 
 - iCloud-specific controls do not appear in the local-source workflow.
 
+- Local Source Profile regression has passed after iCloud additions.
+
 Current UX issue:
 
-The Ingestion tab and Source Profile detail drawer are operationally functional but expose too many technical fields. Future UX should unify local/cloud look and feel while hiding source-specific details under Advanced Details.
+The Ingestion tab and Source Profile detail drawer are operationally functional but still need simplification and source-identity redesign for local/external/NAS intake.
+
+Future UX should unify local/cloud look and feel while hiding source-specific technical detail under Advanced Details.
 
 ### Source Intake
 
@@ -387,35 +472,56 @@ Current state:
 
 - Supports skip-known and deterministic handling where possible.
 
+- Supports iCloud batch handoff with an iCloud-specific minimum-file-size override so valid small iCloud JPG resources are not rejected by the generic Source Intake size floor.
+
 Future direction:
 
-Source Intake should feel like one consistent user workflow across local, external, and cloud sources, even when backend steps differ.
+Source Intake should feel like one consistent user workflow across local, external, NAS/network, removable media, and cloud sources, even when backend steps differ.
 
-### iCloud Acquisition
+### Unified iCloud Intake
 
 Current state:
 
 - `icloudpd` is the preferred iCloud acquisition adapter.
 
-- Raw PyiCloud remains experimental/diagnostic.
+- Raw PyiCloud remains experimental/diagnostic only.
 
-- Acquisition is launched from the Ingestion tab for iCloud Source Profiles.
+- iCloud Intake is launched from the Ingestion tab for iCloud Source Profiles.
 
 - Acquisition downloads into the selected profile’s managed staging path.
 
-- Standard mode downloads requested recent items.
+- Refresh / Prepare Next 1000 creates an exact durable candidate set.
 
-- List-first/non-repeat mode exists and should become the preferred default once fully stabilized.
+- Import Next 1000 imports that candidate set.
 
-- Acquisition status and workflow summary are visible but need consolidation.
+- Import advances one durable chunk at a time through explicit `/intake/` endpoints.
 
-Important constraints:
+- Completed chunks are persisted before the next chunk starts.
 
-- Photo Organizer does not store Apple passwords, 2FA codes, session cookies, auth tokens, or iCloud secrets.
+- Interrupted runs can become `resume_available`.
 
-- iCloud authentication currently relies on external/project-local `icloudpd` session behavior.
+- Operator must explicitly resume interrupted imports.
 
-- Future UI may launch or guide an isolated `icloudpd` authentication/session-health helper, but Photo Organizer must not own or store credentials.
+- Cleanup safety counters are durable and visible.
+
+- Retryable execution failures remain separate from deferred/needs-policy rows.
+
+- Guarded local staging cleanup executes only after exact acquired-resource path matching and safety checks.
+
+The UI uses the `iCloud Intake` model rather than “historical backfill” as the normal operator concept.
+
+### iCloud Intake Endpoints
+
+Current explicit iCloud Intake import endpoints include:
+
+```text
+GET  /api/admin/icloud-routine/intake/import/status?source_id=<id>
+POST /api/admin/icloud-routine/intake/import/start
+POST /api/admin/icloud-routine/intake/import/resume
+POST /api/admin/icloud-routine/intake/import/advance
+```
+
+Older `/historical/...` compatibility endpoints may remain but should not be the primary UI path for full 1000-candidate runs.
 
 ### iCloud Readiness and Guardrails
 
@@ -427,15 +533,18 @@ Current state:
 
 - Cross-operation guardrails prevent unsafe overlap across acquisition, Source Intake, and cleanup.
 
-- Launch path/source registration consistency was fixed in 12.62.10.1.
+- Launch path/source registration consistency was fixed during the 12.62 arc.
+
+- Metadata-only inventory refresh dedupes duplicate helper identities within a single listing.
 
 Future direction:
 
-Readiness should be binary for users:
+Readiness should be binary or near-binary for users:
 
 ```text
-Ready to acquire
+Ready
 Blocked
+Unknown / Needs Review
 ```
 
 Warnings, conflicts, blockers, path checks, and source registration details should be rolled into a single readiness result with expandable technical details.
@@ -444,17 +553,13 @@ Warnings, conflicts, blockers, path checks, and source registration details shou
 
 Current guided-flow state:
 
-- Cleanup readiness and dry-run evaluation are implemented.
+- Guarded local staging cleanup is part of the durable iCloud Intake chunk path.
 
-- Dry run reports eligible/protected/skipped/deleted counts.
+- Cleanup acts only on verified local staging files.
 
-- Dry run does not delete anything.
+- Cleanup dry run and execution require safety counters and exact acquired-resource path matching.
 
-- 12.62.10 validation confirmed dry run can identify eligible staged files for the selected iCloud profile and delete zero files.
-
-Important clarification:
-
-Historical Admin cleanup execution was previously implemented, but the current guided Ingestion-tab flow has validated dry run only. Destructive cleanup execution should remain deferred or carefully reintroduced with explicit UX confirmation and safety checks.
+- Cleanup execution must not touch remote iCloud data, Vault, DB records, provenance, Source Profiles, or source registry history.
 
 Cleanup must never delete:
 
@@ -464,6 +569,32 @@ Vault files
 DB records
 Provenance history
 Source Profile / source registry records
+```
+
+### iCloud Performance Baseline
+
+A successful full live 1000-logical-asset iCloud Intake run completed without incident after 12.62.29.3.
+
+Observed rough baseline:
+
+```text
+100 logical assets ≈ 10 minutes
+1 logical asset ≈ 6 seconds
+1000 logical assets ≈ 100 minutes
+```
+
+Performance is acceptable for v1.0.
+
+Future performance improvement is parked. If revisited, the next step should be finer phase timing to distinguish:
+
+```text
+iCloud fresh resolution
+download/staging
+Source Intake
+DB/Vault/provenance work
+cleanup dry run
+cleanup execution
+inter-chunk orchestration overhead
 ```
 
 ### Display Preview System
@@ -480,11 +611,7 @@ Current state:
 
 - Photo Review and UI surfaces should prefer generated preview URLs when needed.
 
-Recent validation correction:
-
-A suspected HEIC rendering issue during iCloud validation was user/process-order error. HEIC rendered correctly after the review/display-safe process was run.
-
-New follow-up:
+Follow-up:
 
 BMP files need display-safe/review preview generation support.
 
@@ -494,7 +621,7 @@ Current state:
 
 - Still/photo + motion companion pairing exists.
 
-- Supports simple basename pairing and icloudpd `_HEVC.MOV` companion patterns.
+- Supports simple basename pairing and `icloudpd` `_HEVC.MOV` companion patterns.
 
 - UI indicators exist for Live Photo and motion companion states.
 
@@ -546,6 +673,8 @@ Current state:
 
 - Merge/move/reassignment workflows have been improved across review surfaces.
 
+- Recent maintenance improved face-processing queue filtering so only supported image assets count for detection and manually unassigned faces are excluded from clustering-pending.
+
 ### Events, Albums, and Collections
 
 Current state:
@@ -596,9 +725,9 @@ Admin/operational systems include:
 
 - Source Intake
 
-- iCloud acquisition
+- iCloud Intake
 
-- iCloud staging cleanup history/dry run
+- iCloud staging cleanup history/reporting
 
 - Duplicate processing
 
@@ -615,6 +744,8 @@ Admin/operational systems include:
 - Runtime/status/report visibility
 
 - Stale-run recovery for selected jobs
+
+- Durable import/resume patterns for long-running iCloud intake
 
 Reports are written under `storage/logs/`.
 
@@ -644,7 +775,9 @@ Core API domains include:
 
 - Admin operations
 
-- iCloud acquisition
+- iCloud Intake
+
+- iCloud acquisition/staging
 
 - Source Intake
 
@@ -664,6 +797,7 @@ Admin and operational API groups include patterns such as:
 
 ```text
 /api/admin/source-intake/...
+/api/admin/icloud-routine/intake/...
 /api/admin/icloud-acquisition/...
 /api/admin/icloud-staging-cleanup/...
 /api/admin/duplicate-processing/...
@@ -673,7 +807,11 @@ Admin and operational API groups include patterns such as:
 /api/admin/display-preview/...
 ```
 
-The exact endpoint list may evolve, but the architecture principle remains: operational workflows are explicit, reportable, and safe by default.
+The exact endpoint list may evolve, but the architecture principle remains:
+
+```text
+Operational workflows are explicit, reportable, resumable where needed, and safe by default.
+```
 
 ---
 
@@ -689,15 +827,21 @@ The exact endpoint list may evolve, but the architecture principle remains: oper
 
 - iCloud Source Profile guided flow
 
+- Unified iCloud Intake with Refresh / Prepare Next 1000 and Import Next 1000
+
+- Durable prepared candidate snapshots
+
+- Durable iCloud import run/chunk ledger
+
+- Resume interrupted iCloud imports
+
+- Guarded local staging cleanup in iCloud intake path
+
 - iCloud readiness and path/registration guardrails
 
 - iCloud acquisition through `icloudpd`
 
 - iCloud Source Intake handoff
-
-- iCloud workflow summary
-
-- iCloud cleanup dry run
 
 - Local Source Profile regression validated after iCloud additions
 
@@ -759,45 +903,73 @@ The exact endpoint list may evolve, but the architecture principle remains: oper
 
 - Run/stop/status controls for selected workflows
 
+- Durable run/resume behavior for iCloud Intake
+
 ---
 
-## 10. Current 12.62 Validation Conclusions
+## 10. Current 12.62 Arc Conclusions
 
-12.62.10 and 12.62.10.1 established the following:
+The 12.62 iCloud/source-profile arc established the following:
 
 ```text
 iCloud E2E flow is operationally viable.
 Local Source Profile flow still works independently.
 iCloud acquisition can download into selected profile staging.
 Source Intake can process staged iCloud files.
-Cleanup dry run can evaluate staged cleanup eligibility without deleting files.
-Launch path/source registration mismatch was fixed.
+Guarded local staging cleanup can execute safely after exact acquired-resource path matching.
+Unified iCloud Intake replaces the historical/current split as the v1 operator model.
+Refresh / Prepare Next 1000 creates exact candidate snapshots.
+Import Next 1000 consumes the prepared set.
+Long iCloud imports are durable, chunked, and resumable.
+A full 1000-logical-asset live intake run passed without incident.
+Performance is acceptable for v1.0 and optimization is parked.
 HEIC rendering concern was corrected as process-order/user error.
-BMP display preview support is now a follow-up.
-The current UI is safe but too technical and repetitive.
+BMP display preview support remains a follow-up.
 ```
 
-Primary UX conclusion:
+Primary product conclusion:
 
 ```text
-The workflow is robust enough to validate, but the next phase should simplify and unify the user experience.
+iCloud Intake is good enough for v1.0.
 ```
 
-Future Source Profile UX should make local, external, and cloud workflows feel consistent while preserving source-specific backend differences.
+Primary next-product conclusion:
+
+```text
+Move on from iCloud ingestion and address external/local/NAS source identity and intake workflow.
+```
 
 ---
 
 ## 11. Known Limitations and Risks
 
+### iCloud Performance
+
+- Current rough baseline is about 6 seconds per logical asset.
+
+- A 1000-logical-asset run takes roughly 100 minutes.
+
+- This is acceptable for v1.0.
+
+- Fine-grained timing split is still limited because lower-level acquisition does not yet expose precise phase timing.
+
+Parking Lot direction:
+
+```text
+iCloud Intake performance / phase timing / bottleneck analysis
+```
+
 ### iCloud Acquisition Completeness
 
-- Standard recent-window acquisition can re-download recently acquired files.
+- Unified iCloud Intake scans newest-first and imports unknown eligible assets.
 
-- List-first/non-repeat behavior exists and should reduce repeat downloads per profile.
+- Deterministic expanding scan depth exists.
 
-- Full-library checkpoint/until-found completeness strategy is not fully implemented.
+- There is still no persisted provider cursor/page-token/date-boundary continuation.
 
-- Cloud-native iCloud asset IDs are not yet first-class provenance keys.
+- The local prepare ceiling is conservative.
+
+- Do not claim source exhaustion unless provider/source exhaustion is actually proven.
 
 ### iCloud Authentication
 
@@ -807,39 +979,68 @@ Future Source Profile UX should make local, external, and cloud workflows feel c
 
 - Future UI may guide or launch an isolated `icloudpd` authentication helper.
 
-- `icloudpd` version diagnostics should be added because older project-local versions caused 2FA reliability issues.
+- `icloudpd` version diagnostics may be useful because older project-local versions caused 2FA reliability issues.
 
 ### iCloud Cleanup
 
-- Guided flow currently validates cleanup dry run.
+- Guarded local staging cleanup execution is implemented inside the iCloud Intake path.
 
-- Destructive cleanup execution should remain deferred or carefully reintroduced with explicit confirmation and verification.
+- Cleanup must remain local-staging-only.
 
-- Cleanup must remain local-staging-only and never affect iCloud cloud-library data or Vault files.
+- Cleanup must never affect iCloud cloud-library data, Vault files, DB records, or provenance.
+
+- Broad cleanup outside the guarded iCloud staging path remains out of scope.
+
+### External / Local / NAS Source Identity
+
+Current source identity for local/external intake needs redesign.
+
+Problems:
+
+- Drive letters are not durable.
+
+- User nicknames are display labels, not reliable identity.
+
+- Local paths can be moved, remapped, or reassigned.
+
+- External drives, thumb drives, optical media, NAS shares, and local folders need clearer identity semantics.
+
+- Provenance should be anchored to stable device/endpoint/volume identity where possible.
+
+Future design should consider:
+
+```text
+Source Profile = user-facing alias and workflow container
+Source Device / Endpoint = stable machine-readable identity evidence
+Ingestion Source = backend compatibility/source record
+Provenance Observation = asset observed at source-relative path on a specific device/source context
+```
 
 ### UI Complexity
 
-The current Ingestion tab exposes too many internal details:
+The current Ingestion tab exposes too many internal details in some areas:
 
-- Normalized labels
+- normalized labels
 
-- Effective paths
+- effective paths
 
-- Compatibility source roots
+- compatibility source roots
 
-- Managed staging paths
+- managed staging paths
 
-- Source registration status
+- source registration status
 
-- Operational conflicts
+- operational conflicts
 
-- Blocking reasons
+- blocking reasons
 
-- Warnings
+- warnings
 
-- Multiple refresh buttons
+- run IDs
 
-- Repeated acquisition/intake/cleanup status tiles
+- report paths
+
+- technical counters
 
 Future UI should consolidate these into:
 
@@ -847,14 +1048,15 @@ Future UI should consolidate these into:
 Source
 Readiness
 Action
+Progress
 Result
 Next safe action
-Advanced details
+Advanced Details
 ```
 
 ### Local/Cloud Workflow Consistency
 
-Local and cloud workflows currently work, but their presentation should be unified where possible.
+Local and cloud workflows work, but their presentation should be unified where possible.
 
 Goal:
 
@@ -894,62 +1096,138 @@ Future runtime hardening should detect unresolved port-owner PIDs and suggest re
 
 ---
 
-## 12. Near-Term Direction
+## 12. Project Workflow State
+
+The project uses a structured collaboration model:
+
+```text
+User / Project Owner
+ChatGPT / Architect and Planner
+Coder / Implementation in VS Code or similar coding agent
+```
+
+Current workflow refinements:
+
+- Prompts are saved as repository files.
+
+- Prompt filenames must be explicitly named.
+
+- Closeout filenames must match prompt basenames.
+
+- New milestone arcs normally start at `xx.xx.0`.
+
+- Coder creates exactly one human-authored closeout file per milestone/action.
+
+- Separate human-authored report files are no longer preferred.
+
+- Application-generated JSON reports and logs remain allowed runtime artifacts.
+
+- Prompt files are committed before initial coder handoff when practical.
+
+- Prompt Q&A/addenda may be appended during active implementation.
+
+- Minor addenda do not require immediate commits.
+
+- Material scope/safety/schema/provenance changes should be committed before continuing.
+
+- Git preflight and dirty-tree classification are now expected.
+
+- Specific-file git staging is preferred over `git add .`.
+
+Current standing rule documents:
+
+```text
+PROJECT_WORKFLOW.md
+CODING_AGENT_RULES.md
+```
+
+These should be treated as durable project process documents and referenced by future prompts.
+
+---
+
+## 13. Near-Term Direction
 
 Recommended near-term priorities:
 
 ### 1. Documentation Checkpoint
 
-Update:
+Update and align:
 
 ```text
 PROJECT_CONTEXT.md
-PROJECT_ARCHITECTURE.md
+PROJECT_ARCHITECTURE.md or ARCHITECTURE_ROADMAP.md
 PROJECT_WORKFLOW.md
+CODING_AGENT_RULES.md
 MILESTONE_HISTORY.md
-Parking_Lot.md
+Parking Lot
 New Chat Intro
 ```
 
-### 2. Guided Source Profile / Intake UX Simplification
+### 2. Unified External / Local / NAS Source Identity Design
 
-Create a future milestone to simplify the Ingestion tab and Source Profile workflows.
+Next major design area.
+
+Target concepts:
+
+```text
+Source Profile
+Source Device / Endpoint
+Ingestion Source
+Provenance Observation
+Source alias/display name
+Device/volume/network identity evidence
+Identifier confidence
+Observed mount/path history
+```
+
+Questions to resolve:
+
+- How to identify external drives independently of drive letter.
+
+- How to identify thumb drives/removable media.
+
+- How to identify optical media.
+
+- How to identify a local folder on the internal system.
+
+- How to identify a NAS/network share.
+
+- How to treat volume serial number, device serial, VID/PID, filesystem UUID, server/share path, and aliases.
+
+- How provenance should reference device/source identity.
+
+- How to avoid breaking existing Source Intake and provenance.
+
+### 3. External / Local Intake Workflow Redesign
+
+After identity design, redesign the external/local intake workflow using lessons from iCloud Intake where appropriate.
+
+Potential user-facing grammar:
+
+```text
+Select Source
+Check Readiness
+Prepare Candidates / Scan
+Import
+Review Result
+Advanced Details
+```
+
+The backend may differ by source type, but the workflow should feel consistent.
+
+### 4. Guided Source Profile / Intake UX Simplification
+
+Simplify the Ingestion tab and Source Profile workflows.
 
 Target principles:
 
 ```text
-Readiness is binary: Ready or Blocked.
+Readiness is binary or near-binary.
 Warnings become details, fixes, or blockers.
 Create Source Profile asks for user-meaningful fields only.
 Backend-derived fields move to Advanced Details.
-Local and cloud workflows share a common layout.
+Local, external, NAS, and cloud workflows share common layout where possible.
 ```
-
-### 3. Unified Workflow Summary
-
-Consolidate:
-
-```text
-Acquisition Status
-Source Intake Status
-Cleanup Dry Run Status
-Overall Result / Next Step
-```
-
-into one accurate workflow summary.
-
-### 4. iCloud Authentication and Tooling Diagnostics
-
-Add:
-
-```text
-iCloud session health check
-icloudpd version diagnostic
-clear authentication guidance
-possible isolated icloudpd auth helper
-```
-
-without storing credentials in Photo Organizer.
 
 ### 5. BMP Display Preview Support
 
@@ -977,13 +1255,12 @@ runtime stability
 source-profile workflow
 curation throughput
 NAS deployment planning
+mini-server deployment planning
 ```
 
-8. Mini-server deployment architecture and migration planning
+---
 
-
-
-## 13. Storage and Deployment Direction
+## 14. Storage and Deployment Direction
 
 Current operation remains local-first.
 
@@ -1003,7 +1280,7 @@ Planned deployment direction:
 
 - iCloud authentication/session handling must remain external to the app’s credential store.
 
-- Scheduled unattended iCloud acquisition remains deferred.
+- Scheduled unattended acquisition remains deferred.
 
 ### Mini-Server Deployment Direction
 
@@ -1012,44 +1289,56 @@ The user has decided to build and use a dedicated mini server for larger test en
 Planned roles:
 
 - Run Photo Organizer backend/frontend/runtime services.
+
 - Serve a lightweight local/mobile web interface.
+
 - Host local AI services, including semantic search and future local model workflows.
+
 - Run GPU-assisted processing where appropriate.
+
 - Coordinate with NAS-backed durable media storage.
 
 Initial target hardware:
 
 - Case: Fractal Terra
+
 - CPU: AMD Ryzen 9 7900
+
 - Cooler: Noctua NH-L12S
+
 - Motherboard: ASUS ROG Strix B650E-I
+
 - GPU: RTX 4070 Super dual fan
+
 - RAM: 64GB DDR5-6000
+
 - SSD: Samsung 990 Pro 2TB
+
 - PSU: Corsair SF850L 850W SFX-L
+
 - OS: Ubuntu Server 24.04
 
 Deployment direction:
 
 - Mini server should become the primary app/runtime/AI host.
+
 - NAS should remain the durable storage and backup layer.
+
 - PostgreSQL and Redis may run on the mini server in Docker.
+
 - Vault/media storage may live on NAS-backed paths once performance and reliability are validated.
+
 - GPU-dependent workflows should be designed so CPU-only fallbacks remain possible.
 
 ---
 
-## 14. Deferred Themes
+## 15. Deferred Themes
 
 High-level deferred or future areas:
 
-- Guided Source Profile / Intake UX simplification
+- iCloud Intake performance optimization and fine-grained phase timing
 
-- One-click or cleaner multi-step cloud intake
-
-- Unified local/cloud workflow shell
-
-- iCloud checkpoint/until-found completeness strategy
+- Provider cursor/page-token/date-boundary continuation for iCloud completeness proof
 
 - Cloud-native provenance identifiers for iCloud assets
 
@@ -1057,7 +1346,17 @@ High-level deferred or future areas:
 
 - Isolated iCloud authentication helper architecture
 
-- iCloud cleanup execution reintroduction after dry-run validation
+- `icloudpd` version/session diagnostics
+
+- Unified external/local/NAS source identity model
+
+- External drive stable identity detection
+
+- NAS/network share source identity
+
+- Optical media source identity
+
+- Unified local/cloud intake workflow shell
 
 - BMP display preview support
 
@@ -1069,7 +1368,9 @@ High-level deferred or future areas:
 
 - NAS production deployment validation
 
-- Scheduled acquisition and long-running orchestration
+- Mini-server deployment validation
+
+- Scheduled acquisition and long-running orchestration for other providers
 
 - Broader provider support such as OneDrive / Google Takeout / Google Photos-style exports
 
@@ -1077,18 +1378,21 @@ High-level deferred or future areas:
 
 ---
 
-## 15. Current Product State Summary
+## 16. Current Product State Summary
 
-Photo Organizer is now a functional local-first photo organization workbench with strong ingestion, provenance, curation, and review foundations.
+Photo Organizer is now a functional local-first photo organization workbench with strong ingestion, provenance, curation, review, and iCloud Intake foundations.
 
 The system can:
 
 ```text
 Create and manage Source Profiles.
 Run local/external Source Intake.
-Acquire recent iCloud media into managed staging.
+Prepare exact iCloud candidate sets.
+Import iCloud assets through durable chunked intake.
+Resume interrupted iCloud imports.
+Acquire iCloud media into managed local staging.
 Import staged iCloud files through Source Intake.
-Evaluate iCloud staging cleanup safety through dry run.
+Safely clean verified local iCloud staging files.
 Preserve canonical media in Vault.
 Track provenance.
 Generate display previews.
@@ -1097,8 +1401,11 @@ Support Photo Review, faces, people, aliases, events, places, albums, collection
 
 The core architecture is sound and safety-oriented.
 
-The main current product gap is not architectural proof-of-concept. The main gap is operator experience:
+The main current product gap is shifting from iCloud proof-of-concept to broader v1.0 usability and source identity:
 
 ```text
-The workflows work, but they need consolidation, simplification, and more intuitive presentation before v1.0 production use.
+iCloud Intake is good enough for v1.0.
+The next major work is external/local/NAS source identity and intake workflow design.
 ```
+
+The next design challenge is to make all source workflows feel consistent while preserving source-specific safety and provenance requirements.

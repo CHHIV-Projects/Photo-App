@@ -13,20 +13,36 @@ import type {
   SourceProfileCreateRequest,
   SourceProfileCreateResponse,
   SourceProfileDetail,
+  SourceEndpointEnrollmentConfirmRequest,
+  SourceEndpointEnrollmentConfirmResponse,
+  SourceEndpointEnrollmentPlanRequest,
+  SourceEndpointEnrollmentPlanResponse,
+  SourceCreationConfirmRequest,
+  SourceCreationConfirmResponse,
+  SourceCreationPlanRequest,
+  SourceCreationPlanResponse,
   IcloudSourceReadiness,
   IcloudReadinessOperationConflicts,
   IcloudReadinessReason,
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
+  SourceProfileReadinessResponse,
+  RunIngestionDispatchRequest,
+  RunIngestionDispatchResponse,
+  SourceSelectionRequest,
+  SourceSelectionResponse,
   SourceProfileStatus,
   SourceProfilesResponse,
   SourceProfileStagingFolderCreateResponse,
   SourceProfileSummary,
+  SourceIdentityProbeRequest,
+  SourceIdentityProbeResponse,
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
   SourceIntakeSourcesResponse,
   SourceCreateRequest,
   SourceCreateResponse,
+  SourceIntakeReadinessRejectionPayload,
   SourceIntakeRunRequest,
   SourceIntakeRunResponse,
   SourceIntakeStatusSnapshot,
@@ -186,6 +202,18 @@ export class IcloudAcquisitionStartError extends Error {
   constructor(message: string, status: number, payload: IcloudAcquisitionStartErrorPayload | null) {
     super(message);
     this.name = "IcloudAcquisitionStartError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+export class SourceIntakeStartError extends Error {
+  status: number;
+  payload: SourceIntakeReadinessRejectionPayload | null;
+
+  constructor(message: string, status: number, payload: SourceIntakeReadinessRejectionPayload | null) {
+    super(message);
+    this.name = "SourceIntakeStartError";
     this.status = status;
     this.payload = payload;
   }
@@ -882,10 +910,27 @@ export function getFaceProcessingStatus(): Promise<AdminFaceProcessingStatusResp
   return apiRequest<AdminFaceProcessingStatusResponse>("/api/admin/face-processing/status");
 }
 
-export function runFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {
-  return apiRequest<AdminFaceProcessingActionResponse>("/api/admin/face-processing/run", {
-    method: "POST"
+export async function runFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/admin/face-processing/run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    cache: "no-store"
   });
+
+  if (response.ok || response.status === 409) {
+    return (await response.json()) as AdminFaceProcessingActionResponse;
+  }
+
+  let message = `Request failed with status ${response.status}`;
+  try {
+    const errorPayload = (await response.json()) as { detail?: string; message?: string };
+    message = errorPayload.detail ?? errorPayload.message ?? message;
+  } catch {
+    // Fall back to generic message when no JSON payload is returned.
+  }
+  throw new Error(message);
 }
 
 export function stopFaceProcessing(): Promise<AdminFaceProcessingActionResponse> {
@@ -993,6 +1038,69 @@ export function createSourceProfile(
   });
 }
 
+export function probeSourceIdentity(
+  payload: SourceIdentityProbeRequest,
+): Promise<SourceIdentityProbeResponse> {
+  return apiRequest<SourceIdentityProbeResponse>("/api/admin/source-identity/probe", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function planSourceEndpointEnrollment(
+  payload: SourceEndpointEnrollmentPlanRequest,
+): Promise<SourceEndpointEnrollmentPlanResponse> {
+  return apiRequest<SourceEndpointEnrollmentPlanResponse>("/api/admin/source-endpoints/enrollment/plan", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmSourceEndpointEnrollment(
+  payload: SourceEndpointEnrollmentConfirmRequest,
+): Promise<SourceEndpointEnrollmentConfirmResponse> {
+  return apiRequest<SourceEndpointEnrollmentConfirmResponse>("/api/admin/source-endpoints/enrollment/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function planSourceCreation(
+  payload: SourceCreationPlanRequest,
+): Promise<SourceCreationPlanResponse> {
+  return apiRequest<SourceCreationPlanResponse>("/api/admin/source-creation/plan", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function confirmSourceCreation(
+  payload: SourceCreationConfirmRequest,
+): Promise<SourceCreationConfirmResponse> {
+  return apiRequest<SourceCreationConfirmResponse>("/api/admin/source-creation/confirm", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function selectSourceProfile(
+  payload: SourceSelectionRequest,
+): Promise<SourceSelectionResponse> {
+  return apiRequest<SourceSelectionResponse>("/api/admin/source-selection/select", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function dispatchRunIngestion(
+  payload: RunIngestionDispatchRequest,
+): Promise<RunIngestionDispatchResponse> {
+  return apiRequest<RunIngestionDispatchResponse>("/api/admin/run-ingestion/dispatch", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function updateSourceProfileMetadata(
   sourceId: number,
   payload: SourceProfileMetadataUpdateRequest,
@@ -1014,6 +1122,12 @@ export function updateSourceProfileMetadata(
 
 export function verifySourceProfilePath(sourceId: number): Promise<SourceProfilePathCheckResponse> {
   return apiRequest<SourceProfilePathCheckResponse>(`/api/admin/source-profiles/${sourceId}/verify-path`, {
+    method: "POST",
+  });
+}
+
+export function checkSourceProfileReadiness(sourceId: number): Promise<SourceProfileReadinessResponse> {
+  return apiRequest<SourceProfileReadinessResponse>(`/api/admin/source-profiles/${sourceId}/check-readiness`, {
     method: "POST",
   });
 }
@@ -1264,10 +1378,32 @@ export function createOrGetIntakeSource(req: SourceCreateRequest): Promise<Sourc
 // ---------------------------------------------------------------------------
 
 export function startSourceIntake(req: SourceIntakeRunRequest): Promise<SourceIntakeRunResponse> {
-  return apiRequest<SourceIntakeRunResponse>("/api/admin/source-intake/run", {
+  return startSourceIntakeWithDetails(req);
+}
+
+export async function startSourceIntakeWithDetails(req: SourceIntakeRunRequest): Promise<SourceIntakeRunResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/admin/source-intake/run`, {
     method: "POST",
-    body: JSON.stringify(req)
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(req),
+    cache: "no-store",
   });
+
+  if (!response.ok) {
+    let payload: SourceIntakeReadinessRejectionPayload | null = null;
+    try {
+      payload = (await response.json()) as SourceIntakeReadinessRejectionPayload;
+    } catch {
+      payload = null;
+    }
+
+    const message = payload?.detail || `Request failed with status ${response.status}`;
+    throw new SourceIntakeStartError(message, response.status, payload);
+  }
+
+  return (await response.json()) as SourceIntakeRunResponse;
 }
 
 export function getSourceIntakeRunStatus(): Promise<SourceIntakeStatusSnapshot> {

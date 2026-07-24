@@ -38,6 +38,8 @@ from app.schemas.admin import (
     SourceIntakeRunResponse,
     SourceIntakeStatusSchema,
     SourceIntakeStopResponse,
+    RunIngestionDispatchRequest,
+    RunIngestionDispatchResponse,
     SourceProfileCreateRequest,
     SourceProfileCreateResponse,
     SourceProfileDetail,
@@ -111,6 +113,11 @@ from app.services.admin import (
 from app.services.ingestion.ingestion_context_service import normalize_source_label
 from app.services.admin.source_intake_execution_service import (
     SourceIntakeAlreadyRunningError,
+    SourceIntakeReadinessBlockedError,
+)
+from app.services.admin.run_ingestion_dispatch_service import (
+    RunIngestionDispatchError,
+    RunIngestionDispatchService,
 )
 from app.services.duplicates.processing_service import (
     DuplicateProcessingAlreadyRunningError,
@@ -192,6 +199,27 @@ from app.services.source_profile_deferred_asset_service import (
     DeferredAssetListItem,
     list_deferred_assets,
 )
+from app.services.source_identity import (
+    SourceCreationConfirmRequest,
+    SourceCreationConfirmResponse,
+    SourceCreationPlanRequest,
+    SourceCreationPlanResponse,
+    SourceCreationService,
+    SourceEndpointEnrollmentConfirmRequest,
+    SourceEndpointEnrollmentConfirmResponse,
+    SourceEndpointEnrollmentPlanRequest,
+    SourceEndpointEnrollmentPlanResponse,
+    SourceEndpointEnrollmentService,
+    SourceProfileReadinessResponse,
+    SourceProfileReadinessService,
+    SourceIdentityCapabilitiesResponse,
+    SourceIdentityProbeRequest,
+    SourceIdentityProbeResponse,
+    SourceIdentityProbeService,
+    SourceSelectionRequest,
+    SourceSelectionResponse,
+    SourceSelectionService,
+)
 from app.services.admin.ingestion_operation_guardrail_service import (
     IngestionOperationGuardrailSnapshot,
     get_ingestion_operation_guardrail_snapshot,
@@ -206,6 +234,43 @@ from app.services.previews.heic_preview_processing_service import (
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def get_source_identity_probe_service() -> SourceIdentityProbeService:
+    """Return a read-only source identity probe service."""
+    return SourceIdentityProbeService()
+
+
+def get_source_endpoint_enrollment_service(db: Session) -> SourceEndpointEnrollmentService:
+    """Return a stateless source endpoint enrollment service."""
+    return SourceEndpointEnrollmentService(
+        db_session=db,
+        probe_service=get_source_identity_probe_service(),
+    )
+
+
+def get_source_creation_service(db: Session) -> SourceCreationService:
+    """Return the transactional filesystem Source creation service."""
+    return SourceCreationService(
+        db_session=db,
+        probe_service=get_source_identity_probe_service(),
+    )
+
+
+def get_source_profile_readiness_service(db: Session) -> SourceProfileReadinessService:
+    """Return a read-only Source Profile readiness service."""
+    return SourceProfileReadinessService(
+        db_session=db,
+        probe_service=get_source_identity_probe_service(),
+    )
+
+
+def get_source_selection_service(db: Session) -> SourceSelectionService:
+    """Return a read-only Source Selection orchestration service."""
+    return SourceSelectionService(
+        db_session=db,
+        probe_service=get_source_identity_probe_service(),
+    )
 
 
 def _to_run_status(snapshot: DuplicateProcessingStatusSnapshot) -> DuplicateProcessingRunStatus:
@@ -900,6 +965,46 @@ def _guardrail_conflict_content(
         "error_code": error_code,
         "blocking_reasons": [reason.model_dump(mode="json") for reason in snapshot.blocking_reasons],
         "operation_conflicts": snapshot.operation_conflicts.model_dump(mode="json"),
+    }
+    if current is not None:
+        if hasattr(current, "model_dump"):
+            content["current"] = current.model_dump(mode="json")
+        else:
+            content["current"] = current
+    return content
+
+
+def _source_intake_readiness_conflict_content(
+    exc: SourceIntakeReadinessBlockedError,
+    *,
+    current: object | None = None,
+) -> dict[str, object]:
+    readiness = exc.readiness
+    readiness_summary: dict[str, object] = {
+        "source_profile_id": readiness.source_profile_id,
+        "source_label": readiness.source_label,
+        "source_type": readiness.source_type,
+        "profile_status": readiness.profile_status,
+        "cloud_provider": readiness.cloud_provider,
+        "endpoint_id": readiness.endpoint_id,
+        "endpoint_alias": readiness.endpoint_alias,
+        "endpoint_source_type": readiness.endpoint_source_type,
+        "readiness_status": readiness.readiness_status,
+        "identity_match_status": readiness.identity_match_status,
+        "can_run_source_intake": readiness.can_run_source_intake,
+        "requires_operator_acknowledgment": readiness.requires_operator_acknowledgment,
+        "hard_block": readiness.hard_block,
+        "operator_message": readiness.operator_message,
+        "recommended_next_action": readiness.recommended_next_action,
+        "warnings": [warning.model_dump(mode="json") for warning in readiness.warnings],
+        "blockers": [blocker.model_dump(mode="json") for blocker in readiness.blockers],
+        "checked_at": readiness.checked_at.isoformat(),
+    }
+    content: dict[str, object] = {
+        "detail": exc.detail,
+        "error_code": exc.error_code,
+        **readiness_summary,
+        "readiness": readiness_summary,
     }
     if current is not None:
         if hasattr(current, "model_dump"):
@@ -1671,6 +1776,92 @@ def get_internal_icloud_single_flow_run_status(
 # ---------------------------------------------------------------------------
 
 
+@router.post("/source-identity/probe", response_model=SourceIdentityProbeResponse)
+def post_source_identity_probe(
+    body: SourceIdentityProbeRequest,
+) -> SourceIdentityProbeResponse:
+    """Run a read-only source identity probe."""
+    return get_source_identity_probe_service().probe(body)
+
+
+@router.get("/source-identity/capabilities", response_model=SourceIdentityCapabilitiesResponse)
+def get_source_identity_capabilities() -> SourceIdentityCapabilitiesResponse:
+    """Return read-only source identity probe provider capabilities."""
+    return get_source_identity_probe_service().capabilities()
+
+
+@router.post("/source-endpoints/enrollment/plan", response_model=SourceEndpointEnrollmentPlanResponse)
+def post_source_endpoint_enrollment_plan(
+    body: SourceEndpointEnrollmentPlanRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceEndpointEnrollmentPlanResponse:
+    """Build a read-only source endpoint enrollment plan."""
+    return get_source_endpoint_enrollment_service(db).plan(body)
+
+
+@router.post("/source-endpoints/enrollment/confirm", response_model=SourceEndpointEnrollmentConfirmResponse)
+def post_source_endpoint_enrollment_confirm(
+    body: SourceEndpointEnrollmentConfirmRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceEndpointEnrollmentConfirmResponse:
+    """Confirm a stateless source endpoint enrollment plan."""
+    return get_source_endpoint_enrollment_service(db).confirm(body)
+
+
+@router.post("/source-creation/plan", response_model=SourceCreationPlanResponse)
+def post_source_creation_plan(
+    body: SourceCreationPlanRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceCreationPlanResponse:
+    """Build a read-only drive-agnostic filesystem Source creation plan."""
+    return get_source_creation_service(db).plan(body)
+
+
+@router.post("/source-creation/confirm", response_model=SourceCreationConfirmResponse)
+def post_source_creation_confirm(
+    body: SourceCreationConfirmRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceCreationConfirmResponse:
+    """Confirm and atomically persist a drive-agnostic filesystem Source."""
+    return get_source_creation_service(db).confirm(body)
+
+
+@router.post("/source-selection/select", response_model=SourceSelectionResponse)
+def post_source_selection_select(
+    body: SourceSelectionRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceSelectionResponse | JSONResponse:
+    """Select and verify a Source Profile without mutating metadata."""
+    try:
+        return get_source_selection_service(db).select_source(body)
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
+
+
+@router.post("/run-ingestion/dispatch", response_model=RunIngestionDispatchResponse)
+def dispatch_run_ingestion(
+    body: RunIngestionDispatchRequest,
+    db: Session = Depends(get_db_session),
+) -> RunIngestionDispatchResponse | JSONResponse:
+    """Revalidate Source Selection and dispatch the selected Step 3 ingestion action."""
+    with protected_ingestion_operation_start(db):
+        try:
+            return RunIngestionDispatchService(db).dispatch(body)
+        except LookupError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"detail": "Source profile not found.", "error_code": "SOURCE_PROFILE_NOT_FOUND"},
+            )
+        except RunIngestionDispatchError as exc:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": str(exc), "error_code": exc.code},
+            )
+
+
 @router.get("/source-intake/sources", response_model=SourceIntakeSourcesResponse)
 def get_source_intake_sources(db: Session = Depends(get_db_session)) -> SourceIntakeSourcesResponse:
     """Return known ingestion sources with latest run and report information."""
@@ -1846,6 +2037,21 @@ def post_source_profile_verify_path(
         )
 
 
+@router.post("/source-profiles/{source_id}/check-readiness", response_model=SourceProfileReadinessResponse)
+def post_source_profile_check_readiness(
+    source_id: int,
+    db: Session = Depends(get_db_session),
+) -> SourceProfileReadinessResponse | JSONResponse:
+    """Run a read-only Source Profile readiness check."""
+    try:
+        return get_source_profile_readiness_service(db).check_readiness(source_id)
+    except LookupError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "Source profile not found."},
+        )
+
+
 @router.post("/source-profiles/{source_id}/create-staging-folder", response_model=SourceProfileStagingFolderCreateResponse)
 def post_source_profile_create_staging_folder(
     source_id: int,
@@ -2008,6 +2214,13 @@ def _launch_source_intake_locked(
             ingestion_source_id=body.ingestion_source_id,
             source_intake_limit=body.source_intake_limit,
             ingest_batch_size=body.ingest_batch_size,
+            readiness_acknowledged=body.readiness_acknowledged,
+        )
+    except SourceIntakeReadinessBlockedError as exc:
+        current_snapshot = _snapshot_to_schema(get_source_intake_status(db))
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=_source_intake_readiness_conflict_content(exc, current=current_snapshot),
         )
     except SourceIntakeAlreadyRunningError as exc:
         return JSONResponse(

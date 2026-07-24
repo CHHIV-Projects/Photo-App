@@ -187,6 +187,10 @@ def _resolve_vault_root() -> Path:
     return resolve_runtime_path(settings.vault_path).resolve()
 
 
+def _cleanup_reports_dir() -> Path:
+    return (_project_root() / "storage" / "logs" / "icloud_cleanup_reports").resolve()
+
+
 def _normalize_relative(path: str) -> str:
     return path.replace("\\", "/").lstrip("/")
 
@@ -215,6 +219,16 @@ def _json_dict(raw: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _parse_report_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _as_utc(parsed)
 
 
 def _snapshot_from_row(row: IcloudStagingCleanupRun) -> CleanupRunSnapshot:
@@ -256,22 +270,137 @@ def _snapshot_from_row(row: IcloudStagingCleanupRun) -> CleanupRunSnapshot:
     )
 
 
+def _candidate_report_paths(row: IcloudStagingCleanupRun) -> list[Path]:
+    paths: list[Path] = []
+    if row.report_path:
+        paths.append(Path(row.report_path))
+    reports_dir = _cleanup_reports_dir()
+    try:
+        paths.extend(reports_dir.glob(f"*run{row.id}.json"))
+    except OSError:
+        pass
+
+    unique: dict[str, Path] = {}
+    for path in paths:
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        unique[key] = path
+    return sorted(
+        unique.values(),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True,
+    )
+
+
+def _load_terminal_report_for_row(row: IcloudStagingCleanupRun) -> tuple[Path, dict[str, Any]] | None:
+    for path in _candidate_report_paths(row):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("report_type") != "icloud_staging_cleanup":
+            continue
+        if int(payload.get("run_id") or 0) != int(row.id):
+            continue
+        if row.ingestion_source_id is not None and int(payload.get("source_id") or 0) != int(row.ingestion_source_id):
+            continue
+        if bool(payload.get("dry_run")) != bool(row.dry_run):
+            continue
+        if payload.get("status") not in {"completed", "completed_with_errors", "failed"}:
+            continue
+        return path, payload
+    return None
+
+
+def _reconcile_row_from_terminal_report(row: IcloudStagingCleanupRun, path: Path, payload: dict[str, Any]) -> bool:
+    counts = payload.get("counts")
+    if not isinstance(counts, dict):
+        return False
+    status = str(payload.get("status") or "").strip()
+    if status not in {"completed", "completed_with_errors", "failed"}:
+        return False
+
+    generated_at = _parse_report_datetime(payload.get("generated_at_utc"))
+    try:
+        file_mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        file_mtime = None
+    finished_at = generated_at or file_mtime or datetime.now(UTC)
+
+    started_at = _parse_report_datetime(payload.get("started_at_utc")) or _as_utc(row.started_at) or finished_at
+    row.status = status
+    row.current_stage = "completed" if status in {"completed", "completed_with_errors"} else "failed"
+    row.started_at = started_at
+    row.finished_at = finished_at
+    row.elapsed_seconds = max(0.0, float((finished_at - started_at).total_seconds()))
+    row.total_files = int(counts.get("total_files") or 0)
+    row.processed_files = int(counts.get("total_files") or 0)
+    row.eligible_count = int(counts.get("eligible_count") or 0)
+    row.deleted_count = int(counts.get("deleted_count") or 0)
+    row.skipped_count = int(counts.get("skipped_count") or 0)
+    row.protected_count = int(counts.get("protected_count") or 0)
+    row.verification_failed_count = int(counts.get("verification_failed_count") or 0)
+    row.file_missing_count = int(counts.get("file_missing_count") or 0)
+    row.delete_failed_count = int(counts.get("delete_failed_count") or 0)
+    row.total_bytes_eligible = int(counts.get("total_bytes_eligible") or 0)
+    row.total_bytes_deleted = int(counts.get("total_bytes_deleted") or 0)
+    row.manifest_fingerprint = str(payload.get("manifest_fingerprint") or "") or None
+    row.planner_version = str(payload.get("planner_version") or "") or row.planner_version
+    row.skipped_reasons_json = json.dumps(payload.get("skipped_reasons") if isinstance(payload.get("skipped_reasons"), dict) else {}, sort_keys=True)
+    row.skipped_samples_json = row.skipped_samples_json or json.dumps({})
+    row.report_path = str(path)
+    row.error_message = payload.get("error_message") if isinstance(payload.get("error_message"), str) else None
+    if row.dry_run and status == "completed":
+        row.preview_expires_at = finished_at + timedelta(seconds=DRY_RUN_FRESHNESS_SECONDS)
+    return True
+
+
+def reconcile_completed_cleanup_reports(db: Session, *, source_id: int | None = None) -> int:
+    """Complete stale cleanup rows when their terminal report was written before interruption."""
+    stmt = select(IcloudStagingCleanupRun).where(IcloudStagingCleanupRun.status.in_(tuple(RUNNING_STATUSES)))
+    if source_id is not None:
+        stmt = stmt.where(IcloudStagingCleanupRun.ingestion_source_id == source_id)
+    rows = db.execute(stmt).scalars().all()
+    reconciled = 0
+    for row in rows:
+        loaded = _load_terminal_report_for_row(row)
+        if loaded is None:
+            continue
+        path, payload = loaded
+        if _reconcile_row_from_terminal_report(row, path, payload):
+            reconciled += 1
+    if reconciled:
+        db.commit()
+    return reconciled
+
+
 def reset_stale_cleanup_runs(db: Session) -> int:
     """Mark stale running rows as failed after app restarts."""
     stale_rows = db.execute(
         select(IcloudStagingCleanupRun).where(IcloudStagingCleanupRun.status.in_(tuple(RUNNING_STATUSES)))
     ).scalars().all()
     now = datetime.now(UTC)
+    reset_count = 0
     for row in stale_rows:
+        loaded = _load_terminal_report_for_row(row)
+        if loaded is not None:
+            path, payload = loaded
+            if _reconcile_row_from_terminal_report(row, path, payload):
+                continue
         row.status = "failed"
         row.current_stage = "interrupted"
         row.started_at = row.started_at or now
         row.finished_at = now
         row.elapsed_seconds = float((now - _as_utc(row.started_at)).total_seconds())
         row.error_message = "Run interrupted before completion (service restart or crash)."
+        reset_count += 1
     if stale_rows:
         db.commit()
-    return len(stale_rows)
+    return reset_count
 
 
 def get_cleanup_status(db: Session, *, source_id: int | None = None) -> CleanupRunSnapshot | None:
@@ -800,7 +929,7 @@ def _update_row_from_plan(row: IcloudStagingCleanupRun, plan: CleanupPlan) -> No
 
 
 def _report_paths(run_id: int) -> tuple[Path, Path]:
-    reports_dir = (_project_root() / "storage" / "logs" / "icloud_cleanup_reports").resolve()
+    reports_dir = _cleanup_reports_dir()
     reports_dir.mkdir(parents=True, exist_ok=True)
     now = datetime.now(UTC)
     report = reports_dir / f"icloud_cleanup_{now.strftime('%Y%m%d_%H%M%S')}_run{run_id}.json"

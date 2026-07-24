@@ -1231,6 +1231,8 @@ export type SourceProfileStatus =
 export type SourceProfileType =
   | "local_folder"
   | "external_drive"
+  | "removable_media"
+  | "optical_media"
   | "cloud_export"
   | "scan_batch"
   | "other";
@@ -1253,6 +1255,10 @@ export interface SourceProfileSummary {
   source_label: string;
   source_type: SourceProfileType;
   source_root_path: string | null;
+  endpoint_relative_root: string | null;
+  endpoint_id: number | null;
+  endpoint_alias: string | null;
+  endpoint_source_type: SourceIdentityProbeSourceType | null;
   profile_status: SourceProfileStatus;
   cloud_provider: SourceCloudProvider | null;
   acquisition_method: SourceAcquisitionMethod | null;
@@ -1350,6 +1356,152 @@ export interface SourceProfileStagingFolderCreateResponse {
   checked_at: string;
 }
 
+export type SourceProfileReadinessStatus =
+  | "ready"
+  | "path_only"
+  | "needs_review"
+  | "blocked"
+  | "provider_specific"
+  | "unknown";
+
+export type SourceProfileIdentityMatchStatus =
+  | "not_enrolled"
+  | "matched"
+  | "needs_review"
+  | "mismatch"
+  | "unavailable"
+  | "unsupported"
+  | "provider_specific"
+  | "ambiguous"
+  | "unknown";
+
+export interface ReadinessMessage {
+  code: string;
+  message: string;
+}
+
+export type SourceDurableIdentityStatus =
+  | "verified"
+  | "not_verified"
+  | "provider_specific"
+  | "unknown";
+
+export interface SourceProfileReadinessResponse {
+  source_profile_id: number;
+  source_label: string | null;
+  source_type: string | null;
+  profile_status: string | null;
+  cloud_provider: string | null;
+  endpoint_id: number | null;
+  endpoint_alias: string | null;
+  endpoint_source_type: string | null;
+  durable_identity_status: SourceDurableIdentityStatus;
+  durable_identity_reason: string | null;
+  durable_identity_identifier_type: string | null;
+  durable_identity_identifier: string | null;
+  durable_identity_evidence: string[];
+  readiness_status: SourceProfileReadinessStatus;
+  identity_match_status: SourceProfileIdentityMatchStatus;
+  can_run_source_intake: boolean;
+  requires_operator_acknowledgment: boolean;
+  hard_block: boolean;
+  operator_message: string;
+  recommended_next_action: string;
+  warnings: ReadinessMessage[];
+  blockers: ReadinessMessage[];
+  checked_at: string;
+  probe_summary: Record<string, unknown>;
+  observed_path_summary: Record<string, unknown>;
+  access_node_summary: Record<string, unknown>;
+  advanced_details: Record<string, unknown>;
+}
+
+export type SourceSelectionResult = "selected" | "not_selected";
+export type SourceSelectionAvailability = "available" | "unavailable" | "needs_attention";
+export type SourceSelectionWorkflowKind = "filesystem_source_intake" | "icloud_intake";
+
+export interface SourceSelectionRequest {
+  source_profile_id: number;
+}
+
+export interface SelectedSourceContext {
+  source_profile_id: number;
+  source_endpoint_id: number | null;
+  source_type: string | null;
+  friendly_source_type: string;
+  device_label: string;
+  source_name: string;
+  profile_status: string;
+  endpoint_status: string | null;
+  endpoint_relative_root: string | null;
+  configured_source_root: string | null;
+  resolved_source_root: string | null;
+  resolved_endpoint_path: string | null;
+  root_display: string;
+  durable_identity_status: SourceDurableIdentityStatus;
+  identity_match_status: string;
+  availability: SourceSelectionAvailability;
+  workflow_kind: SourceSelectionWorkflowKind;
+  provider_context: Record<string, unknown> | null;
+  selected_at: string;
+  selection_version: string;
+  selection_fingerprint: string | null;
+}
+
+export interface SourceSelectionResponse {
+  result: SourceSelectionResult;
+  availability: SourceSelectionAvailability;
+  workflow_kind: SourceSelectionWorkflowKind | null;
+  selected_source_context: SelectedSourceContext | null;
+  message: string;
+  retry_guidance: string | null;
+  advanced_details: Record<string, unknown>;
+}
+
+export interface RunIngestionFilesystemOptions {
+  source_intake_limit?: number | null;
+  ingest_batch_size?: number | null;
+  acknowledge_legacy_or_review?: boolean;
+}
+
+export interface RunIngestionIcloudOptions {
+  target_logical_items?: number | null;
+}
+
+export interface RunIngestionDispatchRequest {
+  source_profile_id: number;
+  selection_fingerprint?: string | null;
+  filesystem_options?: RunIngestionFilesystemOptions | null;
+  icloud_options?: RunIngestionIcloudOptions | null;
+}
+
+export type RunIngestionDispatchResult =
+  | "started"
+  | "action_completed"
+  | "blocked"
+  | "stale_selection"
+  | "no_action_available";
+
+export type RunIngestionDispatchAction =
+  | "source_intake_started"
+  | "icloud_prepare_started"
+  | "icloud_import_started"
+  | "icloud_import_resumed"
+  | "icloud_import_advanced"
+  | "none";
+
+export interface RunIngestionDispatchResponse {
+  result: RunIngestionDispatchResult;
+  workflow_kind: SourceSelectionWorkflowKind | null;
+  action: RunIngestionDispatchAction;
+  message: string;
+  next_action: string | null;
+  source_profile_id: number;
+  underlying_run_id: number | null;
+  status: string | null;
+  workflow_payload: Record<string, unknown>;
+}
+
 export interface SourceProfilesResponse {
   generated_at: string;
   profiles: SourceProfileSummary[];
@@ -1369,6 +1521,324 @@ export interface SourceProfileCreateRequest {
 export interface SourceProfileCreateResponse {
   already_exists: boolean;
   profile: SourceProfileSummary;
+}
+
+export type SourceIdentityProbeSourceType =
+  | "local"
+  | "external_device"
+  | "removable_media"
+  | "optical_media"
+  | "nas"
+  | "cloud";
+
+export interface SourceIdentityProbeRequest {
+  source_type: SourceIdentityProbeSourceType;
+  observed_path?: string | null;
+  probe_mode?: "setup_probe" | "readiness_probe" | "run_launch_verification" | "diagnostic_probe";
+  intended_use?: string | null;
+  os_family?: "windows" | "linux" | "macos" | "unknown";
+}
+
+export interface SourceIdentityProbeEvidenceItem {
+  category: string;
+  code: string;
+  status: string;
+  durability: string;
+  privacy_level: string;
+  display_value: string | null;
+  masked_value: string | null;
+  message: string | null;
+}
+
+export interface SourceIdentityProbeResponse {
+  probe_status: "completed" | "completed_with_warnings" | "blocked" | "unavailable" | "unsupported_provider" | "provider_error";
+  source_type: SourceIdentityProbeSourceType;
+  observed_path: string | null;
+  normalized_observed_path: string | null;
+  source_root_candidate: {
+    path: string | null;
+    is_valid_source_root_candidate: boolean;
+    filesystem_boundary_type: string;
+    root_reason: string;
+  };
+  evidence_items: SourceIdentityProbeEvidenceItem[];
+  blockers: SourceIdentityProbeEvidenceItem[];
+  warnings: SourceIdentityProbeEvidenceItem[];
+  next_safe_actions: string[];
+}
+
+export interface EnrollmentMessage {
+  code: string;
+  message: string;
+}
+
+export interface SourceEndpointEnrollmentCandidate {
+  source_type: string;
+  observed_path: string | null;
+  normalized_observed_path: string | null;
+  source_root_candidate_path: string | null;
+  filesystem_boundary_type: string;
+  is_valid_source_root_candidate: boolean;
+  probe_status: string;
+  confidence_tier: string;
+  safe_to_run: string;
+  provider_name: string;
+  provider_version: string;
+  access_node_label: string;
+  access_node_os_family: string;
+  identity_fingerprint_hash: string | null;
+  identity_fingerprint_version: string | null;
+  identity_fingerprint_strength: "strong" | "medium" | "weak" | "unavailable";
+}
+
+export interface SourceEndpointEnrollmentMatch {
+  source_endpoint_id: number;
+  alias: string;
+  source_type: string;
+  match_strength: string;
+  match_reason: string;
+  identity_confidence: string;
+}
+
+export interface SourceEndpointEnrollmentPlanRequest {
+  source_profile_id: number;
+  probe_request: SourceIdentityProbeRequest;
+  proposed_alias?: string | null;
+  selected_existing_endpoint_id?: number | null;
+  operator_review_acknowledged?: boolean;
+}
+
+export interface SourceEndpointEnrollmentPlanResponse {
+  generated_at: string;
+  plan_status:
+    | "ready"
+    | "needs_review"
+    | "blocked"
+    | "alias_conflict"
+    | "duplicate_match"
+    | "source_profile_already_linked";
+  source_profile_id: number;
+  source_profile_label: string | null;
+  existing_source_endpoint_id: number | null;
+  endpoint_action: "create_new_endpoint" | "link_existing_endpoint" | "none";
+  source_profile_action: "link_existing_profile" | "none";
+  proposed_alias: string | null;
+  alias_normalized: string | null;
+  plan_fingerprint: string;
+  durable_identity_status: SourceDurableIdentityStatus;
+  durable_identity_reason: string | null;
+  durable_identity_identifier_type: string | null;
+  durable_identity_identifier: string | null;
+  durable_identity_evidence: string[];
+  candidate: SourceEndpointEnrollmentCandidate | null;
+  possible_matches: SourceEndpointEnrollmentMatch[];
+  blockers: EnrollmentMessage[];
+  warnings: EnrollmentMessage[];
+  required_confirmations: EnrollmentMessage[];
+}
+
+export interface SourceEndpointEnrollmentConfirmRequest {
+  source_profile_id: number;
+  probe_request: SourceIdentityProbeRequest;
+  confirmed_alias?: string | null;
+  selected_existing_endpoint_id?: number | null;
+  plan_fingerprint?: string | null;
+  operator_confirmed: boolean;
+  operator_review_acknowledged?: boolean;
+}
+
+export interface SourceEndpointEnrollmentConfirmResponse {
+  generated_at: string;
+  enrollment_status: "completed" | "blocked" | "failed";
+  source_profile_id: number;
+  source_endpoint_id: number | null;
+  source_profile_endpoint_id: number | null;
+  endpoint_action: "create_new_endpoint" | "link_existing_endpoint" | "none";
+  source_profile_action: "link_existing_profile" | "none";
+  already_linked: boolean;
+  created_endpoint: boolean;
+  created_access_node: boolean;
+  created_observed_path: boolean;
+  observed_path_id: number | null;
+  plan_fingerprint: string | null;
+  durable_identity_status: SourceDurableIdentityStatus;
+  durable_identity_reason: string | null;
+  durable_identity_identifier_type: string | null;
+  durable_identity_identifier: string | null;
+  durable_identity_evidence: string[];
+  blockers: EnrollmentMessage[];
+  warnings: EnrollmentMessage[];
+}
+
+export type SourceCreationType = "local" | "external" | "removable" | "optical" | "nas";
+export type SourceCreationNameAction = "create_new" | "use_existing" | "rename_existing" | "cancel";
+export type SourceCreationRecognitionStatus =
+  | "new_device"
+  | "existing_device"
+  | "existing_device_type_mismatch"
+  | "existing_source_active"
+  | "existing_source_inactive"
+  | "existing_legacy_source"
+  | "multiple_source_matches"
+  | "identity_needs_review"
+  | "location_blocked";
+
+export interface SourceCreationMessage {
+  code: string;
+  message: string;
+}
+
+export interface SourceCreationEndpointMatch {
+  source_endpoint_id: number;
+  alias: string;
+  source_type: string;
+  match_strength: "strong" | "legacy_review";
+  match_reason: string;
+  identity_confidence: string;
+}
+
+export interface SourceCreationSourceMatch {
+  source_profile_id: number;
+  source_label: string;
+  source_type: string;
+  profile_status: string;
+  source_root_path: string | null;
+  source_endpoint_id: number | null;
+  endpoint_alias: string | null;
+  endpoint_relative_root: string | null;
+  match_kind: "modern_exact" | "legacy_exact";
+  classification: string;
+  provenance_count: number;
+  ingestion_runs_count: number;
+  source_intake_runs_count: number;
+  asset_count: number;
+  has_protected_history: boolean;
+  recommended_action: string | null;
+  allowed_actions: string[];
+  selected_for_action: boolean;
+  conflict_reason: string | null;
+}
+
+export interface SourceCreationPlanRequest {
+  source_type: SourceCreationType;
+  observed_path: string;
+  source_name?: string | null;
+  device_name?: string | null;
+  naming_action?: SourceCreationNameAction | null;
+  selected_existing_endpoint_id?: number | null;
+  selected_canonical_source_id?: number | null;
+  duplicate_source_ids_to_inactivate?: number[];
+  use_registered_source_type?: boolean;
+  operator_review_acknowledged?: boolean;
+}
+
+export interface SourceCreationPlanResponse {
+  generated_at: string;
+  plan_status: "ready" | "needs_review" | "blocked" | "source_exists";
+  plan_fingerprint: string;
+  recognition_status: SourceCreationRecognitionStatus;
+  recognition_title: string;
+  recognition_message: string;
+  source_type: SourceCreationType;
+  recognized_source_type: SourceCreationType;
+  registered_endpoint_source_type: string | null;
+  source_type_mismatch: boolean;
+  persisted_source_type: string;
+  requested_device_name: string;
+  device_name: string;
+  naming_action: SourceCreationNameAction | null;
+  name_decision_required: boolean;
+  observed_path: string;
+  canonical_source_root_path: string;
+  endpoint_relative_root: string;
+  entire_endpoint: boolean;
+  entire_endpoint_label: string | null;
+  suggested_source_name: string;
+  requested_source_name: string | null;
+  source_name_suggested_alternative: string | null;
+  source_display_name: string;
+  durable_identity_status: SourceDurableIdentityStatus;
+  durable_identity_reason: string | null;
+  durable_identity_identifier_type: string | null;
+  durable_identity_identifier: string | null;
+  durable_identity_evidence: string[];
+  endpoint_action:
+    | "create_new_endpoint"
+    | "reuse_existing_endpoint"
+    | "upgrade_legacy_endpoint"
+    | "rename_existing_endpoint"
+    | "upgrade_and_rename_endpoint"
+    | "none";
+  source_action:
+    | "create_new_source"
+    | "reuse_existing_source"
+    | "reactivate_existing_source"
+    | "adopt_legacy_source"
+    | "adopt_and_reactivate_source"
+    | "canonicalize_existing_source"
+    | "canonicalize_and_reactivate_source"
+    | "none";
+  selected_existing_endpoint_id: number | null;
+  selected_canonical_source_id: number | null;
+  existing_source_profile_id: number | null;
+  existing_source_status: string | null;
+  duplicate_source_ids_to_inactivate: number[];
+  possible_matches: SourceCreationEndpointMatch[];
+  exact_source_matches: SourceCreationSourceMatch[];
+  conflicting_source_profile_ids: number[];
+  final_action_label: string;
+  blockers: SourceCreationMessage[];
+  warnings: SourceCreationMessage[];
+  required_confirmations: SourceCreationMessage[];
+  advanced_details: Record<string, unknown>;
+}
+
+export interface SourceCreationConfirmRequest extends SourceCreationPlanRequest {
+  plan_fingerprint: string;
+  operator_confirmed: boolean;
+}
+
+export interface SourceCreationConfirmResponse {
+  generated_at: string;
+  creation_status: "completed" | "blocked";
+  plan_fingerprint: string | null;
+  source_profile_id: number | null;
+  source_endpoint_id: number | null;
+  observed_path_id: number | null;
+  alias_event_id: number | null;
+  source_type: SourceCreationType;
+  recognized_source_type: SourceCreationType;
+  persisted_source_type: string;
+  device_name: string;
+  observed_path: string;
+  canonical_source_root_path: string;
+  endpoint_relative_root: string;
+  entire_endpoint: boolean;
+  entire_endpoint_label: string | null;
+  suggested_source_name: string;
+  requested_source_name: string | null;
+  source_display_name: string;
+  durable_identity_status: SourceDurableIdentityStatus;
+  durable_identity_reason: string | null;
+  durable_identity_identifier_type: string | null;
+  durable_identity_identifier: string | null;
+  durable_identity_evidence: string[];
+  endpoint_action: SourceCreationPlanResponse["endpoint_action"];
+  source_action: SourceCreationPlanResponse["source_action"];
+  created_endpoint: boolean;
+  reused_endpoint: boolean;
+  upgraded_legacy_endpoint: boolean;
+  renamed_endpoint: boolean;
+  created_source: boolean;
+  reused_source: boolean;
+  reactivated_source: boolean;
+  adopted_legacy_source: boolean;
+  canonicalized_source: boolean;
+  inactivated_duplicate_source_ids: number[];
+  created_observed_path: boolean;
+  blockers: SourceCreationMessage[];
+  warnings: SourceCreationMessage[];
+  advanced_details: Record<string, unknown>;
 }
 
 export interface SourceProfileMetadataUpdateRequest {
@@ -1496,6 +1966,32 @@ export interface SourceIntakeRunRequest {
   ingestion_source_id: number;
   source_intake_limit: number | null;
   ingest_batch_size: number;
+  readiness_acknowledged?: boolean;
+}
+
+export interface SourceIntakeReadinessRejectionPayload {
+  detail?: string;
+  error_code?: string;
+  source_profile_id?: number;
+  source_label?: string | null;
+  source_type?: string | null;
+  profile_status?: string | null;
+  cloud_provider?: string | null;
+  endpoint_id?: number | null;
+  endpoint_alias?: string | null;
+  endpoint_source_type?: string | null;
+  readiness_status?: SourceProfileReadinessStatus;
+  identity_match_status?: SourceProfileIdentityMatchStatus;
+  can_run_source_intake?: boolean;
+  requires_operator_acknowledgment?: boolean;
+  hard_block?: boolean;
+  operator_message?: string;
+  recommended_next_action?: string;
+  warnings?: ReadinessMessage[];
+  blockers?: ReadinessMessage[];
+  checked_at?: string;
+  readiness?: Partial<SourceProfileReadinessResponse>;
+  current?: SourceIntakeStatusSnapshot;
 }
 
 export interface SourceIntakeStatusSnapshot {

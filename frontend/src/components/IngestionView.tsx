@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  checkSourceProfileReadiness,
+  confirmSourceCreation,
   createSourceProfile,
   createSourceProfileStagingFolder,
+  confirmSourceEndpointEnrollment,
+  dispatchRunIngestion,
   getIcloudAcquisitionStatus,
   getIcloudStagingCleanupStatus,
   getIcloudStagingCleanupReadiness,
@@ -16,8 +20,13 @@ import {
   getSourceIntakeReports,
   getSourceIntakeRunStatus,
   getSourceProfiles,
+  planSourceEndpointEnrollment,
+  planSourceCreation,
+  probeSourceIdentity,
   runIcloudAcquisitionWithDetails,
   runIcloudStagingCleanupDryRun,
+  selectSourceProfile,
+  SourceIntakeStartError,
   startSourceIntake,
   stopIcloudAcquisition,
   stopSourceIntake,
@@ -29,12 +38,26 @@ import type {
   SourceAcquisitionMethod,
   SourceCloudProvider,
   IcloudSourceReadiness,
+  SourceEndpointEnrollmentConfirmResponse,
+  SourceEndpointEnrollmentPlanResponse,
+  SourceCreationConfirmResponse,
+  SourceCreationNameAction,
+  SourceCreationPlanResponse,
+  SourceCreationType,
+  SourceIdentityProbeRequest,
+  SourceIdentityProbeSourceType,
   SourceProfileCreateRequest,
   SourceProfileDetail,
   SourceProfileMetadataUpdateRequest,
   SourceProfilePathCheckResponse,
+  SourceProfileReadinessResponse,
+  SourceProfileReadinessStatus,
+  RunIngestionDispatchResponse,
+  SourceSelectionResponse,
   SourceIntakeReportDetail,
   SourceIntakeReportSummary,
+  SourceIntakeReadinessRejectionPayload,
+  SourceDurableIdentityStatus,
   SourceProfileStagingFolderCreateResponse,
   SourceProfileStatus,
   SourceProfileSummary,
@@ -49,6 +72,9 @@ import styles from "./ingestion-view.module.css";
 
 type StatusFilter = SourceProfileStatus | "all";
 type EditorMode = "create" | "edit";
+type SortDirection = "asc" | "desc";
+type KnownSourcesSortKey = "source" | "type" | "status" | "availability" | "last_used";
+type SourceIntakeHistorySortKey = "started" | "source" | "type" | "result" | "scanned" | "new" | "skipped" | "failed";
 
 type LoadProfilesOptions = {
   refreshOnly?: boolean;
@@ -75,6 +101,7 @@ type IcloudSourceIntakeLimitSuggestion = {
 
 type EditorFormState = {
   sourceLabel: string;
+  operatorSourceType: OperatorSourceType;
   sourceType: SourceProfileType;
   profileStatus: SourceProfileStatus;
   sourceRootPath: string;
@@ -83,6 +110,30 @@ type EditorFormState = {
   acquisitionMethod: SourceAcquisitionMethod;
   managedStagingPath: string;
 };
+
+type SourceIdentityEnrollmentPhase = "idle" | "planning" | "review" | "confirming" | "complete";
+type SourceCreationPhase = "idle" | "planning" | "review" | "confirming" | "selecting_existing" | "complete";
+
+type SourceIdentityPlanOutcome = {
+  plan: SourceEndpointEnrollmentPlanResponse;
+  autoLinked: boolean;
+};
+
+type SourceIdentityEnrollmentSupport = {
+  supported: boolean;
+  probeSourceType: SourceIdentityProbeSourceType | null;
+  reason: string | null;
+  note: string;
+};
+
+type WorkbenchDeviceOption = {
+  key: string;
+  label: string;
+  meta: string;
+  profiles: SourceProfileSummary[];
+};
+
+type OperatorSourceType = "local" | "external" | "nas" | "removable" | "optical" | "icloud" | "advanced";
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: "active", label: "Active" },
@@ -101,13 +152,44 @@ const EDITABLE_STATUS_OPTIONS: SourceProfileStatus[] = [
   "deprecated",
 ];
 
-const SOURCE_TYPE_OPTIONS: Array<{ value: SourceProfileType; label: string }> = [
-  { value: "local_folder", label: "Local Folder" },
-  { value: "external_drive", label: "External Drive" },
-  { value: "cloud_export", label: "Cloud Export / iCloud" },
+const REFERENCE_PAGE_SIZE = 25;
+
+function compareNullableString(left: string | null | undefined, right: string | null | undefined): number {
+  return (left ?? "").localeCompare(right ?? "");
+}
+
+function compareNullableNumber(left: number | null | undefined, right: number | null | undefined): number {
+  return (left ?? Number.NEGATIVE_INFINITY) - (right ?? Number.NEGATIVE_INFINITY);
+}
+
+function compareNullableDate(left: string | null | undefined, right: string | null | undefined): number {
+  const leftTime = left ? Date.parse(left) : Number.NEGATIVE_INFINITY;
+  const rightTime = right ? Date.parse(right) : Number.NEGATIVE_INFINITY;
+  return leftTime - rightTime;
+}
+
+function applySortDirection(value: number, direction: SortDirection): number {
+  return direction === "asc" ? value : -value;
+}
+
+const ADVANCED_SOURCE_TYPE_OPTIONS: Array<{ value: SourceProfileType; label: string }> = [
   { value: "scan_batch", label: "Scan Batch" },
   { value: "other", label: "Other" },
+  { value: "cloud_export", label: "Other Cloud Export" },
 ];
+
+const OPERATOR_SOURCE_TYPE_OPTIONS: Array<{ value: OperatorSourceType; label: string; disabled?: boolean }> = [
+  { value: "local", label: "Local" },
+  { value: "external", label: "External" },
+  { value: "nas", label: "NAS" },
+  { value: "icloud", label: "iCloud" },
+  { value: "removable", label: "Removable" },
+  { value: "optical", label: "Optical" },
+  { value: "advanced", label: "Advanced / Legacy" },
+];
+
+const CREATE_SOURCE_TYPE_OPTIONS = OPERATOR_SOURCE_TYPE_OPTIONS.filter((option) => option.value !== "advanced");
+const SOURCE_SELECTOR_TYPE_OPTIONS = OPERATOR_SOURCE_TYPE_OPTIONS.filter((option) => option.value !== "advanced");
 
 const CLOUD_PROVIDER_OPTIONS: Array<{ value: SourceCloudProvider; label: string }> = [
   { value: "icloud", label: "iCloud" },
@@ -152,6 +234,7 @@ const ICLOUD_ACQUISITION_BENIGN_WARNING_CODES = new Set([
 function initialFormState(): EditorFormState {
   return {
     sourceLabel: "",
+    operatorSourceType: "local",
     sourceType: "local_folder",
     profileStatus: "active",
     sourceRootPath: "",
@@ -178,6 +261,99 @@ function toIcloudReadinessLabel(value: IcloudReadinessState): string {
     return "Not Ready";
   }
   return "Unknown";
+}
+
+function toSourceProfileReadinessLabel(value: SourceProfileReadinessStatus | null | undefined): string {
+  if (value === "ready") {
+    return "Ready";
+  }
+  if (value === "path_only") {
+    return "Path-only";
+  }
+  if (value === "needs_review") {
+    return "Needs Review";
+  }
+  if (value === "blocked") {
+    return "Blocked";
+  }
+  if (value === "provider_specific") {
+    return "Provider-specific";
+  }
+  return "Unknown";
+}
+
+function sourceProfileReadinessBadgeClassName(value: SourceProfileReadinessStatus | null | undefined): string {
+  if (value === "ready") {
+    return styles.readinessBadgeReady;
+  }
+  if (value === "blocked") {
+    return styles.readinessBadgeNotReady;
+  }
+  if (value === "path_only" || value === "needs_review") {
+    return styles.readinessBadgeWarning;
+  }
+  return styles.readinessBadgeUnknown;
+}
+
+function toDurableIdentityLabel(value: SourceDurableIdentityStatus | null | undefined): string {
+  if (value === "verified") {
+    return "Verified";
+  }
+  if (value === "not_verified") {
+    return "Not verified";
+  }
+  if (value === "provider_specific") {
+    return "Provider-specific";
+  }
+  return "Unknown";
+}
+
+function durableIdentityBadgeClassName(value: SourceDurableIdentityStatus | null | undefined): string {
+  if (value === "verified" || value === "provider_specific") {
+    return styles.okBadge;
+  }
+  if (value === "not_verified") {
+    return styles.pendingBadge;
+  }
+  return styles.pendingBadge;
+}
+
+function buildSourceReadinessAdvancedDetails(result: SourceProfileReadinessResponse): Record<string, unknown> {
+  return {
+    identity_match_status: result.identity_match_status,
+    endpoint_id: result.endpoint_id,
+    endpoint_alias: result.endpoint_alias,
+    endpoint_source_type: result.endpoint_source_type,
+    durable_identity_identifier_type: result.durable_identity_identifier_type,
+    durable_identity_identifier: result.durable_identity_identifier,
+    checked_at: result.checked_at,
+    probe_summary: result.probe_summary,
+    observed_path_summary: result.observed_path_summary,
+    access_node_summary: result.access_node_summary,
+    advanced_details: result.advanced_details,
+  };
+}
+
+function sourceReadinessObservedPath(result: SourceProfileReadinessResponse | null, fallbackPath: string | null | undefined): string {
+  const observedPath = result?.observed_path_summary?.observed_path;
+  if (typeof observedPath === "string" && observedPath.trim()) {
+    return observedPath;
+  }
+  const sourceRootCandidatePath = result?.observed_path_summary?.source_root_candidate_path;
+  if (typeof sourceRootCandidatePath === "string" && sourceRootCandidatePath.trim()) {
+    return sourceRootCandidatePath;
+  }
+  return fallbackPath || "-";
+}
+
+function sourceReadinessLaunchBlockMessage(result: SourceProfileReadinessResponse): string {
+  if (result.readiness_status === "provider_specific") {
+    return "This source uses a provider-specific workflow. Use iCloud Intake.";
+  }
+  if (result.readiness_status === "unknown") {
+    return "Readiness could not be determined. Check readiness again before running intake.";
+  }
+  return result.operator_message || "Source Profile readiness blocks Source Intake launch.";
 }
 
 function toAuthStatusLabel(value: IcloudAuthState): string {
@@ -290,6 +466,341 @@ function isLocalOrExternalSource(sourceType: SourceProfileType): boolean {
   return sourceType === "local_folder" || sourceType === "external_drive";
 }
 
+function isUncPath(pathValue: string | null | undefined): boolean {
+  const normalized = (pathValue ?? "").trim().replace(/\//g, "\\");
+  return normalized.startsWith("\\\\");
+}
+
+function parseUncServerShareLabel(pathValue: string | null | undefined): string | null {
+  const normalized = (pathValue ?? "").trim().replace(/\//g, "\\");
+  if (!normalized.startsWith("\\\\")) {
+    return null;
+  }
+  const [server, share] = normalized.split("\\").filter(Boolean);
+  if (!server || !share) {
+    return null;
+  }
+  return `\\\\${server}\\${share}`;
+}
+
+function isDriveLetterPath(pathValue: string | null | undefined): boolean {
+  return /^[a-zA-Z]:[\\/]/.test((pathValue ?? "").trim());
+}
+
+function persistedSourceTypeForOperator(value: OperatorSourceType): SourceProfileType {
+  if (value === "external") {
+    return "external_drive";
+  }
+  if (value === "removable") {
+    return "removable_media";
+  }
+  if (value === "optical") {
+    return "optical_media";
+  }
+  if (value === "icloud") {
+    return "cloud_export";
+  }
+  if (value === "advanced") {
+    return "other";
+  }
+  return "local_folder";
+}
+
+function probeSourceTypeForOperator(value: OperatorSourceType): SourceIdentityProbeSourceType | null {
+  if (value === "local") {
+    return "local";
+  }
+  if (value === "nas") {
+    return "nas";
+  }
+  if (value === "external") {
+    return "external_device";
+  }
+  if (value === "removable") {
+    return "removable_media";
+  }
+  if (value === "optical") {
+    return "optical_media";
+  }
+  return null;
+}
+
+function sourceCreationTypeForOperator(value: OperatorSourceType): SourceCreationType | null {
+  if (value === "local" || value === "external" || value === "removable" || value === "optical" || value === "nas") {
+    return value;
+  }
+  return null;
+}
+
+function getSourceCreationDeviceLabel(value: OperatorSourceType): string {
+  if (value === "removable") {
+    return "Media Name";
+  }
+  if (value === "optical") {
+    return "Disc Name";
+  }
+  return "Device Name";
+}
+
+function getSourceCreationRootLabel(value: OperatorSourceType): string {
+  if (value === "removable") {
+    return "Root Relative to Media";
+  }
+  if (value === "optical") {
+    return "Root Relative to Disc";
+  }
+  return "Root Relative to Device";
+}
+
+const SOURCE_CREATION_STRUCTURED_DECISION_CODES = new Set([
+  "device_name_required",
+  "device_name_decision_required",
+  "source_type_mismatch_acknowledgment_required",
+  "select_existing_endpoint",
+  "select_legacy_endpoint",
+]);
+
+function sourceCreationRequiresReviewAcknowledgment(plan: SourceCreationPlanResponse): boolean {
+  return plan.required_confirmations.some(
+    (confirmation) => !SOURCE_CREATION_STRUCTURED_DECISION_CODES.has(confirmation.code),
+  );
+}
+
+function sourceCreationFinalActionLabel(
+  plan: SourceCreationPlanResponse,
+  namingAction: SourceCreationNameAction | null,
+): string {
+  if (namingAction === "rename_existing" && !plan.final_action_label.startsWith("Rename Device")) {
+    return `Rename Device and ${plan.final_action_label}`;
+  }
+  return plan.final_action_label;
+}
+
+function sourceCreationAllowsEditableSourceName(plan: SourceCreationPlanResponse): boolean {
+  return plan.source_action === "create_new_source";
+}
+
+function sourceCreationCompletedActionLabel(result: SourceCreationConfirmResponse): string {
+  const baseAction = result.reactivated_source
+    ? "Reactivated existing Source"
+    : result.adopted_legacy_source
+      ? "Adopted and linked existing Source"
+      : result.canonicalized_source
+        ? "Canonicalized existing Source"
+      : result.reused_source
+        ? "Used existing Source"
+        : result.created_source
+          ? "Created new Source"
+          : "Completed Source action";
+
+  const duplicateSuffix = result.inactivated_duplicate_source_ids.length > 0
+    ? `; marked ${result.inactivated_duplicate_source_ids.length} duplicate Source inactive`
+    : "";
+
+  if (!result.renamed_endpoint) {
+    return `${baseAction}${duplicateSuffix}`;
+  }
+
+  return `Renamed device and ${baseAction.charAt(0).toLowerCase()}${baseAction.slice(1)}${duplicateSuffix}`;
+}
+
+function getCreateSourceIdentitySupport(value: OperatorSourceType): SourceIdentityEnrollmentSupport {
+  const probeSourceType = probeSourceTypeForOperator(value);
+  if (probeSourceType) {
+    return {
+      supported: true,
+      probeSourceType,
+      reason: null,
+      note: value === "nas"
+        ? "NAS identity uses the canonical UNC server/share while the selected folder remains the Source Root."
+        : `${getOperatorSourceTypeLabel(value)} durable identity is checked when the source is created.`,
+    };
+  }
+  if (value === "icloud") {
+    return {
+      supported: false,
+      probeSourceType: null,
+      reason: "iCloud uses provider-specific identity and the iCloud Intake workflow.",
+      note: "iCloud uses provider-specific identity.",
+    };
+  }
+  return {
+    supported: false,
+    probeSourceType: null,
+    reason: "Source Identity Check is not available for this Advanced / Legacy source type.",
+    note: "Generic durable identity is unavailable for this source type.",
+  };
+}
+
+function sourceNamePart(value: string): string {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.toLowerCase() === "nas"
+      ? "NAS"
+      : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function suggestSourceName(sourceType: OperatorSourceType, pathValue: string): string | null {
+  const normalized = pathValue.trim().replace(/\//g, "\\").replace(/\\+$/, "");
+  const parts = normalized.split("\\").filter(Boolean);
+  const leaf = parts.length > 0 ? sourceNamePart(parts[parts.length - 1]) : "";
+  if (sourceType === "nas") {
+    const server = isUncPath(normalized) && parts.length > 0 ? sourceNamePart(parts[0]) : "NAS";
+    const endpointName = server.toLowerCase().endsWith(" nas") ? server : `${server} NAS`;
+    return leaf && leaf !== server ? `${endpointName} - ${leaf}` : endpointName;
+  }
+  if (sourceType === "external") {
+    return leaf ? `External - ${leaf}` : "External Source";
+  }
+  if (sourceType === "removable") {
+    return leaf ? `Removable - ${leaf}` : "Removable Source";
+  }
+  if (sourceType === "local") {
+    return leaf ? `Local - ${leaf}` : "Local Source";
+  }
+  return null;
+}
+
+function getSourceIdentityEnrollmentSupport(
+  sourceType: SourceProfileType,
+  pathValue: string | null | undefined,
+  endpointSourceType: SourceIdentityProbeSourceType | null = null,
+): SourceIdentityEnrollmentSupport {
+  if (sourceType === "cloud_export") {
+    return {
+      supported: false,
+      probeSourceType: null,
+      reason: "Cloud sources use provider-specific identity and staging. Generic filesystem Source Identity Check is not available for this source type yet.",
+      note: "Cloud sources use provider-specific identity and staging.",
+    };
+  }
+  if (sourceType === "scan_batch") {
+    return {
+      supported: false,
+      probeSourceType: null,
+      reason: "Source Identity Check is not available for scan batch profiles yet.",
+      note: "Source Identity Check is not available for scan batch profiles yet.",
+    };
+  }
+  if (sourceType === "other") {
+    return {
+      supported: false,
+      probeSourceType: null,
+      reason: "Source Identity Check is not available for this source type yet.",
+      note: "Source Identity Check is not available for this source type yet.",
+    };
+  }
+  if (endpointSourceType === "nas") {
+    return {
+      supported: true,
+      probeSourceType: "nas",
+      reason: null,
+      note: "NAS durable identity uses the canonical UNC server/share.",
+    };
+  }
+  if (sourceType === "external_drive") {
+    return {
+      supported: true,
+      probeSourceType: "external_device",
+      reason: null,
+      note: "External durable identity can be checked after the profile is created.",
+    };
+  }
+  if (sourceType === "removable_media") {
+    return {
+      supported: true,
+      probeSourceType: "removable_media",
+      reason: null,
+      note: "Removable durable identity can be checked after the profile is created.",
+    };
+  }
+  if (sourceType === "optical_media") {
+    return {
+      supported: true,
+      probeSourceType: "optical_media",
+      reason: null,
+      note: "Optical durable identity uses the inserted disc fingerprint.",
+    };
+  }
+  if (sourceType === "local_folder" && isUncPath(pathValue)) {
+    return {
+      supported: true,
+      probeSourceType: "nas",
+      reason: null,
+      note: "UNC paths are treated as NAS source identity for the check.",
+    };
+  }
+  return {
+    supported: true,
+    probeSourceType: "local",
+    reason: null,
+    note: "Local durable identity can be checked after the profile is created.",
+  };
+}
+
+function buildSourceIdentityProbeRequest(profile: SourceProfileSummary): SourceIdentityProbeRequest | null {
+  const support = getSourceIdentityEnrollmentSupport(
+    profile.source_type,
+    profile.source_root_path,
+    profile.endpoint_source_type,
+  );
+  if (!support.supported || !support.probeSourceType || !profile.source_root_path) {
+    return null;
+  }
+  return {
+    source_type: support.probeSourceType,
+    observed_path: profile.source_root_path,
+    probe_mode: "setup_probe",
+    intended_use: "source_profile_endpoint_enrollment",
+    os_family: "windows",
+  };
+}
+
+function buildCreateSourceProbeRequest(
+  sourceType: OperatorSourceType,
+  observedPath: string,
+): SourceIdentityProbeRequest | null {
+  const probeSourceType = probeSourceTypeForOperator(sourceType);
+  if (!probeSourceType || !observedPath.trim()) {
+    return null;
+  }
+  return {
+    source_type: probeSourceType,
+    observed_path: observedPath.trim(),
+    probe_mode: "setup_probe",
+    intended_use: "source_profile_endpoint_enrollment",
+    os_family: "windows",
+  };
+}
+
+function formatEnrollmentAction(value: string): string {
+  if (value === "create_new_endpoint") {
+    return "Create new endpoint";
+  }
+  if (value === "link_existing_endpoint") {
+    return "Link existing endpoint";
+  }
+  return "No endpoint change";
+}
+
+function formatPlanStatus(value: string): string {
+  return value
+    .split("_")
+    .map((piece) => piece.charAt(0).toUpperCase() + piece.slice(1))
+    .join(" ");
+}
+
+function formatEnrollmentPlanStatus(plan: SourceEndpointEnrollmentPlanResponse): string {
+  if (plan.plan_status === "duplicate_match") {
+    return plan.candidate?.source_type === "nas"
+      ? "Existing NAS share endpoint found"
+      : "Existing durable source identity found";
+  }
+  return formatPlanStatus(plan.plan_status);
+}
+
 function getRunDisabledReason(profile: SourceProfileSummary): string | null {
   if (!isLocalOrExternalSource(profile.source_type)) {
     if (profile.source_type === "cloud_export") {
@@ -305,6 +816,200 @@ function getRunDisabledReason(profile: SourceProfileSummary): string | null {
   return null;
 }
 
+function getOperatorSourceType(profile: SourceProfileSummary): OperatorSourceType {
+  if (isIcloudProfile(profile)) {
+    return "icloud";
+  }
+  if (profile.endpoint_source_type === "nas" || (profile.source_type === "local_folder" && isUncPath(profile.source_root_path))) {
+    return "nas";
+  }
+  if (profile.endpoint_source_type === "removable_media") {
+    return "removable";
+  }
+  if (profile.endpoint_source_type === "optical_media" || profile.source_type === "optical_media") {
+    return "optical";
+  }
+  if (profile.source_type === "local_folder") {
+    return "local";
+  }
+  if (profile.source_type === "external_drive") {
+    return "external";
+  }
+  return "advanced";
+}
+
+function getOperatorSourceTypeLabel(value: OperatorSourceType): string {
+  const option = OPERATOR_SOURCE_TYPE_OPTIONS.find((item) => item.value === value);
+  return option?.label ?? "Advanced / Legacy";
+}
+
+function formatSourceProvider(value: SourceCloudProvider | null | undefined): string {
+  if (value === "icloud") {
+    return "iCloud";
+  }
+  if (value === "google_photos") {
+    return "Google Photos";
+  }
+  if (value === "onedrive") {
+    return "OneDrive";
+  }
+  if (value === "dropbox") {
+    return "Dropbox";
+  }
+  if (value === "other") {
+    return "Other cloud";
+  }
+  return "No provider";
+}
+
+function getSourcePathOrProviderHint(profile: SourceProfileSummary): string {
+  if (isIcloudProfile(profile)) {
+    const accountHint = profile.account_username_masked ? `Account: ${profile.account_username_masked}` : "Account: not shown";
+    const stagingHint = profile.managed_staging_path ? `Staging: ${profile.managed_staging_path}` : "Staging: not configured";
+    return `${accountHint}; ${stagingHint}`;
+  }
+  if (profile.source_root_path) {
+    return profile.source_root_path;
+  }
+  if (profile.managed_staging_path) {
+    return profile.managed_staging_path;
+  }
+  return formatSourceProvider(profile.cloud_provider);
+}
+
+function getSourceIdentityDisplay(
+  profile: SourceProfileSummary,
+  readinessResult: SourceProfileReadinessResponse | null,
+): string {
+  if (readinessResult && readinessResult.source_profile_id === profile.source_id) {
+    return toDurableIdentityLabel(readinessResult.durable_identity_status);
+  }
+  if (isIcloudProfile(profile)) {
+    return "Provider-specific";
+  }
+  return "Not checked";
+}
+
+function getSourceIdentityBadgeClassName(
+  profile: SourceProfileSummary,
+  readinessResult: SourceProfileReadinessResponse | null,
+): string {
+  if (readinessResult && readinessResult.source_profile_id === profile.source_id) {
+    return durableIdentityBadgeClassName(readinessResult.durable_identity_status);
+  }
+  if (isIcloudProfile(profile)) {
+    return durableIdentityBadgeClassName("provider_specific");
+  }
+  return durableIdentityBadgeClassName("unknown");
+}
+
+function getSourceIdentityMeta(
+  profile: SourceProfileSummary,
+  readinessResult: SourceProfileReadinessResponse | null,
+): string {
+  if (readinessResult && readinessResult.source_profile_id === profile.source_id) {
+    return readinessResult.durable_identity_reason ?? "Durable identity checked.";
+  }
+  if (profile.endpoint_id) {
+    return "Endpoint link present. Run Check Readiness to verify current durable identity.";
+  }
+  if (isIcloudProfile(profile)) {
+    return "Use iCloud Intake for provider-specific identity.";
+  }
+  return "Run Check Readiness to verify durable identity.";
+}
+
+function getSourceWorkflowDisplay(profile: SourceProfileSummary): string {
+  const sourceType = getOperatorSourceType(profile);
+  if (sourceType === "icloud") {
+    return "iCloud Intake";
+  }
+  if (sourceType === "advanced") {
+    return "Advanced / legacy";
+  }
+  return "Filesystem Source Intake";
+}
+
+function getSourceWorkflowPlaceholder(profile: SourceProfileSummary): string {
+  const sourceType = getOperatorSourceType(profile);
+  if (sourceType === "icloud") {
+    return "iCloud workflow actions remain in the iCloud Intake panel for now: Refresh / Prepare and Import / Resume.";
+  }
+  if (sourceType === "advanced") {
+    return "These sources are retained for history, diagnostics, or unsupported workflows.";
+  }
+  return "Filesystem Source Intake handoff appears in Step 3 only after this Source is selected.";
+}
+
+function getWorkbenchDeviceKey(profile: SourceProfileSummary): string {
+  if (profile.endpoint_id != null) {
+    return `endpoint:${profile.endpoint_id}`;
+  }
+  if (isIcloudProfile(profile)) {
+    return `icloud:${profile.account_username_masked ?? profile.managed_staging_path ?? profile.source_root_path ?? profile.source_id}`;
+  }
+  return `legacy:${getOperatorSourceType(profile)}`;
+}
+
+function getWorkbenchDeviceLabel(profile: SourceProfileSummary): string {
+  if (isIcloudProfile(profile)) {
+    return profile.account_username_masked ? `iCloud ${profile.account_username_masked}` : "iCloud account";
+  }
+  if (profile.endpoint_id == null) {
+    return "Legacy source";
+  }
+  if (profile.endpoint_alias) {
+    return profile.endpoint_alias;
+  }
+  const operatorType = getOperatorSourceType(profile);
+  if (operatorType === "nas") {
+    return parseUncServerShareLabel(profile.source_root_path) ?? `NAS share #${profile.endpoint_id}`;
+  }
+  if (operatorType === "removable") {
+    return `Removable media #${profile.endpoint_id}`;
+  }
+  if (operatorType === "optical") {
+    return `Optical disc #${profile.endpoint_id}`;
+  }
+  return `${getOperatorSourceTypeLabel(operatorType)} endpoint #${profile.endpoint_id}`;
+}
+
+function getWorkbenchDeviceMeta(profile: SourceProfileSummary): string {
+  if (profile.endpoint_id == null) {
+    return "Path-only compatibility";
+  }
+  if (isIcloudProfile(profile)) {
+    return profile.managed_staging_path ?? "Provider-managed staging";
+  }
+  return profile.source_root_path ?? profile.endpoint_source_type ?? "Registered endpoint";
+}
+
+function getSourceSelectionStatusLabel(result: SourceSelectionResponse | null): string {
+  if (!result) {
+    return "Not selected";
+  }
+  if (result.result === "selected" && result.availability === "available") {
+    return "Selected";
+  }
+  if (result.availability === "unavailable") {
+    return "Unavailable";
+  }
+  return "Needs attention";
+}
+
+function getSourceSelectionBadgeClassName(result: SourceSelectionResponse | null): string {
+  if (!result) {
+    return styles.pendingBadge;
+  }
+  if (result.result === "selected" && result.availability === "available") {
+    return styles.okBadge;
+  }
+  if (result.availability === "unavailable") {
+    return styles.readinessBadgeNotReady;
+  }
+  return styles.pendingBadge;
+}
+
 function extractReportFilename(reportPath: string | null): string | null {
   if (!reportPath) {
     return null;
@@ -313,7 +1018,35 @@ function extractReportFilename(reportPath: string | null): string | null {
   return pieces.length > 0 ? pieces[pieces.length - 1] : null;
 }
 
+function formatSourceIntakeReadinessRejection(payload: SourceIntakeReadinessRejectionPayload): string {
+  const lines: string[] = [];
+  if (payload.readiness_status) {
+    lines.push(`Readiness: ${toSourceProfileReadinessLabel(payload.readiness_status)}`);
+  }
+  if (payload.identity_match_status) {
+    lines.push(`Identity match: ${toStatusLabel(payload.identity_match_status)}`);
+  }
+  if (payload.recommended_next_action) {
+    lines.push(`Recommended next action: ${payload.recommended_next_action}`);
+  }
+  for (const blocker of payload.blockers ?? []) {
+    lines.push(`Blocker - ${blocker.code}: ${blocker.message}`);
+  }
+  for (const warning of payload.warnings ?? []) {
+    lines.push(`Warning - ${warning.code}: ${warning.message}`);
+  }
+  return lines.join("\n");
+}
+
 function mapRunStartError(error: unknown): { message: string; raw: string | null } {
+  if (error instanceof SourceIntakeStartError && error.payload) {
+    const payload = error.payload;
+    return {
+      message: payload.operator_message || payload.detail || error.message,
+      raw: formatSourceIntakeReadinessRejection(payload) || error.message,
+    };
+  }
+
   const raw = error instanceof Error ? error.message : "";
   const normalized = raw.toLowerCase();
 
@@ -450,6 +1183,10 @@ function getIcloudAcquireDisabledReason(snapshot: IcloudSourceReadiness | null):
 }
 
 function getIcloudSourceIntakeDisabledReason(snapshot: IcloudSourceReadiness | null, profile: SourceProfileDetail | null): string | null {
+  if (profile && isIcloudProfile(profile)) {
+    return "Legacy guided Source Intake handoff is retired. Use the iCloud Intake workflow for this source.";
+  }
+
   if (!snapshot) {
     return "Readiness snapshot unavailable. Refresh readiness before preparing Source Intake.";
   }
@@ -607,6 +1344,27 @@ export default function IngestionView() {
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
+  const [workbenchSourceType, setWorkbenchSourceType] = useState<OperatorSourceType>("local");
+  const [selectedWorkbenchDeviceKey, setSelectedWorkbenchDeviceKey] = useState<string | null>(null);
+  const [selectedWorkbenchSourceId, setSelectedWorkbenchSourceId] = useState<number | null>(null);
+  const [sourceSelectionResult, setSourceSelectionResult] = useState<SourceSelectionResponse | null>(null);
+  const [sourceSelectionError, setSourceSelectionError] = useState<string | null>(null);
+  const [isSelectingSource, setIsSelectingSource] = useState(false);
+  const [runIngestionDispatchResult, setRunIngestionDispatchResult] = useState<RunIngestionDispatchResponse | null>(null);
+  const [runIngestionDispatchError, setRunIngestionDispatchError] = useState<string | null>(null);
+  const [createSourceForm, setCreateSourceForm] = useState<EditorFormState>(initialFormState());
+  const [sourceCreationPhase, setSourceCreationPhase] = useState<SourceCreationPhase>("idle");
+  const [sourceCreationPlan, setSourceCreationPlan] = useState<SourceCreationPlanResponse | null>(null);
+  const [sourceCreationResult, setSourceCreationResult] = useState<SourceCreationConfirmResponse | null>(null);
+  const [createdIcloudSource, setCreatedIcloudSource] = useState<SourceProfileSummary | null>(null);
+  const [sourceCreationError, setSourceCreationError] = useState<string | null>(null);
+  const [sourceCreationSelectedEndpointId, setSourceCreationSelectedEndpointId] = useState<number | null>(null);
+  const [sourceCreationNamingAction, setSourceCreationNamingAction] = useState<SourceCreationNameAction | null>(null);
+  const [sourceCreationUseRegisteredType, setSourceCreationUseRegisteredType] = useState(false);
+  const [sourceCreationReviewAcknowledged, setSourceCreationReviewAcknowledged] = useState(false);
+  const [sourceCreationSourceName, setSourceCreationSourceName] = useState("");
+  const [sourceCreationSelectedCanonicalSourceId, setSourceCreationSelectedCanonicalSourceId] = useState<number | null>(null);
+  const [sourceCreationDuplicateIdsToInactivate, setSourceCreationDuplicateIdsToInactivate] = useState<number[]>([]);
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>("create");
@@ -614,6 +1372,15 @@ export default function IngestionView() {
   const [editorForm, setEditorForm] = useState<EditorFormState>(initialFormState());
   const [editorError, setEditorError] = useState<string | null>(null);
   const [isSavingEditor, setIsSavingEditor] = useState(false);
+  const [sourceIdentityEnrollRequested, setSourceIdentityEnrollRequested] = useState(false);
+  const [sourceIdentityAlias, setSourceIdentityAlias] = useState("");
+  const [sourceIdentityPhase, setSourceIdentityPhase] = useState<SourceIdentityEnrollmentPhase>("idle");
+  const [sourceIdentityCreatedProfile, setSourceIdentityCreatedProfile] = useState<SourceProfileSummary | null>(null);
+  const [sourceIdentityPlan, setSourceIdentityPlan] = useState<SourceEndpointEnrollmentPlanResponse | null>(null);
+  const [sourceIdentityConfirmResult, setSourceIdentityConfirmResult] = useState<SourceEndpointEnrollmentConfirmResponse | null>(null);
+  const [sourceIdentityReviewAcknowledged, setSourceIdentityReviewAcknowledged] = useState(false);
+  const [sourceIdentitySelectedEndpointId, setSourceIdentitySelectedEndpointId] = useState<number | null>(null);
+  const [sourceIdentityProbeRequest, setSourceIdentityProbeRequest] = useState<SourceIdentityProbeRequest | null>(null);
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [detailSourceId, setDetailSourceId] = useState<number | null>(null);
@@ -623,6 +1390,9 @@ export default function IngestionView() {
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [isVerifyingPath, setIsVerifyingPath] = useState(false);
   const [pathCheckResult, setPathCheckResult] = useState<SourceProfilePathCheckResponse | null>(null);
+  const [sourceReadinessResult, setSourceReadinessResult] = useState<SourceProfileReadinessResponse | null>(null);
+  const [isCheckingSourceReadiness, setIsCheckingSourceReadiness] = useState(false);
+  const [sourceReadinessError, setSourceReadinessError] = useState<string | null>(null);
   const [stagingCreateResult, setStagingCreateResult] = useState<SourceProfileStagingFolderCreateResponse | null>(null);
   const [isCreatingStagingFolder, setIsCreatingStagingFolder] = useState(false);
   const [icloudReadinessSnapshot, setIcloudReadinessSnapshot] = useState<IcloudSourceReadiness | null>(null);
@@ -660,7 +1430,8 @@ export default function IngestionView() {
   const [runErrorDetails, setRunErrorDetails] = useState<string | null>(null);
   const [isRunConfirmOpen, setIsRunConfirmOpen] = useState(false);
   const [runCandidateProfile, setRunCandidateProfile] = useState<SourceProfileSummary | null>(null);
-  const [runCandidatePathCheck, setRunCandidatePathCheck] = useState<SourceProfilePathCheckResponse | null>(null);
+  const [runCandidateReadiness, setRunCandidateReadiness] = useState<SourceProfileReadinessResponse | null>(null);
+  const [runReadinessAcknowledged, setRunReadinessAcknowledged] = useState(false);
   const [runLimitInput, setRunLimitInput] = useState("");
   const [runBatchSizeInput, setRunBatchSizeInput] = useState("500");
   const [runOptionsError, setRunOptionsError] = useState<string | null>(null);
@@ -669,7 +1440,20 @@ export default function IngestionView() {
   const [selectedReportDetail, setSelectedReportDetail] = useState<SourceIntakeReportDetail | null>(null);
   const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
   const [reportDetailError, setReportDetailError] = useState<string | null>(null);
+  const [isKnownSourcesExpanded, setIsKnownSourcesExpanded] = useState(false);
+  const [isSourceIntakeHistoryExpanded, setIsSourceIntakeHistoryExpanded] = useState(false);
+  const [knownSourcesSort, setKnownSourcesSort] = useState<{ key: KnownSourcesSortKey; direction: SortDirection }>({
+    key: "source",
+    direction: "asc",
+  });
+  const [sourceIntakeHistorySort, setSourceIntakeHistorySort] = useState<{ key: SourceIntakeHistorySortKey; direction: SortDirection }>({
+    key: "started",
+    direction: "desc",
+  });
+  const [knownSourcesPage, setKnownSourcesPage] = useState(1);
+  const [sourceIntakeHistoryPage, setSourceIntakeHistoryPage] = useState(1);
   const detailLoadRequestSeqRef = useRef(0);
+  const sourceReadinessRequestSeqRef = useRef(0);
 
   const normalizedRunLimitInput = useMemo(() => runLimitInput.trim(), [runLimitInput]);
   const normalizedRunBatchSizeInput = useMemo(() => runBatchSizeInput.trim(), [runBatchSizeInput]);
@@ -822,13 +1606,13 @@ export default function IngestionView() {
     try {
       let response;
       try {
-        response = await getSourceProfiles({ status: statusFilter });
+        response = await getSourceProfiles({ status: "all" });
       } catch (error) {
         if (!isTransientFetchError(error)) {
           throw error;
         }
         await delay(350);
-        response = await getSourceProfiles({ status: statusFilter });
+        response = await getSourceProfiles({ status: "all" });
       }
       setProfiles(response.profiles);
     } catch (error) {
@@ -843,11 +1627,16 @@ export default function IngestionView() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [statusFilter]);
+  }, []);
 
   useEffect(() => {
     void loadProfiles({ clearRowErrors: true });
   }, [loadProfiles]);
+
+  useEffect(() => {
+    setRunIngestionDispatchResult(null);
+    setRunIngestionDispatchError(null);
+  }, [workbenchSourceType, selectedWorkbenchDeviceKey, selectedWorkbenchSourceId]);
 
   const loadSourceIntakeStatus = useCallback(async () => {
     try {
@@ -1002,6 +1791,13 @@ export default function IngestionView() {
     loadIcloudAcquisitionStatus,
   ]);
 
+  const registryProfiles = useMemo(() => {
+    if (statusFilter === "all") {
+      return profiles;
+    }
+    return profiles.filter((profile) => profile.profile_status === statusFilter);
+  }, [profiles, statusFilter]);
+
   const countsSummary = useMemo(() => {
     const counts: Record<SourceProfileStatus, number> = {
       active: 0,
@@ -1011,7 +1807,7 @@ export default function IngestionView() {
       deprecated: 0,
     };
 
-    for (const profile of profiles) {
+    for (const profile of registryProfiles) {
       counts[profile.profile_status] += 1;
     }
 
@@ -1019,11 +1815,254 @@ export default function IngestionView() {
       active: counts.active,
       nonActive: counts.archived + counts.test + counts.deprecated,
     };
+  }, [registryProfiles]);
+
+  const sourceProfileById = useMemo(() => {
+    const byId = new Map<number, SourceProfileSummary>();
+    for (const profile of profiles) {
+      byId.set(profile.source_id, profile);
+    }
+    return byId;
   }, [profiles]);
+
+  const getKnownSourceAvailability = useCallback(
+    (profile: SourceProfileSummary): string => {
+      if (selectedWorkbenchSourceId === profile.source_id && sourceSelectionResult) {
+        return getSourceSelectionStatusLabel(sourceSelectionResult);
+      }
+      return "Select to verify";
+    },
+    [selectedWorkbenchSourceId, sourceSelectionResult],
+  );
+
+  const sortedKnownSources = useMemo(() => {
+    const sorted = [...registryProfiles];
+    sorted.sort((left, right) => {
+      let comparison = 0;
+      if (knownSourcesSort.key === "source") {
+        comparison = compareNullableString(left.source_label, right.source_label);
+      } else if (knownSourcesSort.key === "type") {
+        comparison = compareNullableString(getOperatorSourceTypeLabel(getOperatorSourceType(left)), getOperatorSourceTypeLabel(getOperatorSourceType(right)));
+      } else if (knownSourcesSort.key === "status") {
+        comparison = compareNullableString(left.profile_status, right.profile_status);
+      } else if (knownSourcesSort.key === "availability") {
+        comparison = compareNullableString(getKnownSourceAvailability(left), getKnownSourceAvailability(right));
+      } else if (knownSourcesSort.key === "last_used") {
+        comparison = compareNullableDate(left.last_run_at, right.last_run_at);
+      }
+      return applySortDirection(comparison, knownSourcesSort.direction);
+    });
+    return sorted;
+  }, [getKnownSourceAvailability, knownSourcesSort, registryProfiles]);
+
+  const knownSourcesTotalPages = Math.max(1, Math.ceil(sortedKnownSources.length / REFERENCE_PAGE_SIZE));
+  const knownSourcesPageSafe = Math.min(knownSourcesPage, knownSourcesTotalPages);
+  const visibleKnownSources = sortedKnownSources.slice(
+    (knownSourcesPageSafe - 1) * REFERENCE_PAGE_SIZE,
+    knownSourcesPageSafe * REFERENCE_PAGE_SIZE,
+  );
+
+  const sortedSourceIntakeReports = useMemo(() => {
+    const sorted = [...sourceIntakeReports];
+    sorted.sort((left, right) => {
+      const leftProfile = left.ingestion_source_id != null ? sourceProfileById.get(left.ingestion_source_id) ?? null : null;
+      const rightProfile = right.ingestion_source_id != null ? sourceProfileById.get(right.ingestion_source_id) ?? null : null;
+      let comparison = 0;
+      if (sourceIntakeHistorySort.key === "started") {
+        comparison = compareNullableDate(left.generated_at_utc, right.generated_at_utc);
+      } else if (sourceIntakeHistorySort.key === "source") {
+        comparison = compareNullableString(left.source_label, right.source_label);
+      } else if (sourceIntakeHistorySort.key === "type") {
+        comparison = compareNullableString(leftProfile ? getOperatorSourceTypeLabel(getOperatorSourceType(leftProfile)) : null, rightProfile ? getOperatorSourceTypeLabel(getOperatorSourceType(rightProfile)) : null);
+      } else if (sourceIntakeHistorySort.key === "result") {
+        comparison = compareNullableString(left.source_complete == null ? null : left.source_complete ? "complete" : "incomplete", right.source_complete == null ? null : right.source_complete ? "complete" : "incomplete");
+      } else if (sourceIntakeHistorySort.key === "scanned") {
+        comparison = compareNullableNumber(left.counts?.total_files_scanned, right.counts?.total_files_scanned);
+      } else if (sourceIntakeHistorySort.key === "new") {
+        comparison = compareNullableNumber(left.counts?.processed_new_unique, right.counts?.processed_new_unique);
+      } else if (sourceIntakeHistorySort.key === "skipped") {
+        comparison = compareNullableNumber(left.counts?.skipped_already_known, right.counts?.skipped_already_known);
+      } else if (sourceIntakeHistorySort.key === "failed") {
+        comparison = compareNullableNumber(left.counts?.failed_or_rejected, right.counts?.failed_or_rejected);
+      }
+      return applySortDirection(comparison, sourceIntakeHistorySort.direction);
+    });
+    return sorted;
+  }, [sourceIntakeHistorySort, sourceIntakeReports, sourceProfileById]);
+
+  const sourceIntakeHistoryTotalPages = Math.max(1, Math.ceil(sortedSourceIntakeReports.length / REFERENCE_PAGE_SIZE));
+  const sourceIntakeHistoryPageSafe = Math.min(sourceIntakeHistoryPage, sourceIntakeHistoryTotalPages);
+  const visibleSourceIntakeReports = sortedSourceIntakeReports.slice(
+    (sourceIntakeHistoryPageSafe - 1) * REFERENCE_PAGE_SIZE,
+    sourceIntakeHistoryPageSafe * REFERENCE_PAGE_SIZE,
+  );
+
+  const setKnownSourcesSortKey = useCallback((key: KnownSourcesSortKey) => {
+    setKnownSourcesSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+    setKnownSourcesPage(1);
+  }, []);
+
+  const setSourceIntakeHistorySortKey = useCallback((key: SourceIntakeHistorySortKey) => {
+    setSourceIntakeHistorySort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+    setSourceIntakeHistoryPage(1);
+  }, []);
+
+  const workbenchProfiles = useMemo(() => {
+    return profiles.filter((profile) => {
+      const operatorSourceType = getOperatorSourceType(profile);
+      if (operatorSourceType === "advanced") {
+        return false;
+      }
+      if (operatorSourceType !== workbenchSourceType) {
+        return false;
+      }
+      if (profile.profile_status !== "active") {
+        return false;
+      }
+      return true;
+    });
+  }, [profiles, workbenchSourceType]);
+
+  const workbenchSourceTypeOptions = useMemo(() => {
+    const represented = new Set<OperatorSourceType>();
+    for (const profile of profiles) {
+      if (profile.profile_status !== "active") {
+        continue;
+      }
+      const operatorSourceType = getOperatorSourceType(profile);
+      if (operatorSourceType !== "advanced") {
+        represented.add(operatorSourceType);
+      }
+    }
+    return SOURCE_SELECTOR_TYPE_OPTIONS.filter((option) => represented.has(option.value));
+  }, [profiles]);
+
+  const workbenchDevices = useMemo<WorkbenchDeviceOption[]>(() => {
+    const deviceMap = new Map<string, WorkbenchDeviceOption>();
+    for (const profile of workbenchProfiles) {
+      const key = getWorkbenchDeviceKey(profile);
+      const existing = deviceMap.get(key);
+      if (existing) {
+        existing.profiles.push(profile);
+        continue;
+      }
+      deviceMap.set(key, {
+        key,
+        label: getWorkbenchDeviceLabel(profile),
+        meta: getWorkbenchDeviceMeta(profile),
+        profiles: [profile],
+      });
+    }
+    return Array.from(deviceMap.values()).sort((left, right) => left.label.localeCompare(right.label));
+  }, [workbenchProfiles]);
+
+  const selectedWorkbenchDevice = useMemo(() => {
+    if (selectedWorkbenchDeviceKey == null) {
+      return null;
+    }
+    return workbenchDevices.find((device) => device.key === selectedWorkbenchDeviceKey) ?? null;
+  }, [selectedWorkbenchDeviceKey, workbenchDevices]);
+
+  const workbenchSourceOptions = useMemo(() => selectedWorkbenchDevice?.profiles ?? [], [selectedWorkbenchDevice]);
+
+  const selectedWorkbenchProfile = useMemo(() => {
+    if (selectedWorkbenchSourceId == null) {
+      return null;
+    }
+    return workbenchSourceOptions.find((profile) => profile.source_id === selectedWorkbenchSourceId) ?? null;
+  }, [selectedWorkbenchSourceId, workbenchSourceOptions]);
+
+  useEffect(() => {
+    if (
+      workbenchSourceTypeOptions.length > 0
+      && !workbenchSourceTypeOptions.some((option) => option.value === workbenchSourceType)
+    ) {
+      setWorkbenchSourceType(workbenchSourceTypeOptions[0].value);
+      setSelectedWorkbenchDeviceKey(null);
+      setSelectedWorkbenchSourceId(null);
+    }
+  }, [workbenchSourceType, workbenchSourceTypeOptions]);
+
+  useEffect(() => {
+    if (
+      selectedWorkbenchDeviceKey != null
+      && workbenchDevices.some((device) => device.key === selectedWorkbenchDeviceKey)
+    ) {
+      return;
+    }
+    setSelectedWorkbenchDeviceKey(workbenchDevices[0]?.key ?? null);
+  }, [selectedWorkbenchDeviceKey, workbenchDevices]);
+
+  useEffect(() => {
+    if (
+      selectedWorkbenchSourceId != null
+      && workbenchSourceOptions.some((profile) => profile.source_id === selectedWorkbenchSourceId)
+    ) {
+      return;
+    }
+    setSelectedWorkbenchSourceId(workbenchSourceOptions[0]?.source_id ?? null);
+  }, [selectedWorkbenchSourceId, workbenchSourceOptions]);
+
+  useEffect(() => {
+    setSourceSelectionResult(null);
+    setSourceSelectionError(null);
+  }, [selectedWorkbenchDeviceKey, selectedWorkbenchSourceId, workbenchSourceType]);
 
   const managedStagingPreview = useMemo(() => {
     return computeManagedStagingPreview(editorForm.sourceLabel);
   }, [editorForm.sourceLabel]);
+
+  const createManagedStagingPreview = useMemo(() => {
+    return computeManagedStagingPreview(createSourceForm.sourceLabel);
+  }, [createSourceForm.sourceLabel]);
+
+  const editorSourceIdentitySupport = useMemo(() => (
+    editorMode === "create"
+      ? getCreateSourceIdentitySupport(editorForm.operatorSourceType)
+      : getSourceIdentityEnrollmentSupport(editorForm.sourceType, editorForm.sourceRootPath)
+  ), [editorForm.operatorSourceType, editorForm.sourceRootPath, editorForm.sourceType, editorMode]);
+
+  const sourceIdentityConfirmDisabledReason = useMemo(() => {
+    if (!sourceIdentityPlan) {
+      return "Plan enrollment before confirming.";
+    }
+    if (sourceIdentityPlan.blockers.length > 0) {
+      return "Resolve plan blockers before confirming.";
+    }
+    if (
+      sourceIdentityPlan.plan_status !== "ready"
+      && sourceIdentityPlan.plan_status !== "source_profile_already_linked"
+      && sourceIdentityPlan.plan_status !== "needs_review"
+    ) {
+      return "The enrollment plan is not ready to confirm.";
+    }
+    if (sourceIdentityPlan.endpoint_action === "create_new_endpoint") {
+      if (!sourceIdentityAlias.trim()) {
+        return "Endpoint alias is required.";
+      }
+      if ((sourceIdentityPlan.proposed_alias ?? "") !== sourceIdentityAlias.trim()) {
+        return "Run the plan again after changing the endpoint alias.";
+      }
+    }
+    if (sourceIdentityPlan.endpoint_action === "link_existing_endpoint" && sourceIdentitySelectedEndpointId == null) {
+      return "Select the existing endpoint before confirming.";
+    }
+    if (sourceIdentityPlan.required_confirmations.length > 0 && !sourceIdentityReviewAcknowledged) {
+      return "Review acknowledgment is required.";
+    }
+    return null;
+  }, [
+    sourceIdentityAlias,
+    sourceIdentityPlan,
+    sourceIdentityReviewAcknowledged,
+    sourceIdentitySelectedEndpointId,
+  ]);
 
   const editingProfileIsReferenced = useMemo(() => {
     return editingProfile ? hasHistoricalReferences(editingProfile) : false;
@@ -1234,13 +2273,541 @@ export default function IngestionView() {
     }
   }, []);
 
-  const openCreateDrawer = useCallback(() => {
-    setIsDetailsOpen(false);
-    setEditorMode("create");
-    setEditingProfile(null);
-    setEditorError(null);
-    setEditorForm(initialFormState());
-    setIsEditorOpen(true);
+  const resetSourceCreationOutcome = useCallback(() => {
+    setSourceCreationPhase("idle");
+    setSourceCreationPlan(null);
+    setSourceCreationResult(null);
+    setCreatedIcloudSource(null);
+    setSourceCreationError(null);
+    setSourceCreationSelectedEndpointId(null);
+    setSourceCreationNamingAction(null);
+    setSourceCreationUseRegisteredType(false);
+    setSourceCreationReviewAcknowledged(false);
+    setSourceCreationSourceName("");
+    setSourceCreationSelectedCanonicalSourceId(null);
+    setSourceCreationDuplicateIdsToInactivate([]);
+  }, []);
+
+  const clearSourceCreationInputsAfterSuccess = useCallback(() => {
+    setCreateSourceForm((current) => ({
+      ...initialFormState(),
+      operatorSourceType: current.operatorSourceType,
+      sourceType: persistedSourceTypeForOperator(current.operatorSourceType),
+      cloudProvider: current.operatorSourceType === "icloud" ? "icloud" : "icloud",
+    }));
+    setSourceCreationPlan(null);
+    setSourceCreationError(null);
+    setSourceCreationSelectedEndpointId(null);
+    setSourceCreationNamingAction(null);
+    setSourceCreationUseRegisteredType(false);
+    setSourceCreationReviewAcknowledged(false);
+    setSourceCreationSourceName("");
+    setSourceCreationSelectedCanonicalSourceId(null);
+    setSourceCreationDuplicateIdsToInactivate([]);
+  }, []);
+
+  const handleIdentifySourceLocation = useCallback(async (selectedEndpointId: number | null = null) => {
+    setSourceCreationError(null);
+    setSourceCreationResult(null);
+    setCreatedIcloudSource(null);
+
+    const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
+    const observedPath = createSourceForm.sourceRootPath.trim();
+    if (!sourceType) {
+      setSourceCreationError("Choose Local, External, or NAS before identifying the location.");
+      return;
+    }
+    if (!observedPath) {
+      setSourceCreationError("Root Path or Mount Point is required.");
+      return;
+    }
+
+    setSourceCreationPhase("planning");
+    try {
+      const plan = await planSourceCreation({
+        source_type: sourceType,
+        observed_path: observedPath,
+        selected_existing_endpoint_id: selectedEndpointId,
+      });
+      setSourceCreationPlan(plan);
+      setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationSelectedCanonicalSourceId(plan.selected_canonical_source_id);
+      setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
+      setSourceCreationSourceName(sourceCreationAllowsEditableSourceName(plan) ? plan.source_display_name : "");
+      setSourceCreationNamingAction(
+        plan.selected_existing_endpoint_id == null && plan.possible_matches.length === 0
+          ? "create_new"
+          : null,
+      );
+      setSourceCreationUseRegisteredType(!plan.source_type_mismatch);
+      setSourceCreationReviewAcknowledged(false);
+      setCreateSourceForm((current) => ({ ...current, sourceLabel: "" }));
+      setSourceCreationPhase("review");
+
+      if (plan.plan_status === "blocked") {
+        setSourceCreationError(null);
+      }
+    } catch (error) {
+      setSourceCreationPhase("idle");
+      setSourceCreationError(error instanceof Error ? error.message : "Failed to identify the source location.");
+    }
+  }, [createSourceForm.operatorSourceType, createSourceForm.sourceRootPath]);
+
+  const handleCreateSource = useCallback(async (confirmReview = false) => {
+    const deviceName = createSourceForm.sourceLabel.trim();
+    setSourceCreationError(null);
+    setSourceCreationResult(null);
+    setCreatedIcloudSource(null);
+
+    if (createSourceForm.operatorSourceType === "icloud") {
+      if (!deviceName) {
+        setSourceCreationError("Device Name is required.");
+        return;
+      }
+      if (!createSourceForm.accountUsername.trim()) {
+        setSourceCreationError("Account username is required for iCloud sources.");
+        return;
+      }
+      setSourceCreationPhase("confirming");
+      try {
+        const response = await createSourceProfile({
+          source_label: deviceName,
+          source_type: "cloud_export",
+          profile_status: "active",
+          source_root_path: null,
+          cloud_provider: "icloud",
+          account_username: createSourceForm.accountUsername.trim(),
+          acquisition_method: createSourceForm.acquisitionMethod,
+          managed_staging_path: createSourceForm.managedStagingPath.trim() || createManagedStagingPreview,
+        });
+        setCreatedIcloudSource(response.profile);
+        setSourceCreationPhase("complete");
+        clearSourceCreationInputsAfterSuccess();
+        setWorkbenchSourceType("icloud");
+        setSelectedWorkbenchSourceId(response.profile.source_id);
+        void loadProfiles({ refreshOnly: true });
+        setBanner({
+          kind: "success",
+          message: response.already_exists
+            ? `iCloud source already exists: ${response.profile.source_label}`
+            : `iCloud source created: ${response.profile.source_label}`,
+        });
+      } catch (error) {
+        setSourceCreationPhase("idle");
+        setSourceCreationError(error instanceof Error ? error.message : "Failed to create iCloud source.");
+      }
+      return;
+    }
+
+    if (!confirmReview) {
+      await handleIdentifySourceLocation();
+      return;
+    }
+
+    const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
+    const observedPath = createSourceForm.sourceRootPath.trim();
+    if (!sourceType || !observedPath || !sourceCreationPlan) {
+      setSourceCreationError("Identify the location before completing Create Source.");
+      return;
+    }
+    const hasExistingEndpoint = sourceCreationPlan.selected_existing_endpoint_id != null;
+    if (!sourceCreationNamingAction) {
+      setSourceCreationError(
+        hasExistingEndpoint
+          ? "Choose Use Existing Name, Rename Device, or Cancel."
+          : "Enter a Device Name before creating this source.",
+      );
+      return;
+    }
+    if ((sourceCreationNamingAction === "create_new" || sourceCreationNamingAction === "rename_existing") && !deviceName) {
+      setSourceCreationError("Device Name is required.");
+      return;
+    }
+    if (sourceCreationAllowsEditableSourceName(sourceCreationPlan) && !sourceCreationSourceName.trim()) {
+      setSourceCreationError("Source Name is required.");
+      return;
+    }
+    if (sourceCreationPlan.source_type_mismatch && !sourceCreationUseRegisteredType) {
+      setSourceCreationError("Confirm the recognized Source Type or cancel.");
+      return;
+    }
+    if (sourceCreationRequiresReviewAcknowledgment(sourceCreationPlan) && !sourceCreationReviewAcknowledged) {
+      setSourceCreationError("Review acknowledgment is required before completing this action.");
+      return;
+    }
+
+    const request = {
+      source_type: sourceType,
+      observed_path: observedPath,
+      source_name: sourceCreationAllowsEditableSourceName(sourceCreationPlan)
+        ? sourceCreationSourceName.trim()
+        : null,
+      device_name: sourceCreationNamingAction === "use_existing" ? null : deviceName,
+      naming_action: sourceCreationNamingAction,
+      selected_existing_endpoint_id: sourceCreationSelectedEndpointId,
+      selected_canonical_source_id: sourceCreationSelectedCanonicalSourceId,
+      duplicate_source_ids_to_inactivate: sourceCreationDuplicateIdsToInactivate,
+      use_registered_source_type: sourceCreationUseRegisteredType,
+      operator_review_acknowledged: sourceCreationReviewAcknowledged,
+    };
+
+    setSourceCreationPhase("planning");
+    try {
+      const plan = await planSourceCreation(request);
+      setSourceCreationPlan(plan);
+      setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationSelectedCanonicalSourceId(plan.selected_canonical_source_id);
+      setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
+      if (plan.plan_status === "blocked" || plan.plan_status === "needs_review") {
+        setSourceCreationPhase("review");
+        setSourceCreationError(null);
+        return;
+      }
+
+      setSourceCreationPhase("confirming");
+      const result = await confirmSourceCreation({
+        ...request,
+        plan_fingerprint: plan.plan_fingerprint,
+        operator_confirmed: true,
+      });
+      setSourceCreationResult(result);
+      if (result.creation_status !== "completed" || result.source_profile_id == null) {
+        setSourceCreationPhase("review");
+        setSourceCreationError(result.blockers[0]?.message ?? "Create Source did not complete.");
+        return;
+      }
+
+      setSourceCreationPhase("complete");
+      clearSourceCreationInputsAfterSuccess();
+      setWorkbenchSourceType(result.recognized_source_type);
+      setSelectedWorkbenchSourceId(result.source_profile_id);
+      void loadProfiles({ refreshOnly: true });
+      setBanner({
+        kind: "success",
+        message: result.reactivated_source
+          ? `Source reactivated: ${result.source_display_name}`
+          : result.adopted_legacy_source
+            ? `Existing Source adopted: ${result.source_display_name}`
+            : result.reused_source
+              ? `Existing Source selected: ${result.source_display_name}`
+              : `Source created: ${result.source_display_name}`,
+      });
+    } catch (error) {
+      setSourceCreationPhase("review");
+      setSourceCreationError(error instanceof Error ? error.message : "Failed to create source.");
+    }
+  }, [
+    createManagedStagingPreview,
+    createSourceForm,
+    clearSourceCreationInputsAfterSuccess,
+    handleIdentifySourceLocation,
+    loadProfiles,
+    sourceCreationDuplicateIdsToInactivate,
+    sourceCreationNamingAction,
+    sourceCreationPlan,
+    sourceCreationReviewAcknowledged,
+    sourceCreationSelectedCanonicalSourceId,
+    sourceCreationSelectedEndpointId,
+    sourceCreationSourceName,
+    sourceCreationUseRegisteredType,
+  ]);
+
+  const handleUseOpticalDisc = useCallback(async () => {
+    const discName = createSourceForm.sourceLabel.trim();
+    const observedPath = createSourceForm.sourceRootPath.trim();
+    setSourceCreationError(null);
+    setSourceCreationResult(null);
+    setCreatedIcloudSource(null);
+    setSourceSelectionError(null);
+    setSourceSelectionResult(null);
+    setRunIngestionDispatchResult(null);
+    setRunIngestionDispatchError(null);
+
+    if (!observedPath) {
+      setSourceCreationError("Current Optical path is required.");
+      return;
+    }
+    if (!discName) {
+      setSourceCreationError("Friendly disc name is required.");
+      return;
+    }
+
+    const request = {
+      source_type: "optical" as const,
+      observed_path: observedPath,
+      source_name: discName,
+      device_name: discName,
+      naming_action: "create_new" as const,
+      selected_existing_endpoint_id: null,
+      selected_canonical_source_id: null,
+      duplicate_source_ids_to_inactivate: [],
+      use_registered_source_type: true,
+      operator_review_acknowledged: false,
+    };
+
+    setSourceCreationPhase("planning");
+    try {
+      const plan = await planSourceCreation(request);
+      setSourceCreationPlan(plan);
+      setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationSelectedCanonicalSourceId(plan.selected_canonical_source_id);
+      setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
+      setSourceCreationNamingAction(plan.selected_existing_endpoint_id == null ? "create_new" : "use_existing");
+      setSourceCreationUseRegisteredType(!plan.source_type_mismatch);
+      setSourceCreationReviewAcknowledged(false);
+
+      if (
+        plan.source_action === "reuse_existing_source"
+        && plan.existing_source_profile_id != null
+        && plan.durable_identity_status === "verified"
+      ) {
+        setSourceCreationPhase("selecting_existing");
+        setWorkbenchSourceType("optical");
+        if (plan.selected_existing_endpoint_id != null) {
+          setSelectedWorkbenchDeviceKey(`endpoint:${plan.selected_existing_endpoint_id}`);
+        }
+        setSelectedWorkbenchSourceId(plan.existing_source_profile_id);
+        await loadProfiles({ refreshOnly: true, resetBanner: false });
+
+        try {
+          const selection = await selectSourceProfile({ source_profile_id: plan.existing_source_profile_id });
+          setSourceSelectionResult(selection);
+          if (selection.result === "selected" && selection.availability === "available") {
+            const enteredNameNotice = discName !== plan.device_name && discName !== plan.source_display_name
+              ? ` Entered name "${discName}" was not applied.`
+              : "";
+            setBanner({
+              kind: "success",
+              message: `Disc already known as device "${plan.device_name}" and Source "${plan.source_display_name}". Existing Optical Source selected for Source Intake.${enteredNameNotice}`,
+            });
+            window.setTimeout(() => {
+              clearSourceCreationInputsAfterSuccess();
+              setSourceCreationPhase("idle");
+            }, 2500);
+          } else {
+            setSourceCreationPhase("review");
+            setSourceCreationError(
+              `Existing Optical Source was found, but automatic selection did not complete. ${
+                selection.message ?? "Select the Source from Step 2."
+              }`,
+            );
+          }
+        } catch (selectionError) {
+          setSourceCreationPhase("review");
+          setSourceCreationError(
+            `Existing Optical Source was found, but automatic selection did not complete. ${
+              selectionError instanceof Error ? selectionError.message : "Select the Source from Step 2."
+            }`,
+          );
+        }
+        return;
+      }
+
+      if (plan.plan_status === "blocked" || plan.plan_status === "needs_review") {
+        setSourceCreationPhase("review");
+        setSourceCreationError(null);
+        return;
+      }
+
+      const confirmRequest = {
+        ...request,
+        source_name: discName,
+        device_name: plan.selected_existing_endpoint_id == null ? discName : null,
+        naming_action: (plan.selected_existing_endpoint_id == null ? "create_new" : "use_existing") as SourceCreationNameAction,
+        selected_existing_endpoint_id: plan.selected_existing_endpoint_id,
+        selected_canonical_source_id: plan.selected_canonical_source_id,
+        duplicate_source_ids_to_inactivate: plan.duplicate_source_ids_to_inactivate,
+        use_registered_source_type: !plan.source_type_mismatch,
+        plan_fingerprint: plan.plan_fingerprint,
+        operator_confirmed: true,
+      };
+
+      setSourceCreationPhase("confirming");
+      const result = await confirmSourceCreation(confirmRequest);
+      setSourceCreationResult(result);
+      if (result.creation_status !== "completed" || result.source_profile_id == null) {
+        setSourceCreationPhase("review");
+        setSourceCreationError(result.blockers[0]?.message ?? "Optical Source creation did not complete.");
+        return;
+      }
+
+      setSourceCreationPhase("complete");
+      setWorkbenchSourceType("optical");
+      if (result.source_endpoint_id != null) {
+        setSelectedWorkbenchDeviceKey(`endpoint:${result.source_endpoint_id}`);
+      }
+      setSelectedWorkbenchSourceId(result.source_profile_id);
+      await loadProfiles({ refreshOnly: true, resetBanner: false });
+
+      try {
+        const selection = await selectSourceProfile({ source_profile_id: result.source_profile_id });
+        setSourceSelectionResult(selection);
+        if (selection.result === "selected" && selection.availability === "available") {
+          clearSourceCreationInputsAfterSuccess();
+          setBanner({
+            kind: "success",
+            message: `Optical disc ready for Source Intake: ${result.device_name}`,
+          });
+        } else {
+          setSourceCreationError(
+            `Optical Source was created, but automatic selection did not complete. ${selection.message ?? "Select the Source from Step 2."}`,
+          );
+        }
+      } catch (selectionError) {
+        setSourceCreationError(
+          `Optical Source was created, but automatic selection did not complete. ${
+            selectionError instanceof Error ? selectionError.message : "Select the new Source from Step 2."
+          }`,
+        );
+      }
+    } catch (error) {
+      setSourceCreationPhase("idle");
+      setSourceCreationError(error instanceof Error ? error.message : "Failed to use Optical disc.");
+    }
+  }, [
+    clearSourceCreationInputsAfterSuccess,
+    createSourceForm.sourceLabel,
+    createSourceForm.sourceRootPath,
+    loadProfiles,
+  ]);
+
+  const handleReviewDuplicateResolution = useCallback(async () => {
+    if (!sourceCreationPlan) {
+      setSourceCreationError("Identify the location before reviewing duplicate resolution.");
+      return;
+    }
+    const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
+    const observedPath = createSourceForm.sourceRootPath.trim();
+    if (!sourceType || !observedPath) {
+      setSourceCreationError("Root Path or Mount Point is required.");
+      return;
+    }
+    if (sourceCreationSelectedCanonicalSourceId == null) {
+      setSourceCreationError("Choose a canonical Source before reviewing duplicate resolution.");
+      return;
+    }
+
+    setSourceCreationPhase("planning");
+    setSourceCreationError(null);
+    try {
+      const plan = await planSourceCreation({
+        source_type: sourceType,
+        observed_path: observedPath,
+        source_name: sourceCreationAllowsEditableSourceName(sourceCreationPlan)
+          ? sourceCreationSourceName.trim()
+          : null,
+        device_name: sourceCreationNamingAction === "use_existing" ? null : createSourceForm.sourceLabel.trim(),
+        naming_action: sourceCreationNamingAction,
+        selected_existing_endpoint_id: sourceCreationSelectedEndpointId,
+        selected_canonical_source_id: sourceCreationSelectedCanonicalSourceId,
+        duplicate_source_ids_to_inactivate: sourceCreationDuplicateIdsToInactivate,
+        use_registered_source_type: sourceCreationUseRegisteredType,
+        operator_review_acknowledged: sourceCreationReviewAcknowledged,
+      });
+      setSourceCreationPlan(plan);
+      setSourceCreationSelectedEndpointId(plan.selected_existing_endpoint_id);
+      setSourceCreationSelectedCanonicalSourceId(plan.selected_canonical_source_id);
+      setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
+      setSourceCreationPhase("review");
+    } catch (error) {
+      setSourceCreationPhase("review");
+      setSourceCreationError(error instanceof Error ? error.message : "Failed to review duplicate resolution.");
+    }
+  }, [
+    createSourceForm.operatorSourceType,
+    createSourceForm.sourceLabel,
+    createSourceForm.sourceRootPath,
+    sourceCreationDuplicateIdsToInactivate,
+    sourceCreationNamingAction,
+    sourceCreationPlan,
+    sourceCreationReviewAcknowledged,
+    sourceCreationSelectedCanonicalSourceId,
+    sourceCreationSelectedEndpointId,
+    sourceCreationSourceName,
+    sourceCreationUseRegisteredType,
+  ]);
+
+  const handleSelectWorkbenchSource = useCallback(async () => {
+    if (!selectedWorkbenchProfile) {
+      return;
+    }
+    setIsSelectingSource(true);
+    setSourceSelectionError(null);
+    setRunIngestionDispatchResult(null);
+    setRunIngestionDispatchError(null);
+    try {
+      const result = await selectSourceProfile({ source_profile_id: selectedWorkbenchProfile.source_id });
+      setSourceSelectionResult(result);
+    } catch (error) {
+      setSourceSelectionResult(null);
+      setSourceSelectionError(error instanceof Error ? error.message : "Failed to select Source.");
+    } finally {
+      setIsSelectingSource(false);
+    }
+  }, [selectedWorkbenchProfile]);
+
+  const handleDispatchFilesystemRunIngestion = useCallback(async () => {
+    const context = sourceSelectionResult?.selected_source_context;
+    if (!context || sourceSelectionResult?.workflow_kind !== "filesystem_source_intake") {
+      return;
+    }
+    if (runLimitValidationError || runBatchSizeValidationError) {
+      setRunOptionsError(runLimitValidationError ?? runBatchSizeValidationError);
+      return;
+    }
+
+    const sourceIntakeLimit = normalizedRunLimitInput ? Number(normalizedRunLimitInput) : null;
+    const ingestBatchSize = Number(normalizedRunBatchSizeInput);
+    setIsRunActionLoading(true);
+    setRunOptionsError(null);
+    setRunIngestionDispatchError(null);
+    setRunIngestionDispatchResult(null);
+    try {
+      const response = await dispatchRunIngestion({
+        source_profile_id: context.source_profile_id,
+        selection_fingerprint: context.selection_fingerprint,
+        filesystem_options: {
+          source_intake_limit: sourceIntakeLimit,
+          ingest_batch_size: ingestBatchSize,
+          acknowledge_legacy_or_review: runReadinessAcknowledged,
+        },
+      });
+      setRunIngestionDispatchResult(response);
+      if (response.result === "started") {
+        setBanner({ kind: "success", message: response.message });
+        await loadSourceIntakeStatus();
+        await loadSourceIntakeReports();
+      } else {
+        setBanner({ kind: "error", message: response.next_action ? `${response.message} ${response.next_action}` : response.message });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to run ingestion.";
+      setRunIngestionDispatchError(message);
+      setBanner({ kind: "error", message });
+    } finally {
+      setIsRunActionLoading(false);
+    }
+  }, [
+    loadSourceIntakeReports,
+    loadSourceIntakeStatus,
+    normalizedRunBatchSizeInput,
+    normalizedRunLimitInput,
+    runBatchSizeValidationError,
+    runLimitValidationError,
+    runReadinessAcknowledged,
+    sourceSelectionResult,
+  ]);
+
+  const resetSourceIdentityEnrollmentState = useCallback(() => {
+    setSourceIdentityEnrollRequested(false);
+    setSourceIdentityAlias("");
+    setSourceIdentityPhase("idle");
+    setSourceIdentityCreatedProfile(null);
+    setSourceIdentityPlan(null);
+    setSourceIdentityConfirmResult(null);
+    setSourceIdentityReviewAcknowledged(false);
+    setSourceIdentitySelectedEndpointId(null);
+    setSourceIdentityProbeRequest(null);
   }, []);
 
   const openEditDrawer = useCallback((profile: SourceProfileSummary) => {
@@ -1248,8 +2815,10 @@ export default function IngestionView() {
     setEditorMode("edit");
     setEditingProfile(profile);
     setEditorError(null);
+    resetSourceIdentityEnrollmentState();
     setEditorForm({
       sourceLabel: profile.source_label,
+      operatorSourceType: getOperatorSourceType(profile),
       sourceType: profile.source_type,
       profileStatus: profile.profile_status,
       sourceRootPath: profile.source_root_path ?? "",
@@ -1259,9 +2828,10 @@ export default function IngestionView() {
       managedStagingPath: profile.managed_staging_path ?? "",
     });
     setIsEditorOpen(true);
-  }, []);
+  }, [resetSourceIdentityEnrollmentState]);
 
   const openDetailsDrawer = useCallback((profile: SourceProfileSummary) => {
+    sourceReadinessRequestSeqRef.current += 1;
     setIsEditorOpen(false);
     setIsDetailsOpen(true);
     setDetailSourceId(profile.source_id);
@@ -1269,6 +2839,9 @@ export default function IngestionView() {
     setDetailError(null);
     setDetailBanner(null);
     setPathCheckResult(null);
+    setSourceReadinessResult(null);
+    setSourceReadinessError(null);
+    setIsCheckingSourceReadiness(false);
     setStagingCreateResult(null);
     setIcloudReadinessSnapshot(null);
     setIcloudReadinessError(null);
@@ -1298,7 +2871,8 @@ export default function IngestionView() {
   const closeEditor = useCallback(() => {
     setIsEditorOpen(false);
     setEditorError(null);
-  }, []);
+    resetSourceIdentityEnrollmentState();
+  }, [resetSourceIdentityEnrollmentState]);
 
   const closeDetails = useCallback(() => {
     detailLoadRequestSeqRef.current += 1;
@@ -1352,6 +2926,31 @@ export default function IngestionView() {
     }
   }, [detailProfile, detailSourceId, loadIcloudReadiness]);
 
+  const handleCheckSourceReadiness = useCallback(async () => {
+    if (!detailSourceId) {
+      return;
+    }
+    const sourceId = detailSourceId;
+    const requestSeq = sourceReadinessRequestSeqRef.current + 1;
+    sourceReadinessRequestSeqRef.current = requestSeq;
+    setIsCheckingSourceReadiness(true);
+    setSourceReadinessError(null);
+    try {
+      const result = await checkSourceProfileReadiness(sourceId);
+      if (sourceReadinessRequestSeqRef.current === requestSeq && result.source_profile_id === sourceId) {
+        setSourceReadinessResult(result);
+      }
+    } catch (error) {
+      if (sourceReadinessRequestSeqRef.current === requestSeq) {
+        setSourceReadinessError(error instanceof Error ? error.message : "Failed to check Source Profile readiness.");
+      }
+    } finally {
+      if (sourceReadinessRequestSeqRef.current === requestSeq) {
+        setIsCheckingSourceReadiness(false);
+      }
+    }
+  }, [detailSourceId]);
+
   const handleCreateStagingFolder = useCallback(async () => {
     if (!detailSourceId) {
       return;
@@ -1382,13 +2981,158 @@ export default function IngestionView() {
     }
   }, [detailProfile, detailSourceId, loadDetail, loadIcloudReadiness, loadProfiles]);
 
+  const runSourceIdentityEnrollmentPlan = useCallback(async (
+    profile: SourceProfileSummary,
+    selectedExistingEndpointId: number | null = sourceIdentitySelectedEndpointId,
+    probeRequestOverride: SourceIdentityProbeRequest | null = null,
+  ): Promise<SourceIdentityPlanOutcome | null> => {
+    const probeRequest = probeRequestOverride ?? buildSourceIdentityProbeRequest(profile);
+    if (!probeRequest) {
+      setEditorError("Source Identity Check is not available for this Source Profile.");
+      return null;
+    }
+
+    setSourceIdentityProbeRequest(probeRequest);
+    setSourceIdentityPhase("planning");
+    setEditorError(null);
+    setSourceIdentityPlan(null);
+    setSourceIdentityConfirmResult(null);
+
+    try {
+      let plan = await planSourceEndpointEnrollment({
+        source_profile_id: profile.source_id,
+        probe_request: probeRequest,
+        proposed_alias: sourceIdentityAlias.trim() || null,
+        selected_existing_endpoint_id: selectedExistingEndpointId,
+        operator_review_acknowledged: sourceIdentityReviewAcknowledged,
+      });
+
+      const strongMatches = plan.possible_matches.filter((match) => match.match_strength === "strong");
+      const shouldAutoLink = (
+        selectedExistingEndpointId == null
+        && plan.durable_identity_status === "verified"
+        && plan.blockers.length === 0
+        && strongMatches.length === 1
+      );
+
+      if (shouldAutoLink) {
+        const matchedEndpointId = strongMatches[0].source_endpoint_id;
+        setSourceIdentitySelectedEndpointId(matchedEndpointId);
+        setSourceIdentityReviewAcknowledged(true);
+        plan = await planSourceEndpointEnrollment({
+          source_profile_id: profile.source_id,
+          probe_request: probeRequest,
+          proposed_alias: sourceIdentityAlias.trim() || null,
+          selected_existing_endpoint_id: matchedEndpointId,
+          operator_review_acknowledged: true,
+        });
+        setSourceIdentityPlan(plan);
+
+        if (
+          plan.plan_status === "ready"
+          && plan.endpoint_action === "link_existing_endpoint"
+          && plan.durable_identity_status === "verified"
+          && plan.blockers.length === 0
+        ) {
+          setSourceIdentityPhase("confirming");
+          const response = await confirmSourceEndpointEnrollment({
+            source_profile_id: profile.source_id,
+            probe_request: probeRequest,
+            plan_fingerprint: plan.plan_fingerprint,
+            confirmed_alias: null,
+            selected_existing_endpoint_id: matchedEndpointId,
+            operator_confirmed: true,
+            operator_review_acknowledged: true,
+          });
+          setSourceIdentityConfirmResult(response);
+          setSourceIdentityPhase(response.enrollment_status === "completed" ? "complete" : "review");
+          await loadProfiles({ refreshOnly: true });
+          return { plan, autoLinked: response.enrollment_status === "completed" };
+        }
+      }
+
+      setSourceIdentityPlan(plan);
+      setSourceIdentityPhase("review");
+      return { plan, autoLinked: false };
+    } catch (error) {
+      setSourceIdentityPhase("review");
+      setEditorError(error instanceof Error ? error.message : "Failed to plan endpoint enrollment.");
+      return null;
+    }
+  }, [loadProfiles, sourceIdentityAlias, sourceIdentityReviewAcknowledged, sourceIdentitySelectedEndpointId]);
+
+  const confirmSourceIdentityEnrollment = useCallback(async () => {
+    if (!sourceIdentityCreatedProfile || !sourceIdentityPlan) {
+      setEditorError("Create and plan enrollment before confirming.");
+      return;
+    }
+
+    const probeRequest = sourceIdentityProbeRequest ?? buildSourceIdentityProbeRequest(sourceIdentityCreatedProfile);
+    if (!probeRequest) {
+      setEditorError("Source Identity Check is not available for this Source Profile.");
+      return;
+    }
+
+    const confirmedAlias = sourceIdentityAlias.trim();
+    if (sourceIdentityPlan.endpoint_action === "create_new_endpoint" && !confirmedAlias) {
+      setEditorError("Endpoint alias is required before confirming durable identity.");
+      return;
+    }
+
+    if (sourceIdentityPlan.required_confirmations.length > 0 && !sourceIdentityReviewAcknowledged) {
+      setEditorError("Review acknowledgment is required before confirming enrollment.");
+      return;
+    }
+
+    if (sourceIdentityPlan.endpoint_action === "link_existing_endpoint" && sourceIdentitySelectedEndpointId == null) {
+      setEditorError("Select the existing endpoint before confirming enrollment.");
+      return;
+    }
+
+    setSourceIdentityPhase("confirming");
+    setEditorError(null);
+    setSourceIdentityConfirmResult(null);
+
+    try {
+      const response = await confirmSourceEndpointEnrollment({
+        source_profile_id: sourceIdentityCreatedProfile.source_id,
+        probe_request: probeRequest,
+        plan_fingerprint: sourceIdentityPlan.plan_fingerprint,
+        confirmed_alias: sourceIdentityPlan.endpoint_action === "create_new_endpoint" ? confirmedAlias : null,
+        selected_existing_endpoint_id: sourceIdentitySelectedEndpointId,
+        operator_confirmed: true,
+        operator_review_acknowledged: sourceIdentityReviewAcknowledged || sourceIdentityPlan.required_confirmations.length === 0,
+      });
+      setSourceIdentityConfirmResult(response);
+      setSourceIdentityPhase(response.enrollment_status === "completed" ? "complete" : "review");
+      await loadProfiles({ refreshOnly: true });
+      setBanner({
+        kind: response.enrollment_status === "completed" ? "success" : "error",
+        message: response.enrollment_status === "completed"
+          ? "Endpoint enrolled. Source Intake behavior is unchanged."
+          : response.blockers[0]?.message ?? "Endpoint enrollment did not complete.",
+      });
+    } catch (error) {
+      setSourceIdentityPhase("review");
+      setEditorError(error instanceof Error ? error.message : "Failed to confirm endpoint enrollment.");
+    }
+  }, [
+    loadProfiles,
+    sourceIdentityAlias,
+    sourceIdentityCreatedProfile,
+    sourceIdentityPlan,
+    sourceIdentityProbeRequest,
+    sourceIdentityReviewAcknowledged,
+    sourceIdentitySelectedEndpointId,
+  ]);
+
   const saveEditor = useCallback(async () => {
     setEditorError(null);
     const trimmedLabel = editorForm.sourceLabel.trim();
 
     if (editorMode === "create") {
       if (!trimmedLabel) {
-        setEditorError("Source label is required.");
+        setEditorError("Source Name is required.");
         return;
       }
 
@@ -1398,21 +3142,91 @@ export default function IngestionView() {
       }
 
       if (isIcloudCloudExport(editorForm) && !editorForm.accountUsername.trim()) {
-        setEditorError("Account username is required for iCloud source profiles.");
+        setEditorError("Account username is required for iCloud sources.");
         return;
+      }
+
+      if (
+        (editorForm.operatorSourceType === "local" || editorForm.operatorSourceType === "external")
+        && isUncPath(editorForm.sourceRootPath)
+      ) {
+        setEditorError("This looks like a NAS path. Choose source type NAS.");
+        return;
+      }
+
+      if (
+        (editorForm.operatorSourceType === "local" || editorForm.operatorSourceType === "external")
+        && !isDriveLetterPath(editorForm.sourceRootPath)
+      ) {
+        setEditorError("Enter an absolute Windows drive path, such as C:\\Photos.");
+        return;
+      }
+
+      if (sourceIdentityEnrollRequested) {
+        if (!editorSourceIdentitySupport.supported) {
+          setEditorError(editorSourceIdentitySupport.reason ?? "Source Identity Check is not available for this source type.");
+          return;
+        }
+        if (!sourceIdentityAlias.trim()) {
+          setEditorError("Endpoint alias is required when recording a new durable source identity.");
+          return;
+        }
       }
     }
 
     setIsSavingEditor(true);
     try {
       if (editorMode === "create") {
+        let sourceRootPath = editorForm.sourceRootPath.trim();
+        const createProbeRequest = buildCreateSourceProbeRequest(
+          editorForm.operatorSourceType,
+          sourceRootPath,
+        );
+        const drivePathProbe = createProbeRequest && isDriveLetterPath(sourceRootPath)
+          ? await probeSourceIdentity(createProbeRequest)
+          : null;
+        const mappedNetworkBlocker = drivePathProbe?.blockers.find(
+          (item) => item.code === "mapped_network_path_requires_nas",
+        );
+        if (mappedNetworkBlocker) {
+          setEditorError(mappedNetworkBlocker.message);
+          return;
+        }
+
+        if (editorForm.operatorSourceType === "nas") {
+          if (!isUncPath(sourceRootPath) && !isDriveLetterPath(sourceRootPath)) {
+            setEditorError("Enter a UNC path or an existing mapped NAS drive path.");
+            return;
+          }
+          if (!createProbeRequest) {
+            setEditorError("Unable to check this NAS location.");
+            return;
+          }
+          const probe = drivePathProbe ?? await probeSourceIdentity(createProbeRequest);
+          const canonicalRoot = probe.source_root_candidate.path;
+          const boundary = probe.source_root_candidate.filesystem_boundary_type;
+          const resolutionBlocker = probe.blockers.find((item) => (
+            item.code === "mapped_nas_unc_resolution_failed"
+            || item.code === "nas_server_not_runnable"
+          ));
+          if (resolutionBlocker || !canonicalRoot || !isUncPath(canonicalRoot) || boundary === "nas_server_only" || boundary === "unknown") {
+            setEditorError(
+              resolutionBlocker?.message
+              ?? probe.next_safe_actions[0]
+              ?? "The NAS location could not be resolved to a UNC share and folder.",
+            );
+            return;
+          }
+          sourceRootPath = canonicalRoot;
+        }
+
         const payload: SourceProfileCreateRequest = {
           source_label: trimmedLabel,
           source_type: editorForm.sourceType,
           profile_status: editorForm.profileStatus,
           source_root_path: isIcloudCloudExport(editorForm)
             ? null
-            : editorForm.sourceRootPath.trim(),
+            : sourceRootPath,
           cloud_provider: editorForm.sourceType === "cloud_export" ? editorForm.cloudProvider : null,
           account_username: editorForm.accountUsername.trim() || null,
           acquisition_method: editorForm.sourceType === "cloud_export" ? editorForm.acquisitionMethod : null,
@@ -1423,12 +3237,40 @@ export default function IngestionView() {
 
         const response = await createSourceProfile(payload);
         await loadProfiles({ refreshOnly: true });
+        setWorkbenchSourceType(editorForm.operatorSourceType);
+        setSelectedWorkbenchSourceId(response.profile.source_id);
+        if (sourceIdentityEnrollRequested) {
+          setSourceIdentityCreatedProfile(response.profile);
+          setSourceIdentityAlias((current) => current.trim() || response.profile.source_label);
+          const planOutcome = await runSourceIdentityEnrollmentPlan(
+            response.profile,
+            null,
+            createProbeRequest,
+          );
+          if (planOutcome?.autoLinked) {
+            closeEditor();
+            setBanner({
+              kind: "success",
+              message: response.already_exists
+                ? `Source already exists and is linked: ${response.profile.source_label}`
+                : `Source created and linked: ${response.profile.source_label}`,
+            });
+            return;
+          }
+          setBanner({
+            kind: "success",
+            message: response.already_exists
+              ? `Source already exists: ${response.profile.source_label}`
+              : `Source created: ${response.profile.source_label}. Review the identity result to finish enrollment.`,
+          });
+          return;
+        }
         closeEditor();
         setBanner({
           kind: "success",
           message: response.already_exists
-            ? `Source profile already exists: ${response.profile.source_label}`
-            : `Source profile created: ${response.profile.source_label}`,
+            ? `Source already exists: ${response.profile.source_label}`
+            : `Source created: ${response.profile.source_label}`,
         });
         return;
       }
@@ -1463,12 +3305,16 @@ export default function IngestionView() {
     }
   }, [
     closeEditor,
+    editorSourceIdentitySupport,
     editorForm,
     editorMode,
     editingProfile,
     loadProfiles,
     managedStagingPreview,
+    runSourceIdentityEnrollmentPlan,
     statusFilter,
+    sourceIdentityAlias,
+    sourceIdentityEnrollRequested,
   ]);
 
   const detailPathLabel = detailProfile && isIcloudProfile(detailProfile) ? "Staging status" : "Path status";
@@ -1476,6 +3322,11 @@ export default function IngestionView() {
 
   const isDetailIcloudProfile = detailProfile ? isIcloudProfile(detailProfile) : false;
   const isGuidedIcloudRunCandidate = runCandidateProfile ? isIcloudProfile(runCandidateProfile) : false;
+  const runReadinessRequiresAcknowledgment = Boolean(
+    runCandidateReadiness?.requires_operator_acknowledgment
+      && (runCandidateReadiness.readiness_status === "path_only" || runCandidateReadiness.readiness_status === "needs_review"),
+  );
+  const canConfirmRunIntake = !isRunActionLoading && (!runReadinessRequiresAcknowledgment || runReadinessAcknowledged);
 
   const expectedAcquisitionPath = useMemo(() => {
     if (!detailProfile || !isDetailIcloudProfile) {
@@ -1575,6 +3426,21 @@ export default function IngestionView() {
 
   const readinessBlockingReasons = useMemo(() => icloudReadinessSnapshot?.blocking_reasons ?? [], [icloudReadinessSnapshot?.blocking_reasons]);
   const readinessWarnings = useMemo(() => icloudReadinessSnapshot?.warnings ?? [], [icloudReadinessSnapshot?.warnings]);
+
+  const detailReadinessResult = detailSourceId != null && sourceReadinessResult?.source_profile_id === detailSourceId
+    ? sourceReadinessResult
+    : null;
+  const selectedWorkbenchReadinessResult = selectedWorkbenchProfile && sourceReadinessResult?.source_profile_id === selectedWorkbenchProfile.source_id
+    ? sourceReadinessResult
+    : null;
+  const sourceReadinessStatus = detailReadinessResult?.readiness_status ?? "unknown";
+  const sourceReadinessBadgeClassName = sourceProfileReadinessBadgeClassName(sourceReadinessStatus);
+  const sourceReadinessWarnings = detailReadinessResult?.warnings ?? [];
+  const sourceReadinessBlockers = detailReadinessResult?.blockers ?? [];
+  const sourceReadinessAdvancedDetails = useMemo(
+    () => detailReadinessResult ? buildSourceReadinessAdvancedDetails(detailReadinessResult) : null,
+    [detailReadinessResult],
+  );
 
   const activeRunReport = useMemo(() => {
     if (!sourceIntakeStatus) {
@@ -2135,7 +4001,8 @@ export default function IngestionView() {
   const closeRunConfirmation = useCallback(() => {
     setIsRunConfirmOpen(false);
     setRunCandidateProfile(null);
-    setRunCandidatePathCheck(null);
+    setRunCandidateReadiness(null);
+    setRunReadinessAcknowledged(false);
     setRunLimitInput("");
     setRunBatchSizeInput("500");
     setRunOptionsError(null);
@@ -2173,16 +4040,26 @@ export default function IngestionView() {
 
     setRunPreflightSourceId(profile.source_id);
     try {
-      const pathCheck = await verifySourceProfilePath(profile.source_id);
-      if (!pathCheck.exists || !pathCheck.is_directory) {
-        const message = "Cannot run intake. Source path does not exist or is not a directory.";
+      const readiness = await checkSourceProfileReadiness(profile.source_id);
+      if (detailSourceId === profile.source_id) {
+        setSourceReadinessResult(readiness);
+        setSourceReadinessError(null);
+      }
+
+      const isAllowedReadiness =
+        readiness.readiness_status === "ready"
+        || readiness.readiness_status === "path_only"
+        || readiness.readiness_status === "needs_review";
+      if (!isAllowedReadiness || !readiness.can_run_source_intake) {
+        const message = sourceReadinessLaunchBlockMessage(readiness);
         setRowRunError(profile.source_id, message);
         setBanner({ kind: "error", message });
         return;
       }
 
       setRunCandidateProfile(profile);
-      setRunCandidatePathCheck(pathCheck);
+      setRunCandidateReadiness(readiness);
+      setRunReadinessAcknowledged(false);
       setRunLimitInput("");
       setRunBatchSizeInput("500");
       setRunOptionsError(null);
@@ -2195,7 +4072,7 @@ export default function IngestionView() {
     } finally {
       setRunPreflightSourceId(null);
     }
-  }, [clearRowRunError, isSourceIntakeActive, setRowRunError]);
+  }, [clearRowRunError, detailSourceId, isSourceIntakeActive, setRowRunError]);
 
   const handlePrepareIcloudSourceIntake = useCallback(async () => {
     if (!detailProfile || !isDetailIcloudProfile) {
@@ -2219,7 +4096,7 @@ export default function IngestionView() {
       }
 
       setRunCandidateProfile(detailProfile);
-      setRunCandidatePathCheck(pathCheck);
+      setRunCandidateReadiness(null);
       setRunLimitInput(icloudSourceIntakeLimitSuggestion.value);
       setRunBatchSizeInput("500");
       setRunOptionsError(null);
@@ -2243,6 +4120,11 @@ export default function IngestionView() {
       return;
     }
 
+    if (runReadinessRequiresAcknowledgment && !runReadinessAcknowledged) {
+      setRunOptionsError("Acknowledge the readiness warning before starting Source Intake.");
+      return;
+    }
+
     setIsRunActionLoading(true);
     clearRowRunError(runCandidateProfile.source_id);
     setRunErrorDetails(null);
@@ -2257,6 +4139,7 @@ export default function IngestionView() {
         ingestion_source_id: runCandidateProfile.source_id,
         source_intake_limit: normalizedRunLimitInput ? parsedLimit : null,
         ingest_batch_size: parsedBatchSize,
+        readiness_acknowledged: runReadinessRequiresAcknowledgment && runReadinessAcknowledged,
       });
 
       setSourceIntakeStatus(response.current);
@@ -2269,6 +4152,7 @@ export default function IngestionView() {
       const mapped = mapRunStartError(error);
       setRowRunError(runCandidateProfile.source_id, mapped.message);
       setBanner({ kind: "error", message: mapped.message });
+      setRunOptionsError(mapped.message);
       setRunErrorDetails(mapped.raw);
     } finally {
       setIsRunActionLoading(false);
@@ -2282,6 +4166,8 @@ export default function IngestionView() {
     normalizedRunLimitInput,
     runCandidateProfile,
     runBatchSizeValidationError,
+    runReadinessAcknowledged,
+    runReadinessRequiresAcknowledgment,
     runLimitValidationError,
     setRowRunError,
   ]);
@@ -2308,36 +4194,8 @@ export default function IngestionView() {
         <div>
           <h2 className={styles.title}>Ingestion</h2>
           <p className={styles.subtitle}>
-            Source profile lifecycle management foundation. Existing Source Intake operational tools remain in Admin.
+            Create, select, and run a photo source.
           </p>
-        </div>
-        <div className={styles.toolbar}>
-          <button type="button" className={styles.button} onClick={openCreateDrawer}>
-            Create Source Profile
-          </button>
-          <label>
-            <span className={styles.subtitle}>Status filter</span>
-            <br />
-            <select
-              className={styles.select}
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={() => void loadProfiles({ refreshOnly: true, clearRowErrors: true })}
-            disabled={isLoading || isRefreshing}
-          >
-            {isRefreshing ? "Refreshing..." : "Refresh"}
-          </button>
         </div>
       </header>
 
@@ -2347,27 +4205,868 @@ export default function IngestionView() {
         </p>
       )}
 
-      <p className={styles.note}>
-        Source profiles define where files come from. Run Intake from this tab supports active local and external profiles.
-      </p>
-      <p className={styles.note}>
-        Lifecycle status does not delete files, sources, or provenance. Archived, test, and deprecated sources are retained for history and remain visible through the status filter.
-      </p>
-      <p className={styles.note}>
-        Source Profile status changes are non-destructive and do not rewrite prior provenance.
-      </p>
-      <p className={styles.note}>
-        Source labels are not globally unique. Source identity is based on label + type + effective path. For iCloud, managed staging path is the effective operational path when present.
-      </p>
-      <p className={styles.note}>
-        iCloud authentication is handled by icloudpd outside Photo Organizer. Do not enter Apple ID passwords here.
-      </p>
-      <p className={styles.placeholder}>Full Source Intake reports remain available in Admin.</p>
-      <p className={styles.subtitle}>
-        Active shown: {countsSummary.active} | Archived/Test/Deprecated shown: {countsSummary.nonActive}
-      </p>
+      <section className={styles.workbenchPanel} aria-labelledby="create-source-title">
+        <div className={styles.workbenchHeader}>
+          <h3 id="create-source-title" className={styles.runPanelTitle}>Create a Source</h3>
+        </div>
+        <div className={styles.createSourceBody}>
+            <div className={styles.workbenchControlGroup}>
+              <span className={styles.detailLabel}>Source Type</span>
+              <div className={styles.segmentedControl} role="group" aria-label="Create source type">
+                {CREATE_SOURCE_TYPE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`${styles.segmentButton} ${createSourceForm.operatorSourceType === option.value ? styles.segmentButtonActive : ""}`}
+                    aria-pressed={createSourceForm.operatorSourceType === option.value}
+                    disabled={option.disabled || sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                    title={option.disabled ? "Coming later" : undefined}
+                    onClick={() => {
+                      resetSourceCreationOutcome();
+                      setCreateSourceForm((current) => ({
+                        ...current,
+                        operatorSourceType: option.value,
+                        sourceType: persistedSourceTypeForOperator(option.value),
+                        cloudProvider: option.value === "icloud" ? "icloud" : current.cloudProvider,
+                      }));
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-      <IcloudRunWorkflowPanel />
+            <div className={styles.createSourceControls}>
+              {createSourceForm.operatorSourceType === "icloud" && (
+                <label className={styles.formLabel}>
+                  Device Name
+                  <input
+                    className={styles.formInput}
+                    autoComplete="off"
+                    value={createSourceForm.sourceLabel}
+                    disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                    placeholder="Family iCloud"
+                    onChange={(event) => {
+                      resetSourceCreationOutcome();
+                      setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                    }}
+                  />
+                </label>
+              )}
+
+              {createSourceForm.operatorSourceType === "optical" && (
+                <>
+                  <label className={styles.formLabel}>
+                    Friendly Disc Name
+                    <input
+                      className={styles.formInput}
+                      autoComplete="off"
+                      value={createSourceForm.sourceLabel}
+                      disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                      placeholder="Family Archive Disc 1"
+                      onChange={(event) => {
+                        resetSourceCreationOutcome();
+                        setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                      }}
+                    />
+                  </label>
+                  <p className={styles.helperText}>
+                    Insert a filesystem-readable data disc, enter its current drive path and a friendly name, then use the disc for ingestion.
+                  </p>
+                </>
+              )}
+
+              {createSourceForm.operatorSourceType !== "icloud" && (
+                <label className={styles.formLabel}>
+                  {createSourceForm.operatorSourceType === "optical" ? "Current Optical Path" : "Root Path or Mount Point"}
+                  <input
+                    className={styles.formInput}
+                    value={createSourceForm.sourceRootPath}
+                    disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                    placeholder={createSourceForm.operatorSourceType === "nas"
+                      ? "\\\\server\\share\\folder"
+                      : createSourceForm.operatorSourceType === "optical"
+                        ? "E:\\"
+                      : "E:\\Archive\\Family Photos"}
+                    onChange={(event) => {
+                      resetSourceCreationOutcome();
+                      setCreateSourceForm((current) => ({ ...current, sourceRootPath: event.target.value }));
+                    }}
+                  />
+                </label>
+              )}
+
+              {createSourceForm.operatorSourceType === "icloud" && (
+                <>
+                  <label className={styles.formLabel}>
+                    iCloud Provider
+                    <input className={`${styles.formInput} ${styles.readOnlyInput}`} value="iCloud" readOnly />
+                  </label>
+                  <label className={styles.formLabel}>
+                    Account Username
+                    <input
+                      className={styles.formInput}
+                      value={createSourceForm.accountUsername}
+                      disabled={sourceCreationPhase === "confirming"}
+                      placeholder="name@example.com"
+                      onChange={(event) => {
+                        resetSourceCreationOutcome();
+                        setCreateSourceForm((current) => ({ ...current, accountUsername: event.target.value }));
+                      }}
+                    />
+                  </label>
+                  <label className={styles.formLabel}>
+                    Acquisition Method
+                    <select
+                      className={styles.formInput}
+                      value={createSourceForm.acquisitionMethod}
+                      disabled={sourceCreationPhase === "confirming"}
+                      onChange={(event) => {
+                        resetSourceCreationOutcome();
+                        setCreateSourceForm((current) => ({
+                          ...current,
+                          acquisitionMethod: event.target.value as SourceAcquisitionMethod,
+                        }));
+                      }}
+                    >
+                      {ACQUISITION_METHOD_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={styles.formLabel}>
+                    Managed Staging Path
+                    <input
+                      className={styles.formInput}
+                      value={createSourceForm.managedStagingPath || createManagedStagingPreview}
+                      disabled={sourceCreationPhase === "confirming"}
+                      placeholder={createManagedStagingPreview}
+                      onChange={(event) => {
+                        resetSourceCreationOutcome();
+                        setCreateSourceForm((current) => ({ ...current, managedStagingPath: event.target.value }));
+                      }}
+                    />
+                  </label>
+                </>
+              )}
+
+              <div className={styles.createSourceAction}>
+                <button
+                  type="button"
+                  className={styles.updateButton}
+                  disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                  onClick={() => {
+                    if (createSourceForm.operatorSourceType === "optical") {
+                      void handleUseOpticalDisc();
+                      return;
+                    }
+                    void handleCreateSource(false);
+                  }}
+                >
+                  {sourceCreationPhase === "planning"
+                    ? "Identifying..."
+                    : sourceCreationPhase === "confirming"
+                      ? "Creating..."
+                      : sourceCreationPhase === "selecting_existing"
+                        ? "Selecting Existing Source..."
+                      : createSourceForm.operatorSourceType === "icloud"
+                        ? "Create Source"
+                        : createSourceForm.operatorSourceType === "optical"
+                          ? "Use This Disc"
+                          : "Identify Location"}
+                </button>
+              </div>
+            </div>
+
+            {sourceCreationError && <p className={styles.bannerError}>{sourceCreationError}</p>}
+
+            {sourceCreationPlan && !sourceCreationResult && sourceCreationPhase === "selecting_existing" && (
+              <section className={styles.creationReview} aria-label="Existing Optical Source selected">
+                <div className={styles.workbenchSummaryHeader}>
+                  <div>
+                    <h4 className={styles.detailHeading}>Optical disc already known</h4>
+                    <p className={styles.helperText}>
+                      This disc matches an existing Optical identity. The existing Source is being selected; confirm the Source Selector and Step 3 update below.
+                    </p>
+                  </div>
+                  <span className={styles.pendingBadge}>known disc</span>
+                </div>
+                <div className={styles.creationResultGrid}>
+                  <div>
+                    <span className={styles.detailLabel}>Existing Device Name</span>
+                    <span>{sourceCreationPlan.device_name}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Existing Source Name</span>
+                    <span>{sourceCreationPlan.source_display_name}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Entered Friendly Name</span>
+                    <span>{createSourceForm.sourceLabel.trim() || "-"}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Durable Identity</span>
+                    <span className={durableIdentityBadgeClassName(sourceCreationPlan.durable_identity_status)}>
+                      {toDurableIdentityLabel(sourceCreationPlan.durable_identity_status)}
+                    </span>
+                  </div>
+                  <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationPlan.durable_identity_identifier ?? "-"}</span></div>
+                  <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationPlan.observed_path}</span></div>
+                </div>
+              </section>
+            )}
+
+            {sourceCreationPlan && !sourceCreationResult && sourceCreationPhase !== "selecting_existing" && (
+              <section className={styles.creationReview} aria-label="Create Source review">
+                <div className={styles.workbenchSummaryHeader}>
+                  <div>
+                    <h4 className={styles.detailHeading}>{sourceCreationPlan.recognition_title}</h4>
+                    <p className={styles.helperText}>{sourceCreationPlan.recognition_message}</p>
+                  </div>
+                  <span className={`${styles.pendingBadge} ${sourceCreationPlan.plan_status === "blocked" ? styles.readinessBadgeNotReady : ""}`}>
+                    {sourceCreationPlan.recognition_status.replace(/_/g, " ")}
+                  </span>
+                </div>
+
+                <div className={styles.creationResultGrid}>
+                  <div>
+                    <span className={styles.detailLabel}>Selected Source Type</span>
+                    <span>{getOperatorSourceTypeLabel(createSourceForm.operatorSourceType)}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Recognized Source Type</span>
+                    <span>{getOperatorSourceTypeLabel(sourceCreationPlan.recognized_source_type)}</span>
+                  </div>
+                  <div>
+                    <span className={styles.detailLabel}>Recognized Device</span>
+                    <span>{sourceCreationPlan.selected_existing_endpoint_id ? sourceCreationPlan.device_name : "New device"}</span>
+                  </div>
+                  <div><span className={styles.detailLabel}>Source Name</span><span>{sourceCreationPlan.source_display_name}</span></div>
+                  <div>
+                    <span className={styles.detailLabel}>Durable Identity</span>
+                    <span className={durableIdentityBadgeClassName(sourceCreationPlan.durable_identity_status)}>
+                      {toDurableIdentityLabel(sourceCreationPlan.durable_identity_status)}
+                    </span>
+                  </div>
+                  <div><span className={styles.detailLabel}>Identifier Type</span><span>{sourceCreationPlan.durable_identity_identifier_type ?? "-"}</span></div>
+                  <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationPlan.durable_identity_identifier ?? "-"}</span></div>
+                  <div>
+                    <span className={styles.detailLabel}>{getSourceCreationRootLabel(sourceCreationPlan.recognized_source_type)}</span>
+                    <span>{sourceCreationPlan.entire_endpoint_label ?? sourceCreationPlan.endpoint_relative_root}</span>
+                  </div>
+                  <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationPlan.observed_path}</span></div>
+                  <div><span className={styles.detailLabel}>Exact Action</span><span>{sourceCreationFinalActionLabel(sourceCreationPlan, sourceCreationNamingAction)}</span></div>
+                  {sourceCreationPlan.existing_source_status && (
+                    <div><span className={styles.detailLabel}>Existing Source Status</span><span>{sourceCreationPlan.existing_source_status}</span></div>
+                  )}
+                </div>
+
+                {sourceCreationPlan.possible_matches.length > 1 && (
+                  <div className={styles.createSourceDecision}>
+                    <label className={styles.formLabel}>
+                      Existing Device Identity
+                      <select
+                        className={styles.formInput}
+                        value={sourceCreationSelectedEndpointId ?? ""}
+                        onChange={(event) => {
+                          const parsed = Number(event.target.value);
+                          setSourceCreationSelectedEndpointId(Number.isInteger(parsed) && parsed > 0 ? parsed : null);
+                          setSourceCreationNamingAction(null);
+                          setSourceCreationReviewAcknowledged(false);
+                          setSourceCreationError(null);
+                        }}
+                      >
+                        <option value="">Select device...</option>
+                        {sourceCreationPlan.possible_matches.map((match) => (
+                          <option key={match.source_endpoint_id} value={match.source_endpoint_id}>
+                            {match.alias} ({match.match_strength === "legacy_review" ? "legacy review" : "verified match"})
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={sourceCreationSelectedEndpointId == null || sourceCreationPhase === "planning"}
+                      onClick={() => void handleIdentifySourceLocation(sourceCreationSelectedEndpointId)}
+                    >
+                      Review Selected Device
+                    </button>
+                  </div>
+                )}
+
+                {sourceCreationPlan.selected_existing_endpoint_id != null
+                  && (
+                  <div className={styles.createSourceDecision}>
+                    <span className={styles.detailLabel}>{getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)}</span>
+                    <p className={styles.helperText}>
+                      Recognized Device: <strong>{sourceCreationPlan.device_name}</strong>
+                    </p>
+                    <div className={styles.rowActions} role="group" aria-label={`${getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)} action`}>
+                      <button
+                        type="button"
+                        className={sourceCreationNamingAction === "use_existing" ? styles.updateButton : styles.button}
+                        onClick={() => {
+                          setSourceCreationNamingAction("use_existing");
+                          setCreateSourceForm((current) => ({ ...current, sourceLabel: "" }));
+                          setSourceCreationError(null);
+                        }}
+                      >
+                        Use Existing Name
+                      </button>
+                      <button
+                        type="button"
+                        className={sourceCreationNamingAction === "rename_existing" ? styles.updateButton : styles.button}
+                        onClick={() => {
+                          setSourceCreationNamingAction("rename_existing");
+                          setCreateSourceForm((current) => ({ ...current, sourceLabel: sourceCreationPlan.device_name }));
+                          setSourceCreationError(null);
+                        }}
+                      >
+                        {sourceCreationPlan.recognized_source_type === "removable"
+                          ? "Rename Media"
+                          : sourceCreationPlan.recognized_source_type === "optical"
+                            ? "Rename Disc"
+                            : "Rename Device"}
+                      </button>
+                      <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
+                        Cancel
+                      </button>
+                    </div>
+                    {sourceCreationNamingAction === "rename_existing" && (
+                      <label className={styles.formLabel}>
+                        {sourceCreationPlan.recognized_source_type === "removable"
+                          ? "New Media Name"
+                          : sourceCreationPlan.recognized_source_type === "optical"
+                            ? "New Disc Name"
+                            : "New Device Name"}
+                        <input
+                          className={styles.formInput}
+                          autoComplete="off"
+                          value={createSourceForm.sourceLabel}
+                          onChange={(event) => {
+                            setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                            setSourceCreationError(null);
+                          }}
+                        />
+                        <span className={styles.helperText}>
+                          Durable identity, Sources, roots, and history will not change.
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                )}
+
+                {sourceCreationAllowsEditableSourceName(sourceCreationPlan) && (
+                  <div className={styles.createSourceDecision}>
+                    <label className={styles.formLabel}>
+                      Source Name
+                      <input
+                        className={styles.formInput}
+                        autoComplete="off"
+                        value={sourceCreationSourceName}
+                        placeholder={sourceCreationPlan.suggested_source_name}
+                        onChange={(event) => {
+                          setSourceCreationSourceName(event.target.value);
+                          setSourceCreationError(null);
+                        }}
+                      />
+                      <span className={styles.helperText}>
+                        Suggested: {sourceCreationPlan.suggested_source_name}. Durable identity and root stay unchanged.
+                      </span>
+                      {sourceCreationPlan.source_name_suggested_alternative && (
+                        <span className={styles.helperText}>
+                          Alternative: {sourceCreationPlan.source_name_suggested_alternative}
+                        </span>
+                      )}
+                    </label>
+                  </div>
+                )}
+
+                {sourceCreationPlan.selected_existing_endpoint_id == null
+                  && sourceCreationPlan.possible_matches.length === 0
+                  && sourceCreationPlan.plan_status !== "blocked" && (
+                  <div className={styles.createSourceDecision}>
+                    <label className={styles.formLabel}>
+                      {getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)}
+                      <input
+                        className={styles.formInput}
+                        autoComplete="off"
+                        value={createSourceForm.sourceLabel}
+                        placeholder={sourceCreationPlan.recognized_source_type === "removable"
+                          ? "Name this recognized medium"
+                          : sourceCreationPlan.recognized_source_type === "optical"
+                            ? "Name this recognized disc"
+                            : "Name this recognized device"}
+                        onChange={(event) => {
+                          setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                          setSourceCreationNamingAction("create_new");
+                          setSourceCreationError(null);
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
+
+                {sourceCreationPlan.source_type_mismatch && (
+                  <div className={styles.createSourceDecision}>
+                    <p className={styles.inlineWarning}>
+                      This location is recognized as {getOperatorSourceTypeLabel(sourceCreationPlan.recognized_source_type)}.
+                      {sourceCreationPlan.selected_existing_endpoint_id
+                        ? " The registered category will be retained."
+                        : " The recognized technical category will be used."}
+                    </p>
+                    <div className={styles.rowActions}>
+                      <button
+                        type="button"
+                        className={sourceCreationUseRegisteredType ? styles.updateButton : styles.button}
+                        onClick={() => {
+                          setSourceCreationUseRegisteredType(true);
+                          setSourceCreationError(null);
+                        }}
+                      >
+                        Continue Using {getOperatorSourceTypeLabel(sourceCreationPlan.recognized_source_type)}
+                      </button>
+                      <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {sourceCreationPlan.exact_source_matches.length > 0 && (
+                  <div className={styles.createSourceDecision}>
+                    <span className={styles.detailLabel}>Existing Sources for This Location</span>
+                    <p className={styles.helperText}>
+                      This location already has Source records. The normal Create Source flow will not create another exact Source.
+                    </p>
+                    <p className={styles.helperText}>
+                      Detailed duplicate/legacy record information is available under Advanced Details.
+                    </p>
+                  </div>
+                )}
+
+                {sourceCreationPlan.blockers.map((blocker) => (
+                  <p className={styles.bannerError} key={blocker.code}>{blocker.message}</p>
+                ))}
+                {sourceCreationPlan.warnings.map((warning) => (
+                  <p className={styles.inlineWarning} key={warning.code}>{warning.message}</p>
+                ))}
+                {sourceCreationPlan.required_confirmations
+                  .filter((confirmation) => !SOURCE_CREATION_STRUCTURED_DECISION_CODES.has(confirmation.code))
+                  .map((confirmation) => (
+                    <p className={styles.inlineWarning} key={confirmation.code}>{confirmation.message}</p>
+                  ))}
+
+                {sourceCreationRequiresReviewAcknowledgment(sourceCreationPlan) && (
+                  <label className={styles.checkboxLabel}>
+                    <input
+                      type="checkbox"
+                      checked={sourceCreationReviewAcknowledged}
+                      onChange={(event) => setSourceCreationReviewAcknowledged(event.target.checked)}
+                    />
+                    I reviewed the identity evidence and want to complete the displayed action.
+                  </label>
+                )}
+
+                <details className={styles.advancedDetails}>
+                  <summary>Advanced Details</summary>
+                  <pre className={styles.advancedDetailsText}>{JSON.stringify({
+                    selected_existing_endpoint_id: sourceCreationPlan.selected_existing_endpoint_id,
+                    existing_source_profile_id: sourceCreationPlan.existing_source_profile_id,
+                    exact_source_matches: sourceCreationPlan.exact_source_matches,
+                    conflicting_source_profile_ids: sourceCreationPlan.conflicting_source_profile_ids,
+                    selected_canonical_source_id: sourceCreationPlan.selected_canonical_source_id,
+                    duplicate_source_ids_to_inactivate: sourceCreationPlan.duplicate_source_ids_to_inactivate,
+                    endpoint_action: sourceCreationPlan.endpoint_action,
+                    source_action: sourceCreationPlan.source_action,
+                    plan_fingerprint: sourceCreationPlan.plan_fingerprint,
+                    ...sourceCreationPlan.advanced_details,
+                  }, null, 2)}</pre>
+                </details>
+
+                {sourceCreationPlan.plan_status !== "blocked" && (
+                  <div className={styles.rowActions}>
+                    <button
+                      type="button"
+                      className={styles.updateButton}
+                      disabled={
+                        sourceCreationPhase === "planning"
+                        || sourceCreationPhase === "confirming"
+                        || (sourceCreationPlan.possible_matches.length > 1 && sourceCreationSelectedEndpointId == null)
+                        || sourceCreationNamingAction == null
+                        || (sourceCreationAllowsEditableSourceName(sourceCreationPlan) && !sourceCreationSourceName.trim())
+                        || ((sourceCreationNamingAction === "create_new" || sourceCreationNamingAction === "rename_existing")
+                          && !createSourceForm.sourceLabel.trim())
+                        || (sourceCreationPlan.source_type_mismatch && !sourceCreationUseRegisteredType)
+                        || (sourceCreationRequiresReviewAcknowledgment(sourceCreationPlan)
+                          && !sourceCreationReviewAcknowledged)
+                      }
+                      onClick={() => void handleCreateSource(true)}
+                    >
+                      {sourceCreationFinalActionLabel(sourceCreationPlan, sourceCreationNamingAction)}
+                    </button>
+                    <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {sourceCreationResult?.creation_status === "completed" && (
+              <section className={styles.creationReview} aria-label="Created Source result">
+                <div className={styles.workbenchSummaryHeader}>
+                  <h4 className={styles.detailHeading}>
+                    {sourceCreationResult.reactivated_source
+                      ? "Source reactivated"
+                      : sourceCreationResult.adopted_legacy_source
+                        ? "Existing Source adopted"
+                        : sourceCreationResult.reused_source
+                          ? "Existing Source selected"
+                          : "Source created"}
+                  </h4>
+                  <span className={styles.okBadge}>Completed</span>
+                </div>
+                <div className={styles.creationResultGrid}>
+                  <div><span className={styles.detailLabel}>{getSourceCreationDeviceLabel(sourceCreationResult.recognized_source_type)}</span><span>{sourceCreationResult.device_name}</span></div>
+                  <div><span className={styles.detailLabel}>Source Type</span><span>{getOperatorSourceTypeLabel(sourceCreationResult.recognized_source_type)}</span></div>
+                  <div><span className={styles.detailLabel}>Durable Identity</span><span>{toDurableIdentityLabel(sourceCreationResult.durable_identity_status)}</span></div>
+                  <div><span className={styles.detailLabel}>Identifier Type</span><span>{sourceCreationResult.durable_identity_identifier_type ?? "-"}</span></div>
+                  <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationResult.durable_identity_identifier ?? "-"}</span></div>
+                  <div><span className={styles.detailLabel}>{getSourceCreationRootLabel(sourceCreationResult.recognized_source_type)}</span><span>{sourceCreationResult.entire_endpoint_label ?? sourceCreationResult.endpoint_relative_root}</span></div>
+                  <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationResult.observed_path}</span></div>
+                  <div><span className={styles.detailLabel}>Source Name</span><span>{sourceCreationResult.source_display_name}</span></div>
+                  <div><span className={styles.detailLabel}>Action Completed</span><span>{sourceCreationCompletedActionLabel(sourceCreationResult)}</span></div>
+                </div>
+                <details className={styles.advancedDetails}>
+                  <summary>Advanced Details</summary>
+                  <pre className={styles.advancedDetailsText}>{JSON.stringify(sourceCreationResult.advanced_details, null, 2)}</pre>
+                </details>
+              </section>
+            )}
+
+            {createdIcloudSource && (
+              <section className={styles.creationReview} aria-label="Created iCloud Source result">
+                <div className={styles.workbenchSummaryHeader}>
+                  <h4 className={styles.detailHeading}>iCloud source created</h4>
+                  <span className={styles.okBadge}>Provider-specific</span>
+                </div>
+                <div className={styles.creationResultGrid}>
+                  <div><span className={styles.detailLabel}>Device Name</span><span>{createdIcloudSource.source_label}</span></div>
+                  <div><span className={styles.detailLabel}>Source Type</span><span>iCloud</span></div>
+                  <div><span className={styles.detailLabel}>Durable Identity</span><span>Provider-specific</span></div>
+                  <div><span className={styles.detailLabel}>Managed Staging Path</span><span>{createdIcloudSource.managed_staging_path ?? "-"}</span></div>
+                </div>
+              </section>
+            )}
+        </div>
+      </section>
+
+      <section className={styles.workbenchPanel} aria-labelledby="source-selector-title">
+        <div className={styles.workbenchHeader}>
+          <div>
+            <h3 id="source-selector-title" className={styles.runPanelTitle}>Source Selector</h3>
+          </div>
+          <div className={styles.rowActions}>
+            <button
+              type="button"
+              className={styles.button}
+              onClick={() => void loadProfiles({ refreshOnly: true, clearRowErrors: true })}
+              disabled={isLoading || isRefreshing}
+            >
+              {isRefreshing ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+        </div>
+
+        <div className={styles.workbenchControls}>
+          <div className={styles.workbenchControlGroup}>
+            <span className={styles.detailLabel}>Source Type</span>
+            <div className={styles.segmentedControl} role="group" aria-label="Source type">
+              {workbenchSourceTypeOptions.length === 0 && (
+                <span className={styles.detailMeta}>No active selectable Sources</span>
+              )}
+              {workbenchSourceTypeOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`${styles.segmentButton} ${workbenchSourceType === option.value ? styles.segmentButtonActive : ""}`}
+                  onClick={() => {
+                    setWorkbenchSourceType(option.value);
+                    setSelectedWorkbenchDeviceKey(null);
+                    setSelectedWorkbenchSourceId(null);
+                    setSourceSelectionResult(null);
+                    setSourceSelectionError(null);
+                  }}
+                  aria-pressed={workbenchSourceType === option.value}
+                  disabled={option.disabled || isSourceIntakeActive}
+                  title={option.disabled ? "Coming later" : undefined}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className={styles.formLabel}>
+            Device
+            <select
+              className={styles.formInput}
+              value={selectedWorkbenchDeviceKey ?? ""}
+              onChange={(event) => {
+                setSelectedWorkbenchDeviceKey(event.target.value || null);
+                setSelectedWorkbenchSourceId(null);
+                setSourceSelectionResult(null);
+                setSourceSelectionError(null);
+              }}
+              disabled={workbenchDevices.length === 0 || isSourceIntakeActive}
+            >
+              {workbenchDevices.length === 0 ? (
+                <option value="">No matching devices</option>
+              ) : (
+                workbenchDevices.map((device) => (
+                  <option key={device.key} value={device.key}>
+                    {device.label} ({device.profiles.length})
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+
+          <label className={styles.formLabel}>
+            Source
+            <select
+              className={styles.formInput}
+              value={selectedWorkbenchSourceId ?? ""}
+              onChange={(event) => {
+                setSelectedWorkbenchSourceId(event.target.value ? Number(event.target.value) : null);
+                setSourceSelectionResult(null);
+                setSourceSelectionError(null);
+              }}
+              disabled={workbenchSourceOptions.length === 0 || isSourceIntakeActive}
+            >
+              {workbenchSourceOptions.length === 0 ? (
+                <option value="">No matching sources</option>
+              ) : (
+                workbenchSourceOptions.map((profile) => (
+                  <option key={profile.source_id} value={profile.source_id}>
+                    {profile.source_label}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+        </div>
+
+        {workbenchProfiles.length === 0 ? (
+          <p className={styles.empty}>
+            No active {getOperatorSourceTypeLabel(workbenchSourceType)} sources found. Create a Source or choose another Source Type.
+          </p>
+        ) : selectedWorkbenchProfile ? (
+          <div className={styles.workbenchSummary}>
+            <div className={styles.workbenchSummaryHeader}>
+              <div className={styles.labelCell}>
+                <span>{selectedWorkbenchProfile.source_label}</span>
+                <span className={styles.statusBadge}>{selectedWorkbenchProfile.profile_status}</span>
+              </div>
+              <div className={styles.rowActions}>
+                <button type="button" className={styles.updateButton} onClick={() => openDetailsDrawer(selectedWorkbenchProfile)}>
+                  Details
+                </button>
+                <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(selectedWorkbenchProfile)}>
+                  Manage
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={() => void handleSelectWorkbenchSource()}
+                  disabled={isSelectingSource || isSourceIntakeActive}
+                >
+                  {isSelectingSource
+                    ? workbenchSourceType === "optical" ? "Checking optical disc..." : "Selecting..."
+                    : "Select Source"}
+                </button>
+              </div>
+            </div>
+
+            <div className={styles.detailGrid}>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Device</span>
+                <span>{selectedWorkbenchDevice?.label ?? "-"}</span>
+                <span className={styles.detailMeta}>{selectedWorkbenchDevice?.meta ?? "No device selected"}</span>
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Read-only Source Root</span>
+                <input
+                  className={`${styles.formInput} ${styles.readOnlyInput}`}
+                  value={sourceSelectionResult?.selected_source_context?.root_display ?? getSourcePathOrProviderHint(selectedWorkbenchProfile)}
+                  readOnly
+                />
+                {selectedWorkbenchProfile.cloud_provider && (
+                  <span className={styles.detailMeta}>Provider: {formatSourceProvider(selectedWorkbenchProfile.cloud_provider)}</span>
+                )}
+                {!selectedWorkbenchProfile.cloud_provider && selectedWorkbenchProfile.endpoint_relative_root != null && (
+                  <span className={styles.detailMeta}>Relative root: {selectedWorkbenchProfile.endpoint_relative_root || "Entire endpoint"}</span>
+                )}
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Selection</span>
+                <span className={getSourceSelectionBadgeClassName(sourceSelectionResult)}>
+                  {getSourceSelectionStatusLabel(sourceSelectionResult)}
+                </span>
+                <span className={styles.detailMeta}>
+                  {sourceSelectionError ?? sourceSelectionResult?.message ?? "Select Source to verify availability and durable identity."}
+                </span>
+                {sourceSelectionResult?.retry_guidance && (
+                  <span className={styles.detailMeta}>{sourceSelectionResult.retry_guidance}</span>
+                )}
+              </div>
+              <div className={styles.detailCard}>
+                <span className={styles.detailLabel}>Workflow</span>
+                <span>{sourceSelectionResult?.workflow_kind === "icloud_intake" ? "iCloud Intake" : getSourceWorkflowDisplay(selectedWorkbenchProfile)}</span>
+                <span className={styles.detailMeta}>{getSourceWorkflowPlaceholder(selectedWorkbenchProfile)}</span>
+              </div>
+            </div>
+            {sourceSelectionResult && (
+              <details className={styles.advancedDetails}>
+                <summary>Advanced Details</summary>
+                <pre className={styles.advancedDetailsText}>{JSON.stringify({
+                  selected_source_context: sourceSelectionResult.selected_source_context,
+                  advanced_details: sourceSelectionResult.advanced_details,
+                }, null, 2)}</pre>
+              </details>
+            )}
+            {sourceSelectionResult?.result === "selected"
+              && sourceSelectionResult.availability === "available"
+              && sourceSelectionResult.workflow_kind
+              && sourceSelectionResult.selected_source_context ? (
+                sourceSelectionResult.workflow_kind === "icloud_intake" ? (
+                  <IcloudRunWorkflowPanel
+                    selectedSourceId={sourceSelectionResult.selected_source_context.source_profile_id}
+                    selectedSourceLabel={sourceSelectionResult.selected_source_context.source_name}
+                    selectedSourceContext={sourceSelectionResult.selected_source_context}
+                    onActionComplete={() => {
+                      void loadProfiles({ refreshOnly: true, resetBanner: false });
+                    }}
+                  />
+                ) : (
+                  <section className={styles.runPanel} aria-label="Filesystem Source Intake Step 3">
+                    <div className={styles.runPanelHeader}>
+                      <div>
+                        <h3 className={styles.runPanelTitle}>Filesystem Source Intake</h3>
+                        <p className={styles.helperText}>Run ingestion for the selected Source. The backend will revalidate the Source before launch.</p>
+                      </div>
+                    </div>
+
+                    <>
+                        <div className={styles.detailGrid}>
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Source</span>
+                            <span>{sourceSelectionResult.selected_source_context.source_name}</span>
+                            <span className={styles.detailMeta}>{sourceSelectionResult.selected_source_context.friendly_source_type}</span>
+                          </div>
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Device / Media</span>
+                            <span>{sourceSelectionResult.selected_source_context.device_label}</span>
+                            <span className={styles.detailMeta}>Identity: {sourceSelectionResult.selected_source_context.identity_match_status}</span>
+                          </div>
+                          <div className={styles.detailCard}>
+                            <span className={styles.detailLabel}>Resolved Source Root</span>
+                            <input
+                              className={`${styles.formInput} ${styles.readOnlyInput}`}
+                              value={sourceSelectionResult.selected_source_context.root_display}
+                              readOnly
+                            />
+                            <span className={styles.detailMeta}>Read-only; execution revalidates this root before launch.</span>
+                          </div>
+                        </div>
+
+                        <div className={styles.runOptionsGrid}>
+                          <label className={styles.formLabel}>
+                            Total Limit
+                            <input
+                              className={styles.formInput}
+                              value={runLimitInput}
+                              onChange={(event) => setRunLimitInput(event.target.value)}
+                              placeholder="No limit"
+                              disabled={isSourceIntakeActive || isRunActionLoading}
+                            />
+                          </label>
+                          <label className={styles.formLabel}>
+                            Batch Size
+                            <input
+                              className={styles.formInput}
+                              value={runBatchSizeInput}
+                              onChange={(event) => setRunBatchSizeInput(event.target.value)}
+                              disabled={isSourceIntakeActive || isRunActionLoading}
+                            />
+                          </label>
+                        </div>
+
+                        {sourceSelectionResult.selected_source_context.source_endpoint_id == null && (
+                          <label className={styles.checkboxLabel}>
+                            <input
+                              type="checkbox"
+                              checked={runReadinessAcknowledged}
+                              onChange={(event) => setRunReadinessAcknowledged(event.target.checked)}
+                              disabled={isSourceIntakeActive || isRunActionLoading}
+                            />
+                            I reviewed this compatibility Source and want to run Source Intake if backend readiness permits it.
+                          </label>
+                        )}
+
+                        {(runLimitValidationError || runBatchSizeValidationError || runOptionsError || runIngestionDispatchError) && (
+                          <p className={styles.errorText}>
+                            {runLimitValidationError ?? runBatchSizeValidationError ?? runOptionsError ?? runIngestionDispatchError}
+                          </p>
+                        )}
+                        {runIngestionDispatchResult && (
+                          <p className={runIngestionDispatchResult.result === "started" ? styles.successText : styles.inlineWarning}>
+                            {runIngestionDispatchResult.next_action
+                              ? `${runIngestionDispatchResult.message} ${runIngestionDispatchResult.next_action}`
+                              : runIngestionDispatchResult.message}
+                          </p>
+                        )}
+
+                        <div className={styles.rowActions}>
+                          <button
+                            type="button"
+                            className={styles.runButton}
+                            onClick={() => void handleDispatchFilesystemRunIngestion()}
+                            disabled={
+                              isRunActionLoading
+                              || isSourceIntakeActive
+                              || Boolean(runLimitValidationError || runBatchSizeValidationError)
+                            }
+                          >
+                            {isRunActionLoading ? "Starting..." : "Run Ingestion"}
+                          </button>
+                          {isSourceIntakeActive && (
+                            <button
+                              type="button"
+                              className={styles.stopButton}
+                              onClick={() => void handleRequestStop()}
+                              disabled={isRunActionLoading || sourceIntakeStatus?.status === "stop_requested"}
+                            >
+                              {sourceIntakeStatus?.status === "stop_requested" ? "Stop Requested" : "Request Stop"}
+                            </button>
+                          )}
+                        </div>
+                    </>
+                  </section>
+                )
+              ) : (
+                <div className={styles.stepPlaceholder}>
+                  <span className={styles.detailLabel}>Step 3</span>
+                  <span>Select and verify a Source to continue.</span>
+                  <span className={styles.detailMeta}>No Run Ingestion action is available until Source Selection succeeds.</span>
+                </div>
+              )}
+          </div>
+        ) : null}
+      </section>
 
       {sourceIntakeStatus && isSourceIntakeActive && (
         <section className={styles.runPanel}>
@@ -2470,6 +5169,39 @@ export default function IngestionView() {
         </section>
       )}
 
+      {!isSourceIntakeActive && !showTerminalSummary && (
+        <section className={styles.runPanel}>
+          <div className={styles.runPanelHeader}>
+            <h3 className={styles.runPanelTitle}>Last Source Intake Summary</h3>
+            <div className={styles.rowActions}>
+              {activeRunReport?.report_filename && (
+                <button
+                  type="button"
+                  className={styles.updateButton}
+                  onClick={() => handleToggleReportSummary(activeRunReport.report_filename)}
+                >
+                  {selectedReportFilename === activeRunReport.report_filename ? "Hide Report Summary" : "View Report Summary"}
+                </button>
+              )}
+            </div>
+          </div>
+          {activeRunReport ? (
+            <div className={styles.runMetrics}>
+              <span><strong>Source:</strong> {activeRunReport.source_label ?? "-"}</span>
+              <span><strong>Generated:</strong> {toDisplayDate(activeRunReport.generated_at_utc)}</span>
+              <span><strong>Scanned:</strong> {activeRunReport.counts?.total_files_scanned ?? "-"}</span>
+              <span><strong>Selected:</strong> {activeRunReport.counts?.selected_for_session ?? "-"}</span>
+              <span><strong>Processed New:</strong> {activeRunReport.counts?.processed_new_unique ?? "-"}</span>
+              <span><strong>Skipped Known:</strong> {activeRunReport.counts?.skipped_already_known ?? "-"}</span>
+              <span><strong>Failed/Rejected:</strong> {activeRunReport.counts?.failed_or_rejected ?? "-"}</span>
+              <span><strong>Source Complete:</strong> {activeRunReport.source_complete == null ? "-" : activeRunReport.source_complete ? "Yes" : "No"}</span>
+            </div>
+          ) : (
+            <p className={styles.helperText}>No Source Intake run summary is available yet.</p>
+          )}
+        </section>
+      )}
+
       {selectedReportFilename && (
         <section className={styles.runPanel}>
           <div className={styles.runPanelHeader}>
@@ -2525,8 +5257,6 @@ export default function IngestionView() {
                 <span><strong>Source Complete:</strong> {selectedReportSummary?.source_complete == null ? "-" : selectedReportSummary.source_complete ? "Yes" : "No"}</span>
               </div>
 
-              <p className={styles.placeholder}>Full Source Intake report details remain available in Admin.</p>
-
               {selectedReportDetail && (
                 <details className={styles.errorDetails}>
                   <summary>Show raw report details</summary>
@@ -2545,120 +5275,183 @@ export default function IngestionView() {
         </details>
       )}
 
-      {isLoading ? (
-        <p className={styles.empty}>Loading source profiles...</p>
-      ) : profiles.length === 0 ? (
-        <p className={styles.empty}>No source profiles match the selected status filter.</p>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Source Label</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Root Path</th>
-                <th>Cloud Provider</th>
-                <th>Acquisition Method</th>
-                <th>Managed Staging Path</th>
-                <th>Account Username (Masked)</th>
-                <th>First Seen</th>
-                <th>Last Run</th>
-                <th>Reference Counts</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {profiles.map((profile) => {
-                const isReferenced = hasHistoricalReferences(profile);
-                return (
-                  <tr key={profile.source_id}>
-                    <td>
-                      <div className={styles.labelCell}>
-                        <span>{profile.source_label}</span>
-                        <span className={isReferenced ? styles.referenceBadge : styles.unreferencedBadge}>
-                          {isReferenced ? "Referenced" : "Unreferenced"}
-                        </span>
-                      </div>
-                    </td>
-                    <td>{profile.source_type}</td>
-                    <td>
-                      <span className={styles.statusBadge}>{profile.profile_status}</span>
-                    </td>
-                    <td className={styles.pathCell}>{profile.source_root_path ?? "-"}</td>
-                    <td>{profile.cloud_provider ?? "-"}</td>
-                    <td>{profile.acquisition_method ?? "-"}</td>
-                    <td className={styles.pathCell}>{profile.managed_staging_path ?? "-"}</td>
-                    <td>{profile.account_username_masked ?? "-"}</td>
-                    <td>{toDisplayDate(profile.first_seen_at)}</td>
-                    <td>
-                      {(() => {
-                        const latestReport = latestReportBySourceId.get(profile.source_id);
-                        if (!latestReport) {
-                          return (
-                            <span className={styles.lastRunSummary}>
-                              {(profile.source_intake_runs_count ?? 0) > 0
-                                ? "No recent run found in available report history."
-                                : "Last run: no run found"}
-                            </span>
-                          );
-                        }
-                        return (
-                          <span className={styles.lastRunSummary}>
-                            {buildLastRunSummaryText(latestReport, profile, sourceIntakeStatus)}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    <td>
-                      <div className={styles.counts}>
-                        <span>Provenance: {profile.provenance_count ?? 0}</span>
-                        <span>Ingestion: {profile.ingestion_runs_count ?? 0}</span>
-                        <span>Source Intake: {profile.source_intake_runs_count ?? 0}</span>
-                        <span>iCloud Runs: {profile.icloud_acquisition_runs_count ?? 0}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.rowActions}>
-                        {(() => {
-                          const disabledReason = getRunDisabledReason(profile);
-                          const isDisabledForActiveRun = isSourceIntakeActive && disabledReason == null;
-                          const effectiveReason = isDisabledForActiveRun
-                            ? "Another Source Intake run is already active."
-                            : disabledReason;
-                          const rowRunError = rowRunErrors[profile.source_id];
-                          const isChecking = runPreflightSourceId === profile.source_id;
-
-                          return (
-                            <>
-                              <button
-                                type="button"
-                                className={styles.runButton}
-                                onClick={() => void handleRunIntakeClick(profile)}
-                                disabled={Boolean(effectiveReason) || isChecking || isRunActionLoading}
-                              >
-                                {isChecking ? "Checking..." : "Run Intake"}
-                              </button>
-                              {effectiveReason && <span className={styles.disabledReason}>{effectiveReason}</span>}
-                              {rowRunError && <span className={styles.rowError}>{rowRunError}</span>}
-                            </>
-                          );
-                        })()}
-                        <button type="button" className={styles.updateButton} onClick={() => openDetailsDrawer(profile)}>
-                          Details
-                        </button>
-                        <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(profile)}>
-                          Manage
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <section className={styles.runPanel} aria-label="Reference and history">
+        <div className={styles.runPanelHeader}>
+          <div>
+            <h3 className={styles.runPanelTitle}>Reference and History</h3>
+            <p className={styles.helperText}>Source lists and older intake runs are collapsed by default.</p>
+          </div>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={() => void loadProfiles({ refreshOnly: true, clearRowErrors: true })}
+            disabled={isLoading || isRefreshing}
+          >
+            {isRefreshing ? "Refreshing..." : "Refresh Sources"}
+          </button>
         </div>
-      )}
+
+        <details
+          className={styles.errorDetails}
+          open={isKnownSourcesExpanded}
+          onToggle={(event) => setIsKnownSourcesExpanded(event.currentTarget.open)}
+        >
+          <summary>Known Sources ({registryProfiles.length})</summary>
+          <div className={styles.rowActions}>
+            <label className={styles.formLabel}>
+              Status filter
+              <select
+                className={styles.formInput}
+                value={statusFilter}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value as StatusFilter);
+                  setKnownSourcesPage(1);
+                }}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className={styles.helperText}>
+              Active shown: {countsSummary.active}; Archived/Test/Deprecated shown: {countsSummary.nonActive}
+            </span>
+          </div>
+          {isLoading ? (
+            <p className={styles.empty}>Loading source profiles...</p>
+          ) : profiles.length === 0 ? (
+            <p className={styles.empty}>No source profiles found.</p>
+          ) : sortedKnownSources.length === 0 ? (
+            <p className={styles.empty}>No source profiles match the selected status filter.</p>
+          ) : (
+            <>
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("source")}>Source {knownSourcesSort.key === "source" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("type")}>Type {knownSourcesSort.key === "type" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("status")}>Status {knownSourcesSort.key === "status" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("availability")}>Availability {knownSourcesSort.key === "availability" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th>Root / Provider</th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("last_used")}>Last Used {knownSourcesSort.key === "last_used" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleKnownSources.map((profile) => {
+                      const latestReport = latestReportBySourceId.get(profile.source_id);
+                      return (
+                        <tr key={profile.source_id}>
+                          <td>{profile.source_label}</td>
+                          <td>{getOperatorSourceTypeLabel(getOperatorSourceType(profile))}</td>
+                          <td><span className={styles.statusBadge}>{profile.profile_status}</span></td>
+                          <td>{getKnownSourceAvailability(profile)}</td>
+                          <td className={styles.pathCell}>
+                            {profile.managed_staging_path ?? profile.source_root_path ?? profile.account_username_masked ?? "-"}
+                          </td>
+                          <td>
+                            {latestReport
+                              ? toDisplayDate(latestReport.generated_at_utc)
+                              : toDisplayDate(profile.last_run_at)}
+                          </td>
+                          <td>
+                            <div className={styles.rowActions}>
+                              <button type="button" className={styles.updateButton} onClick={() => openDetailsDrawer(profile)}>
+                                Details
+                              </button>
+                              <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(profile)}>
+                                Manage
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className={styles.rowActions}>
+                <button type="button" className={styles.button} disabled={knownSourcesPageSafe <= 1} onClick={() => setKnownSourcesPage((page) => Math.max(1, page - 1))}>
+                  Previous
+                </button>
+                <span className={styles.helperText}>Page {knownSourcesPageSafe} of {knownSourcesTotalPages} · showing {visibleKnownSources.length} of {sortedKnownSources.length}</span>
+                <button type="button" className={styles.button} disabled={knownSourcesPageSafe >= knownSourcesTotalPages} onClick={() => setKnownSourcesPage((page) => Math.min(knownSourcesTotalPages, page + 1))}>
+                  Next
+                </button>
+              </div>
+            </>
+          )}
+        </details>
+
+        <details
+          className={styles.errorDetails}
+          open={isSourceIntakeHistoryExpanded}
+          onToggle={(event) => setIsSourceIntakeHistoryExpanded(event.currentTarget.open)}
+        >
+          <summary>Source Intake History ({sourceIntakeReports.length} runs)</summary>
+          {sourceIntakeReports.length === 0 ? (
+            <p className={styles.empty}>No Source Intake reports found.</p>
+          ) : (
+            <>
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("started")}>Started {sourceIntakeHistorySort.key === "started" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("source")}>Source {sourceIntakeHistorySort.key === "source" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("type")}>Type {sourceIntakeHistorySort.key === "type" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("result")}>Result {sourceIntakeHistorySort.key === "result" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("scanned")}>Scanned {sourceIntakeHistorySort.key === "scanned" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("new")}>New {sourceIntakeHistorySort.key === "new" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("skipped")}>Skipped {sourceIntakeHistorySort.key === "skipped" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("failed")}>Failed {sourceIntakeHistorySort.key === "failed" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th>Report</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleSourceIntakeReports.map((report) => {
+                      const reportProfile = report.ingestion_source_id != null ? sourceProfileById.get(report.ingestion_source_id) ?? null : null;
+                      return (
+                        <tr key={report.report_filename}>
+                          <td>{toDisplayDate(report.generated_at_utc)}</td>
+                          <td>{report.source_label ?? "-"}</td>
+                          <td>{reportProfile ? getOperatorSourceTypeLabel(getOperatorSourceType(reportProfile)) : "-"}</td>
+                          <td>{report.source_complete == null ? "-" : report.source_complete ? "Complete" : "Incomplete"}</td>
+                          <td>{report.counts?.total_files_scanned ?? "-"}</td>
+                          <td>{report.counts?.processed_new_unique ?? "-"}</td>
+                          <td>{report.counts?.skipped_already_known ?? "-"}</td>
+                          <td>{report.counts?.failed_or_rejected ?? "-"}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className={styles.updateButton}
+                              onClick={() => handleToggleReportSummary(report.report_filename)}
+                            >
+                              {selectedReportFilename === report.report_filename ? "Hide" : "View"}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className={styles.rowActions}>
+                <button type="button" className={styles.button} disabled={sourceIntakeHistoryPageSafe <= 1} onClick={() => setSourceIntakeHistoryPage((page) => Math.max(1, page - 1))}>
+                  Previous
+                </button>
+                <span className={styles.helperText}>Page {sourceIntakeHistoryPageSafe} of {sourceIntakeHistoryTotalPages} · showing {visibleSourceIntakeReports.length} of {sortedSourceIntakeReports.length}</span>
+                <button type="button" className={styles.button} disabled={sourceIntakeHistoryPageSafe >= sourceIntakeHistoryTotalPages} onClick={() => setSourceIntakeHistoryPage((page) => Math.min(sourceIntakeHistoryTotalPages, page + 1))}>
+                  Next
+                </button>
+              </div>
+            </>
+          )}
+        </details>
+      </section>
 
       {isEditorOpen && (
         <div className={styles.drawerBackdrop} role="dialog" aria-modal="true">
@@ -2666,15 +5459,20 @@ export default function IngestionView() {
             <div className={styles.drawerHeader}>
               <div>
                 <h3 className={styles.drawerTitle}>
-                  {editorMode === "create" ? "Create Source Profile" : "Manage Source Profile Status"}
+                  {editorMode === "create" ? "Create Source" : "Manage Source Status"}
                 </h3>
                 <p className={styles.drawerSubtitle}>
                   {editorMode === "create"
-                    ? "Create a safe metadata profile without starting ingestion."
+                    ? "Create a source without starting ingestion."
                     : "Manage lifecycle status while preserving historical source identity."}
                 </p>
               </div>
-              <button type="button" className={styles.closeButton} onClick={closeEditor} disabled={isSavingEditor}>
+              <button
+                type="button"
+                className={styles.closeButton}
+                onClick={closeEditor}
+                disabled={isSavingEditor || sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming"}
+              >
                 Close
               </button>
             </div>
@@ -2692,12 +5490,27 @@ export default function IngestionView() {
 
             <div className={styles.formGrid}>
               <label className={styles.formLabel}>
-                Source Label
+                Source Name
                 {editorMode === "create" ? (
                   <input
                     className={styles.formInput}
+                    autoComplete="off"
                     value={editorForm.sourceLabel}
-                    onChange={(event) => setEditorForm((prev) => ({ ...prev, sourceLabel: event.target.value }))}
+                    disabled={sourceIdentityPhase !== "idle"}
+                    onChange={(event) => {
+                      const nextLabel = event.target.value;
+                      const previousLabel = editorForm.sourceLabel.trim();
+                      setEditorForm((prev) => ({ ...prev, sourceLabel: nextLabel }));
+                      if (sourceIdentityEnrollRequested) {
+                        setSourceIdentityAlias((prevAlias) => {
+                          const trimmedAlias = prevAlias.trim();
+                          if (!trimmedAlias || trimmedAlias === previousLabel) {
+                            return nextLabel.trim();
+                          }
+                          return prevAlias;
+                        });
+                      }
+                    }}
                     placeholder="Chuck PC"
                   />
                 ) : (
@@ -2710,57 +5523,106 @@ export default function IngestionView() {
                 {editorMode === "create" ? (
                   <select
                     className={styles.formInput}
+                    value={editorForm.operatorSourceType}
+                    disabled={sourceIdentityPhase !== "idle"}
+                    onChange={(event) => {
+                      const operatorSourceType = event.target.value as OperatorSourceType;
+                      const sourceType = persistedSourceTypeForOperator(operatorSourceType);
+                      resetSourceIdentityEnrollmentState();
+                      setSourceIdentityEnrollRequested(probeSourceTypeForOperator(operatorSourceType) != null);
+                      setEditorForm((prev) => ({
+                        ...prev,
+                        operatorSourceType,
+                        sourceType,
+                        cloudProvider: operatorSourceType === "icloud" ? "icloud" : prev.cloudProvider,
+                        acquisitionMethod: operatorSourceType === "icloud" ? "icloudpd" : prev.acquisitionMethod,
+                      }));
+                    }}
+                  >
+                    {OPERATOR_SOURCE_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value} disabled={option.disabled}>
+                        {option.label}{option.disabled ? " - coming later" : ""}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className={`${styles.formInput} ${styles.readOnlyInput}`}
+                    value={getOperatorSourceTypeLabel(editorForm.operatorSourceType)}
+                    readOnly
+                  />
+                )}
+              </label>
+
+              {editorMode === "create" && editorForm.operatorSourceType === "advanced" && (
+                <label className={styles.formLabel}>
+                  Legacy Type
+                  <select
+                    className={styles.formInput}
                     value={editorForm.sourceType}
+                    disabled={sourceIdentityPhase !== "idle"}
                     onChange={(event) => {
                       const sourceType = event.target.value as SourceProfileType;
                       setEditorForm((prev) => ({
                         ...prev,
                         sourceType,
-                        cloudProvider: sourceType === "cloud_export" ? prev.cloudProvider : "icloud",
-                        acquisitionMethod: sourceType === "cloud_export" ? prev.acquisitionMethod : "icloudpd",
+                        cloudProvider: sourceType === "cloud_export" ? "other" : prev.cloudProvider,
                       }));
                     }}
                   >
-                    {SOURCE_TYPE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
+                    {ADVANCED_SOURCE_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
-                ) : (
-                  <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.sourceType} readOnly />
-                )}
-              </label>
+                </label>
+              )}
 
-              <label className={styles.formLabel}>
-                Profile Status
-                <select
-                  className={styles.formInput}
-                  value={editorForm.profileStatus}
-                  onChange={(event) => setEditorForm((prev) => ({
-                    ...prev,
-                    profileStatus: event.target.value as SourceProfileStatus,
-                  }))}
-                >
-                  {EDITABLE_STATUS_OPTIONS.map((statusValue) => (
-                    <option key={statusValue} value={statusValue}>
-                      {statusValue}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {editorMode === "edit" && (
+                <label className={styles.formLabel}>
+                  Profile Status
+                  <select
+                    className={styles.formInput}
+                    value={editorForm.profileStatus}
+                    onChange={(event) => setEditorForm((prev) => ({
+                      ...prev,
+                      profileStatus: event.target.value as SourceProfileStatus,
+                    }))}
+                  >
+                    {EDITABLE_STATUS_OPTIONS.map((statusValue) => (
+                      <option key={statusValue} value={statusValue}>{statusValue}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               {!isIcloudCloudExport(editorForm) && (
                 <label className={styles.formLabel}>
-                  Source Root Path
+                  Location / Root Path
                   {editorMode === "create" ? (
                     <input
                       className={styles.formInput}
+                      autoComplete="off"
                       value={editorForm.sourceRootPath}
+                      disabled={sourceIdentityPhase !== "idle"}
                       onChange={(event) => setEditorForm((prev) => ({
                         ...prev,
                         sourceRootPath: event.target.value,
                       }))}
+                      onBlur={() => {
+                        setSourceIdentityPlan(null);
+                        setSourceIdentityConfirmResult(null);
+                        setSourceIdentityPhase("idle");
+                        setSourceIdentitySelectedEndpointId(null);
+                        setSourceIdentityReviewAcknowledged(false);
+                        setSourceIdentityProbeRequest(null);
+                        if (!editorForm.sourceLabel.trim()) {
+                          const suggestion = suggestSourceName(editorForm.operatorSourceType, editorForm.sourceRootPath);
+                          if (suggestion) {
+                            setEditorForm((prev) => ({ ...prev, sourceLabel: suggestion }));
+                            setSourceIdentityAlias(suggestion);
+                          }
+                        }
+                      }}
                       placeholder="C:\\Users\\chhen\\Pictures"
                     />
                   ) : (
@@ -2777,6 +5639,7 @@ export default function IngestionView() {
                       <select
                         className={styles.formInput}
                         value={editorForm.cloudProvider}
+                        disabled={sourceIdentityPhase !== "idle"}
                         onChange={(event) => setEditorForm((prev) => ({
                           ...prev,
                           cloudProvider: event.target.value as SourceCloudProvider,
@@ -2799,6 +5662,7 @@ export default function IngestionView() {
                       <select
                         className={styles.formInput}
                         value={editorForm.acquisitionMethod}
+                        disabled={sourceIdentityPhase !== "idle"}
                         onChange={(event) => setEditorForm((prev) => ({
                           ...prev,
                           acquisitionMethod: event.target.value as SourceAcquisitionMethod,
@@ -2821,6 +5685,7 @@ export default function IngestionView() {
                       <input
                         className={styles.formInput}
                         value={editorForm.accountUsername}
+                        disabled={sourceIdentityPhase !== "idle"}
                         onChange={(event) => setEditorForm((prev) => ({
                           ...prev,
                           accountUsername: event.target.value,
@@ -2838,6 +5703,7 @@ export default function IngestionView() {
                       <input
                         className={styles.formInput}
                         value={editorForm.managedStagingPath || managedStagingPreview}
+                        disabled={sourceIdentityPhase !== "idle"}
                         onChange={(event) => setEditorForm((prev) => ({
                           ...prev,
                           managedStagingPath: event.target.value,
@@ -2876,6 +5742,235 @@ export default function IngestionView() {
               </div>
             ) : null}
 
+            {editorMode === "create" && (
+              <section className={styles.detailSection}>
+                <h4 className={styles.detailHeading}>Source Identity</h4>
+                {editorSourceIdentitySupport.supported ? (
+                  <>
+                    <p className={styles.helperText}>{editorSourceIdentitySupport.note}</p>
+                    <details className={styles.advancedDetails}>
+                      <summary>Advanced Details</summary>
+                      <div className={styles.advancedDetailsText}>
+                        <label className={styles.formLabel}>
+                          Endpoint Alias
+                          <input
+                            className={styles.formInput}
+                            value={sourceIdentityAlias}
+                            disabled={sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming" || sourceIdentityPhase === "complete"}
+                            onChange={(event) => setSourceIdentityAlias(event.target.value)}
+                            placeholder={editorForm.sourceLabel.trim() || "Chuck PC Pictures"}
+                          />
+                        </label>
+                      </div>
+                    </details>
+                  </>
+                ) : (
+                  <p className={styles.helperText}>{editorSourceIdentitySupport.reason}</p>
+                )}
+
+                {sourceIdentityPhase === "planning" && (
+                  <p className={styles.note}>Creating source and checking durable identity...</p>
+                )}
+
+                {sourceIdentityPlan && (
+                  <div className={styles.readOnlyBlock}>
+                    <div className={styles.runPanelHeader}>
+                      <div>
+                        <h5 className={styles.runOptionsTitle}>Enrollment Plan</h5>
+                        <p className={styles.runOptionsSummary}>
+                          {formatEnrollmentPlanStatus(sourceIdentityPlan)} | {formatEnrollmentAction(sourceIdentityPlan.endpoint_action)}
+                        </p>
+                      </div>
+                      <span className={styles.statusBadge}>{formatEnrollmentPlanStatus(sourceIdentityPlan)}</span>
+                    </div>
+
+                    <div className={styles.detailGrid}>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Source Root</span>
+                        <span>{sourceIdentityPlan.candidate?.source_root_candidate_path ?? "-"}</span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Durable Identity</span>
+                        <span className={durableIdentityBadgeClassName(sourceIdentityPlan.durable_identity_status)}>
+                          {toDurableIdentityLabel(sourceIdentityPlan.durable_identity_status)}
+                        </span>
+                        <span className={styles.detailMeta}>
+                          {sourceIdentityPlan.durable_identity_reason ?? "Durable identity was not checked."}
+                        </span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Identifier Type</span>
+                        <span>{sourceIdentityPlan.durable_identity_identifier_type ?? "-"}</span>
+                      </div>
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>Identifier</span>
+                        <span>{sourceIdentityPlan.durable_identity_identifier ?? "-"}</span>
+                      </div>
+                    </div>
+
+                    {sourceIdentityPlan.candidate?.source_type === "nas" && (
+                      <p className={styles.helperText}>
+                        NAS endpoint identity is server + share. The full configured folder remains this Source Profile root.
+                      </p>
+                    )}
+
+                    {sourceIdentityPlan.possible_matches.length > 0 && (
+                      <label className={styles.formLabel}>
+                        {sourceIdentityPlan.candidate?.source_type === "nas"
+                          ? "Existing NAS Share"
+                          : "Existing Durable Identity"}
+                        <select
+                          className={styles.formInput}
+                          value={sourceIdentitySelectedEndpointId ?? ""}
+                          onChange={(event) => {
+                            const parsed = Number(event.target.value);
+                            setSourceIdentitySelectedEndpointId(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+                          }}
+                        >
+                          <option value="">Select endpoint...</option>
+                          {sourceIdentityPlan.possible_matches.map((match) => (
+                            <option key={match.source_endpoint_id} value={match.source_endpoint_id}>
+                              {match.alias} ({match.match_strength})
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          disabled={!sourceIdentityCreatedProfile || sourceIdentitySelectedEndpointId == null || sourceIdentityPhase === "planning"}
+                          onClick={() => {
+                            if (sourceIdentityCreatedProfile) {
+                              void runSourceIdentityEnrollmentPlan(sourceIdentityCreatedProfile, sourceIdentitySelectedEndpointId);
+                            }
+                          }}
+                        >
+                          Review Selected Identity
+                        </button>
+                      </label>
+                    )}
+
+                    {sourceIdentityPlan.blockers.length > 0 && (
+                      <div className={styles.warningList}>
+                        {sourceIdentityPlan.blockers.map((blocker) => (
+                          <p className={styles.bannerError} key={blocker.code}>
+                            {blocker.code}: {blocker.message}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+
+                    {sourceIdentityPlan.warnings.length > 0 && (
+                      <div className={styles.warningList}>
+                        {sourceIdentityPlan.warnings.map((warning) => (
+                          <p className={styles.inlineWarning} key={warning.code}>
+                            {warning.code}: {warning.message}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+
+                    {sourceIdentityPlan.required_confirmations.length > 0 && (
+                      <>
+                        <div className={styles.warningList}>
+                          {sourceIdentityPlan.required_confirmations.map((confirmation) => (
+                            <p className={styles.inlineWarning} key={confirmation.code}>
+                              {confirmation.code}: {confirmation.message}
+                            </p>
+                          ))}
+                        </div>
+                        <label className={styles.checkboxLabel}>
+                          <input
+                            type="checkbox"
+                            checked={sourceIdentityReviewAcknowledged}
+                            onChange={(event) => setSourceIdentityReviewAcknowledged(event.target.checked)}
+                          />
+                          I reviewed the warnings and want to enroll this source endpoint.
+                        </label>
+                      </>
+                    )}
+
+                    {sourceIdentityConfirmResult && (
+                      <p className={sourceIdentityConfirmResult.enrollment_status === "completed" ? styles.bannerSuccess : styles.bannerError}>
+                        {sourceIdentityConfirmResult.enrollment_status === "completed"
+                          ? `Endpoint enrolled. Durable identity: ${toDurableIdentityLabel(sourceIdentityConfirmResult.durable_identity_status)}. Source Intake behavior is unchanged.`
+                          : sourceIdentityConfirmResult.blockers[0]?.message ?? "Endpoint enrollment did not complete."}
+                      </p>
+                    )}
+
+                    {sourceIdentityConfirmResult?.blockers.length ? (
+                      <div className={styles.warningList}>
+                        {sourceIdentityConfirmResult.blockers.map((blocker) => (
+                          <p className={styles.bannerError} key={`confirm-blocker:${blocker.code}`}>
+                            {blocker.code}: {blocker.message}
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {sourceIdentityConfirmResult?.warnings.length ? (
+                      <div className={styles.warningList}>
+                        {sourceIdentityConfirmResult.warnings.map((warning) => (
+                          <p className={styles.inlineWarning} key={`confirm-warning:${warning.code}`}>
+                            {warning.code}: {warning.message}
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    <details className={styles.errorDetails}>
+                      <summary>Advanced Details</summary>
+                      <p className={styles.errorDetailsText}>
+                        Plan fingerprint: {sourceIdentityPlan.plan_fingerprint}
+                        {"\n"}Candidate type: {sourceIdentityPlan.candidate?.source_type ?? "-"}
+                        {"\n"}Boundary: {sourceIdentityPlan.candidate?.filesystem_boundary_type ?? "-"}
+                        {"\n"}Observed access path: {sourceIdentityPlan.candidate?.observed_path ?? "-"}
+                        {"\n"}Endpoint alias: {sourceIdentityPlan.proposed_alias ?? (sourceIdentityAlias.trim() || "-")}
+                        {"\n"}Normalized alias: {sourceIdentityPlan.alias_normalized ?? "-"}
+                        {"\n"}Provider: {sourceIdentityPlan.candidate?.provider_name ?? "-"} {sourceIdentityPlan.candidate?.provider_version ?? ""}
+                        {"\n"}Identity confidence: {sourceIdentityPlan.candidate?.confidence_tier ?? "-"}
+                        {"\n"}Fingerprint evidence: {sourceIdentityPlan.candidate?.identity_fingerprint_strength ?? "-"}
+                        {"\n"}Durable identity evidence: {sourceIdentityPlan.durable_identity_evidence.join(" | ") || "-"}
+                        {"\n"}Possible endpoint IDs: {sourceIdentityPlan.possible_matches.map((match) => match.source_endpoint_id).join(", ") || "-"}
+                        {"\n"}Blocker codes: {sourceIdentityPlan.blockers.map((item) => item.code).join(", ") || "-"}
+                        {"\n"}Warning codes: {sourceIdentityPlan.warnings.map((item) => item.code).join(", ") || "-"}
+                      </p>
+                    </details>
+
+                    <div className={styles.drawerActions}>
+                      {sourceIdentityConfirmDisabledReason && sourceIdentityPhase !== "complete" && (
+                        <span className={styles.disabledReason}>{sourceIdentityConfirmDisabledReason}</span>
+                      )}
+                      <button
+                        type="button"
+                        className={styles.button}
+                        disabled={!sourceIdentityCreatedProfile || sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming" || sourceIdentityPhase === "complete"}
+                        onClick={() => {
+                          if (sourceIdentityCreatedProfile) {
+                            void runSourceIdentityEnrollmentPlan(sourceIdentityCreatedProfile, sourceIdentitySelectedEndpointId);
+                          }
+                        }}
+                      >
+                        Refresh Plan
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.updateButton}
+                        disabled={Boolean(sourceIdentityConfirmDisabledReason) || sourceIdentityPhase === "confirming" || sourceIdentityPhase === "complete"}
+                        onClick={() => void confirmSourceIdentityEnrollment()}
+                      >
+                        {sourceIdentityPhase === "confirming" ? "Confirming..." : "Confirm Enrollment"}
+                      </button>
+                      {sourceIdentityPhase === "complete" && (
+                        <button type="button" className={styles.button} onClick={closeEditor}>
+                          Done
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+
             {editorError && <p className={styles.bannerError}>{editorError}</p>}
 
             <div className={styles.drawerActions}>
@@ -2883,11 +5978,20 @@ export default function IngestionView() {
                 type="button"
                 className={styles.updateButton}
                 onClick={() => void saveEditor()}
-                disabled={isSavingEditor}
+                disabled={isSavingEditor || sourceIdentityPhase !== "idle"}
               >
-                {isSavingEditor ? "Saving..." : editorMode === "create" ? "Create Profile" : "Save Status"}
+                {isSavingEditor || sourceIdentityPhase === "planning"
+                  ? "Saving..."
+                  : editorMode === "create"
+                    ? "Create Source"
+                    : "Save Status"}
               </button>
-              <button type="button" className={styles.button} onClick={closeEditor} disabled={isSavingEditor}>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={closeEditor}
+                disabled={isSavingEditor || sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming"}
+              >
                 Cancel
               </button>
             </div>
@@ -2895,7 +5999,7 @@ export default function IngestionView() {
         </div>
       )}
 
-      {isRunConfirmOpen && runCandidateProfile && runCandidatePathCheck && (
+      {isRunConfirmOpen && runCandidateProfile && runCandidateReadiness && (
         <div className={styles.modalBackdrop} role="dialog" aria-modal="true">
           <div className={styles.modalPanel}>
             <div className={styles.drawerHeader}>
@@ -2925,15 +6029,18 @@ export default function IngestionView() {
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>{isGuidedIcloudRunCandidate ? "Managed Staging Path" : "Source Path"}</span>
-                <span>{runCandidatePathCheck.path ?? "-"}</span>
+                <span>{sourceReadinessObservedPath(runCandidateReadiness, runCandidateProfile.source_root_path)}</span>
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Profile Status</span>
                 <span>{runCandidateProfile.profile_status}</span>
               </div>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Path Verification Result</span>
-                <span className={styles.okBadge}>{formatPathStatus(runCandidatePathCheck)}</span>
+                <span className={styles.detailLabel}>Readiness Result</span>
+                <span className={`${styles.readinessBadge} ${sourceProfileReadinessBadgeClassName(runCandidateReadiness.readiness_status)}`}>
+                  {toSourceProfileReadinessLabel(runCandidateReadiness.readiness_status)}
+                </span>
+                <span className={styles.detailMeta}>Identity match: {toStatusLabel(runCandidateReadiness.identity_match_status)}</span>
               </div>
               {isGuidedIcloudRunCandidate && (
                 <div className={styles.detailCard}>
@@ -2999,12 +6106,33 @@ export default function IngestionView() {
 
             {runOptionsError && <p className={styles.bannerError}>{runOptionsError}</p>}
 
+            {runReadinessRequiresAcknowledgment && (
+              <section className={styles.runOptionsBlock}>
+                <h4 className={styles.runOptionsTitle}>Readiness Acknowledgment</h4>
+                <p className={styles.inlineWarning}>
+                  {runCandidateReadiness.readiness_status === "path_only"
+                    ? "Path-only source. This can run, but durable source identity enrollment is recommended."
+                    : "This source needs review before relying on durable source identity. You may run Source Intake after acknowledging this warning."}
+                </p>
+                <p className={styles.helperText}>{runCandidateReadiness.operator_message}</p>
+                <label className={styles.checkboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={runReadinessAcknowledged}
+                    onChange={(event) => setRunReadinessAcknowledged(event.target.checked)}
+                    disabled={isRunActionLoading}
+                  />
+                  I reviewed this readiness warning and want to run Source Intake for this source now.
+                </label>
+              </section>
+            )}
+
             <div className={styles.drawerActions}>
               <button
                 type="button"
                 className={styles.runButton}
                 onClick={() => void handleConfirmRunIntake()}
-                disabled={isRunActionLoading}
+                disabled={!canConfirmRunIntake}
               >
                 {isRunActionLoading ? "Starting..." : (isGuidedIcloudRunCandidate ? "Start Guided Source Intake" : "Run Intake")}
               </button>
@@ -3355,7 +6483,7 @@ export default function IngestionView() {
                 <section className={styles.detailSection}>
                   <h4 className={styles.detailHeading}>Source Identity</h4>
                   <p className={styles.helperText}>
-                    Source identity is based on label + type + effective path. Source labels are not globally unique.
+                    Source labels are not globally unique. Durable identity verification uses safe provider evidence from Check Readiness.
                   </p>
                   <div className={styles.detailGrid}>
                     <div className={styles.detailCard}>
@@ -3375,6 +6503,30 @@ export default function IngestionView() {
                       <span className={styles.statusBadge}>{detailProfile.profile_status}</span>
                     </div>
                     <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Durable Source Identity</span>
+                      <span className={durableIdentityBadgeClassName(
+                        detailReadinessResult?.durable_identity_status
+                          ?? (isIcloudProfile(detailProfile) ? "provider_specific" : "unknown"),
+                      )}>
+                        {detailReadinessResult
+                          ? toDurableIdentityLabel(detailReadinessResult.durable_identity_status)
+                          : isIcloudProfile(detailProfile)
+                            ? "Provider-specific"
+                            : "Unknown"}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        {detailReadinessResult?.durable_identity_reason
+                          ?? (detailProfile.endpoint_id
+                            ? "Endpoint link present. Run Check Readiness to verify current durable identity."
+                            : "Run Check Readiness to verify durable identity.")}
+                      </span>
+                      {detailReadinessResult?.durable_identity_identifier_type && (
+                        <span className={styles.detailMeta}>
+                          {detailReadinessResult.durable_identity_identifier_type}: {detailReadinessResult.durable_identity_identifier ?? "-"}
+                        </span>
+                      )}
+                    </div>
+                    <div className={styles.detailCard}>
                       <span className={styles.detailLabel}>Effective Path</span>
                       <span>{detailProfile.effective_path ?? "-"}</span>
                       {detailProfile.effective_path_relative && (
@@ -3388,6 +6540,117 @@ export default function IngestionView() {
                         {detailProfile.is_referenced ? "Referenced" : "Unreferenced"}
                       </span>
                     </div>
+                  </div>
+                </section>
+
+                <section className={styles.detailSection}>
+                  <h4 className={styles.detailHeading}>Source Readiness</h4>
+                  <p className={styles.helperText}>
+                    Manual read-only check. Source Intake launch behavior is unchanged.
+                  </p>
+                  <div className={styles.detailGrid}>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Status</span>
+                      <span className={`${styles.readinessBadge} ${sourceReadinessBadgeClassName}`}>
+                        {toSourceProfileReadinessLabel(sourceReadinessStatus)}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        Identity match: {detailReadinessResult ? toStatusLabel(detailReadinessResult.identity_match_status) : "Not checked"}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        Checked: {detailReadinessResult ? toDisplayDate(detailReadinessResult.checked_at) : "Not checked"}
+                      </span>
+                    </div>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Message</span>
+                      <span>{detailReadinessResult?.operator_message ?? "Readiness has not been checked."}</span>
+                      <span className={styles.detailMeta}>
+                        Recommended next action: {detailReadinessResult?.recommended_next_action ?? "Check readiness before running intake."}
+                      </span>
+                      {detailReadinessResult?.readiness_status === "provider_specific" && (
+                        <span className={styles.detailMeta}>
+                          Use iCloud Intake or the provider-specific workflow for this source.
+                        </span>
+                      )}
+                    </div>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Source Intake</span>
+                      <span className={detailReadinessResult?.can_run_source_intake ? styles.okBadge : styles.pendingBadge}>
+                        Can run: {detailReadinessResult ? (detailReadinessResult.can_run_source_intake ? "Yes" : "No") : "Unknown"}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        Run acknowledgment needed later: {detailReadinessResult ? (detailReadinessResult.requires_operator_acknowledgment ? "Yes" : "No") : "Unknown"}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        Hard block: {detailReadinessResult ? (detailReadinessResult.hard_block ? "Yes" : "No") : "Unknown"}
+                      </span>
+                    </div>
+                    <div className={styles.detailCard}>
+                      <span className={styles.detailLabel}>Durable Identity</span>
+                      <span className={durableIdentityBadgeClassName(detailReadinessResult?.durable_identity_status)}>
+                        {toDurableIdentityLabel(detailReadinessResult?.durable_identity_status)}
+                      </span>
+                      <span className={styles.detailMeta}>
+                        {detailReadinessResult?.durable_identity_reason ?? "Check readiness to verify durable identity."}
+                      </span>
+                      {detailReadinessResult?.durable_identity_identifier_type && (
+                        <span className={styles.detailMeta}>
+                          {detailReadinessResult.durable_identity_identifier_type}: {detailReadinessResult.durable_identity_identifier ?? "-"}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {sourceReadinessError && (
+                    <p className={styles.bannerError}>{sourceReadinessError}</p>
+                  )}
+                  {detailReadinessResult && detailReadinessResult.durable_identity_evidence.length > 0 && (
+                    <div className={styles.warningList}>
+                      {detailReadinessResult.durable_identity_evidence.map((evidence, index) => (
+                        <p key={`durable-identity-evidence:${index}:${evidence}`} className={styles.helperText}>
+                          Evidence - {evidence}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {sourceReadinessBlockers.length > 0 && (
+                    <div className={styles.warningList}>
+                      {sourceReadinessBlockers.map((message) => (
+                        <p key={`blocker:${message.code}:${message.message}`} className={styles.inlineWarning}>
+                          Blocker - {message.code}: {message.message}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {sourceReadinessWarnings.length > 0 && (
+                    <div className={styles.warningList}>
+                      {sourceReadinessWarnings.map((message) => (
+                        <p key={`warning:${message.code}:${message.message}`} className={styles.inlineWarning}>
+                          Warning - {message.code}: {message.message}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {sourceReadinessAdvancedDetails && (
+                    <details className={styles.advancedDetails}>
+                      <summary>Advanced Details</summary>
+                      <pre className={styles.advancedDetailsText}>
+                        {JSON.stringify(sourceReadinessAdvancedDetails, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                  <div className={styles.drawerActions}>
+                    <button
+                      type="button"
+                      className={styles.updateButton}
+                      onClick={() => void handleCheckSourceReadiness()}
+                      disabled={isCheckingSourceReadiness || !detailSourceId}
+                    >
+                      {isCheckingSourceReadiness
+                        ? "Checking readiness..."
+                        : detailReadinessResult
+                          ? "Recheck Readiness"
+                          : "Check Readiness"}
+                    </button>
                   </div>
                 </section>
 

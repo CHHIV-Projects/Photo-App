@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AdminDuplicateTypeCount(BaseModel):
@@ -281,6 +281,10 @@ class SourceProfileSummary(BaseModel):
     source_label: str
     source_type: str
     source_root_path: str | None = None
+    endpoint_relative_root: str | None = None
+    endpoint_id: int | None = None
+    endpoint_alias: str | None = None
+    endpoint_source_type: str | None = None
     profile_status: str
     cloud_provider: str | None = None
     acquisition_method: str | None = None
@@ -503,6 +507,7 @@ class SourceIntakeRunRequest(BaseModel):
     ingestion_source_id: int
     source_intake_limit: int | None = None
     ingest_batch_size: int = 500
+    readiness_acknowledged: bool = False
 
 
 class SourceIntakeStatusSchema(BaseModel):
@@ -539,6 +544,53 @@ class SourceIntakeStopResponse(BaseModel):
     status: str
     message: str
     current: SourceIntakeStatusSchema
+
+
+# ---------------------------------------------------------------------------
+# Selected-source Run Ingestion dispatch
+# ---------------------------------------------------------------------------
+
+
+class RunIngestionFilesystemOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_intake_limit: int | None = Field(default=None, ge=1)
+    ingest_batch_size: int | None = Field(default=None, ge=1)
+    acknowledge_legacy_or_review: bool = False
+
+
+class RunIngestionIcloudOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_logical_items: int | None = Field(default=None, ge=1, le=1000)
+
+
+class RunIngestionDispatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_profile_id: int
+    selection_fingerprint: str | None = None
+    filesystem_options: RunIngestionFilesystemOptions | None = None
+    icloud_options: RunIngestionIcloudOptions | None = None
+
+
+class RunIngestionDispatchResponse(BaseModel):
+    result: Literal["started", "action_completed", "blocked", "stale_selection", "no_action_available"]
+    workflow_kind: Literal["filesystem_source_intake", "icloud_intake"] | None = None
+    action: Literal[
+        "source_intake_started",
+        "icloud_prepare_started",
+        "icloud_import_started",
+        "icloud_import_resumed",
+        "icloud_import_advanced",
+        "none",
+    ]
+    message: str
+    next_action: str | None = None
+    source_profile_id: int
+    underlying_run_id: int | None = None
+    status: str | None = None
+    workflow_payload: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
