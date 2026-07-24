@@ -1,4 +1,13 @@
-﻿# MILESTONE_HISTORY.md
+# MILESTONE_HISTORY.md
+
+## Document Status
+
+**Version:** v6  
+**History through:** Milestone 12.63.23.0  
+**Current code state:** Source Identity and Intake Unification merged into `main`  
+**Merge commit:** `b7ef737 Merge source identity and intake unification`
+
+---
 
 ## Project Onboarding
 
@@ -748,7 +757,7 @@
 
 - Integrated filter controls (year, month, camera, location, faces)
 
-- Established Photo Review as primary browsing surface (partial completion; further consolidation planned)
+- Established Photo Review as the primary browsing surface.
 
 ---
 
@@ -796,7 +805,7 @@
 
 - Implemented read-only operational visibility dashboard
 
-- Added UI placeholders for future Maintenance and Settings functionality
+- Added UI placeholders for Maintenance and Settings.
 
 - Introduced operational visibility layer separating system management from user workflows
 
@@ -978,7 +987,7 @@
 
 - Documented exact operator workflow and recommended settings
 
-- Logged known issues and follow-up milestone requirements
+- Documented known display-preview issues discovered during the trial.
 
 ---
 
@@ -1012,7 +1021,7 @@
 
 - Identified deterministic still and motion pairing signals
 
-- Defined pair relationship model for future implementation
+- Defined the Live Photo pair relationship model.
 
 - Deferred playback while preserving paired media structure
 
@@ -1170,7 +1179,7 @@
 
 - Displayed source registry status, staged file count, report path, and acquisition status  
 
-- Added next-step guidance toward Source Intake without automating intake
+- Added workflow guidance from acquisition toward Source Intake without automating intake.
 
 ---
 
@@ -1214,6 +1223,11 @@
 
 ## Milestone 12.45–12.47 — Documentation and Production Baseline
 
+> **Historical note:** The original Windows-host production baseline documented in
+> 12.46–12.47 was later superseded by `production_v1_release_roadmap_rev2.md`.
+> The current v1 target uses Ubuntu mini-server compute, NAS-backed durable media
+> storage, and separate Dev 2, Test/Staging, and Production environments.
+
 ### 12.45 — PROJECT_CONTEXT Refresh
 
 - Updated project context to reflect post-12.44.1 system state.
@@ -1226,9 +1240,9 @@
 
 ### 12.45.0 — PROJECT_ARCHITECTURE Refresh
 
-- Updated architecture roadmap to match implemented iCloud/source-intake arc.
+- Updated architecture documentation to match the implemented iCloud/source-intake arc.
 
-- Reclassified completed versus future work for clearer planning.
+- Clarified the classification of completed work.
 
 - Established accurate architecture baseline for production hardening phase.
 
@@ -1380,7 +1394,7 @@
 
 - Reconnoitered cluster cleanup pain points in Face Review workflows.
 
-- Planned merge/search/alias improvements for safer high-volume correction.
+- Designed merge, search, and alias improvements for safer high-volume correction.
 
 - Defined explicit, operator-driven merge safety principles.
 
@@ -1512,7 +1526,7 @@
 
 - Defined evidence model separating Place, Address, Observation, Landmark concepts.
 
-- Planned multi-provider evidence handling without auto-truth assumptions.
+- Designed multi-provider evidence handling without auto-truth assumptions.
 
 - Established user-correction protection requirements for place data.
 
@@ -1590,9 +1604,9 @@
 
 ### 12.60.4 — Context Persistence and Propagation Planning
 
-- Planned Observation-to-Accepted-Context model separation.
+- Designed Observation-to-Accepted-Context model separation.
 
-- Defined context_type framework for flexible future enrichment types.
+- Defined a `context_type` framework for flexible enrichment types.
 
 - Designed safe propagation approach prior to implementation.
 
@@ -1652,7 +1666,7 @@
 
 - Simplified enrichment review into per-asset cards.
 
-- Consolidated suggestion handling and follow-up context runs.
+- Consolidated suggestion handling and subsequent context runs.
 
 - Removed low-value collection-first complexity from primary flow.
 
@@ -1684,7 +1698,7 @@
 
 - Performed deep reconnaissance of source, intake, and acquisition behavior.
 
-- Planned Source Profile-driven ingestion model for unified operations.
+- Designed the Source Profile-driven ingestion model for unified operations.
 
 - Identified safety constraints before execution-layer changes.
 
@@ -1742,7 +1756,7 @@
 
 ### 12.61.6 — Unified Run Intake Planning (Local/External)
 
-- Planned safe reuse of existing Source Intake execution APIs.
+- Designed safe reuse of existing Source Intake execution APIs.
 
 - Avoided backend semantic rewrites for Ingestion-tab integration.
 
@@ -1792,7 +1806,7 @@
 
 ### 12.62 — iCloud Source Profile Run Planning
 
-- Planned guided iCloud flow: readiness, acquire, intake, summary, cleanup.
+- Designed a guided iCloud flow covering readiness, acquisition, intake, summary, and cleanup.
 
 - Kept scope planning-only with no direct behavior changes.
 
@@ -1908,7 +1922,7 @@
 
 - Identified UX simplification needs: binary readiness, consolidated workflow summary, fewer duplicated technical tiles, and stronger local/cloud workflow consistency.
 
-- Corrected HEIC rendering concern as process-order/user-error; identified BMP display-preview handling as follow-up.
+- Corrected the HEIC rendering concern as a process-order/user-error issue.
 
 ---
 
@@ -2080,7 +2094,7 @@
 
 - Confirmed Source Intake and cleanup behavior across a broader asset set.
 
-- Identified remaining final-routine design decisions for historical/backfill scope.
+- Documented final-routine design decisions for historical/backfill scope.
 
 ---
 
@@ -2128,11 +2142,11 @@
 
 ### 12.62.28.1 — Historical Backfill Acquisition from Inventory Pre-Code Plan Only
 
-- Planned acquisition from durable inventory rather than live listing selection.
+- Designed acquisition from durable inventory rather than live listing selection.
 
 - Defined exact candidate identity, safety gates, and no-code implementation sequence.
 
-- Preserved adjusted-resource exclusion pending policy decisions.
+- Preserved adjusted-resource exclusion.
 
 ---
 
@@ -2212,7 +2226,7 @@
 
 - Confirmed Source Intake, Vault/provenance, and cleanup safety handoff.
 
-- Identified next UI workflow simplification needs.
+- Confirmed bounded acquisition and cleanup behavior through the operator workflow.
 
 ---
 
@@ -2244,29 +2258,372 @@
 
 - Recorded cleanup safety counters/timing and validated a full 1000-logical-asset UI run.
 
-### Current iCloud Intake Status
+---
 
-- iCloud Intake is considered good enough for v1.0.
-- Performance optimization and fine-grained phase timing are parked.
-- Next major direction is external/local/NAS source identity and intake workflow redesign.
+## Milestone 12.63.0–12.63.23.0 — Source Identity and Intake Unification
+
+### 12.63.0 — Source Profile and Intake Unification Reconnaissance
+
+- Mapped the existing Source Profile, source registry, Source Intake, iCloud Intake, provenance, readiness, cleanup, and UI workflow surfaces.
+
+- Documented the boundaries and compatibility constraints needed to unify source identity and intake.
+
+- Established an evidence-backed baseline without changing runtime data or application behavior.
 
 ---
 
-## Forward-Looking Areas
+### 12.63.1 — Unified Source Identity Boundary Design
 
-The following areas remain candidates for future milestones:
+- Defined durable Source Endpoint, Source Profile, Source Root, Observed Path, Intake Run, and Provenance boundaries.
 
--- External/local/NAS source identity independent of drive letter, mapped path, or user nickname
-- Unified source/device/endpoint provenance model
-- Unified local/external/NAS intake workflow using lessons from iCloud Intake where appropriate
- Acquisition lifecycle observability and richer operator diagnostics
-- Connector reliability hardening and long-lived session resilience
-- Landmark/context intelligence expansion beyond current enrichment workflows
-- Video-aware review and playback-centered UX improvements
-- Cross-source acquisition unification beyond iCloud-specific execution
-- Policy-driven automation for cleanup, retry, and background orchestration
-- Guided Source Profile / Intake UX simplification across local, external, and cloud sources
-- Unified iCloud workflow summary replacing separate acquisition/intake/cleanup status tiles
-- iCloud authentication/session-health helper and icloudpd version diagnostics
-- BMP display-preview generation support
-- Runtime hardening for Docker/WSL ghost listener diagnostics and recovery guidance
+- Separated durable source identity from changing access paths and operator-facing names.
+
+- Documented source-type identity rules for local, external, removable, NAS, and cloud sources.
+
+---
+
+### 12.63.2 — Read-Only Source Identity Probe Reconnaissance
+
+- Inspected identity evidence available from Windows for local, external, removable, NAS, and cloud source categories.
+
+- Characterized drive classification, Volume GUID, device, filesystem, path, and network evidence.
+
+- Recorded privacy, confidence, and fail-closed requirements for read-only source probing.
+
+---
+
+### 12.63.3 — Source Identity Probe Design
+
+- Designed the Source Identity Probe service, provider abstraction, request/response contracts, and normalized evidence model.
+
+- Defined Windows non-admin probing behavior and extension hooks for other operating systems.
+
+- Specified confidence, matching, blockers, warnings, privacy, readiness, and API integration rules.
+
+---
+
+### 12.63.4 — Read-Only Source Identity Probe Service
+
+- Implemented the backend Source Identity Probe service with provider and command-runner abstractions.
+
+- Added Windows non-admin classification for local, external, removable, NAS, and cloud roots.
+
+- Added privacy masking, admin probe/capabilities endpoints, and deterministic service/API tests.
+
+---
+
+### 12.63.5 — Source Identity Probe API Validation
+
+- Validated service and API behavior for local, external, removable, NAS, cloud, and unsupported-provider cases.
+
+- Confirmed confidence, blocker, warning, safety, and privacy/redaction behavior.
+
+- Re-ran the probe regression suite without modifying source data or intake state.
+
+---
+
+### 12.63.6 — Source Endpoint Schema Foundation
+
+- Added Access Node, Source Endpoint, and Source Endpoint Observed Path schema/model foundations.
+
+- Added a nullable Source Profile-to-endpoint link and idempotent startup schema initialization.
+
+- Preserved legacy Source Profile compatibility and verified the foundation with focused schema/model tests.
+
+---
+
+### 12.63.7 — Source Endpoint Enrollment Service Design
+
+- Designed the conversion of read-only probe evidence into an endpoint candidate and enrollment plan.
+
+- Defined explicit operator confirmation, endpoint persistence, Source Profile linking, and observed-path recording.
+
+- Established idempotency, conflict, privacy, and transaction boundaries for enrollment.
+
+---
+
+### 12.63.8 — Source Endpoint Enrollment Service
+
+- Implemented stateless enrollment planning and explicit confirmation API endpoints.
+
+- Re-probed identity at confirmation time and verified the reviewed plan fingerprint before writing.
+
+- Added safe endpoint reuse/creation, Source Profile linking, observed-path persistence, and validation coverage.
+
+---
+
+### 12.63.9 — Integrated Source Endpoint Enrollment UI
+
+- Integrated optional durable endpoint enrollment into the Ingestion page’s Source Profile creation drawer.
+
+- Preserved create-only behavior while adding guided plan, review, and explicit confirmation steps.
+
+- Added endpoint enrollment state to existing Source Profile details and frontend API contracts.
+
+---
+
+### 12.63.10 — Source Endpoint Enrollment UI Validation
+
+- Validated create-only, local create-and-enroll, NAS create-and-enroll, and cloud-unavailable flows in the running UI.
+
+- Confirmed plan/confirmation presentation, warning gates, and enrolled/not-enrolled details behavior.
+
+- Verified Source Intake isolation and automated regression coverage without requiring code fixes.
+
+---
+
+### 12.63.11 — Source Identity Readiness Integration Design
+
+- Mapped Source Profile status, path verification, endpoint identity, Source Intake launch, and UI readiness behavior.
+
+- Defined normalized readiness states and their operator-facing meanings.
+
+- Specified service, API, UI, and launch-guard integration boundaries.
+
+---
+
+### 12.63.12 — Source Profile Readiness Service and API
+
+- Implemented a read-only Source Profile Readiness Service and readiness response schemas.
+
+- Added a Source Profile readiness-check API and shared endpoint fingerprint helper.
+
+- Added targeted service/API tests while preserving existing intake and persistence behavior.
+
+---
+
+### 12.63.13 — Source Profile Readiness Ingestion UI
+
+- Added a manual Source Readiness section to the Ingestion page’s Source Profile details drawer.
+
+- Displayed readiness status, guidance, endpoint summary, warnings, blockers, and advanced details.
+
+- Scoped results safely to the selected profile and guarded against stale asynchronous responses.
+
+---
+
+### 12.63.14 — Source Intake Run Launch Guard
+
+- Added frontend and backend readiness checks for operator-launched generic Source Intake.
+
+- Allowed ready sources, required per-run acknowledgment for path-only or review states, and rejected blocked or unknown states.
+
+- Routed provider-specific sources to their provider workflow and prevented run creation before backend approval.
+
+---
+
+### 12.63.15 — Ingestion UI Simplification Reconnaissance
+
+- Audited the Ingestion and Admin source workflows and their overlapping controls.
+
+- Defined a simplified Create → Select → Run operator model.
+
+- Documented component, state, workflow, and migration boundaries for the consolidated workbench.
+
+---
+
+### 12.63.16 — Ingestion Workbench Source Picker UI
+
+- Added a source-focused workbench near the top of the Ingestion page.
+
+- Implemented source-type selection, profile search, source selection, and inactive/legacy visibility controls.
+
+- Added a selected-source summary with access to the existing Details and Manage drawers.
+
+---
+
+### 12.63.17 — Source Identity Verification Validation
+
+- Implemented a shared durable identity summary policy across readiness and enrollment responses.
+
+- Normalized operator-facing status to Verified, Not verified, Provider-specific, or Unknown.
+
+- Kept endpoint identifiers and fingerprint strength in advanced details instead of treating endpoint presence as proof.
+
+---
+
+### 12.63.18 — Create Source Endpoint and Root Model
+
+- Consolidated source creation into one Create Source entry point above Source Selector.
+
+- Separated source type, operator name, exact root, and durable endpoint identity across supported source categories.
+
+- Added safe mapped-drive resolution, endpoint-type summaries, and a corrected existing-endpoint plan fingerprint contract.
+
+---
+
+### 12.63.18.1 — Drive-Agnostic Source Creation
+
+- Added stateless filesystem source-creation plan and confirmation APIs with atomic endpoint, observed-path, and Source Profile creation/reuse.
+
+- Persisted endpoint-relative roots and Volume GUID-based Local/External identity independent of drive letter.
+
+- Added safe legacy endpoint fingerprint upgrades, whole-device/share roots, and desktop/mobile validation.
+
+---
+
+### 12.63.18.2 — Source Recognition, Naming, and Duplicate Handling
+
+- Improved source recognition, default naming, exact-root reuse, and duplicate prevention during creation.
+
+- Corrected endpoint linkage and endpoint-relative-root behavior for drive-letter reassignment.
+
+- Validated existing-source reuse and drive-agnostic External Source Intake.
+
+---
+
+### 12.63.18.3 — Source Naming, Identity Status, and NAS Validation
+
+- Shortened persisted filesystem Source names and clarified durable identity status in normal creation results.
+
+- Added collision-safe generated names using limited parent context and stable suffixes.
+
+- Validated current-format NAS Source creation, endpoint linkage, observed-path recording, and operator UI behavior.
+
+---
+
+### 12.63.18.4 — Source Name and Duplicate Review
+
+- Added editable Source names with validation and same-endpoint uniqueness enforcement.
+
+- Added exact-duplicate review metadata, safe resolution controls, and guarded no-history duplicate inactivation.
+
+- Simplified normal duplicate messaging while preserving technical details and existing ingestion/provenance history.
+
+---
+
+### 12.63.18.5 — Removable Flash and SD Source Creation
+
+- Enabled Source creation for Windows-mounted USB flash drives and SD media.
+
+- Reused Volume GUID v2 identity with whole-medium and subfolder roots plus removable-specific naming.
+
+- Validated exact endpoint/Source reuse and real USB flash and SD creation flows.
+
+---
+
+### 12.63.18.6 — Optical Media Source Creation
+
+- Added Optical Source creation for readable data discs using logical media identity.
+
+- Implemented optical endpoint/Profile types, whole-disc roots, exact reuse, and unsupported-media blockers.
+
+- Validated plan/confirmation and reinsertion behavior against a real data disc.
+
+---
+
+### 12.63.19.0 — Unified Source Selection Reconnaissance and Contract
+
+- Audited the Source creation, readiness, and selection surfaces across filesystem and provider-specific sources.
+
+- Defined Source Type → Device → Source → Root selection hierarchy and normalized selection results.
+
+- Established read-only selection, runtime-root resolution, identity matching, and guarded Step 3 contracts.
+
+---
+
+### 12.63.19.1 — Unified Source Selection Implementation and Validation
+
+- Implemented the Source Type → Device → Source → read-only Root selection workflow.
+
+- Added backend-authoritative selection results, availability checks, state clearing, and guarded workflow handoff.
+
+- Corrected and live-validated current-format External and Removable source selection defects.
+
+---
+
+### 12.63.20.0 — Unified Run Ingestion Reconnaissance and Integration Contract
+
+- Mapped filesystem Source Intake and iCloud intake launch paths behind the selected-source workflow.
+
+- Defined backend-authoritative dispatch, selection revalidation, runtime-root resolution, and operation guardrails.
+
+- Established a thin integration contract that reused existing ingestion engines and provenance behavior.
+
+---
+
+### 12.63.20.1 — Unified Run Ingestion Implementation and Validation
+
+- Added selected-source backend dispatch with immediate Source Selection revalidation.
+
+- Connected filesystem sources to existing Source Intake and iCloud sources to the existing intake routine.
+
+- Replaced the normal row-level launch path with the Step 3 action tile and validated current-format Removable ingestion.
+
+---
+
+### 12.63.21.0 — NAS Run Ingestion Enablement and Validation
+
+- Enabled NAS sources in the selected-source Step 3 filesystem workflow.
+
+- Added NAS-specific runtime-root validation before launching existing Source Intake.
+
+- Validated current-format NAS creation, selection, canonical UNC resolution, and run availability without changing ingestion semantics.
+
+---
+
+### 12.63.22.0 — Optical Selected-Source Run Ingestion
+
+- Enabled Optical dispatch through the existing selected-source and filesystem Source Intake path.
+
+- Added launch-time media revalidation requiring complete, exact optical identity evidence.
+
+- Preserved fail-closed behavior for missing, unreadable, swapped, unverified, or mismatched media.
+
+---
+
+### 12.63.22.1 — Optical Identity Stability and Windows Drive Recognition Reconnaissance
+
+- Investigated Windows Optical-drive recognition and instability in the first optical fingerprint format.
+
+- Traced creation, selection, readiness, and launch-time identity comparison paths.
+
+- Established deterministic evidence and fingerprint requirements from controlled media observations.
+
+---
+
+### 12.63.22.2 — Optical Fingerprint v2 and Streamlined Operator Flow
+
+- Implemented the deterministic Optical fingerprint v2 identity format.
+
+- Streamlined known-disc recognition so existing Sources are selected and surfaced directly in the normal workflow.
+
+- Validated disc creation, reinsertion, Source Selector population, and Source Intake handoff while preserving the shared ingestion pipeline.
+
+---
+
+### 12.63.23.0 — Admin and Ingestion UI Consolidation
+
+- Reduced the Admin page to administrative operations and removed duplicate source/intake workflow sections.
+
+- Made Ingestion the canonical Create → Select → Run workspace with Known Sources and Source Intake History.
+
+- Added collapsed-by-default, sortable, paginated reference/history lists while preserving details, management, and intake summary access.
+
+---
+
+### Source Identity and Intake Unification Arc Completion
+
+- Completed the 12.63 Source Identity and Intake Unification arc.
+
+- Merged the feature branch into `main` through commit:
+
+  ```text
+  b7ef737 Merge source identity and intake unification
+  ```
+
+- Confirmed the feature branch contained no unmerged implementation work.
+
+- Validated the merged application from `main`.
+
+- Final automated validation included 518 backend tests plus successful frontend lint and production build.
+
+- Established the implemented Source workflow as:
+
+  ```text
+  Create Source
+  → Select Source
+  → Run Ingestion
+  → Review latest result and history
+  ```
+
