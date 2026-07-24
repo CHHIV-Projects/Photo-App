@@ -72,6 +72,9 @@ import styles from "./ingestion-view.module.css";
 
 type StatusFilter = SourceProfileStatus | "all";
 type EditorMode = "create" | "edit";
+type SortDirection = "asc" | "desc";
+type KnownSourcesSortKey = "source" | "type" | "status" | "availability" | "last_used";
+type SourceIntakeHistorySortKey = "started" | "source" | "type" | "result" | "scanned" | "new" | "skipped" | "failed";
 
 type LoadProfilesOptions = {
   refreshOnly?: boolean;
@@ -148,6 +151,26 @@ const EDITABLE_STATUS_OPTIONS: SourceProfileStatus[] = [
   "test",
   "deprecated",
 ];
+
+const REFERENCE_PAGE_SIZE = 25;
+
+function compareNullableString(left: string | null | undefined, right: string | null | undefined): number {
+  return (left ?? "").localeCompare(right ?? "");
+}
+
+function compareNullableNumber(left: number | null | undefined, right: number | null | undefined): number {
+  return (left ?? Number.NEGATIVE_INFINITY) - (right ?? Number.NEGATIVE_INFINITY);
+}
+
+function compareNullableDate(left: string | null | undefined, right: string | null | undefined): number {
+  const leftTime = left ? Date.parse(left) : Number.NEGATIVE_INFINITY;
+  const rightTime = right ? Date.parse(right) : Number.NEGATIVE_INFINITY;
+  return leftTime - rightTime;
+}
+
+function applySortDirection(value: number, direction: SortDirection): number {
+  return direction === "asc" ? value : -value;
+}
 
 const ADVANCED_SOURCE_TYPE_OPTIONS: Array<{ value: SourceProfileType; label: string }> = [
   { value: "scan_batch", label: "Scan Batch" },
@@ -1417,6 +1440,18 @@ export default function IngestionView() {
   const [selectedReportDetail, setSelectedReportDetail] = useState<SourceIntakeReportDetail | null>(null);
   const [isReportDetailLoading, setIsReportDetailLoading] = useState(false);
   const [reportDetailError, setReportDetailError] = useState<string | null>(null);
+  const [isKnownSourcesExpanded, setIsKnownSourcesExpanded] = useState(false);
+  const [isSourceIntakeHistoryExpanded, setIsSourceIntakeHistoryExpanded] = useState(false);
+  const [knownSourcesSort, setKnownSourcesSort] = useState<{ key: KnownSourcesSortKey; direction: SortDirection }>({
+    key: "source",
+    direction: "asc",
+  });
+  const [sourceIntakeHistorySort, setSourceIntakeHistorySort] = useState<{ key: SourceIntakeHistorySortKey; direction: SortDirection }>({
+    key: "started",
+    direction: "desc",
+  });
+  const [knownSourcesPage, setKnownSourcesPage] = useState(1);
+  const [sourceIntakeHistoryPage, setSourceIntakeHistoryPage] = useState(1);
   const detailLoadRequestSeqRef = useRef(0);
   const sourceReadinessRequestSeqRef = useRef(0);
 
@@ -1781,6 +1816,102 @@ export default function IngestionView() {
       nonActive: counts.archived + counts.test + counts.deprecated,
     };
   }, [registryProfiles]);
+
+  const sourceProfileById = useMemo(() => {
+    const byId = new Map<number, SourceProfileSummary>();
+    for (const profile of profiles) {
+      byId.set(profile.source_id, profile);
+    }
+    return byId;
+  }, [profiles]);
+
+  const getKnownSourceAvailability = useCallback(
+    (profile: SourceProfileSummary): string => {
+      if (selectedWorkbenchSourceId === profile.source_id && sourceSelectionResult) {
+        return getSourceSelectionStatusLabel(sourceSelectionResult);
+      }
+      return "Select to verify";
+    },
+    [selectedWorkbenchSourceId, sourceSelectionResult],
+  );
+
+  const sortedKnownSources = useMemo(() => {
+    const sorted = [...registryProfiles];
+    sorted.sort((left, right) => {
+      let comparison = 0;
+      if (knownSourcesSort.key === "source") {
+        comparison = compareNullableString(left.source_label, right.source_label);
+      } else if (knownSourcesSort.key === "type") {
+        comparison = compareNullableString(getOperatorSourceTypeLabel(getOperatorSourceType(left)), getOperatorSourceTypeLabel(getOperatorSourceType(right)));
+      } else if (knownSourcesSort.key === "status") {
+        comparison = compareNullableString(left.profile_status, right.profile_status);
+      } else if (knownSourcesSort.key === "availability") {
+        comparison = compareNullableString(getKnownSourceAvailability(left), getKnownSourceAvailability(right));
+      } else if (knownSourcesSort.key === "last_used") {
+        comparison = compareNullableDate(left.last_run_at, right.last_run_at);
+      }
+      return applySortDirection(comparison, knownSourcesSort.direction);
+    });
+    return sorted;
+  }, [getKnownSourceAvailability, knownSourcesSort, registryProfiles]);
+
+  const knownSourcesTotalPages = Math.max(1, Math.ceil(sortedKnownSources.length / REFERENCE_PAGE_SIZE));
+  const knownSourcesPageSafe = Math.min(knownSourcesPage, knownSourcesTotalPages);
+  const visibleKnownSources = sortedKnownSources.slice(
+    (knownSourcesPageSafe - 1) * REFERENCE_PAGE_SIZE,
+    knownSourcesPageSafe * REFERENCE_PAGE_SIZE,
+  );
+
+  const sortedSourceIntakeReports = useMemo(() => {
+    const sorted = [...sourceIntakeReports];
+    sorted.sort((left, right) => {
+      const leftProfile = left.ingestion_source_id != null ? sourceProfileById.get(left.ingestion_source_id) ?? null : null;
+      const rightProfile = right.ingestion_source_id != null ? sourceProfileById.get(right.ingestion_source_id) ?? null : null;
+      let comparison = 0;
+      if (sourceIntakeHistorySort.key === "started") {
+        comparison = compareNullableDate(left.generated_at_utc, right.generated_at_utc);
+      } else if (sourceIntakeHistorySort.key === "source") {
+        comparison = compareNullableString(left.source_label, right.source_label);
+      } else if (sourceIntakeHistorySort.key === "type") {
+        comparison = compareNullableString(leftProfile ? getOperatorSourceTypeLabel(getOperatorSourceType(leftProfile)) : null, rightProfile ? getOperatorSourceTypeLabel(getOperatorSourceType(rightProfile)) : null);
+      } else if (sourceIntakeHistorySort.key === "result") {
+        comparison = compareNullableString(left.source_complete == null ? null : left.source_complete ? "complete" : "incomplete", right.source_complete == null ? null : right.source_complete ? "complete" : "incomplete");
+      } else if (sourceIntakeHistorySort.key === "scanned") {
+        comparison = compareNullableNumber(left.counts?.total_files_scanned, right.counts?.total_files_scanned);
+      } else if (sourceIntakeHistorySort.key === "new") {
+        comparison = compareNullableNumber(left.counts?.processed_new_unique, right.counts?.processed_new_unique);
+      } else if (sourceIntakeHistorySort.key === "skipped") {
+        comparison = compareNullableNumber(left.counts?.skipped_already_known, right.counts?.skipped_already_known);
+      } else if (sourceIntakeHistorySort.key === "failed") {
+        comparison = compareNullableNumber(left.counts?.failed_or_rejected, right.counts?.failed_or_rejected);
+      }
+      return applySortDirection(comparison, sourceIntakeHistorySort.direction);
+    });
+    return sorted;
+  }, [sourceIntakeHistorySort, sourceIntakeReports, sourceProfileById]);
+
+  const sourceIntakeHistoryTotalPages = Math.max(1, Math.ceil(sortedSourceIntakeReports.length / REFERENCE_PAGE_SIZE));
+  const sourceIntakeHistoryPageSafe = Math.min(sourceIntakeHistoryPage, sourceIntakeHistoryTotalPages);
+  const visibleSourceIntakeReports = sortedSourceIntakeReports.slice(
+    (sourceIntakeHistoryPageSafe - 1) * REFERENCE_PAGE_SIZE,
+    sourceIntakeHistoryPageSafe * REFERENCE_PAGE_SIZE,
+  );
+
+  const setKnownSourcesSortKey = useCallback((key: KnownSourcesSortKey) => {
+    setKnownSourcesSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+    setKnownSourcesPage(1);
+  }, []);
+
+  const setSourceIntakeHistorySortKey = useCallback((key: SourceIntakeHistorySortKey) => {
+    setSourceIntakeHistorySort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+    setSourceIntakeHistoryPage(1);
+  }, []);
 
   const workbenchProfiles = useMemo(() => {
     return profiles.filter((profile) => {
@@ -4063,33 +4194,8 @@ export default function IngestionView() {
         <div>
           <h2 className={styles.title}>Ingestion</h2>
           <p className={styles.subtitle}>
-            Source profile lifecycle management foundation. Existing Source Intake operational tools remain in Admin.
+            Create, select, and run a photo source.
           </p>
-        </div>
-        <div className={styles.toolbar}>
-          <label>
-            <span className={styles.subtitle}>Status filter</span>
-            <br />
-            <select
-              className={styles.select}
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={() => void loadProfiles({ refreshOnly: true, clearRowErrors: true })}
-            disabled={isLoading || isRefreshing}
-          >
-            {isRefreshing ? "Refreshing..." : "Refresh"}
-          </button>
         </div>
       </header>
 
@@ -4098,26 +4204,6 @@ export default function IngestionView() {
           {banner.message}
         </p>
       )}
-
-      <p className={styles.note}>
-        Source profiles define where files come from. Run Intake from this tab supports active local and external profiles.
-      </p>
-      <p className={styles.note}>
-        Lifecycle status does not delete files, sources, or provenance. Archived, test, and deprecated sources are retained for history and remain visible through the status filter.
-      </p>
-      <p className={styles.note}>
-        Source Profile status changes are non-destructive and do not rewrite prior provenance.
-      </p>
-      <p className={styles.note}>
-        Source labels are not globally unique. Source identity is based on label + type + effective path. For iCloud, managed staging path is the effective operational path when present.
-      </p>
-      <p className={styles.note}>
-        iCloud authentication is handled by icloudpd outside Photo Organizer. Do not enter Apple ID passwords here.
-      </p>
-      <p className={styles.placeholder}>Full Source Intake reports remain available in Admin.</p>
-      <p className={styles.subtitle}>
-        Active shown: {countsSummary.active} | Archived/Test/Deprecated shown: {countsSummary.nonActive}
-      </p>
 
       <section className={styles.workbenchPanel} aria-labelledby="create-source-title">
         <div className={styles.workbenchHeader}>
@@ -5083,6 +5169,39 @@ export default function IngestionView() {
         </section>
       )}
 
+      {!isSourceIntakeActive && !showTerminalSummary && (
+        <section className={styles.runPanel}>
+          <div className={styles.runPanelHeader}>
+            <h3 className={styles.runPanelTitle}>Last Source Intake Summary</h3>
+            <div className={styles.rowActions}>
+              {activeRunReport?.report_filename && (
+                <button
+                  type="button"
+                  className={styles.updateButton}
+                  onClick={() => handleToggleReportSummary(activeRunReport.report_filename)}
+                >
+                  {selectedReportFilename === activeRunReport.report_filename ? "Hide Report Summary" : "View Report Summary"}
+                </button>
+              )}
+            </div>
+          </div>
+          {activeRunReport ? (
+            <div className={styles.runMetrics}>
+              <span><strong>Source:</strong> {activeRunReport.source_label ?? "-"}</span>
+              <span><strong>Generated:</strong> {toDisplayDate(activeRunReport.generated_at_utc)}</span>
+              <span><strong>Scanned:</strong> {activeRunReport.counts?.total_files_scanned ?? "-"}</span>
+              <span><strong>Selected:</strong> {activeRunReport.counts?.selected_for_session ?? "-"}</span>
+              <span><strong>Processed New:</strong> {activeRunReport.counts?.processed_new_unique ?? "-"}</span>
+              <span><strong>Skipped Known:</strong> {activeRunReport.counts?.skipped_already_known ?? "-"}</span>
+              <span><strong>Failed/Rejected:</strong> {activeRunReport.counts?.failed_or_rejected ?? "-"}</span>
+              <span><strong>Source Complete:</strong> {activeRunReport.source_complete == null ? "-" : activeRunReport.source_complete ? "Yes" : "No"}</span>
+            </div>
+          ) : (
+            <p className={styles.helperText}>No Source Intake run summary is available yet.</p>
+          )}
+        </section>
+      )}
+
       {selectedReportFilename && (
         <section className={styles.runPanel}>
           <div className={styles.runPanelHeader}>
@@ -5138,8 +5257,6 @@ export default function IngestionView() {
                 <span><strong>Source Complete:</strong> {selectedReportSummary?.source_complete == null ? "-" : selectedReportSummary.source_complete ? "Yes" : "No"}</span>
               </div>
 
-              <p className={styles.placeholder}>Full Source Intake report details remain available in Admin.</p>
-
               {selectedReportDetail && (
                 <details className={styles.errorDetails}>
                   <summary>Show raw report details</summary>
@@ -5158,99 +5275,183 @@ export default function IngestionView() {
         </details>
       )}
 
-      {isLoading ? (
-        <p className={styles.empty}>Loading source profiles...</p>
-      ) : profiles.length === 0 ? (
-        <p className={styles.empty}>No source profiles found.</p>
-      ) : registryProfiles.length === 0 ? (
-        <p className={styles.empty}>No source profiles match the selected status filter.</p>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Source Label</th>
-                <th>Type</th>
-                <th>Status</th>
-                <th>Root Path</th>
-                <th>Cloud Provider</th>
-                <th>Acquisition Method</th>
-                <th>Managed Staging Path</th>
-                <th>Account Username (Masked)</th>
-                <th>First Seen</th>
-                <th>Last Run</th>
-                <th>Reference Counts</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {registryProfiles.map((profile) => {
-                const isReferenced = hasHistoricalReferences(profile);
-                return (
-                  <tr key={profile.source_id}>
-                    <td>
-                      <div className={styles.labelCell}>
-                        <span>{profile.source_label}</span>
-                        <span className={isReferenced ? styles.referenceBadge : styles.unreferencedBadge}>
-                          {isReferenced ? "Referenced" : "Unreferenced"}
-                        </span>
-                      </div>
-                    </td>
-                    <td>{profile.source_type}</td>
-                    <td>
-                      <span className={styles.statusBadge}>{profile.profile_status}</span>
-                    </td>
-                    <td className={styles.pathCell}>{profile.source_root_path ?? "-"}</td>
-                    <td>{profile.cloud_provider ?? "-"}</td>
-                    <td>{profile.acquisition_method ?? "-"}</td>
-                    <td className={styles.pathCell}>{profile.managed_staging_path ?? "-"}</td>
-                    <td>{profile.account_username_masked ?? "-"}</td>
-                    <td>{toDisplayDate(profile.first_seen_at)}</td>
-                    <td>
-                      {(() => {
-                        const latestReport = latestReportBySourceId.get(profile.source_id);
-                        if (!latestReport) {
-                          return (
-                            <span className={styles.lastRunSummary}>
-                              {(profile.source_intake_runs_count ?? 0) > 0
-                                ? "No recent run found in available report history."
-                                : "Last run: no run found"}
-                            </span>
-                          );
-                        }
-                        return (
-                          <span className={styles.lastRunSummary}>
-                            {buildLastRunSummaryText(latestReport, profile, sourceIntakeStatus)}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    <td>
-                      <div className={styles.counts}>
-                        <span>Provenance: {profile.provenance_count ?? 0}</span>
-                        <span>Ingestion: {profile.ingestion_runs_count ?? 0}</span>
-                        <span>Source Intake: {profile.source_intake_runs_count ?? 0}</span>
-                        <span>iCloud Runs: {profile.icloud_acquisition_runs_count ?? 0}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.rowActions}>
-                        <span className={styles.disabledReason}>Use Source Selector Step 3 to run ingestion.</span>
-                        <button type="button" className={styles.updateButton} onClick={() => openDetailsDrawer(profile)}>
-                          Details
-                        </button>
-                        <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(profile)}>
-                          Manage
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <section className={styles.runPanel} aria-label="Reference and history">
+        <div className={styles.runPanelHeader}>
+          <div>
+            <h3 className={styles.runPanelTitle}>Reference and History</h3>
+            <p className={styles.helperText}>Source lists and older intake runs are collapsed by default.</p>
+          </div>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={() => void loadProfiles({ refreshOnly: true, clearRowErrors: true })}
+            disabled={isLoading || isRefreshing}
+          >
+            {isRefreshing ? "Refreshing..." : "Refresh Sources"}
+          </button>
         </div>
-      )}
+
+        <details
+          className={styles.errorDetails}
+          open={isKnownSourcesExpanded}
+          onToggle={(event) => setIsKnownSourcesExpanded(event.currentTarget.open)}
+        >
+          <summary>Known Sources ({registryProfiles.length})</summary>
+          <div className={styles.rowActions}>
+            <label className={styles.formLabel}>
+              Status filter
+              <select
+                className={styles.formInput}
+                value={statusFilter}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value as StatusFilter);
+                  setKnownSourcesPage(1);
+                }}
+              >
+                {STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className={styles.helperText}>
+              Active shown: {countsSummary.active}; Archived/Test/Deprecated shown: {countsSummary.nonActive}
+            </span>
+          </div>
+          {isLoading ? (
+            <p className={styles.empty}>Loading source profiles...</p>
+          ) : profiles.length === 0 ? (
+            <p className={styles.empty}>No source profiles found.</p>
+          ) : sortedKnownSources.length === 0 ? (
+            <p className={styles.empty}>No source profiles match the selected status filter.</p>
+          ) : (
+            <>
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("source")}>Source {knownSourcesSort.key === "source" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("type")}>Type {knownSourcesSort.key === "type" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("status")}>Status {knownSourcesSort.key === "status" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("availability")}>Availability {knownSourcesSort.key === "availability" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th>Root / Provider</th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setKnownSourcesSortKey("last_used")}>Last Used {knownSourcesSort.key === "last_used" ? (knownSourcesSort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleKnownSources.map((profile) => {
+                      const latestReport = latestReportBySourceId.get(profile.source_id);
+                      return (
+                        <tr key={profile.source_id}>
+                          <td>{profile.source_label}</td>
+                          <td>{getOperatorSourceTypeLabel(getOperatorSourceType(profile))}</td>
+                          <td><span className={styles.statusBadge}>{profile.profile_status}</span></td>
+                          <td>{getKnownSourceAvailability(profile)}</td>
+                          <td className={styles.pathCell}>
+                            {profile.managed_staging_path ?? profile.source_root_path ?? profile.account_username_masked ?? "-"}
+                          </td>
+                          <td>
+                            {latestReport
+                              ? toDisplayDate(latestReport.generated_at_utc)
+                              : toDisplayDate(profile.last_run_at)}
+                          </td>
+                          <td>
+                            <div className={styles.rowActions}>
+                              <button type="button" className={styles.updateButton} onClick={() => openDetailsDrawer(profile)}>
+                                Details
+                              </button>
+                              <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(profile)}>
+                                Manage
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className={styles.rowActions}>
+                <button type="button" className={styles.button} disabled={knownSourcesPageSafe <= 1} onClick={() => setKnownSourcesPage((page) => Math.max(1, page - 1))}>
+                  Previous
+                </button>
+                <span className={styles.helperText}>Page {knownSourcesPageSafe} of {knownSourcesTotalPages} · showing {visibleKnownSources.length} of {sortedKnownSources.length}</span>
+                <button type="button" className={styles.button} disabled={knownSourcesPageSafe >= knownSourcesTotalPages} onClick={() => setKnownSourcesPage((page) => Math.min(knownSourcesTotalPages, page + 1))}>
+                  Next
+                </button>
+              </div>
+            </>
+          )}
+        </details>
+
+        <details
+          className={styles.errorDetails}
+          open={isSourceIntakeHistoryExpanded}
+          onToggle={(event) => setIsSourceIntakeHistoryExpanded(event.currentTarget.open)}
+        >
+          <summary>Source Intake History ({sourceIntakeReports.length} runs)</summary>
+          {sourceIntakeReports.length === 0 ? (
+            <p className={styles.empty}>No Source Intake reports found.</p>
+          ) : (
+            <>
+              <div className={styles.tableWrap}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("started")}>Started {sourceIntakeHistorySort.key === "started" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("source")}>Source {sourceIntakeHistorySort.key === "source" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("type")}>Type {sourceIntakeHistorySort.key === "type" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("result")}>Result {sourceIntakeHistorySort.key === "result" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("scanned")}>Scanned {sourceIntakeHistorySort.key === "scanned" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("new")}>New {sourceIntakeHistorySort.key === "new" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("skipped")}>Skipped {sourceIntakeHistorySort.key === "skipped" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th><button type="button" className={styles.detailToggle} onClick={() => setSourceIntakeHistorySortKey("failed")}>Failed {sourceIntakeHistorySort.key === "failed" ? (sourceIntakeHistorySort.direction === "asc" ? "↑" : "↓") : ""}</button></th>
+                      <th>Report</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleSourceIntakeReports.map((report) => {
+                      const reportProfile = report.ingestion_source_id != null ? sourceProfileById.get(report.ingestion_source_id) ?? null : null;
+                      return (
+                        <tr key={report.report_filename}>
+                          <td>{toDisplayDate(report.generated_at_utc)}</td>
+                          <td>{report.source_label ?? "-"}</td>
+                          <td>{reportProfile ? getOperatorSourceTypeLabel(getOperatorSourceType(reportProfile)) : "-"}</td>
+                          <td>{report.source_complete == null ? "-" : report.source_complete ? "Complete" : "Incomplete"}</td>
+                          <td>{report.counts?.total_files_scanned ?? "-"}</td>
+                          <td>{report.counts?.processed_new_unique ?? "-"}</td>
+                          <td>{report.counts?.skipped_already_known ?? "-"}</td>
+                          <td>{report.counts?.failed_or_rejected ?? "-"}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className={styles.updateButton}
+                              onClick={() => handleToggleReportSummary(report.report_filename)}
+                            >
+                              {selectedReportFilename === report.report_filename ? "Hide" : "View"}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className={styles.rowActions}>
+                <button type="button" className={styles.button} disabled={sourceIntakeHistoryPageSafe <= 1} onClick={() => setSourceIntakeHistoryPage((page) => Math.max(1, page - 1))}>
+                  Previous
+                </button>
+                <span className={styles.helperText}>Page {sourceIntakeHistoryPageSafe} of {sourceIntakeHistoryTotalPages} · showing {visibleSourceIntakeReports.length} of {sortedSourceIntakeReports.length}</span>
+                <button type="button" className={styles.button} disabled={sourceIntakeHistoryPageSafe >= sourceIntakeHistoryTotalPages} onClick={() => setSourceIntakeHistoryPage((page) => Math.min(sourceIntakeHistoryTotalPages, page + 1))}>
+                  Next
+                </button>
+              </div>
+            </>
+          )}
+        </details>
+      </section>
 
       {isEditorOpen && (
         <div className={styles.drawerBackdrop} role="dialog" aria-modal="true">
