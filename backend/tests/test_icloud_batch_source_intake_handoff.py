@@ -29,6 +29,7 @@ from app.services.icloud_acquisition import batch_source_intake_service as hando
 from app.services.icloud_acquisition import durable_exact_service as durable
 from app.services.icloud_acquisition import execution_service as acquisition
 from app.services.ingestion import pipeline_orchestrator as pipeline
+from app.services.ingestion import storage_manager
 
 
 def _bytes(seed: bytes) -> bytes:
@@ -261,8 +262,10 @@ class IcloudBatchSourceIntakeHandoffTests(unittest.TestCase):
         self.db.commit()
         batch, resource, _ = self._create_ready_batch(content=content)
 
-        result = handoff.run_batch_source_intake(self.db, batch_id=batch.id, source_id=self.source.id)
+        with patch.object(storage_manager, "_copy_file_to_vault") as vault_copy:
+            result = handoff.run_batch_source_intake(self.db, batch_id=batch.id, source_id=self.source.id)
 
+        vault_copy.assert_not_called()
         self.assertEqual(result.status, handoff.STATUS_BATCH_INTAKE_COMPLETED)
         self.assertEqual(result.resources_processed, 0)
         self.assertEqual(result.resources_duplicate_linked, 1)
@@ -271,6 +274,12 @@ class IcloudBatchSourceIntakeHandoffTests(unittest.TestCase):
         provenance = self.db.scalar(select(Provenance).where(Provenance.ingestion_source_id == self.source.id))
         self.assertIsNotNone(provenance)
         self.assertEqual(provenance.asset_sha256, sha256)
+        unchanged_asset = self.db.get(Asset, sha256)
+        self.assertEqual(unchanged_asset.original_source_path, "other/source/existing.jpg")
+        source_intake_run = self.db.get(SourceIntakeRun, result.source_intake_run_id)
+        ingestion_run = self.db.get(IngestionRun, source_intake_run.ingestion_run_id)
+        self.assertEqual(source_intake_run.ingestion_source_id, self.source.id)
+        self.assertEqual(ingestion_run.ingestion_source_id, self.source.id)
 
     def test_wrong_source_profile_is_rejected(self) -> None:
         other_root = self.root / "storage" / "exports" / "icloud" / "other"

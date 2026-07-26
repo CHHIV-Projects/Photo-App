@@ -49,7 +49,11 @@ from app.services.ingestion.filter import FilterResult, filter_records
 from app.services.ingestion.hasher import HashResult, HashedFile, hash_records
 from app.services.ingestion.scanner import FileScanRecord, ScanResult, scan_folder
 from app.services.ingestion.source_readiness import classify_source_readiness
-from app.services.ingestion.storage_manager import StorageResult, copy_unique_files_to_vault
+from app.services.ingestion.storage_manager import (
+    ExistingAssetVaultState,
+    StorageResult,
+    copy_unique_files_to_vault,
+)
 from app.services.persistence.asset_repository import (
     DuplicateProvenanceResult,
     PersistenceResult,
@@ -72,6 +76,7 @@ class PipelineContext:
     ingest_source_limit: int | None
     source_label: str | None
     source_type: str | None
+    ingestion_source_id: int | None = None
     minimum_file_size_bytes: int | None = None
     explicit_source_records: list[FileScanRecord] = field(default_factory=list)
     source_intake_context: dict[str, Any] = field(default_factory=dict)
@@ -591,11 +596,35 @@ def _storage_stage(ctx: PipelineContext) -> dict[str, Any]:
     if ctx.dedup_result is None:
         raise RuntimeError("Deduplication stage must run before storage.")
 
-    result = copy_unique_files_to_vault(ctx.dedup_result, ctx.vault_path)
+    candidate_sha256 = [item.sha256 for item in ctx.dedup_result.unique_files]
+    existing_assets_by_sha256: dict[str, ExistingAssetVaultState] = {}
+    if candidate_sha256:
+        db_session = SessionLocal()
+        try:
+            existing_assets = db_session.scalars(
+                select(Asset).where(Asset.sha256.in_(candidate_sha256))
+            ).all()
+            existing_assets_by_sha256 = {
+                asset.sha256: ExistingAssetVaultState(
+                    sha256=asset.sha256,
+                    vault_path=asset.vault_path,
+                    size_bytes=asset.size_bytes,
+                )
+                for asset in existing_assets
+            }
+        finally:
+            db_session.close()
+
+    result = copy_unique_files_to_vault(
+        ctx.dedup_result,
+        ctx.vault_path,
+        existing_assets_by_sha256=existing_assets_by_sha256,
+    )
     ctx.storage_result = result
     return {
         "scope": "batch",
-        "copied_to_vault": len(result.copied_files),
+        "copied_to_vault": sum(1 for item in result.copied_files if item.copy_performed),
+        "reused_existing_vault": sum(1 for item in result.copied_files if not item.copy_performed),
         "copy_failures": len(result.failed_files),
         "vault_path": str(ctx.vault_path),
     }
@@ -1211,6 +1240,7 @@ def _resolve_ingestion_context_stage(ctx: PipelineContext) -> dict[str, Any]:
             from_path=ctx.from_path,
             source_label=ctx.source_label,
             source_type=ctx.source_type,
+            ingestion_source_id=ctx.ingestion_source_id,
         )
     finally:
         db_session.close()

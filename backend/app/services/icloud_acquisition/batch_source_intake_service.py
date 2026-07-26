@@ -885,6 +885,7 @@ def run_batch_source_intake(
         ingest_source_limit=None,
         source_label=source.source_label,
         source_type=source.source_type,
+        ingestion_source_id=source.id,
         minimum_file_size_bytes=ICLOUD_BATCH_MINIMUM_FILE_SIZE_BYTES,
         explicit_source_records=[item.file_record for item in verified_resources],
         source_intake_context={

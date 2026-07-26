@@ -242,6 +242,11 @@ def start_source_intake(
     if not resolved_path.is_dir():
         raise ValueError(f"Source path is not a directory: {resolved_path}")
     canonical_source_root_path = str(resolved_path)
+    authoritative_ingestion_source_id = (
+        source.id
+        if source.endpoint_id is not None and source.endpoint_relative_root is not None
+        else None
+    )
 
     # Validate drop zone is empty
     drop_zone = resolve_runtime_path(settings.drop_zone_path)
@@ -271,7 +276,15 @@ def start_source_intake(
     with _runner_lock:
         t = threading.Thread(
             target=_run_background_job,
-            args=(run_id, canonical_source_root_path, source.source_label, source.source_type, source_intake_limit, ingest_batch_size),
+            args=(
+                run_id,
+                canonical_source_root_path,
+                source.source_label,
+                source.source_type,
+                source_intake_limit,
+                ingest_batch_size,
+                authoritative_ingestion_source_id,
+            ),
             daemon=True,
             name=f"source-intake-{run_id}",
         )
@@ -337,6 +350,7 @@ def _update_progress(run_id: int):
             run.selected = ctx.source_files_selected
             run.staged = ctx.source_files_selected
             run.processed_new_unique = ctx.total_new_unique_ingested
+            run.failed_or_rejected = len(ctx.moved_to_ingest_failures)
             run.remaining_unknown = ctx.source_files_remaining_unknown
             db.commit()
     return _on_batch
@@ -349,6 +363,7 @@ def _run_background_job(
     source_type: str,
     limit: int | None,
     batch_size: int,
+    ingestion_source_id: int | None = None,
 ) -> None:
     started_at = time.perf_counter()
     final_status = STATUS_FAILED
@@ -365,6 +380,7 @@ def _run_background_job(
             ingest_source_limit=limit,
             source_label=source_label,
             source_type=source_type,
+            ingestion_source_id=ingestion_source_id,
         )
         args = RuntimeArgs(
             from_path=ctx.from_path,
@@ -413,6 +429,7 @@ def _run_background_job(
             run.selected = ctx.source_files_selected
             run.staged = ctx.source_files_selected
             run.processed_new_unique = ctx.total_new_unique_ingested
+            run.failed_or_rejected = len(ctx.moved_to_ingest_failures)
             run.remaining_unknown = ctx.source_files_remaining_unknown
             if ctx.source_intake_report_path is not None:
                 run.report_path = str(ctx.source_intake_report_path)

@@ -84,12 +84,39 @@ def resolve_ingestion_context(
     from_path: Path | None,
     source_label: str | None,
     source_type: str | None,
+    ingestion_source_id: int | None = None,
 ) -> ResolvedIngestionContext | None:
-    """Create or reuse source context and create one ingestion run row."""
-    if from_path is None and (source_label or "").strip() == "":
+    """Resolve source context and create one ingestion run row.
+
+    A supplied ingestion_source_id is authoritative for a previously validated
+    modern Source Profile. Runtime path evidence remains per-run and does not
+    rewrite the saved Source Profile's configured root.
+    """
+    if ingestion_source_id is None and from_path is None and (source_label or "").strip() == "":
         return None
 
     source_root_path = str(from_path.resolve()) if from_path is not None else None
+    if ingestion_source_id is not None:
+        source = db_session.get(IngestionSource, ingestion_source_id)
+        if source is None:
+            raise ValueError(f"Authoritative ingestion source {ingestion_source_id} was not found.")
+
+        run = IngestionRun(
+            ingestion_source_id=source.id,
+            from_path=source_root_path,
+        )
+        db_session.add(run)
+        db_session.flush()
+        db_session.commit()
+
+        return ResolvedIngestionContext(
+            ingestion_source_id=source.id,
+            ingestion_run_id=run.id,
+            source_label=source.source_label,
+            source_type=source.source_type,
+            source_root_path=source_root_path,
+        )
+
     resolved_label = _resolve_source_label_with_fallback(source_label, from_path)
     normalized_label = normalize_source_label(resolved_label)
     resolved_type = coerce_source_type(source_type)

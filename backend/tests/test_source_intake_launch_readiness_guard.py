@@ -161,8 +161,21 @@ class SourceIntakeLaunchReadinessGuardTests(unittest.TestCase):
         runtime_root = self.root / "runtime-source"
         runtime_root.mkdir()
         old_root = self.root / "missing-old-drive" / "source"
+        endpoint = SourceEndpoint(
+            source_type="external_device",
+            alias="Launch Guard Endpoint",
+            alias_normalized="launch guard endpoint",
+            status="active",
+            identity_fingerprint_hash="launch-guard-fingerprint",
+            identity_fingerprint_version="test_v1",
+            identity_confidence="strong_match",
+        )
+        self.db.add(endpoint)
+        self.db.flush()
         self.source.source_root_path = str(old_root)
         self.source.source_root_path_normalized = str(old_root).casefold()
+        self.source.endpoint_id = endpoint.id
+        self.source.endpoint_relative_root = "source"
         self.db.commit()
         fake = _FakeReadinessService(self._readiness("ready", can_run=True, requires_ack=False))
 
@@ -184,6 +197,7 @@ class SourceIntakeLaunchReadinessGuardTests(unittest.TestCase):
         self.assertEqual(snapshot.status, "running")
         self.assertEqual(snapshot.source_root_path, str(runtime_root.resolve()))
         self.assertEqual(_FakeThread.instances[0].args[1], str(runtime_root.resolve()))
+        self.assertEqual(_FakeThread.instances[0].args[6], self.source.id)
         self.db.expire_all()
         source = self.db.get(IngestionSource, self.source.id)
         self.assertIsNotNone(source)
