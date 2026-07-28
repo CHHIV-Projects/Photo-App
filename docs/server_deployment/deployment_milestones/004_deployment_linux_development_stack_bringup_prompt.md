@@ -35,7 +35,7 @@ This milestone must:
 - open the approved SSH tunnel from the Windows laptop;
 - perform controlled browser smoke testing;
 - prove that direct LAN access to the application ports remains unavailable;
-- confirm that no Windows, NAS-authoritative, Test, or Production resource is reachable;
+- confirm that no Windows, NAS-authoritative, Test, or Production resource is configured, mounted, credentialed, migrated, or actively used;
 - leave the healthy Development stack running for continued work.
 
 This milestone must stop before:
@@ -81,7 +81,7 @@ Before implementation:
    - `frontend/Dockerfile`
    - `backend/scripts/container_entrypoint.py`
    - `scripts/runtime/photo-organizer-dev.sh`
-   - backend configuration, health, startup, and schema-bootstrap paths directly used during startup
+   - backend configuration, health, startup, one-shot base bootstrap, and additive schema-synchronization paths used by this milestone
 
 Do not repeat broad repository or Windows-runtime reconnaissance.
 
@@ -206,6 +206,42 @@ Two high-severity production dependency advisories remain accepted only for:
 - no direct application LAN exposure.
 
 Do not perform a framework-major upgrade in this milestone.
+
+### 7.1 Frontend Development target
+
+The live Milestone 004 Compose stack intentionally uses the frontend
+`development` target defined by:
+
+`docker/compose.development.yml`
+
+That target runs the Next.js Development server using:
+
+`next dev`
+
+The production-style frontend runtime image inspected in Milestone 003 remains
+packaging evidence only. Do not change Compose to the production runtime target
+for this milestone, and do not treat the Development frontend result as Test or
+Production deployment evidence.
+
+### 7.2 Isolation meaning
+
+For this milestone, isolation means that the running Development stack has no:
+
+- configured connection to the Windows PostgreSQL database or Redis;
+- configured Windows filesystem path, volume, or bind mount;
+- NAS application bind mount or NAS-authoritative storage configuration;
+- Test or Production configuration or credential;
+- migrated Windows data;
+- active use of Windows, NAS-authoritative, Test, or Production resources.
+
+This milestone must also prove loopback-only application publication,
+unpublished PostgreSQL and Redis, failed direct-LAN ingress to ports 13000 and
+18001, and browser access only through the approved SSH tunnel.
+
+Do not claim literal outbound network-layer isolation. The Docker bridge
+networks may permit ordinary outbound connectivity to the home LAN or internet.
+Do not add outbound firewall controls, Docker egress restrictions, or a network
+redesign in this milestone.
 
 ### 8. Resource policy
 
@@ -608,7 +644,7 @@ From inside the PostgreSQL container, validate:
 - PostgreSQL version;
 - expected Development database exists;
 - connection works using container environment variables;
-- database is initially fresh before backend schema bootstrap.
+- database is initially fresh before the one-shot `init_db.py` base-schema bootstrap.
 
 Use internal container commands that do not expose the password.
 
@@ -618,7 +654,7 @@ Record:
 
 - database name classification;
 - server version;
-- initial user-table count before backend startup.
+- initial user-table count before the one-shot base-schema bootstrap.
 
 Do not dump full environment variables.
 
@@ -635,7 +671,69 @@ Do not publish Redis to the host.
 
 Do not add authentication or redesign Redis in this milestone.
 
-## 6. Start the GPU Backend
+## 6. Build the Backend and Run the One-Time Base-Schema Bootstrap
+
+Before starting the normal backend service, build its current GPU-target image
+without starting the service.
+
+Use a command equivalent to:
+
+    sudo docker compose \
+      --env-file docker/.env.development \
+      --file docker/compose.development.yml \
+      --file docker/compose.development.gpu.yml \
+      build backend
+
+Review the exact effective command before the Product Owner runs it.
+
+After confirming again that PostgreSQL is the newly created, empty Development
+database, run the tracked application-provided bootstrap exactly once from an
+automatically removed one-off Compose backend container:
+
+    sudo docker compose \
+      --env-file docker/.env.development \
+      --file docker/compose.development.yml \
+      --file docker/compose.development.gpu.yml \
+      run --rm --no-deps backend python scripts/init_db.py
+
+The one-off container must use:
+
+- the same Development Compose project;
+- the same protected Development configuration;
+- the built backend image and internal Docker network;
+- no published port;
+- no NAS mount;
+- no Windows, Test, or Production resource;
+- automatic container removal after completion.
+
+Confirm:
+
+- `init_db.py` exits successfully;
+- the expected base schema exists;
+- the database still contains no application data;
+- no secret is printed;
+- no normal backend service was started by the bootstrap command.
+
+Do not:
+
+- create or edit schema through manual SQL;
+- redesign migration handling or introduce Alembic;
+- migrate the Windows database;
+- rerun `init_db.py` blindly;
+- delete or recreate the fresh volume after a failure.
+
+If `init_db.py` fails or partially initializes the schema:
+
+- preserve the database volume;
+- preserve sanitized logs;
+- do not rerun it;
+- do not manually repair the schema;
+- stop and report the exact failure.
+
+Record the initial table count and the post-bootstrap base-table count
+separately.
+
+## 7. Start the GPU Backend
 
 Start the backend using the GPU overlay and current committed build context.
 
@@ -645,7 +743,7 @@ Use the repository’s effective Compose contract and a command equivalent to:
       --env-file docker/.env.development \
       --file docker/compose.development.yml \
       --file docker/compose.development.gpu.yml \
-      up --detach --build backend
+      up --detach backend
 
 Do not start the frontend yet.
 
@@ -670,7 +768,8 @@ Confirm:
 - backend container starts;
 - backend health becomes healthy;
 - PostgreSQL and Redis remain healthy;
-- schema bootstrap completes;
+- the previously completed base-schema bootstrap remains intact;
+- the backend's existing additive startup schema synchronization completes;
 - no repeated crash/restart loop occurs;
 - no Production path appears;
 - no Windows path is treated as an active Linux runtime path;
@@ -685,14 +784,15 @@ If backend startup fails:
 - do not delete volumes;
 - stop and escalate before changing application code or schema behavior.
 
-## 7. Validate Fresh Database Schema
+## 8. Validate Fresh Database Schema
 
 After the backend becomes healthy, inspect PostgreSQL internally.
 
 Confirm:
 
 - application tables were created successfully;
-- startup schema mutation completed without fatal error;
+- the one-shot base-schema bootstrap completed without fatal error;
+- normal backend startup's additive schema synchronization completed without fatal error;
 - no Alembic redesign was introduced;
 - the database contains no migrated Windows records.
 
@@ -714,12 +814,14 @@ Do not modify schema manually.
 
 Record:
 
-- total application-table count;
+- initial fresh-database table count;
+- post-`init_db.py` base-table count;
+- post-backend additive-synchronization table count;
 - selected empty-table counts;
 - any startup-created administrative rows, if present;
 - confirmation that no Windows path or NAS-authoritative record exists.
 
-## 8. Validate the Running Backend GPU
+## 9. Validate the Running Backend GPU
 
 Inside the running backend container, validate:
 
@@ -746,7 +848,7 @@ Do not:
 
 The running backend must not silently fall back to CPU.
 
-## 9. Validate Backend Health and Storage Boundary
+## 10. Validate Backend Health and Storage Boundary
 
 From the server:
 
@@ -774,7 +876,7 @@ Confirm:
 - no Docker socket is mounted;
 - no credential directory is mounted.
 
-## 10. Start the Frontend
+## 11. Start the Frontend
 
 After backend validation passes, start the frontend using the same Compose project.
 
@@ -805,12 +907,16 @@ Inspect:
 Confirm:
 
 - frontend becomes healthy;
+- the Compose frontend target is `development`;
+- the frontend runs `next dev`;
 - no crash/restart loop occurs;
 - it connects through the intended browser API URL;
 - no Production path appears;
 - no secret appears in logs;
 - Next.js remains 14.2.35;
 - Node.js remains 22.23.1.
+
+This is Development validation and is not Production deployment evidence.
 
 From the server:
 
@@ -820,7 +926,7 @@ Confirm a valid frontend HTTP response.
 
 Do not expose the frontend directly to the LAN.
 
-## 11. Validate Complete Stack State
+## 12. Validate Complete Stack State
 
 The Product Owner should run:
 
@@ -845,7 +951,7 @@ Confirm:
 - only expected Photo Organizer Development volumes and networks were created;
 - no Test or Production container, volume, or network exists.
 
-## 12. Open the SSH Tunnel
+## 13. Open the SSH Tunnel
 
 After all server-side validation passes, the Product Owner should open a second Windows PowerShell window.
 
@@ -868,7 +974,7 @@ Keep that window open during browser testing.
 
 Do not expose or forward PostgreSQL or Redis.
 
-## 13. Validate Tunnel Access From Windows
+## 14. Validate Tunnel Access From Windows
 
 In another Windows PowerShell window, test:
 
@@ -884,7 +990,7 @@ Expected:
 
 Do not use the server LAN IP for application access.
 
-## 14. Prove Direct LAN Application Access Is Blocked
+## 15. Prove Direct LAN Application Access Is Blocked
 
 From Windows, while the server stack is running, test:
 
@@ -901,7 +1007,7 @@ Do not change firewall or bind settings to make these tests succeed.
 
 Portainer and Cockpit are pre-existing exceptions and are not part of this application-port test.
 
-## 15. Browser Smoke Test
+## 16. Browser Smoke Test
 
 With the SSH tunnel active, the Product Owner should open:
 
@@ -931,7 +1037,7 @@ Capture concise observations.
 
 Do not conduct broad functional testing.
 
-## 16. Confirm Isolation From Windows, NAS, Test, and Production
+## 17. Confirm Isolation From Windows, NAS, Test, and Production
 
 Use configuration, mounts, database contents, and running-container inspection to prove:
 
@@ -939,16 +1045,19 @@ Use configuration, mounts, database contents, and running-container inspection t
 - no Windows UNC path is active;
 - no Windows PostgreSQL connection is used;
 - no Windows Redis connection is used;
-- no Windows Docker volume is reachable;
+- no Windows Docker volume is configured or mounted;
 - no NAS application bind mount is present;
-- no NAS Production directory is reachable;
-- no Test environment resource exists;
-- no Production environment resource exists;
+- no NAS-authoritative storage is configured or actively used;
+- no Test environment resource is configured, credentialed, migrated, or actively used;
+- no Production environment resource is configured, credentialed, migrated, or actively used;
 - no migrated Asset, Source, Endpoint, Run, or Provenance row exists.
 
 Do not recursively scan the NAS or Windows filesystems.
 
-## 17. Final Healthy State
+Do not claim or test blanket outbound network-layer isolation. Ordinary bridge
+network egress is outside this milestone.
+
+## 18. Final Healthy State
 
 If all validations pass:
 
@@ -990,9 +1099,11 @@ This milestone explicitly authorizes:
 - building current Development images;
 - starting PostgreSQL;
 - starting Redis;
+- building the backend image without starting the normal backend service;
+- one execution of tracked `backend/scripts/init_db.py` against the confirmed fresh Development database;
 - starting the GPU backend;
 - starting the frontend;
-- application startup schema bootstrap against the fresh Development database;
+- normal backend additive startup schema synchronization against the bootstrapped fresh Development database;
 - temporary isolated health and GPU validation commands;
 - creation of the required closeout in the Windows repository.
 
@@ -1066,6 +1177,7 @@ Stop and report if:
 - backend or frontend would bind beyond loopback;
 - a secret appears in logs or command output;
 - PostgreSQL or Redis fails health checks;
+- the one-shot `init_db.py` bootstrap fails or partially initializes the schema;
 - backend schema startup fails;
 - backend enters a restart loop;
 - frontend enters a restart loop;
@@ -1074,7 +1186,7 @@ Stop and report if:
 - the application silently falls back to CPU;
 - the fresh database contains migrated or unexpected user data;
 - an application container mounts the NAS;
-- an application container can reach a Windows, Test, or Production resource;
+- an application container is configured with, mounts, is credentialed for, contains migrated data from, or actively uses a Windows, NAS-authoritative, Test, or Production resource;
 - direct LAN access to ports 13000 or 18001 succeeds;
 - browser testing requires media ingestion or Source creation;
 - a schema, dependency, framework, or architectural change is needed;
@@ -1174,8 +1286,11 @@ Document:
 - version;
 - fresh volume;
 - internal-only networking;
-- initial table count;
-- post-backend schema table count;
+- initial fresh-database table count;
+- exact one-shot `init_db.py` command and result;
+- post-`init_db.py` base-table count;
+- normal backend additive schema-synchronization result;
+- post-backend final application-table count;
 - selected empty application-table counts;
 - absence of migrated Windows data.
 
@@ -1198,7 +1313,8 @@ Document:
 - container/image ID;
 - health result;
 - startup duration;
-- schema-bootstrap result;
+- confirmation that the prior one-shot base bootstrap remained intact;
+- additive startup schema-synchronization result;
 - restart count;
 - runtime user;
 - local-storage result;
@@ -1225,6 +1341,8 @@ Document:
 
 - exact start/build command;
 - container/image ID;
+- Docker target `development`;
+- confirmation that the process ran `next dev`;
 - health result;
 - Node.js version;
 - Next.js version;
@@ -1265,10 +1383,14 @@ Document:
 - no Windows database or Redis use;
 - no Windows path use;
 - no NAS application mount;
+- no NAS-authoritative storage configuration or active use;
 - no Production path;
 - no Test resource;
 - no migrated Assets, Sources, Endpoints, Runs, or Provenance;
 - no media ingestion.
+
+State explicitly that this evidence does not claim literal outbound
+network-layer isolation.
 
 ### 12. Resource Policy
 
@@ -1304,8 +1426,10 @@ List exact commands and results for:
 - Compose validation;
 - PostgreSQL startup and query validation;
 - Redis startup and ping;
+- backend image build without normal service startup;
+- one-shot `init_db.py` bootstrap;
 - backend startup and health;
-- schema validation;
+- additive startup schema synchronization and final schema validation;
 - running GPU validation;
 - frontend startup and health;
 - Docker network and mount inspection;
@@ -1388,8 +1512,10 @@ Milestone 004 is complete when:
 - protected Development configuration remains intact;
 - PostgreSQL starts healthy with a fresh Development volume;
 - Redis starts healthy with fresh state;
+- the backend GPU-target image is built without starting the normal backend service;
+- tracked `backend/scripts/init_db.py` runs exactly once and creates the expected base schema;
 - backend starts healthy using the GPU overlay;
-- schema bootstrap succeeds;
+- normal backend additive startup schema synchronization succeeds;
 - the fresh database contains no migrated Windows data;
 - CUDA works inside the running backend;
 - frontend starts healthy;
@@ -1401,8 +1527,35 @@ Milestone 004 is complete when:
 - browser smoke testing passes;
 - no media is ingested;
 - no Source is created;
-- no Windows, NAS-authoritative, Test, or Production resource is reachable;
+- no Windows, NAS-authoritative, Test, or Production resource is configured, mounted, credentialed, migrated, or actively used;
+- no claim of literal outbound network-layer isolation is made;
 - no arbitrary resource limit is introduced;
 - the healthy Development stack is left running;
 - exactly one correctly named closeout is created;
 - the closeout recommends one clear next milestone.
+
+## Approved Pre-Execution Clarifications
+
+The Product Owner approved these material lock-ins before execution:
+
+1. The tracked `backend/scripts/init_db.py` is the authorized one-time
+   application-provided bootstrap for the confirmed fresh Linux Development
+   PostgreSQL database. It must run from an automatically removed one-off
+   Compose backend container after the backend image is built and before the
+   normal backend service starts. Failure or partial initialization is a stop
+   condition; preserve the volume and sanitized evidence, and do not rerun or
+   repair manually.
+2. Isolation means no Windows, NAS-authoritative, Test, or Production
+   connection, path, mount, volume, credential, migrated data, configuration,
+   or active use. It does not mean literal outbound network-layer isolation.
+   Loopback-only application publication, unpublished PostgreSQL and Redis,
+   failed direct-LAN ingress, and SSH-tunnel-only browser access remain
+   mandatory.
+3. The live frontend intentionally uses the Compose `development` target and
+   runs `next dev`. The Milestone 003 production-style runtime image remains
+   packaging evidence only; this Development result is not Test or Production
+   deployment evidence.
+4. After this clarification is incorporated, do not begin server
+   reconciliation, reboot, Docker startup, volume creation, or database
+   bootstrap until the revised prompt is committed and pushed by the Product
+   Owner.
