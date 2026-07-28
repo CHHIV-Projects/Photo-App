@@ -58,7 +58,7 @@ INDEX_DDLS: dict[str, str] = {
 
 def ensure_asset_context_label_schema(db_session: Session) -> AssetContextLabelSchemaSummary:
     """Ensure asset_context_labels table and indexes exist."""
-    bind = db_session.get_bind()
+    bind = db_session.connection()
     inspector = inspect(bind)
     existing_tables = set(inspector.get_table_names())
 

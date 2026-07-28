@@ -1559,3 +1559,100 @@ The Product Owner approved these material lock-ins before execution:
    reconciliation, reboot, Docker startup, volume creation, or database
    bootstrap until the revised prompt is committed and pushed by the Product
    Owner.
+
+## Live Escalation Addendum — Backend Schema Transaction Visibility
+
+### Observed live sequence
+
+The Product Owner committed and pushed the pre-execution clarifications. The
+server then:
+
+- fast-forwarded cleanly to the approved Windows commit;
+- completed the required reboot and returned with Docker, NVIDIA, NAS, and
+  Portainer healthy;
+- created fresh project-scoped PostgreSQL, Redis, and application-storage
+  volumes;
+- confirmed the new Development database had zero public tables;
+- ran tracked `backend/scripts/init_db.py` exactly once with exit code 0;
+- confirmed the one-shot bootstrap created 18 base tables;
+- confirmed Assets, Source Profiles, Source Endpoints, Ingestion Runs, and
+  Provenance each contained zero rows;
+- built the Development GPU backend image without starting the normal backend
+  service.
+
+Normal backend startup then failed. Evidence:
+
+- backend `up --wait` exit code: 1;
+- backend restart count before the safety stop: 9;
+- backend container exit code: 3;
+- PyTorch CUDA validation passed and identified the RTX 5070 Ti;
+- application startup failed in `ensure_album_schema()`;
+- exact exception:
+  `sqlalchemy.exc.NoSuchTableError: collections`.
+
+The Product Owner stopped only the affected backend. PostgreSQL and Redis
+remained healthy. Read-only inspection confirmed the failed startup transaction
+left the database at the same 18 base tables; no partial `collections` schema
+persisted.
+
+Do not rerun `init_db.py`, delete or recreate the database, alter schema
+manually, or start the frontend as part of this recovery.
+
+### Diagnosis
+
+`ensure_album_schema()` executed `CREATE TABLE` through the Session's active
+transaction and then inspected the Engine returned by `db_session.get_bind()`.
+On PostgreSQL, that inspection could use another connection, which could not
+see the uncommitted table. Inspection therefore raised
+`NoSuchTableError: collections`, and the transaction rolled back cleanly.
+
+`ensure_asset_context_label_schema()` used the same split-connection pattern.
+Although it would not raise at the same point, it could omit its expected
+indexes during first startup because the second connection could not see the
+new uncommitted table.
+
+### Approved correction
+
+The Product Owner authorized a narrow correction in exactly:
+
+- `backend/app/services/albums/album_schema.py`;
+- `backend/app/services/context_labels/schema.py`.
+
+Each helper must use `db_session.connection()` for schema creation and
+inspection inside the Session's current transaction. The correction must:
+
+- preserve existing schema definitions, tables, indexes, constraints, and
+  startup ordering;
+- introduce no intermediate commit;
+- leave transaction ownership outside the helpers unchanged;
+- add focused regression coverage for first-pass same-transaction visibility,
+  first-pass indexes, rollback safety, and idempotency;
+- include focused and full-backend validation;
+- make no change to `init_db.py`, migration architecture, or database contents.
+
+No direct server hot patch is authorized. After local validation, the Coder
+must pause for Product Owner review, commit, and push.
+
+### Approved recovery sequence
+
+After the Product Owner confirms the correction is committed and pushed:
+
+1. Fast-forward the server checkout using the existing approved reconciliation
+   rules.
+2. Confirm protected `docker/.env.development` remains intact.
+3. Rebuild only the Development GPU backend image.
+4. Preserve the existing PostgreSQL and Redis containers and all Development
+   volumes.
+5. Retry normal backend startup once without rerunning `init_db.py`.
+6. Allow existing additive startup schema synchronization to complete.
+7. Verify backend health, the `collections` and `asset_context_labels` tables,
+   their expected indexes, and the empty Development data state.
+8. Continue Milestone 004 only if all required validation passes.
+
+If corrected backend startup fails again:
+
+- preserve database, volumes, and sanitized logs;
+- do not retry repeatedly;
+- do not rerun `init_db.py`;
+- do not perform manual schema repair;
+- stop and escalate with the new evidence.

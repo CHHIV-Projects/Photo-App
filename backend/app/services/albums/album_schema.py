@@ -65,7 +65,7 @@ INDEX_DDLS = {
 
 def ensure_album_schema(db_session: Session) -> AlbumSchemaSummary:
     """Ensure tables and indexes for album foundation exist."""
-    bind = db_session.get_bind()
+    bind = db_session.connection()
     inspector = inspect(bind)
 
     existing_tables = set(inspector.get_table_names())
