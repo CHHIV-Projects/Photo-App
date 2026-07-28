@@ -1656,3 +1656,112 @@ If corrected backend startup fails again:
 - do not rerun `init_db.py`;
 - do not perform manual schema repair;
 - stop and escalate with the new evidence.
+
+## Live Execution Addendum: Development Frontend Write Permission
+
+The approved backend correction was committed and pushed as
+`76d0426c87442f094f312ce9f2e9b8d3ef07d311`. The server fast-forwarded cleanly,
+the protected Development configuration remained intact, and only the backend
+image was rebuilt. The single corrected backend startup retry then passed:
+
+- startup exit code: 0;
+- health: healthy;
+- restart count: 0;
+- runtime image:
+  `sha256:1b57ab81f60d4039d5c3366701e523d30ffcb25e4f598c49215bfd02e399ea49`;
+- post-startup public-table count: 41;
+- all required `collections` and `asset_context_labels` indexes were present;
+- the nine selected Asset, Source, Endpoint, Run, Provenance, collection, and
+  context-label tables each contained zero rows;
+- local storage and the expected project-scoped application-storage volume were
+  active, with no NAS or Windows mount;
+- live PyTorch CUDA validation passed on the NVIDIA GeForce RTX 5070 Ti.
+
+PostgreSQL, Redis, and the corrected backend remained healthy while the
+Development frontend image was built. The frontend image build succeeded, but
+the first normal Development frontend startup failed. Evidence:
+
+- frontend image:
+  `sha256:5664315da2cce1323d0a564a4382e3f790561fa11727f1a8631e57a293545298`;
+- Compose Development target and `next dev` command were correct;
+- startup exit code: 1;
+- restart count before the safety stop: 4;
+- the frontend was stopped while the healthy backend, PostgreSQL, Redis, and
+  Development volumes were preserved;
+- exact error:
+  `EACCES: permission denied, mkdir '/app/.next'`.
+
+Read-only inspection confirmed:
+
+- runtime user: `node`, UID 1000;
+- `/app`: `root:root`, mode 755;
+- `/app/.next`: absent;
+- the `node` user could not write to `/app`.
+
+### Diagnosis
+
+The frontend Development target correctly retained the non-root `node` user,
+but did not prepare the Next.js Development output directory for that user.
+`next dev` must create or write `/app/.next`; because `/app` was root-owned and
+not broadly writable, startup failed before the Development server became
+healthy.
+
+This failure is limited to Development-image filesystem ownership. It is not a
+frontend application, package-version, route, backend, database, Redis, GPU,
+networking, NAS, Test, Production, or production-runtime-image failure.
+
+### Approved correction
+
+The Product Owner authorized a narrow correction only in:
+
+- `frontend/Dockerfile`.
+
+After the Development-stage `COPY . .` and before `USER node`, the Dockerfile
+must create `/app/.next` with ownership assigned to `node`, equivalent to:
+
+    RUN install -d -o node -g node /app/.next
+
+The correction must:
+
+- affect only the frontend Development target;
+- preserve `node` as the runtime user;
+- leave `/app` ownership and permissions unchanged;
+- add no writable volume;
+- make no application-source, package, lockfile, route, or behavior change;
+- leave the production builder and runtime stages unchanged;
+- make no backend, PostgreSQL, Redis, GPU, network, NAS, Test, or Production
+  change.
+
+Local validation must include deterministic dependency installation as
+applicable, lint, frontend build, an isolated uniquely tagged Development image,
+and one automatically removed validation container with no published port,
+mount, Docker socket, PostgreSQL, Redis, media, NAS, Test, or Production access.
+Validation must prove the non-root user, narrow `.next` writability, lack of
+broad `/app` writability, successful `next dev` startup, and absence of
+unexpected secrets or Production paths.
+
+No commit, push, live-server edit, or server hot patch is authorized during
+local validation. Pause for Product Owner review after reporting the exact
+results and final Git diff.
+
+### Approved recovery sequence
+
+After the Product Owner confirms the correction is committed and pushed:
+
+1. Fast-forward the server under the existing approved Git rules.
+2. Confirm `docker/.env.development` remains intact and ignored.
+3. Rebuild only the frontend Development image.
+4. Preserve PostgreSQL, Redis, backend, and all Development volumes.
+5. Attempt frontend startup once.
+6. Validate frontend health, restart count, sanitized logs, loopback-only
+   publication, and SSH-tunnel access.
+7. Continue Milestone 004 only if the frontend becomes healthy.
+
+If isolated validation or the single live retry fails:
+
+- preserve logs and current server state;
+- do not retry repeatedly;
+- do not run the frontend as root;
+- do not broaden ownership changes;
+- do not add a writable volume;
+- stop and escalate with the new evidence.

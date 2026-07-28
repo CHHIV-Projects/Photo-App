@@ -8,6 +8,7 @@ RUN npm ci
 FROM dependencies AS development
 ENV NODE_ENV=development
 COPY . .
+RUN install -d -o node -g node /app/.next
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=5 \
