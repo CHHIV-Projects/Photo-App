@@ -2,7 +2,7 @@
 
 ## Milestone
 
-**005 — Linux Development Controlled Fixture Validation**
+**005 - Linux Development Controlled Fixture Validation**
 
 **Reasoning level:** High  
 **Milestone mode:** Targeted reconnaissance, controlled implementation, and live Development validation  
@@ -32,7 +32,7 @@ This milestone must verify, using the existing Linux Development stack:
 - exact-content deduplication;
 - source-location provenance;
 - metadata extraction and canonicalization;
-- preview and thumbnail generation;
+- display-media readability and behavior-eligible preview or thumbnail generation;
 - relevant background processing;
 - continued backend GPU availability;
 - persistence through one controlled Development-stack restart;
@@ -72,7 +72,7 @@ Before implementation:
    - ingestion pipeline orchestrator;
    - provenance creation;
    - exact-duplicate handling;
-   - preview and thumbnail processing;
+   - display-media, preview, and thumbnail processing;
    - metadata extraction and canonicalization;
    - backend health and processing-status APIs;
    - existing ingestion-related tests and test fixtures;
@@ -109,13 +109,29 @@ The healthy stack was left running.
 
 ## Locked Decisions
 
+### Pre-work review approval
+
+The Product Owner approved these pre-work clarifications before Phase A:
+
+- retain the Linux Source Identity stop-and-escalate boundary;
+- require direct code and test evidence before deciding whether a supported Linux intake path exists;
+- do not authorize an adapter or harness yet;
+- validate ordinary JPEG display behavior without inventing preview or thumbnail requirements;
+- add one deterministic TIFF fixture to exercise the existing preview pathway;
+- authorize one Pillow-based deterministic generator with no dependency change;
+- retain the temporary read-only fixture bind through restart validation, then remove it and return to the standard Compose topology;
+- treat pre/post CUDA probes as continuity evidence rather than proof that fixture processing used the GPU;
+- attempt the controlled four-service restart once with bounded recovery and preserved logs.
+
+No fixture generator, Phase A server reconnaissance, Source record, or fixture state was created as part of this prompt clarification.
+
 ### 1. Fixture data must be non-personal
 
 Use only deterministic synthetic images or existing repository fixtures with clearly documented, acceptable licensing.
 
 Do not use:
 
-- the Product Owner’s photographs;
+- the Product Owner's photographs;
 - family photographs;
 - Windows photo folders;
 - iCloud media;
@@ -196,15 +212,34 @@ Do not:
 - reuse a Windows durable identifier;
 - fake an endpoint identity;
 - manually insert Source Profile or Source Endpoint rows;
+- weaken Runtime Root authority;
 - bypass Source Intake authority;
 - weaken readiness or identity validation;
 - redesign Source Endpoint or Source Profile semantics.
 
-The first phase of this milestone must identify the smallest existing supported ingestion path.
+Phase A must establish, with direct code and test evidence, whether any currently supported Linux route can complete controlled Source Intake.
 
-If no safe existing path can ingest a controlled Linux fixture source while preserving current architecture, stop and escalate before implementation.
+If no safe existing path can ingest a controlled Linux fixture source while preserving current architecture:
 
-A narrow Development-only fixture-source adapter or harness may be proposed, but it is not authorized unless separately approved after evidence is presented.
+- stop before creating Source Profile or Source Endpoint records;
+- stop before generating or ingesting fixtures;
+- do not call lower-level ingestion services in a way that bypasses readiness or Source Intake;
+- do not invent or reuse a durable identifier;
+- present the required narrow escalation before implementation.
+
+A narrow Development-only fixture-source adapter or harness may be proposed, but it is not authorized unless separately approved through a narrow sub-prompt or approved Milestone 005 addendum.
+
+Any later proposal must explain:
+
+- whether persistent Source records are created;
+- how Source identity is represented;
+- how readiness remains enforced;
+- whether provenance fields or semantics change;
+- whether the pathway is restricted to Development;
+- whether Source Intake remains the sole filesystem-ingestion authority;
+- how the pathway is prevented from becoming a Production bypass.
+
+No adapter or harness is authorized by this prompt.
 
 ### 6. Ingestion authority
 
@@ -321,35 +356,47 @@ The final controlled fixture set should remain very small.
 Preferred minimum logical cases:
 
 1. `unique_a.jpg`
-   
+
    - deterministic synthetic image;
    - known dimensions;
    - known SHA-256;
    - known capture timestamp or other controlled metadata.
 
 2. `unique_a_duplicate.jpg`
-   
+
    - exact byte-for-byte copy of `unique_a.jpg`;
    - different filename;
    - same SHA-256.
 
 3. `unique_b.jpg`
-   
+
    - deterministic synthetic image with different content;
    - different SHA-256;
    - known dimensions;
    - a different controlled capture timestamp or metadata value.
 
+4. `preview_source.tiff`
+
+   - deterministic synthetic non-personal TIFF content;
+   - different SHA-256;
+   - known dimensions and byte size;
+   - controlled metadata;
+   - intentionally eligible for the existing TIFF preview-processing path.
+
 Optional only when already supported without broadening scope:
 
-4. one deterministic near-duplicate derived from a unique image;
-5. one clearly licensed, non-personal face-processing fixture already present in the repository.
+5. one deterministic near-duplicate derived from a unique image;
+6. one clearly licensed, non-personal face-processing fixture already present in the repository.
 
-Exact duplicate validation is required.
+Exact duplicate and TIFF preview-path validation are required.
 
 Near-duplicate and face-processing validation are optional and must not block the required milestone.
 
 Do not add corrupted, malicious, or unsupported-file cases in this milestone.
+
+The existing preview service must process `preview_source.tiff`. Do not add a general thumbnail generator or change preview or thumbnail architecture.
+
+If the existing TIFF preview path cannot be invoked through the supported intake and processing flow, stop and report rather than calling a lower-level helper in an unapproved way.
 
 ## Fixture Generation
 
@@ -366,27 +413,42 @@ If no suitable generator exists, this prompt authorizes one small deterministic 
 
 `scripts/fixtures/create_controlled_photo_fixture_set.py`
 
+The caller must supply this fixture root:
+
+`/home/chuck/photo-organizer-fixtures/m005`
+
+The generator may create only:
+
+- `/home/chuck/photo-organizer-fixtures/m005/source/*`;
+- `/home/chuck/photo-organizer-fixtures/m005/fixture_manifest.json`.
+
 Requirements:
 
-- use existing approved dependencies where practical;
+- use Pillow, which is already pinned;
+- add or change no dependency;
 - require no internet access;
 - produce deterministic content;
-- write only beneath a caller-supplied output directory;
-- refuse to overwrite an unexpected non-empty directory unless explicitly told to replace only its own known fixture files;
+- write only beneath the caller-supplied fixture root;
+- refuse to overwrite unexpected files;
+- intentionally make every generated media file exceed the effective live minimum-file-size threshold;
 - generate a JSON manifest with:
   - filename;
+  - media type;
   - SHA-256;
   - byte size;
   - dimensions;
-  - expected metadata;
+  - controlled metadata;
   - logical relationship such as exact duplicate;
+  - expected display or preview behavior;
 - create no personal data;
 - contain no secret;
-- create no database or application-storage state.
+- create no database, Docker, Vault, NAS, or application-storage state.
 
 A small focused test for deterministic generation is authorized.
 
-If adding the generator requires a new dependency, stop and request approval rather than changing dependency files.
+Before generation, verify the effective live minimum-file-size threshold. Do not assume the configured default when the Development environment overrides it.
+
+If the generator requires a new dependency, stop and request approval rather than changing dependency files.
 
 ## Preflight
 
@@ -514,7 +576,7 @@ Inside the running backend, confirm:
 
 Do not run a benchmark.
 
-## Phase A — Targeted Ingestion-Path Reconnaissance
+## Phase A - Targeted Ingestion-Path Reconnaissance
 
 Before creating a Source or executing ingestion, determine the exact supported route for a Linux controlled fixture source.
 
@@ -541,10 +603,11 @@ Answer these questions with direct code and test evidence:
 4. What exact service or API remains the Source Intake authority?
 
 5. What records are expected for:
-   
+
    - one unique candidate;
    - one exact duplicate candidate;
-   - a second unique candidate?
+   - a second unique candidate;
+   - the unique TIFF preview candidate?
 
 6. Can the live backend see the server-local fixture source without modifying the permanent Compose topology?
 
@@ -556,7 +619,9 @@ Answer these questions with direct code and test evidence:
 
 10. Which pipeline stages run synchronously, in-process asynchronously, or through Redis?
 
-Do not begin ingestion until these answers are coherent.
+Use direct code and test evidence for every conclusion.
+
+Do not create Source records, generate fixtures, or begin ingestion until these answers are coherent.
 
 ### Required escalation after reconnaissance
 
@@ -582,11 +647,14 @@ Present:
 - Why it matters
 - Smallest safe options
 - Recommendation
+- Exact files and tests affected
 - Exact approval required
+
+If Phase A confirms that Linux Source Identity blocks the supported path, stop before fixture generation, Source creation, or application changes and present the narrow follow-on proposal.
 
 If the existing supported path is safe and requires no tracked correction, proceed.
 
-## Phase B — Prepare the Controlled Fixture Set
+## Phase B - Prepare the Controlled Fixture Set
 
 Create:
 
@@ -609,20 +677,28 @@ If the target already exists:
 
 Generate the fixture set using the approved tracked generator or already approved fixtures.
 
+Before generation:
+
+- verify the effective live minimum-file-size threshold;
+- record the effective value and its configuration source;
+- confirm every planned fixture will intentionally exceed that threshold.
+
 Validate the manifest:
 
 - all expected files exist;
+- the required four-file set is complete;
 - exact duplicate hashes match;
 - unique-file hashes differ;
 - sizes and dimensions match;
 - metadata matches;
+- expected display and preview behavior is recorded;
 - source directory contains no extra file;
 - fixture files are readable;
 - fixture files are not writable by the application container if mounted read-only.
 
 Record source-file hashes before ingestion.
 
-## Phase C — Make Fixtures Visible Safely
+## Phase C - Make Fixtures Visible Safely
 
 Use the smallest temporary mechanism supported by the reconnaissance result.
 
@@ -645,9 +721,25 @@ A temporary non-secret Compose override may be used only for the fixture bind an
 
 Do not commit a host-specific absolute path into the normal Compose file.
 
-Remove temporary containers and temporary override files after validation unless the closeout explains why retention is needed.
+Retain the temporary read-only fixture bind through:
 
-## Phase D — Create or Select the Controlled Source
+- controlled ingestion;
+- post-ingestion validation;
+- the controlled four-service restart;
+- post-restart persistence validation.
+
+After successful final validation:
+
+- remove the temporary Compose override;
+- reconcile the running backend to the normal Compose topology without the fixture bind;
+- confirm the backend returns healthy;
+- confirm no permanent host fixture bind remains;
+- retain the fixture source files and manifest on server NVMe;
+- retain the ingested Development evidence.
+
+A future rerun must deliberately reattach the controlled fixture source.
+
+## Phase D - Create or Select the Controlled Source
 
 Use only the supported architecture identified during Phase A.
 
@@ -681,11 +773,11 @@ If Source identity blocks the supported operation, stop and escalate.
 
 Do not click through or suppress a blocked readiness result.
 
-## Phase E — Run One Controlled Ingestion
+## Phase E - Run One Controlled Ingestion
 
 Execute one controlled ingestion run containing only the approved fixture files.
 
-Use the smallest batch size that includes the complete fixture set.
+Use the smallest batch size that includes the complete required four-file fixture set.
 
 Do not run repeated ingestion until the first result is understood.
 
@@ -792,20 +884,28 @@ Confirm the controlled expected metadata matches the generated manifest.
 
 Do not add GPS or trigger external geocoding in this milestone.
 
-### 6. Preview and thumbnail generation
+### 6. Display media, preview, and thumbnail validation
 
 Confirm:
 
-- required preview records exist;
-- expected preview files exist;
-- expected thumbnail files exist where current behavior creates them;
-- files are readable;
-- generated dimensions and format are reasonable;
-- previews correspond to the correct Asset;
+- ordinary JPEG originals are readable through the current Vault-backed display-media or display-URL contract;
+- ordinary JPEGs are not required to have separate preview files when current preview-eligibility rules do not create them;
+- the TIFF qualifies for the existing preview-processing path;
+- the TIFF preview-processing path is invoked through the supported application flow;
+- required TIFF preview records exist where current behavior represents them in the database;
+- the expected TIFF preview file exists and is readable;
+- the TIFF preview dimensions and format are reasonable;
+- thumbnail files are required only when an actually invoked processing stage creates them;
+- no general thumbnail is required when no current stage creates one;
+- display media and previews correspond to the correct Asset;
 - exact duplicates do not create improper duplicate preview state;
 - no preview path resolves outside local Development storage.
 
-Perform a read-only browser or HTTP check through the SSH tunnel when current UI/API behavior exposes the preview.
+Do not add a general thumbnail generator or change preview or thumbnail architecture.
+
+If the TIFF preview path cannot be invoked through the supported intake and processing flow, stop and report rather than calling a lower-level preview helper in an unapproved way.
+
+Perform a read-only browser or HTTP check through the SSH tunnel when current UI/API behavior exposes the display media or preview.
 
 ### 7. Duplicate behavior
 
@@ -842,9 +942,13 @@ For each stage, identify from logs/code whether it ran:
 - another backend;
 - or was not invoked.
 
-Revalidate the running backend’s PyTorch CUDA operation after fixture processing.
+Revalidate the running backend's PyTorch CUDA operation after fixture processing.
 
 Do not claim fixture processing used GPU unless direct evidence proves it.
+
+Pre/post CUDA probes establish GPU continuity only. They are not evidence that ingestion or derivative processing used the GPU.
+
+Do not require face processing solely to manufacture GPU-use evidence.
 
 If DeepFace attempts a runtime model download:
 
@@ -863,7 +967,7 @@ Confirm where the current UI supports it:
 - no Windows library appears;
 - no personal media appears;
 - expected metadata is visible;
-- previews render;
+- required display media and the TIFF preview render;
 - duplicate count or relationship appears as designed;
 - no Test or Production data appears.
 
@@ -887,6 +991,8 @@ Do not remove containers, volumes, or networks.
 
 Use the current Compose project and GPU overlay.
 
+Keep the temporary read-only fixture bind in place throughout this restart and its persistence validation.
+
 A command equivalent to the following may be used:
 
     sudo docker compose \
@@ -895,7 +1001,11 @@ A command equivalent to the following may be used:
       --file docker/compose.development.gpu.yml \
       restart postgres redis backend frontend
 
-Wait for all health checks to recover.
+Attempt this four-service restart once.
+
+Use a bounded health-recovery window and preserve sanitized restart logs.
+
+Wait for all health checks to recover within the bounded window.
 
 Confirm after restart:
 
@@ -907,7 +1017,7 @@ Confirm after restart:
 - fixture Asset counts unchanged;
 - provenance counts unchanged;
 - Vault hashes unchanged;
-- preview files remain;
+- required display media and TIFF preview files remain;
 - backend GPU validation still passes;
 - SSH-tunnel frontend and backend responses still pass;
 - no duplicate ingestion run occurred automatically;
@@ -916,10 +1026,24 @@ Confirm after restart:
 
 If restart recovery fails:
 
-- preserve all volumes and logs;
+- preserve containers, volumes, database state, Vault evidence, and logs;
 - do not run `down --volumes`;
 - do not delete or regenerate fixture data;
+- do not repeat the restart;
+- do not rerun ingestion;
 - stop and escalate.
+
+After successful post-restart persistence validation:
+
+- remove the temporary Compose override;
+- reconcile the backend once to the standard Compose topology without the fixture bind;
+- use a bounded health-recovery window;
+- confirm the backend is healthy;
+- inspect the running backend mounts and confirm the fixture bind is absent;
+- confirm retained database, Vault, provenance, and preview evidence remains readable;
+- preserve the fixture source and manifest on server NVMe.
+
+If removal of the fixture bind or return to the standard topology fails, preserve state and stop rather than repeatedly recreating the backend.
 
 ## Final State
 
@@ -927,8 +1051,11 @@ If all validation passes:
 
 - leave the Development stack running;
 - retain the controlled fixture source;
+- retain the fixture manifest;
 - retain Development database records;
-- retain Vault and preview evidence;
+- retain Vault, provenance, and applicable preview or thumbnail evidence;
+- return the running stack to its standard Compose topology;
+- confirm no permanent fixture host bind remains;
 - close the SSH tunnel when browser review is complete;
 - do not start another ingestion run.
 
@@ -958,14 +1085,17 @@ If a tracked generator or correction is created:
 This milestone authorizes:
 
 - creation of the controlled fixture directory on server NVMe;
-- generation of the approved non-personal fixture files and manifest;
+- generation of the approved four-file non-personal fixture set and manifest;
 - creation of one supported controlled Source Profile when the existing architecture permits it;
 - one controlled ingestion run;
 - creation of expected Development database records;
-- creation of local Development Vault, preview, thumbnail, report, and processing files;
+- creation of local Development Vault, behavior-eligible preview or thumbnail, report, and processing files;
+- invocation of the existing TIFF preview-processing pathway through the supported application flow;
 - temporary read-only fixture bind mounts;
+- creation and removal of one temporary non-secret Compose override for the fixture bind;
 - temporary one-off validation containers;
 - one controlled restart of the four Development services;
+- one post-validation backend reconciliation to remove the fixture bind and restore the standard Compose topology;
 - creation of the milestone closeout.
 
 No other mutation is authorized.
@@ -980,6 +1110,7 @@ Do not:
 - use iCloud;
 - create a broad Source root;
 - implement Linux durable Source identity;
+- implement a Development-only adapter or harness without separate approval;
 - fake durable identity;
 - redesign Source Profiles or Source Endpoints;
 - manually insert database rows;
@@ -987,6 +1118,8 @@ Do not:
 - alter immutable Vault semantics;
 - change exact-duplicate policy;
 - change provenance semantics;
+- add a general thumbnail generator;
+- redesign preview or thumbnail behavior;
 - add GPS/geocoding validation;
 - perform broad face-recognition testing;
 - assign people;
@@ -1034,7 +1167,9 @@ Stop and report if:
 - ingestion creates unexpected Assets or Vault objects;
 - provenance contains an unexpected root or relative path;
 - metadata differs unexpectedly from the manifest;
-- preview generation fails;
+- required TIFF preview generation fails;
+- TIFF preview processing would require direct lower-level helper invocation;
+- an ordinary JPEG is assigned an unexpected derivative requirement;
 - a processing service enters a retry loop;
 - a DeepFace/model download is unclear or uncontrolled;
 - application code, schema, dependencies, or architecture must change;
@@ -1048,6 +1183,7 @@ Use:
 - Why it matters
 - Smallest safe options
 - Recommendation
+- Exact files and tests affected
 - Exact approval required
 
 Do not improvise through a stop condition.
@@ -1114,6 +1250,8 @@ Document:
 - dimensions;
 - metadata;
 - duplicate relationships;
+- expected display and preview behavior;
+- effective live minimum-file-size threshold and configuration source;
 - licensing/origin classification;
 - confirmation of no personal media.
 
@@ -1171,7 +1309,14 @@ Document expected versus actual canonical values.
 
 ### 11. Preview and Thumbnail Validation
 
-Document records, paths, dimensions, readability, and UI/API rendering.
+Document:
+
+- ordinary JPEG Vault-backed display-media or display-URL readability;
+- why ordinary JPEG derivatives were or were not eligible under current behavior;
+- TIFF preview eligibility and the supported processing entry point used;
+- applicable preview records, paths, dimensions, format, readability, and UI/API rendering;
+- any thumbnail produced by an actually invoked stage;
+- confirmation that no general thumbnail was required or added.
 
 ### 12. Duplicate Validation
 
@@ -1201,9 +1346,12 @@ Document:
 - retained database counts;
 - retained provenance;
 - retained Vault hashes;
-- retained previews;
+- retained required display media and TIFF preview;
 - retained GPU availability;
-- absence of automatic reingestion.
+- absence of automatic reingestion;
+- temporary fixture-bind removal procedure and result;
+- final backend health after return to the standard Compose topology;
+- running-container evidence that no fixture host bind remains.
 
 ### 16. Isolation Evidence
 
@@ -1223,7 +1371,10 @@ Document:
 - final listeners;
 - status/log commands;
 - tunnel procedure;
-- retained fixture location.
+- retained fixture and manifest location;
+- confirmation that the standard Compose topology was restored;
+- confirmation that no permanent fixture host bind remains;
+- statement that a future fixture rerun must deliberately reattach the source.
 
 ### 19. Validation Performed
 
@@ -1287,7 +1438,7 @@ Do not commit or push without Product Owner approval.
 
 Milestone 005 is complete when:
 
-- a deterministic non-personal fixture set exists on server NVMe;
+- the required deterministic four-file non-personal fixture set exists on server NVMe;
 - its hashes and metadata are documented;
 - the supported Linux ingestion route is established without bypassing Source Intake;
 - the Linux Source-identity boundary is explicitly handled;
@@ -1297,11 +1448,14 @@ Milestone 005 is complete when:
 - the exact duplicate creates no extra Asset or Vault object;
 - provenance is correct for the controlled source;
 - expected metadata is canonicalized correctly;
-- previews and thumbnails are generated and readable;
+- required display media, previews, and thumbnails are present and readable according to current application behavior;
+- the deterministic TIFF exercises the existing preview-processing pathway through the supported application flow;
 - actual processing stages and accelerator use are documented honestly;
 - backend PyTorch CUDA remains operational;
 - no Windows, NAS-authoritative, Test, or Production resource is configured, mounted, credentialed, migrated, or actively used;
 - one controlled Development-stack restart preserves the fixture data and healthy state;
+- the temporary fixture bind is removed after validation and the healthy stack is returned to its standard Compose topology;
+- no permanent fixture host bind remains;
 - no personal media is ingested;
 - the healthy stack and fixture evidence are retained;
 - exactly one correctly named closeout is created;
