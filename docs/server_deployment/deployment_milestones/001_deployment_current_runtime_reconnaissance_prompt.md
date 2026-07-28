@@ -4,6 +4,24 @@
 
 **001 — Deployment Current Runtime Reconnaissance**
 
+**Reasoning level:** High  
+**Milestone mode:** Reconnaissance-only
+
+## Repository Baseline and Change Control
+
+Before this milestone begins, the existing contents of
+`docs/server_deployment/`, including this prompt and the sanitized evidence
+files, must already be committed and pushed.
+
+During reconnaissance, the only permitted repository change is creation of:
+
+`docs/server_deployment/deployment_milestones/001_deployment_current_runtime_reconnaissance_closeout.md`
+
+Do not modify any other tracked or untracked file.
+
+If the working tree is not clean at milestone start, stop and report the exact
+status before proceeding.
+
 ## Purpose
 
 Perform a read-only reconnaissance of the current Photo Organizer development environment on the Windows laptop so that the project can be migrated safely to the Ubuntu mini-server.
