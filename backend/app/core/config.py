@@ -31,6 +31,30 @@ else:
 
 
 DEFAULT_APPROVED_EXTENSIONS = ".jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.heic,.mp4,.mov,.avi,.mkv"
+DEFAULT_FRONTEND_ALLOWED_ORIGINS = (
+	"http://localhost:3000,http://127.0.0.1:3000,"
+	"http://localhost:3001,http://127.0.0.1:3001,"
+	"http://localhost:3002,http://127.0.0.1:3002"
+)
+
+
+def _join_config_path(root: str, child: str) -> str:
+	"""Join configured path text without making it host-specific at import time."""
+	trimmed_root = root.rstrip("/\\")
+	trimmed_child = child.lstrip("/\\")
+	return f"{trimmed_root}/{trimmed_child}"
+
+
+def _configured_path(name: str, root: str, child: str) -> str:
+	"""Return an explicit path or a path derived from the configured root."""
+	value = (os.getenv(name) or "").strip()
+	return value or _join_config_path(root, child)
+
+
+_STORAGE_ROOT = (os.getenv("STORAGE_ROOT") or "../storage").strip()
+_LOGS_PATH = _configured_path("LOGS_PATH", _STORAGE_ROOT, "logs")
+_REPORTS_PATH = (os.getenv("REPORTS_PATH") or "").strip() or _LOGS_PATH
+_MODEL_ROOT_PATH = (os.getenv("MODEL_ROOT_PATH") or "app/services/vision/models").strip()
 
 
 @dataclass(frozen=True)
@@ -47,13 +71,44 @@ class Settings:
 	postgres_password: str = os.getenv("POSTGRES_PASSWORD", "change_me")
 	redis_host: str = os.getenv("REDIS_HOST", "localhost")
 	redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
+	backend_host: str = os.getenv("BACKEND_HOST", "0.0.0.0")
+	backend_port: int = int(os.getenv("BACKEND_PORT", "8001"))
+	frontend_port: int = int(os.getenv("FRONTEND_PORT", "3000"))
 
 	approved_extensions_csv: str = os.getenv("APPROVED_EXTENSIONS", DEFAULT_APPROVED_EXTENSIONS)
 	minimum_file_size_bytes: int = int(os.getenv("MINIMUM_FILE_SIZE_BYTES", str(50 * 1024)))
-	drop_zone_path: str = os.getenv("DROP_ZONE_PATH", "../storage/drop_zone")
-	vault_path: str = os.getenv("VAULT_PATH", "../storage/vault")
-	quarantine_path: str = os.getenv("QUARANTINE_PATH", "../storage/quarantine")
-	ingest_failures_path: str = os.getenv("INGEST_FAILURES_PATH", "../storage/ingest_failures")
+	storage_mode: str = (os.getenv("STORAGE_MODE") or "local").strip().lower()
+	storage_root: str = _STORAGE_ROOT
+	drop_zone_path: str = _configured_path("DROP_ZONE_PATH", _STORAGE_ROOT, "drop_zone")
+	vault_path: str = _configured_path("VAULT_PATH", _STORAGE_ROOT, "vault")
+	quarantine_path: str = _configured_path("QUARANTINE_PATH", _STORAGE_ROOT, "quarantine")
+	ingest_failures_path: str = _configured_path(
+		"INGEST_FAILURES_PATH",
+		_STORAGE_ROOT,
+		"ingest_failures",
+	)
+	previews_path: str = _configured_path("PREVIEWS_PATH", _STORAGE_ROOT, "previews")
+	thumbnails_path: str = _configured_path("THUMBNAILS_PATH", _STORAGE_ROOT, "thumbnails")
+	review_path: str = _configured_path("REVIEW_PATH", _STORAGE_ROOT, "review")
+	logs_path: str = _LOGS_PATH
+	reports_path: str = _REPORTS_PATH
+	exports_icloud_path: str = _configured_path(
+		"EXPORTS_ICLOUD_PATH",
+		_STORAGE_ROOT,
+		"exports/icloud",
+	)
+	model_root_path: str = _MODEL_ROOT_PATH
+	model_cache_path: str = (
+		(os.getenv("MODEL_CACHE_PATH") or os.getenv("DEEPFACE_HOME") or "").strip()
+		or _join_config_path(_STORAGE_ROOT, "models")
+	)
+	nas_mount_path: str = (os.getenv("NAS_MOUNT_PATH") or "").strip()
+	nas_environment_marker: str = (
+		os.getenv("NAS_ENVIRONMENT_MARKER") or ".photo-organizer-environment"
+	).strip()
+	nas_environment_marker_value: str = (
+		os.getenv("NAS_ENVIRONMENT_MARKER_VALUE") or "environment=development"
+	).strip()
 	ingest_batch_size: int = int(os.getenv("INGEST_BATCH_SIZE", "50"))
 	ingest_source_limit: int | None = (
 		int(
@@ -83,7 +138,7 @@ class Settings:
 	)
 	face_detector_model_path: str = os.getenv(
 		"FACE_MODEL_PATH",
-		"app/services/vision/models/face_detection_yunet_2023mar.onnx",
+		_join_config_path(_MODEL_ROOT_PATH, "face_detection_yunet_2023mar.onnx"),
 	)
 	face_detection_confidence_threshold: float = float(os.getenv("FACE_DETECTION_CONFIDENCE_THRESHOLD", "0.7"))
 	face_detection_resize_longest_side: int = int(os.getenv("FACE_DETECTION_RESIZE_LONGEST_SIDE", "1024"))
@@ -97,9 +152,10 @@ class Settings:
 	content_tag_min_confidence: float = float(os.getenv("CONTENT_TAG_MIN_CONFIDENCE", "0.25"))
 	content_tag_max_per_asset: int = int(os.getenv("CONTENT_TAG_MAX_PER_ASSET", "5"))
 	face_embedding_crop_margin_ratio: float = float(os.getenv("FACE_EMBEDDING_CROP_MARGIN_RATIO", "0.1"))
-	frontend_allowed_origins_csv: str = os.getenv(
-		"FRONTEND_ALLOWED_ORIGINS",
-		"http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3002,http://127.0.0.1:3002",
+	frontend_allowed_origins_csv: str = (
+		os.getenv("FRONTEND_ALLOWED_ORIGINS")
+		or os.getenv("CORS_ORIGINS")
+		or DEFAULT_FRONTEND_ALLOWED_ORIGINS
 	)
 	google_maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
 	place_geocode_max_calls_per_run: int = int(os.getenv("PLACE_GEOCODE_MAX_CALLS_PER_RUN", "100"))

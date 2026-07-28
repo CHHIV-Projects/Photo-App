@@ -12,6 +12,7 @@ from typing import Callable
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from app.core.runtime_paths import reports_directory
 from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.duplicate_processing_run import DuplicateProcessingRun
@@ -22,9 +23,7 @@ from app.services.duplicates.lineage import (
 )
 from app.services.duplicates.processing_schema import ensure_duplicate_processing_schema
 
-# Reports are written to storage/logs/duplicate_processing_reports/ relative to project root.
-_BACKEND_ROOT = Path(__file__).resolve().parents[4]
-REPORT_DIR: Path = _BACKEND_ROOT / "storage" / "logs" / "duplicate_processing_reports"
+REPORT_DIR: Path = reports_directory("duplicate_processing_reports")
 
 STATUS_IDLE = "idle"
 STATUS_RUNNING = "running"

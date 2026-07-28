@@ -1,0 +1,107 @@
+name: ${COMPOSE_PROJECT_NAME:-photo-organizer-dev}
+
+services:
+  postgres:
+    image: postgres:16.9-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-photo_organizer_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-photo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env.development}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - application_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.5-bookworm
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - application_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: development-${BACKEND_BUILD_PROFILE:-cpu}
+    environment:
+      APP_RUNTIME_PROFILE: development
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-photo_organizer_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-photo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env.development}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: "8001"
+      FRONTEND_ALLOWED_ORIGINS: ${FRONTEND_ALLOWED_ORIGINS:-http://127.0.0.1:13000,http://localhost:13000}
+      STORAGE_MODE: local
+      STORAGE_ROOT: /app/storage
+      DROP_ZONE_PATH: /app/storage/drop_zone
+      VAULT_PATH: /app/storage/vault
+      QUARANTINE_PATH: /app/storage/quarantine
+      INGEST_FAILURES_PATH: /app/storage/ingest_failures
+      PREVIEWS_PATH: /app/storage/previews
+      THUMBNAILS_PATH: /app/storage/thumbnails
+      REVIEW_PATH: /app/storage/review
+      LOGS_PATH: /app/storage/logs
+      REPORTS_PATH: /app/storage/logs
+      EXPORTS_ICLOUD_PATH: /app/storage/exports/icloud
+      MODEL_ROOT_PATH: /app/app/services/vision/models
+      MODEL_CACHE_PATH: /app/storage/models
+      DEEPFACE_HOME: /app/storage/models
+      FACE_MODEL_PATH: /app/app/services/vision/models/face_detection_yunet_2023mar.onnx
+      REQUIRE_GPU: "false"
+    volumes:
+      - application_storage:/app/storage
+    ports:
+      - "${DEVELOPMENT_BIND_ADDRESS:-127.0.0.1}:${BACKEND_HOST_PORT:-18001}:8001"
+    networks:
+      - application_internal
+      - browser_edge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      target: development
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:18001}
+    ports:
+      - "${DEVELOPMENT_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_HOST_PORT:-13000}:3000"
+    networks:
+      - browser_edge
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  application_internal:
+    internal: true
+  browser_edge:
+
+volumes:
+  postgres_data:
+  redis_data:
+  application_storage:

@@ -12,6 +12,7 @@ from typing import Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.runtime_paths import reports_directory
 from app.db.session import SessionLocal
 from app.models.place import Place
 from app.models.place_geocoding_run import PlaceGeocodingRun
@@ -23,9 +24,7 @@ from app.services.location.geocoding_service import (
 )
 from app.services.location.place_geocoding_schema import ensure_place_geocoding_schema
 
-# Reports written to storage/logs/place_geocoding_reports/ relative to project root.
-_BACKEND_ROOT = Path(__file__).resolve().parents[4]
-REPORT_DIR: Path = _BACKEND_ROOT / "storage" / "logs" / "place_geocoding_reports"
+REPORT_DIR: Path = reports_directory("place_geocoding_reports")
 
 STATUS_IDLE = "idle"
 STATUS_RUNNING = "running"

@@ -16,12 +16,13 @@ from pathlib import Path
 import pillow_heif
 from PIL import Image
 
+from app.core.runtime_paths import configured_path
+
 # Register pillow-heif opener so Pillow can open .heic / .heif files.
 # Safe to call multiple times — registration is idempotent.
 pillow_heif.register_heif_opener()
 
-_BACKEND_ROOT = Path(__file__).resolve().parents[4]
-_PREVIEWS_ROOT: Path = _BACKEND_ROOT / "storage" / "previews"
+_PREVIEWS_ROOT: Path = configured_path("previews_path")
 
 # Longest-side cap for generated previews (keeps file size reasonable).
 _MAX_PREVIEW_LONGEST_SIDE = 2048

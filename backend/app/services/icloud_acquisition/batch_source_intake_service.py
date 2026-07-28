@@ -18,6 +18,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.runtime_paths import reports_directory
 from app.models.asset import Asset
 from app.models.icloud_acquisition_run import (
     IcloudAcquisitionBatch,
@@ -183,7 +184,7 @@ def _file_record(path: Path) -> FileScanRecord:
 
 
 def _report_directory() -> Path:
-    report_root = resolve_runtime_path("../storage/logs/icloud_batch_source_intake_reports")
+    report_root = reports_directory("icloud_batch_source_intake_reports")
     report_root.mkdir(parents=True, exist_ok=True)
     return report_root
 

@@ -1,5 +1,60 @@
-```
-# 002_deployment_linux_development_runtime_foundation_prompt.md## Milestone**002 — Linux Development Runtime Foundation****Reasoning level:** Medium-High  **Milestone mode:** Implementation-after-reconnaissance  **Approved branch:** `feature/deployment-linux-runtime`## Required Filenames**Prompt**`docs/server_deployment/deployment_milestones/002_deployment_linux_development_runtime_foundation_prompt.md`**Closeout**`docs/server_deployment/deployment_milestones/002_deployment_linux_development_runtime_foundation_closeout.md`## GoalMake a fresh Photo Organizer repository checkout reproducibly buildable and statically configurable as an isolated Linux Development application stack.This milestone prepares the repository for later deployment to the Ubuntu mini-server.It does not connect to the mini-server, deploy services there, migrate the current Windows database, copy media, or begin Production work.The current Windows Development database and Redis state contain only disposable test/sample data and do not need to be migrated or preserved for the new Linux Development environment.## Required ReadingBefore implementation:1. Read and obey the current coding-agent rules:   `docs/context/CODING_AGENT_RULES_v6.md`   or the exact active v6 coding-agent-rules path present in the repository.2. Read this prompt.3. Read the approved reconnaissance closeout:   `docs/server_deployment/deployment_milestones/001_deployment_current_runtime_reconnaissance_closeout.md`4. Read as needed:   - `docs/context/PROJECT_CONTEXT_v6.md`   - `docs/context/PROJECT_ARCHITECTURE_v6.md`   - `docs/context/PROJECT_WORKFLOW_v6.md`   - `docs/server_deployment/Future-State_Development_Architecture_v1.0.md`5. Inspect the targeted implementation files and directly related tests.Do not repeat repository-wide reconnaissance unless current code materially contradicts the approved closeout.## Repository and Branch PreflightBefore editing, report:```powershellgit branch --show-currentgit status --shortgit log --oneline --decorate -5
+# 002_deployment_linux_development_runtime_foundation_prompt.md
+
+## Milestone
+
+**002 — Linux Development Runtime Foundation**
+
+**Reasoning level:** High
+**Milestone mode:** Implementation-after-reconnaissance
+**Approved branch:** `feature/deployment-linux-runtime`
+
+## Required Filenames
+
+**Prompt**
+
+`docs/server_deployment/deployment_milestones/002_deployment_linux_development_runtime_foundation_prompt.md`
+
+**Closeout**
+
+`docs/server_deployment/deployment_milestones/002_deployment_linux_development_runtime_foundation_closeout.md`
+
+## Goal
+
+Make a fresh Photo Organizer repository checkout reproducibly buildable and statically configurable as an isolated Linux Development application stack.
+
+This milestone prepares the repository for later deployment to the Ubuntu mini-server.
+
+It does not connect to the mini-server, deploy services there, migrate the current Windows database, copy media, or begin Production work.
+
+The current Windows Development database and Redis state contain only disposable test/sample data and do not need to be migrated or preserved for the new Linux Development environment.
+
+## Required Reading
+
+Before implementation:
+
+1. Read and obey the current coding-agent rules:
+   `docs/context/CODING_AGENT_RULES_v6.md`
+   or the exact active v6 coding-agent-rules path present in the repository.
+2. Read this prompt.
+3. Read the approved reconnaissance closeout:
+   `docs/server_deployment/deployment_milestones/001_deployment_current_runtime_reconnaissance_closeout.md`
+4. Read as needed:
+   - `docs/context/PROJECT_CONTEXT_v6.md`
+   - `docs/context/PROJECT_ARCHITECTURE_v6.md`
+   - `docs/context/PROJECT_WORKFLOW_v6.md`
+   - `docs/server_deployment/Future-State_Development_Architecture_v1.0.md`
+5. Inspect the targeted implementation files and directly related tests.
+
+Do not repeat repository-wide reconnaissance unless current code materially contradicts the approved closeout.
+
+## Repository and Branch Preflight
+
+Before editing, report:
+
+```powershell
+git branch --show-current
+git status --short
+git log --oneline --decorate -5
 ```
 
 Expected branch:
@@ -11,7 +66,8 @@ feature/deployment-linux-runtime
 Expected state:
 
 ```
-working tree cleanactive prompt committed
+working tree clean
+active prompt committed
 ```
 
 Stop and report if:
@@ -88,7 +144,11 @@ Do not redesign Source Endpoint identity or provenance.
 The intended near-term topology is:
 
 ```
-Windows laptop  = operator interface  = VS Code / Codex / Copilot  = browser and Git reviewUbuntu mini-server  = Development repository  = Docker application runtime  = PostgreSQL  = Redis  = backend  = frontend  = later workers and GPU workloadsSynology NAS  = Development/Test/Production environment-specific durable storage  = not the active Git working tree  = not live PostgreSQL storage
+Windows laptop = operator interface = VS Code / Codex / Copilot = browser and Git review
+
+Ubuntu mini-server = Development repository = Docker application runtime = PostgreSQL = Redis = backend = frontend = later workers and GPU workloads
+
+Synology NAS = Development/Test/Production environment-specific durable storage = not the active Git working tree = not live PostgreSQL storage
 ```
 
 For this milestone, repository work remains on the existing Windows checkout. The result must prepare a later fresh clone on Linux.
@@ -692,4 +752,46 @@ This milestone is complete when:
 - exactly one correctly named closeout is created;
 - the closeout recommends one clear next milestone.
 
-Help me
+## Final Lock-ins
+
+The Product Owner confirmed the following before implementation:
+
+1. The current Windows Development data is excluded from Linux migration only.
+   This does not authorize deleting, resetting, stopping, modifying, cleaning, or
+   otherwise changing the current Windows PostgreSQL database, Redis, Vault,
+   media, Source Profiles, Source Endpoints, Docker volumes, or runtime.
+2. The canonical editable Linux Development repository path is:
+
+   `/home/chuck/projects/photo-organizer-dev`
+
+   The older `/srv/apps/photo-organizer` path is not used for the active editable
+   Development working tree. A future `/srv/apps` location may be considered for
+   immutable Test or Production deployments only when separately approved.
+3. GPU packaging uses a locally buildable CPU-capable Development image and a
+   separate explicitly pinned GPU dependency profile or build target. The
+   current Windows CPU-only PyTorch installation is not the future server GPU
+   reference. CUDA/GPU execution validation is deferred to the server validation
+   milestone, and no CPU fallback may be described as GPU validation.
+4. Controlled YuNet model provisioning may use an official or clearly
+   authoritative upstream source. Provisioning evidence must record the source
+   URL or identity, version, license, checksum, and expected destination path.
+   The model binary is not committed without separate approval of licensing and
+   repository-size implications.
+5. The storage-mode contract is:
+   - `storage_mode=local`: safe disposable Development defaults with no
+     Production or authoritative NAS path required.
+   - `storage_mode=nas`: requires the expected Development NAS mount and
+     `.photo-organizer-environment` marker and fails clearly when either is
+     absent.
+   - NAS mode never falls back automatically to local storage.
+6. Tracked Production example templates may be updated only to correct
+   configuration key names and remain aligned with the settings contract. This
+   does not authorize Production values, secrets, runtime files, deployment
+   behavior, or services.
+7. Redis remains internal and unpublished.
+8. Existing in-process background jobs remain unchanged and are documented as a
+   retained limitation.
+9. Any local container smoke test must use a unique Compose project, isolated
+   disposable volumes, and non-conflicting ports. It must not use, start, stop,
+   or alter the existing Windows Development database, Redis, media, Docker
+   volumes, or runtime.

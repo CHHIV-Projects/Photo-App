@@ -17,6 +17,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from app.core.config import BACKEND_ROOT, settings
+from app.core.runtime_paths import icloud_exports_root, reports_directory
 from app.db.session import SessionLocal
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.ingestion_source import IngestionSource
@@ -44,8 +45,8 @@ STATUS_STOPPED = "stopped"
 
 RUNNING_STATUSES = (STATUS_RUNNING, STATUS_STOP_REQUESTED)
 
-REPORT_DIR: Path = (BACKEND_ROOT.parent / "storage" / "logs" / "icloud_connector_reports").resolve()
-EXPORTS_ROOT: Path = (BACKEND_ROOT.parent / "storage" / "exports" / "icloud").resolve()
+REPORT_DIR: Path = reports_directory("icloud_connector_reports")
+EXPORTS_ROOT: Path = icloud_exports_root()
 HELPER_ENV_ROOT_DEFAULT = BACKEND_ROOT.parent / ".tools" / "icloudpd"
 DEFAULT_RECENT_COUNT = 25
 MAX_RECENT_COUNT = 500

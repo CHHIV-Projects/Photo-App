@@ -1,0 +1,5 @@
+# Server-oriented GPU profile. Actual CUDA execution must be validated on the server.
+--extra-index-url https://download.pytorch.org/whl/cu130
+-r requirements-core.txt
+torch==2.11.0+cu130
+torchvision==0.26.0+cu130

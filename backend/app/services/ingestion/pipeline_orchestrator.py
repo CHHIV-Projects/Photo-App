@@ -23,6 +23,10 @@ from typing import Any, Callable
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.runtime_paths import (
+    reports_directory,
+    resolve_runtime_path as resolve_configured_runtime_path,
+)
 from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.face import Face
@@ -159,7 +163,7 @@ class IngestionBatch:
 
 
 def resolve_runtime_path(path_setting: str) -> Path:
-    return (BACKEND_ROOT / path_setting).resolve()
+    return resolve_configured_runtime_path(path_setting)
 
 
 def _format_duration(total_seconds: float) -> str:
@@ -888,7 +892,7 @@ def _write_ingestion_run_manifest(
     total_elapsed_seconds: float,
     status: str,
 ) -> Path | None:
-    manifest_root = resolve_runtime_path("../storage/logs/ingestion_manifests")
+    manifest_root = reports_directory("ingestion_manifests")
     manifest_root.mkdir(parents=True, exist_ok=True)
 
     run_id = (
@@ -914,7 +918,7 @@ def _write_source_intake_report(ctx: PipelineContext) -> Path | None:
     if ctx.from_path is None:
         return None
 
-    report_root = resolve_runtime_path("../storage/logs/source_intake_reports")
+    report_root = reports_directory("source_intake_reports")
     report_root.mkdir(parents=True, exist_ok=True)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

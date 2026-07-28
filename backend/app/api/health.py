@@ -4,13 +4,16 @@ Intended for startup readiness checks, not high-frequency monitoring.
 No secrets, passwords, or connection strings are exposed in the response.
 """
 
-from pathlib import Path
-
 import psycopg2
 import redis as redis_lib
 from fastapi import APIRouter
 
-from app.core.config import BACKEND_ROOT, RUNTIME_PROFILE, settings
+from app.core.config import RUNTIME_PROFILE, settings
+from app.core.runtime_paths import (
+	StorageConfigurationError,
+	configured_path,
+	validate_storage_configuration,
+)
 
 router = APIRouter(tags=["health"])
 
@@ -49,16 +52,22 @@ def _check_redis() -> str:
 
 def _check_storage() -> dict:
 	"""Check vault path configuration and reachability."""
-	raw = settings.vault_path
+	raw = settings.vault_path.strip()
 	configured = bool(raw)
-	if configured:
-		vault = Path(raw)
-		if not vault.is_absolute():
-			vault = (BACKEND_ROOT / vault).resolve()
+	try:
+		validate_storage_configuration(settings)
+		vault = configured_path("vault_path")
 		reachable = vault.exists()
-	else:
+		configuration_status = "ok"
+	except (OSError, StorageConfigurationError):
 		reachable = False
-	return {"vault_path_configured": configured, "vault_path_reachable": reachable}
+		configuration_status = "invalid"
+	return {
+		"mode": settings.storage_mode,
+		"configuration": configuration_status,
+		"vault_path_configured": configured,
+		"vault_path_reachable": reachable,
+	}
 
 
 @router.get("/health")

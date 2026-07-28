@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.runtime_paths import reports_directory
 from app.models.asset import Asset
 from app.services.places.observation_service import CreatePlaceObservationInput, create_place_observation
 
@@ -35,9 +36,8 @@ except Exception:  # pragma: no cover - handled at runtime
 
 pillow_heif.register_heif_opener()
 
-BACKEND_ROOT = Path(__file__).resolve().parents[4]
-REPORT_DIR = BACKEND_ROOT / "storage" / "logs" / "google_vision_reports"
-DERIVATIVE_DEBUG_DIR = BACKEND_ROOT / "storage" / "logs" / "google_vision_derivatives"
+REPORT_DIR = reports_directory("google_vision_reports")
+DERIVATIVE_DEBUG_DIR = reports_directory("google_vision_derivatives")
 
 MEDIA_PREVIEW_PREFIX = "/media/previews/"
 

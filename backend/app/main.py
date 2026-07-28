@@ -1,7 +1,5 @@
 """FastAPI application entrypoint."""
 
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +22,7 @@ from app.api.search import router as search_router
 from app.api.timeline import router as timeline_router
 from app.api.visual_enrichment import router as visual_enrichment_router
 from app.core.config import settings
+from app.core.runtime_paths import prepare_runtime_directories
 from app.db.session import SessionLocal
 from app.services.albums.album_schema import ensure_album_schema
 from app.services.context_labels.schema import ensure_asset_context_label_schema
@@ -57,15 +56,15 @@ from app.services.previews.heic_preview_processing_service import _reset_stale_r
 
 def create_app() -> FastAPI:
 	"""Create and configure the FastAPI application."""
+	runtime_paths = prepare_runtime_directories(settings)
 	app = FastAPI(title=settings.app_name, version=settings.app_version)
-	review_media_dir = (Path(__file__).resolve().parents[2] / "storage" / "review").resolve()
+	review_media_dir = runtime_paths["review_path"]
 	if review_media_dir.exists():
 		app.mount("/media/review", StaticFiles(directory=str(review_media_dir)), name="review-media")
-	vault_media_dir = (Path(__file__).resolve().parents[2] / "storage" / "vault").resolve()
+	vault_media_dir = runtime_paths["vault_path"]
 	if vault_media_dir.exists():
 		app.mount("/media/assets", StaticFiles(directory=str(vault_media_dir)), name="assets-media")
-	previews_media_dir = (Path(__file__).resolve().parents[2] / "storage" / "previews").resolve()
-	previews_media_dir.mkdir(parents=True, exist_ok=True)
+	previews_media_dir = runtime_paths["previews_path"]
 	app.mount("/media/previews", StaticFiles(directory=str(previews_media_dir)), name="previews-media")
 	app.add_middleware(
 		CORSMiddleware,

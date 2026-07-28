@@ -1,20 +1,2 @@
-fastapi
-uvicorn
-httpx
-SQLAlchemy
-psycopg2-binary
-python-dotenv
-redis
-rq
-pydantic
-pydantic-settings
-pyexiftool
-opencv-python-headless
-deepface
-Pillow
-pillow-heif
-ImageHash
-timm
-torch
-torchvision
-google-cloud-vision
+# Backward-compatible/default install: deterministic CPU-capable profile.
+-r requirements-linux-cpu.txt

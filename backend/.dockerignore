@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.*.example
+.venv
+.tools
+__pycache__
+*.pyc
+.pytest_cache
+storage
+app/services/vision/models
+tests

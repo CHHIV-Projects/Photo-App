@@ -11,6 +11,7 @@ import time
 from sqlalchemy import func, inspect, select, update
 from sqlalchemy.orm import Session
 
+from app.core.runtime_paths import reports_directory
 from app.models.icloud_acquisition_run import IcloudAcquisitionBatch, IcloudAcquisitionItem, IcloudAcquisitionResource
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.icloud_backfill import IcloudRemoteAssetInventory
@@ -61,7 +62,7 @@ DEFAULT_PREPARE_EXPIRY_MINUTES = 60
 DEFAULT_CLEANUP_WAIT_SECONDS = 120.0
 DEFAULT_CLEANUP_POLL_SECONDS = 0.2
 DEFAULT_IMPORT_STALE_SECONDS = 30.0
-INTAKE_IMPORT_REPORT_DIR = Path("storage") / "logs" / "icloud_intake_import_reports"
+INTAKE_IMPORT_REPORT_DIR = reports_directory("icloud_intake_import_reports")
 
 AVAILABLE_YES = "yes"
 AVAILABLE_NO = "no"

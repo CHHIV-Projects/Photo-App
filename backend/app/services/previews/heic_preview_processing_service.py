@@ -22,6 +22,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.runtime_paths import reports_directory
 from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models import duplicate_group as _duplicate_group_model
@@ -33,8 +34,7 @@ from app.services.previews.preview_service import (
     inspect_preview_eligibility,
 )
 
-_BACKEND_ROOT = Path(__file__).resolve().parents[4]
-REPORT_DIR: Path = _BACKEND_ROOT / "storage" / "logs" / "heic_preview_reports"
+REPORT_DIR: Path = reports_directory("heic_preview_reports")
 
 STATUS_IDLE = "idle"
 STATUS_RUNNING = "running"

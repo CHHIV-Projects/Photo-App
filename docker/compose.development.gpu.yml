@@ -1,0 +1,7 @@
+services:
+  backend:
+    build:
+      target: development-gpu
+    environment:
+      REQUIRE_GPU: "true"
+    gpus: all

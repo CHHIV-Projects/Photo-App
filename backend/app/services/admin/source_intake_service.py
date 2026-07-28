@@ -10,6 +10,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.runtime_paths import icloud_exports_root, reports_directory
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
@@ -42,7 +43,7 @@ ALLOWED_PROFILE_STATUS = {"active", "inactive", "archived", "test", "deprecated"
 ALLOWED_CLOUD_PROVIDERS = {"icloud", "onedrive", "google_photos", "dropbox", "other"}
 ALLOWED_ACQUISITION_METHODS = {"icloudpd", "folder_scan", "manual_export", "none"}
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
-_APPROVED_ICLOUD_EXPORTS_ROOT = (_PROJECT_ROOT / "storage" / "exports" / "icloud").resolve()
+_APPROVED_ICLOUD_EXPORTS_ROOT = icloud_exports_root()
 
 
 def _mask_account_username(value: str | None) -> str | None:
@@ -388,10 +389,8 @@ def create_source_profile_staging_folder(
 
 
 def _report_directory() -> Path:
-    """Resolve the source intake reports directory relative to this file's location."""
-    # backend/app/services/admin/ -> backend/
-    backend_root = Path(__file__).resolve().parents[3]
-    return (backend_root / "../storage/logs/source_intake_reports").resolve()
+    """Resolve the environment-scoped source intake reports directory."""
+    return reports_directory("source_intake_reports")
 
 
 def _parse_report_counts(counts_dict: dict) -> SourceIntakeReportCounts:

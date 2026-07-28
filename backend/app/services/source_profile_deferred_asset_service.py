@@ -12,6 +12,7 @@ from typing import Iterable
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.runtime_paths import reports_directory
 from app.models.source_profile_deferred_asset import (
     SourceProfileDeferredAsset,
     SourceProfileDeferredAssetEvent,
@@ -37,9 +38,7 @@ EVENT_REASON_CHANGED = "reason_changed"
 EVENT_CLASSIFICATION_CHANGED = "classification_changed"
 
 REPORT_VERSION = 1
-REPORT_ROOT = (
-    Path(__file__).resolve().parents[3] / "storage" / "logs" / "deferred_asset_reports"
-).resolve()
+REPORT_ROOT = reports_directory("deferred_asset_reports")
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.runtime_paths import icloud_exports_root, reports_directory
 from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.icloud_staging_cleanup_run import IcloudStagingCleanupRun
@@ -180,7 +181,7 @@ def _project_root() -> Path:
 
 
 def _resolve_exports_root() -> Path:
-    return (_project_root() / "storage" / "exports" / "icloud").resolve()
+    return icloud_exports_root()
 
 
 def _resolve_vault_root() -> Path:
@@ -188,7 +189,7 @@ def _resolve_vault_root() -> Path:
 
 
 def _cleanup_reports_dir() -> Path:
-    return (_project_root() / "storage" / "logs" / "icloud_cleanup_reports").resolve()
+    return reports_directory("icloud_cleanup_reports")
 
 
 def _normalize_relative(path: str) -> str:
@@ -510,7 +511,7 @@ def _validate_cleanup_source(db: Session, *, source_id: int) -> ValidatedCleanup
 
 
 def _collect_report_evidence(source_id: int, source_root: Path) -> tuple[set[str], set[str]]:
-    reports_dir = (_project_root() / "storage" / "logs" / "source_intake_reports").resolve()
+    reports_dir = reports_directory("source_intake_reports")
     failure_paths: set[str] = set()
     deferred_paths: set[str] = set()
     if not reports_dir.exists():

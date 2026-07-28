@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+from app.core.runtime_paths import icloud_exports_root
 
 
 def sanitize_icloud_source_label(source_label: str | None) -> str:
@@ -15,4 +15,4 @@ def sanitize_icloud_source_label(source_label: str | None) -> str:
 
 
 def resolve_icloud_staging_path(source_label: str | None) -> Path:
-    return (_BACKEND_ROOT.parent / "storage" / "exports" / "icloud" / sanitize_icloud_source_label(source_label)).resolve()
+    return (icloud_exports_root() / sanitize_icloud_source_label(source_label)).resolve()

@@ -28,6 +28,7 @@ import cv2
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.runtime_paths import configured_path, reports_directory
 from app.db.session import SessionLocal
 from app.models.asset import Asset
 from app.models.face import Face
@@ -35,10 +36,8 @@ from app.models.face_processing_run import FaceProcessingRun
 from app.services.face.face_processing_schema import ensure_face_processing_schema
 from app.services.vision.face_detector import IMAGE_EXTENSIONS, load_image_for_cv2
 
-# Reports written to storage/logs/face_processing_reports/ relative to project root.
-_BACKEND_ROOT = Path(__file__).resolve().parents[4]
-REPORT_DIR: Path = _BACKEND_ROOT / "storage" / "logs" / "face_processing_reports"
-_REVIEW_ROOT: Path = _BACKEND_ROOT / "storage" / "review"
+REPORT_DIR: Path = reports_directory("face_processing_reports")
+_REVIEW_ROOT: Path = configured_path("review_path")
 _FACE_FILENAME_PATTERN = re.compile(r"^face_(\d+)__", re.IGNORECASE)
 
 STATUS_IDLE = "idle"

@@ -6,12 +6,13 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core.runtime_paths import reports_directory
 from app.services.live_photo.pairing_schema import LivePhotoPairingSchemaSummary
 from app.services.live_photo.pairing_service import LivePhotoPairingResult
 
 
 def report_dir() -> Path:
-    return (Path(__file__).resolve().parents[4] / "storage" / "logs" / "live_photo_pairing_reports").resolve()
+    return reports_directory("live_photo_pairing_reports")
 
 
 def utc_stamp() -> str:
