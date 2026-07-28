@@ -1530,3 +1530,157 @@ This milestone is complete when:
 - the Windows runtime remains unchanged;
 - exactly one correctly named closeout is created;
 - the closeout recommends one clear next milestone.
+
+## Approved Pre-Implementation Lock-Ins
+
+The Product Owner approved the following operational clarifications on
+2026-07-28. These clarifications are part of the milestone contract.
+
+### 1. Repository deploy key
+
+Use a dedicated repository-scoped SSH deploy key that is:
+
+- write-enabled for the Photo Organizer repository;
+- created without a passphrase for reliable server-side Git and VS Code Remote
+  SSH operations;
+- dedicated only to this repository;
+- stored only under the `chuck` server account;
+- protected with private-key permissions of `600`;
+- never copied into the repository, NAS, documentation, chat, or closeout.
+
+The accepted risk is that compromise of the `chuck` server account could permit
+Git writes to this one repository.
+
+This does not authorize the Coder to commit, push, merge, rebase, tag, reset,
+clean, stash, or create or delete branches without separate Product Owner
+approval.
+
+Verify GitHub host keys against GitHub's officially published fingerprints
+before modifying `known_hosts`. Do not disable host-key verification.
+
+### 2. Sudo execution
+
+The following non-interactive test is approved:
+
+    sudo -n docker version
+
+This command may be run because it will fail rather than prompt for a password.
+
+If it succeeds, approved Docker commands may be executed with `sudo` without
+handling a password.
+
+If it fails:
+
+- do not request, receive, store, or handle the Product Owner's sudo password;
+- do not modify `sudoers`;
+- do not add `chuck` to the Docker group;
+- stop at each required privileged step;
+- provide the Product Owner the exact command and its purpose;
+- wait for the Product Owner to execute it manually and return a sanitized
+  result.
+
+### 3. NAS identity and path mapping
+
+The Synology NAS shared-folder name is exactly:
+
+    PhotoOrganizer
+
+The expected SMB source is:
+
+    //HENDERSON-NAS/PhotoOrganizer
+
+The Linux mount point is separately named:
+
+    /mnt/nas/photo-organizer
+
+The Linux mount-point name does not need to match the SMB shared-folder name.
+
+Before NAS validation, positively verify the live mapping with:
+
+    findmnt -no SOURCE,TARGET,FSTYPE /mnt/nas/photo-organizer
+
+The required relationship is:
+
+    SMB source:       //HENDERSON-NAS/PhotoOrganizer
+    Linux target:     /mnt/nas/photo-organizer
+    Filesystem type:  cifs
+
+Do not proceed if the live source, target, or filesystem type does not match the
+expected NAS mapping.
+
+### 4. NAS structure and guard validation
+
+The Development subtree is:
+
+    /mnt/nas/photo-organizer/development
+
+The currently known Development directories are:
+
+    /mnt/nas/photo-organizer/development/backups
+    /mnt/nas/photo-organizer/development/fixtures
+    /mnt/nas/photo-organizer/development/sample-media
+    /mnt/nas/photo-organizer/development/staging
+
+Other sibling directories under the `PhotoOrganizer` share include
+`production`, `shared`, and `test`. The NAS-managed recycle directory is
+`#recycle`.
+
+The Development directory is a subdirectory of the CIFS mount and is not itself
+a separate host mount point.
+
+Validate the NAS guard using this approved method:
+
+- independently verify that `/mnt/nas/photo-organizer` is the expected active
+  CIFS mount sourced from `//HENDERSON-NAS/PhotoOrganizer`;
+- verify that the resolved Development path remains beneath that mount;
+- create or validate only
+  `/mnt/nas/photo-organizer/development/.photo-organizer-environment`;
+- require exact marker content `environment=development`;
+- bind-mount only the Development subtree read-only into a one-off CPU
+  validation container;
+- make that Development subtree the configured storage root inside the
+  validation container;
+- use temporary non-secret overrides pointing only to existing Development
+  directories;
+- run positive and negative NAS-guard checks;
+- remove the validation container afterward;
+- keep normal `docker/.env.development` configured for `STORAGE_MODE=local`.
+
+Additional NAS boundaries:
+
+- do not enumerate, inspect, hash, copy, move, rename, or modify media;
+- do not traverse `#recycle`;
+- do not touch `production`, `test`, or `shared`;
+- do not create application storage directories beyond the one approved marker;
+- do not use the `backups` directory as a live application storage location;
+- treat temporary directory mappings only as guard-validation inputs, not as
+  approval of the final runtime directory layout;
+- do not allow automatic fallback from NAS mode to local storage;
+- do not mount the entire `PhotoOrganizer` share into the validation container;
+- do not leave the temporary validation container running;
+- do not modify existing Development directory contents.
+
+The read-only bind mount is approved only for validating guard behavior. It
+does not authorize NAS-backed application startup in this milestone.
+
+### 5. Secret-safe Compose validation
+
+Suppress helper output where it could expand the database password. Use
+secret-safe validation such as:
+
+    docker compose config --quiet
+
+Do not include resolved Compose output, passwords, tokens, or secret-bearing
+environment values in terminal output, chat, evidence, or the closeout.
+
+### 6. Prompt-record gate
+
+After appending these clarifications:
+
+- run `git diff --check`;
+- report `git status --short` and the prompt-only diff summary;
+- do not begin server mutation;
+- pause for the Product Owner to commit and push the updated prompt.
+
+Proceed with the milestone only after the updated prompt is committed and
+pushed.
