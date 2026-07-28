@@ -27,7 +27,11 @@ from app.services.source_identity.identity_fingerprint import (
     stable_hash,
 )
 from app.services.source_identity.probe_schema import SourceIdentityProbeRequest, SourceIdentityProbeResponse
-from app.services.source_identity.probe_service import SourceIdentityProbeService
+from app.services.source_identity.probe_service import (
+    LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+    SourceIdentityProbeService,
+)
+from app.services.source_identity.providers.linux_development_fixture import CONTROLLED_SOURCE_LABEL
 from app.services.source_identity.source_selection_schema import (
     SelectedSourceContext,
     SourceSelectionRequest,
@@ -77,7 +81,12 @@ class SourceSelectionService:
         self._icloud_readiness_resolver = icloud_readiness_resolver
         self._mounted_volume_resolver = mounted_volume_resolver or enumerate_windows_mounted_volume_candidates
 
-    def select_source(self, request: SourceSelectionRequest) -> SourceSelectionResponse:
+    def select_source(
+        self,
+        request: SourceSelectionRequest,
+        *,
+        operator_acknowledged: bool = False,
+    ) -> SourceSelectionResponse:
         """Return a normalized, read-only Source Selection result."""
         source = self._db.get(IngestionSource, request.source_profile_id)
         if source is None:
@@ -114,7 +123,11 @@ class SourceSelectionService:
             )
 
         if endpoint is None:
-            return self._select_legacy_path_only(source, friendly_type)
+            return self._select_legacy_path_only(
+                source,
+                friendly_type,
+                operator_acknowledged=operator_acknowledged,
+            )
 
         if source.endpoint_relative_root is None:
             return self._not_selected(
@@ -273,7 +286,13 @@ class SourceSelectionService:
             },
         )
 
-    def _select_legacy_path_only(self, source: IngestionSource, friendly_type: str) -> SourceSelectionResponse:
+    def _select_legacy_path_only(
+        self,
+        source: IngestionSource,
+        friendly_type: str,
+        *,
+        operator_acknowledged: bool,
+    ) -> SourceSelectionResponse:
         if source.endpoint_relative_root is not None:
             return self._not_selected(
                 availability="needs_attention",
@@ -292,6 +311,28 @@ class SourceSelectionService:
                 advanced_details=_base_advanced_details(source, None, friendly_type),
             )
 
+        is_controlled_fixture = source.source_label == CONTROLLED_SOURCE_LABEL
+        if is_controlled_fixture and source.source_type != "local_folder":
+            return self._not_selected(
+                availability="needs_attention",
+                message="The controlled Development fixture Source must remain a local path-only Source.",
+                retry_guidance="Review the controlled fixture Source without changing its identity shape.",
+                advanced_details={
+                    **_base_advanced_details(source, None, friendly_type),
+                    "fixture_reason": "controlled fixture Source type is not local_folder.",
+                },
+            )
+        if is_controlled_fixture and not operator_acknowledged:
+            return self._not_selected(
+                availability="needs_attention",
+                message="Explicit acknowledgment is required before selecting the controlled Development fixture Source.",
+                retry_guidance="Run ingestion with the explicit legacy/review acknowledgment.",
+                advanced_details={
+                    **_base_advanced_details(source, None, friendly_type),
+                    "fixture_reason": "development fixture acknowledgment was not supplied.",
+                },
+            )
+
         probe_source_type = _probe_source_type_for_legacy(source, friendly_type)
         if probe_source_type is None:
             return self._not_selected(
@@ -301,7 +342,11 @@ class SourceSelectionService:
                 advanced_details=_base_advanced_details(source, None, friendly_type),
             )
 
-        probe = self._probe(probe_source_type, source.source_root_path)
+        probe = self._probe(
+            probe_source_type,
+            source.source_root_path,
+            controlled_fixture=is_controlled_fixture,
+        )
         if _probe_path_unavailable(probe):
             return self._not_selected(
                 availability="unavailable",
@@ -313,7 +358,7 @@ class SourceSelectionService:
                     "legacy_reason": "path-only compatibility fallback failed because the path is unavailable.",
                 },
             )
-        if not _probe_is_usable(probe):
+        if not _probe_is_usable(probe, allow_needs_review=is_controlled_fixture):
             return self._not_selected(
                 availability="needs_attention",
                 message="This legacy Source needs identity review before it can be selected.",
@@ -350,24 +395,45 @@ class SourceSelectionService:
             source=source,
             endpoint=None,
             friendly_type=friendly_type,
-            device_label="Legacy source",
+            device_label="Development fixture path" if is_controlled_fixture else "Legacy source",
             resolved_source_root=source.source_root_path,
             resolved_endpoint_path=None,
             durable_identity_status="not_verified",
-            identity_match_status="path_only_compatibility",
+            identity_match_status=(
+                "development_fixture_path_only"
+                if is_controlled_fixture
+                else "path_only_compatibility"
+            ),
             workflow_kind="filesystem_source_intake",
+            provider_context=(
+                {
+                    "provider_name": LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+                    "identity_representation": "unverified_development_fixture_path_only",
+                    "requires_operator_acknowledgment": True,
+                }
+                if is_controlled_fixture
+                else None
+            ),
         )
         return SourceSelectionResponse(
             result="selected",
             availability="available",
             workflow_kind="filesystem_source_intake",
             selected_source_context=context,
-            message=f"{source.source_label} is available through legacy path compatibility.",
+            message=(
+                f"{source.source_label} is available as an acknowledged, unverified Development fixture path."
+                if is_controlled_fixture
+                else f"{source.source_label} is available through legacy path compatibility."
+            ),
             retry_guidance=None,
             advanced_details={
                 **_base_advanced_details(source, None, friendly_type),
                 "probe": _probe_details(probe),
-                "legacy_reason": "active path-only Source selected through strict compatibility fallback.",
+                "legacy_reason": (
+                    "exact acknowledged Development fixture Source selected without durable identity."
+                    if is_controlled_fixture
+                    else "active path-only Source selected through strict compatibility fallback."
+                ),
             },
         )
 
@@ -493,14 +559,25 @@ class SourceSelectionService:
             paths.append(_join_endpoint_root(endpoint_root, source.endpoint_relative_root or ""))
         return paths
 
-    def _probe(self, source_type: str, path: str) -> SourceIdentityProbeResponse:
+    def _probe(
+        self,
+        source_type: str,
+        path: str,
+        *,
+        controlled_fixture: bool = False,
+    ) -> SourceIdentityProbeResponse:
         return self._probe_service.probe(
             SourceIdentityProbeRequest(
                 source_type=source_type,  # type: ignore[arg-type]
                 observed_path=path,
                 probe_mode="readiness_probe",
-                intended_use="source_selection",
-                os_family="windows",
+                intended_use=(
+                    "m005_development_fixture_source_selection_acknowledged"
+                    if controlled_fixture
+                    else "source_selection"
+                ),
+                os_family="linux" if controlled_fixture else "unknown",
+                provider_name=LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME if controlled_fixture else None,
             )
         )
 

@@ -23,6 +23,11 @@ from app.services.source_identity.probe_schema import (
     SourceIdentityProbeResponse,
     SourceRootCandidate,
 )
+from app.services.source_identity.probe_service import LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME
+from app.services.source_identity.providers.linux_development_fixture import (
+    APPROVED_CONTAINER_FIXTURE_ROOT,
+    CONTROLLED_SOURCE_LABEL,
+)
 from app.services.source_identity.source_selection_schema import SourceSelectionRequest
 from app.services.source_identity.source_selection_service import (
     MountedVolumeCandidate,
@@ -365,6 +370,81 @@ class SourceSelectionServiceTests(unittest.TestCase):
         self.assertEqual(result.selected_source_context.identity_match_status, "path_only_compatibility")
         self.assertEqual(result.selected_source_context.durable_identity_status, "not_verified")
 
+    def test_controlled_fixture_selection_fails_closed_without_acknowledgment(self) -> None:
+        source = self._source(
+            CONTROLLED_SOURCE_LABEL,
+            "local_folder",
+            APPROVED_CONTAINER_FIXTURE_ROOT,
+            endpoint_id=None,
+            endpoint_relative_root=None,
+        )
+        fake = _FakeProbeService({})
+
+        result = SourceSelectionService(self.db, fake).select_source(
+            SourceSelectionRequest(source_profile_id=source.id)
+        )
+
+        self.assertEqual(result.result, "not_selected")
+        self.assertEqual(result.availability, "needs_attention")
+        self.assertIn("acknowledgment", result.message)
+        self.assertEqual(fake.requests, [])
+
+    def test_acknowledged_controlled_fixture_selects_without_durable_identity_or_endpoint(self) -> None:
+        source = self._source(
+            CONTROLLED_SOURCE_LABEL,
+            "local_folder",
+            APPROVED_CONTAINER_FIXTURE_ROOT,
+            endpoint_id=None,
+            endpoint_relative_root=None,
+        )
+        fake = _FakeProbeService(
+            {APPROVED_CONTAINER_FIXTURE_ROOT: _development_fixture_probe()}
+        )
+
+        result = SourceSelectionService(self.db, fake).select_source(
+            SourceSelectionRequest(source_profile_id=source.id),
+            operator_acknowledged=True,
+        )
+
+        self.assertEqual(result.result, "selected")
+        self.assertEqual(result.availability, "available")
+        self.assertIsNotNone(result.selected_source_context)
+        self.assertIsNone(result.selected_source_context.source_endpoint_id)
+        self.assertEqual(result.selected_source_context.durable_identity_status, "not_verified")
+        self.assertEqual(
+            result.selected_source_context.identity_match_status,
+            "development_fixture_path_only",
+        )
+        self.assertEqual(
+            result.selected_source_context.provider_context["provider_name"],
+            LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+        )
+        self.assertEqual(fake.requests[0].provider_name, LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME)
+        self.assertIn("acknowledged", fake.requests[0].intended_use or "")
+        self.assertEqual(self.db.scalar(select(func.count(SourceEndpoint.id))), 0)
+
+    def test_non_fixture_linux_path_remains_unsupported(self) -> None:
+        source = self._source(
+            "Arbitrary Linux Photos",
+            "local_folder",
+            "/home/chuck/photos",
+            endpoint_id=None,
+            endpoint_relative_root=None,
+        )
+
+        with patch(
+            "app.services.source_identity.probe_service.infer_os_family",
+            return_value="linux",
+        ):
+            result = SourceSelectionService(self.db).select_source(
+                SourceSelectionRequest(source_profile_id=source.id),
+                operator_acknowledged=True,
+            )
+
+        self.assertEqual(result.result, "not_selected")
+        self.assertEqual(result.availability, "needs_attention")
+        self.assertIsNone(result.selected_source_context)
+
     def test_linked_legacy_null_relative_root_returns_needs_attention(self) -> None:
         fingerprint_hash, fingerprint_version = volume_guid_fingerprint("11111111-1111-1111-1111-111111111111")
         endpoint = self._endpoint("local", "Chuck PC", fingerprint_hash, fingerprint_version)
@@ -574,6 +654,43 @@ def _volume_probe(source_type: str, path: str, guid: str, *, safe_to_run: bool |
         evidence_items=[evidence],
         confidence_tier="strong_match",
         safe_to_run=safe_to_run,
+    )
+
+
+def _development_fixture_probe() -> SourceIdentityProbeResponse:
+    warning = SourceIdentityEvidenceItem(
+        category="capability_evidence",
+        code="development_fixture_identity_unverified",
+        status="warning",
+        durability="weak",
+        privacy_level="normal_ui",
+        source_types=["local"],
+        message="Unverified Development fixture path.",
+        provider_name=LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+    )
+    return SourceIdentityProbeResponse(
+        probe_status="completed_with_warnings",
+        source_type="local",
+        os_family="linux",
+        provider_name=LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+        provider_version="1",
+        access_node_summary=AccessNodeSummary(
+            label="Development Linux fixture access node",
+            os_family="linux",
+        ),
+        observed_path=APPROVED_CONTAINER_FIXTURE_ROOT,
+        normalized_observed_path=APPROVED_CONTAINER_FIXTURE_ROOT,
+        source_root_candidate=SourceRootCandidate(
+            path=APPROVED_CONTAINER_FIXTURE_ROOT,
+            is_valid_source_root_candidate=True,
+            filesystem_boundary_type="local_folder",
+            root_reason="test controlled fixture",
+        ),
+        evidence_items=[warning],
+        confidence_tier="weak_manual_confirmation_required",
+        match_status="not_compared",
+        safe_to_run="needs_review",
+        warnings=[warning],
     )
 
 

@@ -239,7 +239,134 @@ Any later proposal must explain:
 - whether Source Intake remains the sole filesystem-ingestion authority;
 - how the pathway is prevented from becoming a Production bypass.
 
-No adapter or harness is authorized by this prompt.
+No adapter or harness was authorized before the Phase A escalation recorded below.
+
+#### Phase A finding and approved Development-only fixture adapter
+
+Phase A completed read-only reconnaissance before any fixture, Source, endpoint,
+or ingestion state was created.
+
+Live Linux evidence established:
+
+- the runtime reported `os_family=linux`;
+- `supported_providers` was empty and no default provider existed;
+- an explicit Linux probe returned `unsupported_provider`,
+  `safe_to_run=false`, and `unsupported_os_provider`;
+- the normal Source-creation plan rejected the POSIX root because it required
+  an absolute Windows drive path;
+- the existing legacy path-only compatibility flow forced Windows-provider
+  semantics and therefore was not accepted as an existing supported Linux
+  route.
+
+The focused Phase A regression set passed 134 tests. Phase A stopped as
+required before fixture generation, Source creation, application changes, or
+ingestion.
+
+The Product Owner subsequently approved one narrow Development-only Linux
+fixture adapter. It exists solely to admit the exact Milestone 005 controlled
+fixture root into the normal Source Intake workflow. It is not the future
+general Linux Source-identity architecture.
+
+Approved application file scope:
+
+- new:
+  `backend/app/services/source_identity/providers/linux_development_fixture.py`;
+- modify:
+  `backend/app/core/config.py`;
+- modify:
+  `backend/app/services/source_identity/probe_service.py`;
+- modify:
+  `backend/app/services/source_identity/readiness_service.py`;
+- modify:
+  `backend/app/services/source_identity/source_selection_service.py`;
+- modify:
+  `backend/app/services/admin/run_ingestion_dispatch_service.py`.
+
+The dispatch-service file was approved through a follow-on escalation because
+the existing acknowledgment field had to be propagated before Source Selection
+and readiness. No public request or response schema change was approved or
+required.
+
+The adapter must fail closed unless all of these conditions hold:
+
+- `APP_RUNTIME_PROFILE=development`;
+- `STORAGE_MODE=local`;
+- `DEVELOPMENT_FIXTURE_SOURCE_ROOT` is explicitly configured;
+- the configured and requested roots are the exact normalized and resolved
+  approved container fixture root;
+- the path is absolute POSIX with no traversal or symlink escape;
+- the bind is read-only;
+- the operator explicitly supplies the existing
+  `filesystem_options.acknowledge_legacy_or_review` acknowledgment;
+- Source Selection and readiness explicitly select the fixture adapter for the
+  controlled path.
+
+The approved container root is:
+
+`/mnt/photo-organizer-fixtures/m005`
+
+The temporary Compose override will map only:
+
+`/home/chuck/photo-organizer-fixtures/m005/source`
+
+to that exact container root read-only. The environment setting and bind may
+exist only in the temporary non-secret Milestone 005 override; neither belongs
+in permanent Compose configuration.
+
+The single later Source Profile must be named:
+
+`M005 Controlled Fixture Source`
+
+It must remain:
+
+- a persistent path-only `local_folder` Source Profile created through the
+  existing Source Profile API and ORM path;
+- linked to no Source Endpoint;
+- associated with no fabricated durable identifier;
+- associated with no Windows provider identity;
+- explicitly represented as unverified Development fixture/path-only identity.
+
+Acknowledged readiness must remain `needs_review`, with durable identity
+`not_verified`. Acknowledgment permits only the controlled run; it does not
+create a durable match or change the Source identity.
+
+The authoritative execution path remains:
+
+    POST /api/admin/run-ingestion/dispatch
+      -> read existing acknowledgment
+      -> acknowledgment-aware Source Selection
+      -> acknowledgment-aware readiness returning needs_review
+      -> start_source_intake()
+      -> existing independent acknowledgment enforcement
+      -> existing Source Intake pipeline
+
+Direct Source Selection and readiness invocations remain fail-closed without
+acknowledgment. The adapter is not the default Linux provider or a fallback for
+arbitrary POSIX paths. Test, Production, NAS, repository, application-storage,
+Windows, UNC, sibling, descendant, and unrelated roots cannot activate it.
+
+No frontend, schema, migration, provenance, Vault, duplicate, Source Intake,
+pipeline, Dockerfile, permanent Compose, dependency, or Production
+configuration change is authorized.
+
+Fixture generation and ingestion remain paused until:
+
+1. local implementation and validation are reviewed;
+2. the Product Owner commits and pushes the reviewed files;
+3. the clean server checkout is fast-forwarded;
+4. only the Development GPU backend image is rebuilt;
+5. PostgreSQL, Redis, application storage, and existing state are preserved;
+6. the temporary fixture setting is absent during negative gate checks;
+7. live read-only gate validation proves arbitrary Linux paths remain
+   unsupported, missing acknowledgment is blocked, Test/Production/local-mode
+   gates fail closed, and only the exact configured root can return
+   `needs_review`;
+8. live gate validation creates no Source Profile, Source Endpoint, fixture, or
+   ingestion state.
+
+If implementation or live validation requires a broader Source-identity
+architecture, public API change, permanent Compose change, schema change,
+manual Source creation, or Source Intake bypass, stop and escalate again.
 
 ### 6. Ingestion authority
 

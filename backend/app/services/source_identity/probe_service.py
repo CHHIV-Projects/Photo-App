@@ -13,6 +13,10 @@ from app.services.source_identity.probe_schema import (
     SourceIdentityProviderCapabilities,
     SourceRootCandidate,
 )
+from app.services.source_identity.providers.linux_development_fixture import (
+    LinuxDevelopmentFixtureProbeProvider,
+    PROVIDER_NAME as LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+)
 from app.services.source_identity.providers.windows_non_admin import WindowsSourceIdentityProbeProvider
 
 
@@ -35,13 +39,28 @@ def infer_os_family() -> str:
 class SourceIdentityProbeService:
     """Select providers and return normalized read-only probe results."""
 
-    def __init__(self, *, windows_provider: WindowsSourceIdentityProbeProvider | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        windows_provider: WindowsSourceIdentityProbeProvider | None = None,
+        linux_development_fixture_provider: LinuxDevelopmentFixtureProbeProvider | None = None,
+    ) -> None:
         self._windows_provider = windows_provider or WindowsSourceIdentityProbeProvider()
+        self._linux_development_fixture_provider = (
+            linux_development_fixture_provider or LinuxDevelopmentFixtureProbeProvider()
+        )
 
     def probe(self, request: SourceIdentityProbeRequest) -> SourceIdentityProbeResponse:
         """Run a read-only source identity probe."""
         os_family = request.os_family if request.os_family != "unknown" else infer_os_family()
         provider_name = request.provider_name or (WINDOWS_PROVIDER_NAME if os_family == "windows" else None)
+
+        if provider_name == LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME:
+            if os_family != "linux":
+                return self._unsupported_response(request, os_family=os_family, provider_name=provider_name)
+            return self._linux_development_fixture_provider.probe(
+                request.model_copy(update={"os_family": "linux", "provider_name": provider_name})
+            )
 
         if provider_name and provider_name != WINDOWS_PROVIDER_NAME:
             return self._unsupported_response(request, os_family=os_family, provider_name=provider_name)

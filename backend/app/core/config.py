@@ -78,6 +78,9 @@ class Settings:
 	approved_extensions_csv: str = os.getenv("APPROVED_EXTENSIONS", DEFAULT_APPROVED_EXTENSIONS)
 	minimum_file_size_bytes: int = int(os.getenv("MINIMUM_FILE_SIZE_BYTES", str(50 * 1024)))
 	storage_mode: str = (os.getenv("STORAGE_MODE") or "local").strip().lower()
+	development_fixture_source_root: str = (
+		os.getenv("DEVELOPMENT_FIXTURE_SOURCE_ROOT") or ""
+	).strip()
 	storage_root: str = _STORAGE_ROOT
 	drop_zone_path: str = _configured_path("DROP_ZONE_PATH", _STORAGE_ROOT, "drop_zone")
 	vault_path: str = _configured_path("VAULT_PATH", _STORAGE_ROOT, "vault")

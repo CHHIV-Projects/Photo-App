@@ -20,7 +20,11 @@ from app.services.source_identity.probe_schema import (
     SourceIdentityProbeResponse,
     SourceIdentitySourceType,
 )
-from app.services.source_identity.probe_service import SourceIdentityProbeService
+from app.services.source_identity.probe_service import (
+    LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+    SourceIdentityProbeService,
+)
+from app.services.source_identity.providers.linux_development_fixture import CONTROLLED_SOURCE_LABEL
 from app.services.source_identity.readiness_schema import (
     IdentityMatchStatus,
     ReadinessStatus,
@@ -50,10 +54,12 @@ class SourceProfileReadinessService:
         db_session: Session,
         probe_service: SourceIdentityProbeService | None = None,
         runtime_source_root_overrides: dict[int, str] | None = None,
+        operator_acknowledged: bool = False,
     ) -> None:
         self._db = db_session
         self._probe_service = probe_service or SourceIdentityProbeService()
         self._runtime_source_root_overrides = runtime_source_root_overrides or {}
+        self._operator_acknowledged = operator_acknowledged
 
     def check_readiness(self, source_profile_id: int) -> SourceProfileReadinessResponse:
         """Return a read-only readiness result for one Source Profile."""
@@ -97,13 +103,40 @@ class SourceProfileReadinessService:
                 recommended_next_action="Configure or reconnect the source path.",
             )
 
+        is_controlled_fixture = source.source_label == CONTROLLED_SOURCE_LABEL
+        if is_controlled_fixture and (
+            source.source_type != "local_folder"
+            or source.endpoint_id is not None
+            or source.endpoint_relative_root is not None
+        ):
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="unsupported",
+                code="development_fixture_source_shape_blocked",
+                message="The controlled Development fixture Source must remain path-only with no Source Endpoint.",
+                recommended_next_action="Review the controlled fixture Source without changing identity semantics.",
+            )
+        if is_controlled_fixture and not self._operator_acknowledged:
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="needs_review",
+                code="development_fixture_acknowledgment_required",
+                message="Explicit acknowledgment is required before checking the controlled Development fixture Source.",
+                recommended_next_action="Use Run Ingestion with the explicit legacy/review acknowledgment.",
+            )
+
         probe = self._probe_service.probe(
             SourceIdentityProbeRequest(
                 source_type=mapped_type,
                 observed_path=effective_path,
                 probe_mode="readiness_probe",
-                intended_use="source_profile_readiness",
-                os_family="windows",
+                intended_use=(
+                    "m005_development_fixture_readiness_acknowledged"
+                    if is_controlled_fixture
+                    else "source_profile_readiness"
+                ),
+                os_family="linux" if is_controlled_fixture else "unknown",
+                provider_name=LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME if is_controlled_fixture else None,
             )
         )
         probe_block = _probe_blocker(probe)
@@ -323,6 +356,28 @@ class SourceProfileReadinessService:
         source: IngestionSource,
         probe: SourceIdentityProbeResponse,
     ) -> SourceProfileReadinessResponse:
+        if probe.provider_name == LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME:
+            warning = _message(
+                "development_fixture_identity_unverified",
+                (
+                    "This exact controlled Development fixture root is path-only and unverified. "
+                    "Acknowledgment does not create durable identity."
+                ),
+            )
+            return self._response(
+                source,
+                endpoint=None,
+                probe=probe,
+                readiness_status="needs_review",
+                identity_match_status="needs_review",
+                can_run_source_intake=True,
+                requires_operator_acknowledgment=True,
+                hard_block=False,
+                operator_message="The controlled Development fixture Source can run only with explicit acknowledgment.",
+                recommended_next_action="Run the one controlled Development intake with acknowledgment.",
+                warnings=[*_probe_warning_messages(probe), warning],
+            )
+
         warning = _message(
             "durable_source_identity_recommended",
             "Path-only source identity. Durable source identity enrollment is recommended.",

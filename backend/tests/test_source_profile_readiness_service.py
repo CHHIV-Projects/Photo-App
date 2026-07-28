@@ -26,6 +26,11 @@ from app.services.source_identity.probe_schema import (
     SourceIdentityProbeResponse,
     SourceRootCandidate,
 )
+from app.services.source_identity.probe_service import LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME
+from app.services.source_identity.providers.linux_development_fixture import (
+    APPROVED_CONTAINER_FIXTURE_ROOT,
+    CONTROLLED_SOURCE_LABEL,
+)
 from app.services.source_identity.readiness_service import SourceProfileReadinessService
 
 
@@ -91,6 +96,68 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         self.assertEqual(result.identity_match_status, "unavailable")
         self.assertFalse(result.can_run_source_intake)
         self.assertTrue(result.hard_block)
+
+    def test_controlled_fixture_readiness_fails_closed_without_acknowledgment(self) -> None:
+        source = self._add_source(
+            label=CONTROLLED_SOURCE_LABEL,
+            source_type="local_folder",
+            path=APPROVED_CONTAINER_FIXTURE_ROOT,
+        )
+
+        result = SourceProfileReadinessService(
+            self.db,
+            _FailingProbeService(),
+        ).check_readiness(source.id)
+
+        self.assertEqual(result.readiness_status, "blocked")
+        self.assertEqual(result.identity_match_status, "needs_review")
+        self.assertEqual(result.blockers[0].code, "development_fixture_acknowledgment_required")
+        self.assertFalse(result.can_run_source_intake)
+
+    def test_acknowledged_controlled_fixture_readiness_remains_unverified_needs_review(self) -> None:
+        source = self._add_source(
+            label=CONTROLLED_SOURCE_LABEL,
+            source_type="local_folder",
+            path=APPROVED_CONTAINER_FIXTURE_ROOT,
+        )
+        fake = _FakeProbeService(_development_fixture_probe_response())
+
+        result = SourceProfileReadinessService(
+            self.db,
+            fake,
+            operator_acknowledged=True,
+        ).check_readiness(source.id)
+
+        self.assertEqual(result.readiness_status, "needs_review")
+        self.assertEqual(result.identity_match_status, "needs_review")
+        self.assertTrue(result.can_run_source_intake)
+        self.assertTrue(result.requires_operator_acknowledgment)
+        self.assertFalse(result.hard_block)
+        self.assertEqual(result.durable_identity_status, "not_verified")
+        self.assertIsNone(result.durable_identity_identifier)
+        self.assertIsNone(result.endpoint_id)
+        self.assertEqual(fake.requests[0].provider_name, LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME)
+        self.assertEqual(fake.requests[0].os_family, "linux")
+        self.assertIn("acknowledged", fake.requests[0].intended_use or "")
+        self.assert_non_mutating(source.id, expected_endpoint_id=None)
+
+    def test_controlled_fixture_with_endpoint_is_blocked_before_probe(self) -> None:
+        endpoint = self._add_endpoint_from_probe(_probe_response())
+        source = self._add_source(
+            label=CONTROLLED_SOURCE_LABEL,
+            source_type="local_folder",
+            path=APPROVED_CONTAINER_FIXTURE_ROOT,
+            endpoint_id=endpoint.id,
+        )
+
+        result = SourceProfileReadinessService(
+            self.db,
+            _FailingProbeService(),
+            operator_acknowledged=True,
+        ).check_readiness(source.id)
+
+        self.assertEqual(result.readiness_status, "blocked")
+        self.assertEqual(result.blockers[0].code, "development_fixture_source_shape_blocked")
 
     def test_inactive_profile_is_blocked_before_probe(self) -> None:
         source = self._add_source(profile_status="inactive")
@@ -375,6 +442,7 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
     def _add_source(
         self,
         *,
+        label: str | None = None,
         source_type: str = "external_drive",
         path: str = "E:\\Photos",
         profile_status: str = "active",
@@ -383,9 +451,10 @@ class SourceProfileReadinessServiceTests(unittest.TestCase):
         account_username: str | None = None,
         endpoint_id: int | None = None,
     ) -> IngestionSource:
+        resolved_label = label or f"Source {len(self.db.scalars(select(IngestionSource.id)).all()) + 1}"
         source = IngestionSource(
-            source_label=f"Source {len(self.db.scalars(select(IngestionSource.id)).all()) + 1}",
-            source_label_normalized=f"source {len(self.db.scalars(select(IngestionSource.id)).all()) + 1}",
+            source_label=resolved_label,
+            source_label_normalized=resolved_label.casefold(),
             source_type=source_type,
             source_root_path=path,
             source_root_path_normalized=path.casefold(),
@@ -486,6 +555,44 @@ def _probe_response(
         safe_to_run=safe_to_run,
         blockers=blockers,
         warnings=warnings,
+    )
+
+
+def _development_fixture_probe_response() -> SourceIdentityProbeResponse:
+    warning = SourceIdentityEvidenceItem(
+        category="capability_evidence",
+        code="development_fixture_identity_unverified",
+        status="warning",
+        durability="weak",
+        privacy_level="normal_ui",
+        source_types=["local"],
+        message="Unverified Development fixture path.",
+        provider_name=LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+    )
+    return SourceIdentityProbeResponse(
+        probe_status="completed_with_warnings",
+        source_type="local",
+        os_family="linux",
+        provider_name=LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+        provider_version="1",
+        access_node_summary=AccessNodeSummary(
+            label="Development Linux fixture access node",
+            os_family="linux",
+        ),
+        observed_path=APPROVED_CONTAINER_FIXTURE_ROOT,
+        normalized_observed_path=APPROVED_CONTAINER_FIXTURE_ROOT,
+        source_root_candidate=SourceRootCandidate(
+            path=APPROVED_CONTAINER_FIXTURE_ROOT,
+            is_valid_source_root_candidate=True,
+            filesystem_boundary_type="local_folder",
+            root_reason="test controlled fixture",
+        ),
+        evidence_items=[warning],
+        evidence_summary={"identity_evidence": "unverified_path_only"},
+        confidence_tier="weak_manual_confirmation_required",
+        match_status="not_compared",
+        safe_to_run="needs_review",
+        warnings=[warning],
     )
 
 

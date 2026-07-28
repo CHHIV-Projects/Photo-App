@@ -21,6 +21,13 @@ from app.schemas.admin import (
     RunIngestionIcloudOptions,
 )
 from app.services.admin.run_ingestion_dispatch_service import RunIngestionDispatchError, RunIngestionDispatchService
+from app.services.source_identity.probe_service import SourceIdentityProbeService
+from app.services.source_identity.providers.linux_development_fixture import (
+    APPROVED_CONTAINER_FIXTURE_ROOT,
+    CONTROLLED_SOURCE_LABEL,
+    FixturePathInspection,
+    LinuxDevelopmentFixtureProbeProvider,
+)
 from app.services.source_identity.source_selection_schema import SelectedSourceContext, SourceSelectionResponse
 
 
@@ -28,9 +35,11 @@ class _FakeSelectionService:
     def __init__(self, response: SourceSelectionResponse) -> None:
         self.response = response
         self.calls: list[int] = []
+        self.acknowledgment_calls: list[bool] = []
 
-    def select_source(self, request):  # noqa: ANN001
+    def select_source(self, request, *, operator_acknowledged: bool = False):  # noqa: ANN001
         self.calls.append(request.source_profile_id)
+        self.acknowledgment_calls.append(operator_acknowledged)
         return self.response
 
 
@@ -86,6 +95,122 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         self.assertTrue(kwargs["selection_verified_identity"])
         self.assertEqual(kwargs["source_intake_limit"], 25)
         self.assertEqual(kwargs["ingest_batch_size"], 10)
+
+    def test_controlled_fixture_dispatch_without_acknowledgment_is_blocked(self) -> None:
+        source = self._controlled_fixture_source()
+        service = RunIngestionDispatchService(
+            self.db,
+            probe_service=SourceIdentityProbeService(
+                linux_development_fixture_provider=_fixture_provider(),
+            ),
+        )
+
+        with patch(
+            "app.services.admin.run_ingestion_dispatch_service.start_source_intake"
+        ) as mocked_start:
+            result = service.dispatch(
+                RunIngestionDispatchRequest(source_profile_id=source.id)
+            )
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.action, "none")
+        self.assertIn("acknowledgment", result.message)
+        mocked_start.assert_not_called()
+
+    def test_controlled_fixture_dispatch_with_acknowledgment_uses_normal_launch_guard(self) -> None:
+        source = self._controlled_fixture_source()
+        service = RunIngestionDispatchService(
+            self.db,
+            probe_service=SourceIdentityProbeService(
+                linux_development_fixture_provider=_fixture_provider(),
+            ),
+        )
+        snapshot = SimpleNamespace(run_id=501, status="running")
+
+        with patch(
+            "app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot",
+            return_value=SimpleNamespace(blocked=False),
+        ), patch(
+            "app.services.admin.run_ingestion_dispatch_service.start_source_intake",
+            return_value=snapshot,
+        ) as mocked_start:
+            result = service.dispatch(
+                RunIngestionDispatchRequest(
+                    source_profile_id=source.id,
+                    filesystem_options=RunIngestionFilesystemOptions(
+                        acknowledge_legacy_or_review=True,
+                    ),
+                )
+            )
+
+        self.assertEqual(result.result, "started")
+        kwargs = mocked_start.call_args.kwargs
+        self.assertTrue(kwargs["readiness_acknowledged"])
+        self.assertFalse(kwargs["selection_verified_identity"])
+        self.assertEqual(
+            kwargs["runtime_source_root_path"],
+            APPROVED_CONTAINER_FIXTURE_ROOT,
+        )
+        readiness = kwargs["readiness_service"].check_readiness(source.id)
+        self.assertEqual(readiness.readiness_status, "needs_review")
+        self.assertEqual(readiness.identity_match_status, "needs_review")
+        self.assertEqual(readiness.durable_identity_status, "not_verified")
+        self.assertTrue(readiness.requires_operator_acknowledgment)
+        self.assertIsNone(readiness.endpoint_id)
+
+    def test_controlled_fixture_dispatch_acknowledgment_cannot_override_other_gates(self) -> None:
+        source = self._controlled_fixture_source()
+        providers = (
+            _fixture_provider(runtime_profile="production"),
+            _fixture_provider(storage_mode="nas"),
+            _fixture_provider(configured_fixture_root=""),
+        )
+
+        for provider in providers:
+            with self.subTest(provider=provider):
+                service = RunIngestionDispatchService(
+                    self.db,
+                    probe_service=SourceIdentityProbeService(
+                        linux_development_fixture_provider=provider,
+                    ),
+                )
+                with patch(
+                    "app.services.admin.run_ingestion_dispatch_service.start_source_intake"
+                ) as mocked_start:
+                    result = service.dispatch(
+                        RunIngestionDispatchRequest(
+                            source_profile_id=source.id,
+                            filesystem_options=RunIngestionFilesystemOptions(
+                                acknowledge_legacy_or_review=True,
+                            ),
+                        )
+                    )
+                self.assertEqual(result.result, "blocked")
+                mocked_start.assert_not_called()
+
+    def test_controlled_fixture_acknowledgment_cannot_enable_arbitrary_linux_root(self) -> None:
+        source = self._controlled_fixture_source(root="/home/chuck/photos")
+        service = RunIngestionDispatchService(
+            self.db,
+            probe_service=SourceIdentityProbeService(
+                linux_development_fixture_provider=_fixture_provider(),
+            ),
+        )
+
+        with patch(
+            "app.services.admin.run_ingestion_dispatch_service.start_source_intake"
+        ) as mocked_start:
+            result = service.dispatch(
+                RunIngestionDispatchRequest(
+                    source_profile_id=source.id,
+                    filesystem_options=RunIngestionFilesystemOptions(
+                        acknowledge_legacy_or_review=True,
+                    ),
+                )
+            )
+
+        self.assertEqual(result.result, "blocked")
+        mocked_start.assert_not_called()
 
     def test_nas_selection_dispatches_filesystem_source_intake_with_unc_runtime_root(self) -> None:
         source, endpoint = self._nas_source(stored_root="I:\\Camera imports", relative_root="Camera imports")
@@ -731,6 +856,26 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         self.db.refresh(endpoint)
         return source, endpoint
 
+    def _controlled_fixture_source(
+        self,
+        *,
+        root: str = APPROVED_CONTAINER_FIXTURE_ROOT,
+    ) -> IngestionSource:
+        source = IngestionSource(
+            source_label=CONTROLLED_SOURCE_LABEL,
+            source_label_normalized=CONTROLLED_SOURCE_LABEL.casefold(),
+            source_type="local_folder",
+            source_root_path=root,
+            source_root_path_normalized=root.casefold(),
+            endpoint_relative_root=None,
+            profile_status="active",
+            endpoint_id=None,
+        )
+        self.db.add(source)
+        self.db.commit()
+        self.db.refresh(source)
+        return source
+
     def _icloud_selection(self) -> SourceSelectionResponse:
         return SourceSelectionResponse(
             result="selected",
@@ -768,6 +913,28 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         IngestionRun.__table__.create(self.engine)
         SourceIntakeRun.__table__.create(self.engine)
         SourceEndpointObservedPath.__table__.create(self.engine)
+
+
+def _fixture_provider(
+    *,
+    runtime_profile: str = "development",
+    storage_mode: str = "local",
+    configured_fixture_root: str = APPROVED_CONTAINER_FIXTURE_ROOT,
+) -> LinuxDevelopmentFixtureProbeProvider:
+    inspection = FixturePathInspection(
+        resolved_path=APPROVED_CONTAINER_FIXTURE_ROOT,
+        exists=True,
+        is_directory=True,
+        readable=True,
+        writable=False,
+    )
+    return LinuxDevelopmentFixtureProbeProvider(
+        runtime_profile=runtime_profile,
+        storage_mode=storage_mode,
+        configured_fixture_root=configured_fixture_root,
+        runtime_os_family="linux",
+        path_inspector=lambda _path: inspection,
+    )
 
 
 if __name__ == "__main__":

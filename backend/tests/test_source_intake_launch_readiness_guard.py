@@ -116,6 +116,18 @@ class SourceIntakeLaunchReadinessGuardTests(unittest.TestCase):
         self.assertEqual(snapshot.status, "running")
         self.assertEqual(self._run_count(), 1)
 
+    def test_unverified_fixture_needs_review_still_requires_independent_launch_acknowledgment(self) -> None:
+        readiness = self._readiness("needs_review", can_run=True, requires_ack=True)
+        readiness.durable_identity_status = "not_verified"
+        readiness.durable_identity_identifier_type = None
+        readiness.durable_identity_identifier = None
+        fake = _FakeReadinessService(readiness)
+
+        with self.assertRaises(SourceIntakeReadinessBlockedError):
+            self._start(fake, readiness_acknowledged=False)
+
+        self.assert_non_mutating(expected_endpoint_id=None)
+
     def test_blocked_readiness_rejects_before_run_row(self) -> None:
         fake = _FakeReadinessService(self._readiness("blocked", can_run=False, hard_block=True))
 

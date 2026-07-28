@@ -40,6 +40,7 @@ from app.services.source_identity.identity_fingerprint import (
     OPTICAL_MEDIA_FINGERPRINT_VERSION,
     parse_unc_server_share,
 )
+from app.services.source_identity.readiness_service import SourceProfileReadinessService
 from app.services.source_identity.source_selection_schema import SourceSelectionResponse
 
 
@@ -68,14 +69,20 @@ class RunIngestionDispatchService:
         probe_service: SourceIdentityProbeService | None = None,
     ) -> None:
         self._db = db_session
+        self._probe_service = probe_service
         self._source_selection_service = source_selection_service or SourceSelectionService(
             db_session=db_session,
             probe_service=probe_service,
         )
 
     def dispatch(self, request: RunIngestionDispatchRequest) -> RunIngestionDispatchResponse:
+        filesystem_options = request.filesystem_options
+        acknowledged = bool(
+            filesystem_options.acknowledge_legacy_or_review
+        ) if filesystem_options is not None else False
         selection = self._source_selection_service.select_source(
-            SourceSelectionRequest(source_profile_id=request.source_profile_id)
+            SourceSelectionRequest(source_profile_id=request.source_profile_id),
+            operator_acknowledged=acknowledged,
         )
         blocked = self._blocked_for_unselected(request.source_profile_id, selection)
         if blocked is not None:
@@ -216,6 +223,12 @@ class RunIngestionDispatchService:
         batch_size = options.ingest_batch_size if options is not None and options.ingest_batch_size is not None else DEFAULT_FILESYSTEM_BATCH_SIZE
         acknowledged = bool(options.acknowledge_legacy_or_review) if options is not None else False
         selection_verified_identity = context.source_endpoint_id is not None and context.identity_match_status == "matched"
+        readiness_service = SourceProfileReadinessService(
+            self._db,
+            probe_service=self._probe_service,
+            runtime_source_root_overrides={request.source_profile_id: runtime_root},
+            operator_acknowledged=acknowledged,
+        )
 
         try:
             snapshot = start_source_intake(
@@ -225,6 +238,7 @@ class RunIngestionDispatchService:
                 ingest_batch_size=batch_size,
                 readiness_acknowledged=acknowledged,
                 created_by="run_ingestion_dispatch",
+                readiness_service=readiness_service,
                 runtime_source_root_path=runtime_root,
                 selection_verified_identity=selection_verified_identity,
             )
