@@ -1,0 +1,61 @@
+Photo Organizer Server — Health Baseline
+Captured: 2026-07-27T23:08:01+00:00
+
+ 23:08:01 up  3:53,  1 user,  load average: 0.00, 0.00, 0.00
+
+               total        used        free      shared  buff/cache   available
+Mem:            61Gi       1.3Gi        60Gi       1.9Mi       1.0Gi        60Gi
+Swap:          8.0Gi          0B       8.0Gi
+
+amdgpu-pci-0c00
+Adapter: PCI adapter
+vddgfx:        1.45 V  
+vddnb:         1.01 V  
+edge:         +41.0°C  
+PPT:          46.05 W  
+
+nvme-pci-0200
+Adapter: PCI adapter
+Composite:    +42.9°C  (low  = -273.1°C, high = +81.8°C)
+                       (crit = +84.8°C)
+Sensor 1:     +42.9°C  (low  = -273.1°C, high = +65261.8°C)
+Sensor 2:     +44.9°C  (low  = -273.1°C, high = +65261.8°C)
+
+mt7921_phy0-pci-0900
+Adapter: PCI adapter
+temp1:        +46.0°C  
+
+k10temp-pci-00c3
+Adapter: PCI adapter
+Tctl:         +43.0°C  
+Tccd1:        +39.1°C  
+Tccd2:        +37.6°C  
+
+
+Mon Jul 27 23:08:01 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 595.84                 Driver Version: 595.84         CUDA Version: 13.2     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 5070 Ti     Off |   00000000:01:00.0 Off |                  N/A |
+|  0%   45C    P8             11W /  300W |       2MiB /  16303MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+
+Jul 27 19:15:02 henderson-server1 (udev-worker)[669]: event4: Failed to call EVIOCSKEYCODE with scan code 0x7c, and key code 190: Invalid argument
+Jul 27 19:15:02 henderson-server1 kernel: 

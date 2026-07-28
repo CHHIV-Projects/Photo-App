@@ -1,0 +1,37 @@
+Photo Organizer Server — Network and Firewall
+Captured: 2026-07-27T23:07:19+00:00
+
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+eno1             UP             192.168.1.173/24 metric 100 2600:1012:a124:68c2:32c5:99ff:feed:4611/64 fe80::32c5:99ff:feed:4611/64 
+wlp9s0           DOWN           
+docker0          DOWN           172.17.0.1/16 
+br-c2ac142a2e90  UP             172.18.0.1/16 fe80::601d:d7ff:fe3d:f3d3/64 
+vethd4e9368@if2  UP             fe80::8415:e8ff:fea8:5188/64 
+
+default via 192.168.1.1 dev eno1 proto dhcp src 192.168.1.173 metric 100 
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 linkdown 
+172.18.0.0/16 dev br-c2ac142a2e90 proto kernel scope link src 172.18.0.1 
+192.168.1.0/24 dev eno1 proto kernel scope link src 192.168.1.173 metric 100 
+192.168.1.1 dev eno1 proto dhcp scope link src 192.168.1.173 metric 100 
+
+Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] 22/tcp                     ALLOW IN    192.168.1.0/24             # SSH from home LAN
+[ 2] 9090/tcp                   ALLOW IN    192.168.1.0/24             # Cockpit from home LAN
+[ 3] 9443/tcp                   ALLOW IN    192.168.1.0/24             # Portainer from home LAN
+
+
+Netid State  Recv-Q Send-Q                    Local Address:Port Peer Address:PortProcess                                                 
+udp   UNCONN 0      0                            127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=896,fd=16))              
+udp   UNCONN 0      0                         127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=896,fd=14))              
+udp   UNCONN 0      0                    192.168.1.173%eno1:68        0.0.0.0:*    users:(("systemd-network",pid=1048,fd=22))             
+udp   UNCONN 0      0      [fe80::32c5:99ff:feed:4611]%eno1:546          [::]:*    users:(("systemd-network",pid=1048,fd=23))             
+tcp   LISTEN 0      4096                            0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=1878,fd=3),("systemd",pid=1,fd=117))
+tcp   LISTEN 0      4096                            0.0.0.0:9443      0.0.0.0:*    users:(("docker-proxy",pid=1757,fd=8))                 
+tcp   LISTEN 0      4096                         127.0.0.54:53        0.0.0.0:*    users:(("systemd-resolve",pid=896,fd=17))              
+tcp   LISTEN 0      4096                      127.0.0.53%lo:53        0.0.0.0:*    users:(("systemd-resolve",pid=896,fd=15))              
+tcp   LISTEN 0      4096                               [::]:22           [::]:*    users:(("sshd",pid=1878,fd=4),("systemd",pid=1,fd=118))
+tcp   LISTEN 0      4096                               [::]:9443         [::]:*    users:(("docker-proxy",pid=1763,fd=8))                 
+tcp   LISTEN 0      4096                                  *:9090            *:*    users:(("systemd",pid=1,fd=133))                       
