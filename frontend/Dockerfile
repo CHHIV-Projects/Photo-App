@@ -18,7 +18,8 @@ FROM dependencies AS builder
 ARG NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:18001
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 COPY . .
-RUN npm run build
+RUN mkdir -p public \
+    && npm run build
 
 FROM node:22.23.1-bookworm-slim AS production-dependencies
 WORKDIR /app
