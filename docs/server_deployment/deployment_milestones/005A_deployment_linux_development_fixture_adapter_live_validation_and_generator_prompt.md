@@ -315,6 +315,12 @@ Confirm:
 - PostgreSQL and Redis unpublished;
 - no unexpected container.
 
+Confirm before mutation:
+
+- protected `docker/.env.development` remains present and ignored;
+- PostgreSQL, Redis, and application-storage volumes remain present;
+- current Vault and application-storage fixture counts remain unchanged.
+
 Record read-only baseline counts for:
 
 - Assets;
@@ -327,7 +333,46 @@ Expected count for each remains zero.
 
 Stop if baseline application data is not empty.
 
-## Phase 2 — Stage 1 Live Validation Before the Override
+## Phase 2 — Build and Deploy the Adapter Without the Override
+
+Before creating any fixture directory or temporary override, rebuild the GPU
+backend image once using only:
+
+- `docker/compose.development.yml`;
+- `docker/compose.development.gpu.yml`;
+- protected `docker/.env.development`.
+
+Do not supply a temporary fixture override or
+`DEVELOPMENT_FIXTURE_SOURCE_ROOT`.
+
+Do not rebuild, restart, or recreate:
+
+- PostgreSQL;
+- Redis;
+- frontend.
+
+Recreate only the backend under the normal permanent Development Compose
+topology with one bounded health-recovery window. Preserve PostgreSQL, Redis,
+application-storage, and all other existing volumes.
+
+After recreation, confirm:
+
+- backend healthy with restart count zero;
+- PostgreSQL, Redis, and frontend remain the same healthy containers;
+- backend and frontend remain loopback-only;
+- PostgreSQL and Redis remain unpublished;
+- GPU Development configuration and CUDA availability remain intact;
+- `DEVELOPMENT_FIXTURE_SOURCE_ROOT` is absent;
+- no fixture bind or other new host bind exists;
+- database, Vault, and application-storage fixture counts remain unchanged.
+
+If the build or first backend recreation fails, preserve logs, containers,
+volumes, and state. Do not repeat the recreation to conceal the failure. Stop
+and escalate.
+
+This is the only backend image build authorized in 005A.
+
+## Phase 3 — Stage 1 Live Validation Before the Override
 
 Complete these checks before creating the temporary fixture override or
 introducing `DEVELOPMENT_FIXTURE_SOURCE_ROOT`.
@@ -354,7 +399,7 @@ Record database counts before and after this stage for:
 Confirm the counts remain zero and that no fixture artifact was added to the
 Vault or application storage.
 
-## Phase 3 — Prepare an Empty Controlled Fixture Root
+## Phase 4 — Prepare an Empty Controlled Fixture Root
 
 Inspect before creating:
 
@@ -402,7 +447,7 @@ Before using the bind, prove operationally that:
 Host-side symlink safety is a deployment gate. The provider is not required to
 recover the original host path after Docker has resolved and mounted it.
 
-## Phase 4 — Create the Temporary Fixture Compose Override
+## Phase 5 — Create the Temporary Fixture Compose Override
 
 Create one temporary, non-secret override outside the Git repository.
 
@@ -449,17 +494,15 @@ Do not commit the override.
 
 Retain it through the later Milestone 005 ingestion and restart validation, unless a failure requires preservation.
 
-## Phase 5 — Rebuild and Restart Only the Backend
+## Phase 6 — Recreate Only the Backend With the Override
 
-Rebuild only the GPU backend using the committed adapter code and temporary override.
+Use the already-built GPU backend image. Do not rebuild it a second time.
 
-Do not rebuild:
+Do not rebuild, restart, or recreate:
 
 - PostgreSQL;
 - Redis;
 - frontend.
-
-Do not restart PostgreSQL, Redis, or frontend.
 
 Use the effective Compose project with:
 
@@ -467,7 +510,7 @@ Use the effective Compose project with:
 - GPU overlay;
 - temporary fixture override.
 
-Start or recreate only the backend with one bounded wait.
+Recreate only the backend with one bounded health-recovery window.
 
 Preserve all existing volumes.
 
@@ -490,10 +533,10 @@ If backend startup fails:
 
 - preserve logs;
 - preserve containers and volumes;
-- do not retry repeatedly;
+- do not repeat the recreation;
 - stop and escalate.
 
-## Phase 6 — Stage 2 Live Adapter Gate Validation
+## Phase 7 — Stage 2 Live Adapter Gate Validation
 
 Perform live validation without creating a Source Profile or application state.
 
@@ -627,7 +670,7 @@ Use:
 - Recommendation
 - Exact approval required
 
-## Phase 7 — Implement the Deterministic Fixture Generator
+## Phase 8 — Implement the Deterministic Fixture Generator
 
 Proceed only if every live adapter gate passes.
 
@@ -809,7 +852,7 @@ Required focused tests must prove:
 
 Do not use current date/time, randomness without a fixed deterministic seed, machine hostname, username, or operating-system-specific metadata in generated content.
 
-## Phase 8 — Local Validation
+## Phase 9 — Local Validation
 
 Run:
 
@@ -844,6 +887,10 @@ Append the 005A live-validation results and generator contract to:
 The addendum must document:
 
 - server commit;
+- the one backend image build under normal permanent Compose;
+- the first backend-only recreation without the fixture override;
+- the second backend-only recreation with the fixture override and no second
+  image build;
 - temporary override path;
 - exact bind;
 - exact environment key;
@@ -931,6 +978,12 @@ Its purpose will be:
 This 005A continuation is complete when:
 
 - the server repository matches the approved adapter commit;
+- the GPU backend image was built exactly once without the fixture override;
+- Stage 1 used the first backend-only recreation with configuration absent;
+- Stage 2 used the second backend-only recreation with the override and no
+  second image build;
+- PostgreSQL, Redis, frontend, and all volumes remained intact through both
+  recreations;
 - the existing Development stack remains healthy;
 - the empty controlled fixture root exists on local NVMe;
 - the temporary read-only fixture override is validated;

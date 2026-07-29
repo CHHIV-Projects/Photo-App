@@ -354,23 +354,45 @@ Fixture generation and ingestion remain paused until:
 1. local implementation and validation are reviewed;
 2. the Product Owner commits and pushes the reviewed files;
 3. the clean server checkout is fast-forwarded;
-4. only the Development GPU backend image is rebuilt;
-5. PostgreSQL, Redis, application storage, and existing state are preserved;
-6. pre-override live checks prove the fixture provider cannot activate without
+4. the clean branch, protected ignored configuration, healthy four-service
+   stack, intact volumes, and unchanged database/Vault counts are confirmed;
+5. the Development GPU backend image is built exactly once using only the
+   permanent Development Compose file and GPU overlay;
+6. only the backend is recreated under the normal permanent topology with no
+   fixture setting or bind;
+7. pre-override live checks against that deployed adapter prove the fixture
+   provider cannot activate without
    configuration and arbitrary Linux paths remain unsupported;
-7. the temporary fixture setting and exact read-only bind are then introduced
+8. the approved empty directories and temporary fixture setting and exact
+   read-only bind are then introduced
    for the separate post-override gate checks;
-8. post-override live probe validation proves missing acknowledgment and
+9. only the backend is recreated a second time with the override and without a
+   second image build;
+10. post-override live probe validation proves missing acknowledgment and
    unrelated paths fail closed and only the exact configured root communicates
    `needs_review` and unverified path-only identity;
-9. live gate validation creates no Source Profile, Source Endpoint, fixture, or
-   ingestion state.
+11. PostgreSQL, Redis, frontend, all volumes, database state, and Vault state
+    remain intact, and live gate validation creates no Source Profile, Source
+    Endpoint, fixture, or ingestion state.
 
 #### Approved 005A live-validation clarification
 
-Milestone 005A uses two live stages.
+Milestone 005A uses one backend image build, two bounded backend-only
+recreations, and two live validation stages.
 
-Before the temporary override exists, the public live probe must prove:
+After the clean server checkout is fast-forwarded, confirm the protected
+`docker/.env.development` file remains present and ignored, all four services
+are healthy, all three application volumes remain intact, and database, Vault,
+and application-storage fixture counts remain unchanged.
+
+Build the GPU backend image exactly once using the permanent Development
+Compose file and permanent GPU overlay. Do not use the temporary override or
+set `DEVELOPMENT_FIXTURE_SOURCE_ROOT` during that build or the first
+backend-only recreation. Do not rebuild or recreate PostgreSQL, Redis, or
+frontend. Use one bounded health-recovery window.
+
+Against the newly deployed adapter, before any fixture directory or temporary
+override exists, the Stage 1 public live probe must prove:
 
 - no default Linux provider exists;
 - the fixture adapter is not advertised as a general Linux provider;
@@ -379,9 +401,16 @@ Before the temporary override exists, the public live probe must prove:
 - an arbitrary Linux path remains unsupported;
 - database, Vault, and application-storage fixture state remains unchanged.
 
-Only after those checks pass may the empty fixture directories and temporary
-override be created. The backend may then be recreated once with the exact
-configured root and bind for the remaining public-probe gate checks.
+Only after Stage 1 passes may the empty fixture directories and temporary
+override be created. Recreate only the backend a second time with the exact
+configured root and read-only bind, using the already-built GPU image. Do not
+perform a second image build. Use one bounded health-recovery window. Stage 2
+then performs the remaining public-probe gate checks.
+
+PostgreSQL, Redis, frontend, and every volume must remain intact throughout
+both backend recreations. If either recreation or validation stage fails,
+preserve logs, containers, volumes, and state; do not repeat a recreation to
+conceal the failure; and do not proceed to the next stage.
 
 Milestone 005A does not create a Source Profile. Because Source Selection and
 `SourceProfileReadinessService` require an existing Source Profile ID, 005A
