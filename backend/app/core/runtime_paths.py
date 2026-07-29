@@ -28,6 +28,7 @@ _STORAGE_PATH_FIELDS = (
 
 _CREATED_LOCAL_DIRECTORY_FIELDS = (
     "vault_path",
+    "drop_zone_path",
     "previews_path",
     "review_path",
 )
@@ -191,5 +192,11 @@ def prepare_runtime_directories(
         and current_settings.storage_mode == "local"
     ):
         for field_name in _CREATED_LOCAL_DIRECTORY_FIELDS:
-            paths[field_name].mkdir(parents=True, exist_ok=True)
+            try:
+                paths[field_name].mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise StorageConfigurationError(
+                    "Unable to create required local Development directory "
+                    f"({field_name}): {paths[field_name]}"
+                ) from exc
     return paths

@@ -1588,3 +1588,432 @@ workflow while preserving:
 - controlled Git authority;
 - protected secrets;
 - clear distinction between local Windows review and remote Linux execution.
+
+## Approved Live Escalation and Recovery Addendum — 2026-07-29
+
+This addendum records the first live Milestone 005B dispatch, the resulting
+failure, the preserved evidence, the approved narrow correction, and the only
+authorized recovery path.
+
+For this incident only, this addendum supersedes earlier prompt statements
+that:
+
+- no application-code or test change was expected;
+- only one Source Intake Run and one Ingestion Run could exist;
+- any second dispatch was categorically prohibited.
+
+All other safety, isolation, preservation, and stop conditions remain in
+force.
+
+### Finding
+
+The single originally authorized dispatch was accepted, but the background
+Source Intake failed in `collect_input` before scanning any controlled fixture
+file.
+
+The configured local Development drop-zone directory did not exist:
+
+```text
+/app/storage/drop_zone
+```
+
+### Dispatch and failure evidence
+
+The exact submitted request was:
+
+```json
+{
+  "source_profile_id": 1,
+  "filesystem_options": {
+    "source_intake_limit": 4,
+    "ingest_batch_size": 4,
+    "acknowledge_legacy_or_review": true
+  }
+}
+```
+
+The dispatch was submitted exactly once and returned:
+
+- HTTP status: `200`;
+- result: `started`;
+- workflow: `filesystem_source_intake`;
+- action: `source_intake_started`;
+- Source Profile ID: `1`;
+- Source Intake Run ID: `1`;
+- initial status: `running`;
+- selected runtime root:
+  `/mnt/photo-organizer-fixtures/m005`;
+- selected provider:
+  `linux_development_fixture_probe_v1`;
+- durable identity status: `not_verified`.
+
+The first supported status poll returned:
+
+- Source Intake Run ID: `1`;
+- terminal status: `failed`;
+- Ingestion Run ID: `1`;
+- started:
+  `2026-07-29T21:55:37.233088Z`;
+- finished:
+  `2026-07-29T21:55:37.265303Z`;
+- elapsed seconds:
+  `0.023486833000788465`;
+- error:
+  `Stage failed: collect_input`;
+- files scanned: `0`;
+- files selected: `0`;
+- files staged: `0`;
+- new unique Assets processed: `0`;
+- failed or rejected files: `0`;
+- remaining unknown files: `0`.
+
+The retained backend log records:
+
+```text
+Running collect input...
+Failed in 0.0s
+Error: Folder not found: /app/storage/drop_zone
+```
+
+No dispatch retry was performed.
+
+### Preserved failure state
+
+The following evidence is authoritative and must remain intact:
+
+- Source Profile ID `1`;
+- failed Source Intake Run ID `1`;
+- Ingestion Run ID `1`;
+- failed report:
+  `/app/storage/logs/source_intake_reports/source_intake_1.json`;
+- failed report size:
+  `880` bytes;
+- failed report SHA-256:
+  `a18bcdc0bcd43b4db77c95f356cb1e78adfe617664ee0be39f976d1ccae5e63d`;
+- generated controlled fixture files;
+- fixture manifest;
+- temporary fixture override;
+- PostgreSQL and Redis volumes;
+- application-storage volume;
+- backend logs;
+- all four running Development services.
+
+The failed attempt produced:
+
+- Source Profiles: `1`;
+- Source Endpoints: `0`;
+- Source Intake Runs: `1`;
+- Ingestion Runs: `1`;
+- Assets: `0`;
+- provenance observations: `0`;
+- HEIC/TIFF preview runs: `0`;
+- Vault files: `0`;
+- previews: `0`;
+- thumbnails: `0`;
+- ingestion failures: `0`;
+- Redis keys: `0`.
+
+The failed attempt therefore created an Ingestion Run context and a failed
+Source Intake report, but it created no Asset, Vault object, provenance
+observation, Source Endpoint, or preview state.
+
+### Source and runtime preservation
+
+After the failure:
+
+- all four controlled source media files remained present;
+- their owners remained `chuck:chuck`;
+- their modes remained `0644`;
+- their sizes remained unchanged;
+- their SHA-256 values remained unchanged;
+- the manifest SHA-256 remained:
+  `bce699c85d0bfa608bba03e62813fe9d5a3fbc01e4e0b1ebd840987e42a7cc6b`;
+- the temporary override SHA-256 remained:
+  `6e6d7d26cd18f5ec628b4ebd0cb8fa296a8d02674fa3aa382370c83325742614`;
+- the fixture bind remained exact and read-only;
+- PostgreSQL, Redis, backend, and frontend remained healthy;
+- all original container identities remained unchanged;
+- no manual filesystem or database repair occurred.
+
+Runtime-path inspection showed:
+
+- storage root: present;
+- drop zone: absent;
+- Vault: present and empty;
+- quarantine: absent;
+- ingestion failures: absent;
+- previews: present and empty;
+- thumbnails: absent;
+- review: present and empty;
+- logs/reports: present with only the retained failed report.
+
+### Root cause
+
+The permanent Development Compose configuration correctly sets:
+
+```text
+DROP_ZONE_PATH=/app/storage/drop_zone
+```
+
+Normal application startup calls:
+
+```text
+prepare_runtime_directories(settings)
+```
+
+Before the approved correction, local Development startup automatically
+created only:
+
+- `vault_path`;
+- `previews_path`;
+- `review_path`.
+
+It did not create `drop_zone_path`.
+
+The Source Intake launch guard rejected a non-empty drop zone but allowed a
+missing drop zone to proceed. The pipeline then required the configured drop
+zone during `collect_input`, producing the observed asynchronous failure.
+
+### Why it matters
+
+The local Development stack passed service health checks while lacking a
+required mutable ingestion workspace. Health alone therefore did not prove
+that Source Intake prerequisites were complete.
+
+Manual server directory creation would conceal the runtime contract defect
+and would not make a fresh local Development deployment self-sufficient.
+
+### Approved narrow correction
+
+The Product Owner authorized changes only to:
+
+```text
+backend/app/core/runtime_paths.py
+backend/tests/test_runtime_configuration.py
+docs/server_deployment/deployment_milestones/005B_deployment_linux_controlled_fixture_ingestion_and_persistence_validation_prompt.md
+```
+
+For:
+
+```text
+APP_RUNTIME_PROFILE=development
+STORAGE_MODE=local
+```
+
+normal application startup must create the exact configured:
+
+```text
+drop_zone_path
+```
+
+alongside the already-created local Development directories.
+
+The complete authorized automatically created local Development set becomes:
+
+- `vault_path`;
+- `drop_zone_path`;
+- `previews_path`;
+- `review_path`.
+
+The correction must:
+
+- use the configured runtime path;
+- remain idempotent;
+- preserve existing directories and files;
+- fail when the configured path cannot be created;
+- use existing directory-creation behavior;
+- require no manual server repair.
+
+The correction must not automatically create:
+
+- quarantine;
+- ingestion failures;
+- thumbnails;
+- logs;
+- exports;
+- models;
+- fixtures;
+- temporary override directories;
+- any other currently unmanaged directory.
+
+It must not change:
+
+- NAS fail-closed behavior;
+- Test or Production behavior;
+- Source Intake logic;
+- pipeline stages;
+- dispatch behavior;
+- database schema or models;
+- frontend behavior;
+- Dockerfiles;
+- permanent Compose configuration;
+- tracked environment examples;
+- provenance;
+- duplicate handling;
+- Vault immutability;
+- preview behavior.
+
+### Required focused regression coverage
+
+Focused runtime-configuration tests must prove:
+
+- local Development startup creates the exact configured drop zone;
+- the complete automatically created local set is exactly Vault, drop zone,
+  previews, and review;
+- unrelated configured directories remain absent;
+- repeated initialization is idempotent;
+- existing files are not deleted, replaced, or altered;
+- an already-existing drop zone succeeds;
+- Test and Production create none of these directories;
+- missing NAS paths remain fail-closed with no local fallback;
+- valid NAS mode uses only pre-existing directories;
+- an unusable configured drop-zone path fails without fallback;
+- no hard-coded server path is introduced.
+
+Required local validation remains:
+
+- focused runtime-configuration tests;
+- directly related runtime/storage tests;
+- complete backend regression suite;
+- Python compilation;
+- `git diff --check`.
+
+Do not commit or push before Product Owner review.
+
+### Reporting anomaly
+
+The retained failed report contains:
+
+```text
+source_complete=true
+```
+
+even though `collect_input` failed and zero files were scanned.
+
+For this milestone:
+
+- the terminal Source Intake status is authoritative;
+- Run `1` is failed;
+- `source_complete=true` must not be interpreted as success;
+- the value must not authorize cleanup, continuation, or a retry;
+- the failed report must not be edited or replaced.
+
+Changing report semantics is outside this correction and requires separate
+reconnaissance and approval.
+
+### Local implementation pause
+
+After the three authorized files are changed and locally validated, report:
+
+```text
+git status --short
+git diff --name-only
+git diff --stat
+git diff --check
+```
+
+Also report exact focused and full-suite test counts, compilation results, and
+confirmation that no server command or application-state mutation occurred.
+
+Do not commit or push.
+
+Pause for Product Owner review.
+
+### Authorized recovery after commit and push
+
+Only after Product Owner review, commit, and push:
+
+1. confirm the server branch and clean tracked working tree;
+2. confirm `docker/.env.development` remains present, protected, and ignored;
+3. fast-forward using `git merge --ff-only`;
+4. reconfirm failed Run `1`, Ingestion Run `1`, the failed report, Source
+   Profile, fixtures, database, volumes, and storage evidence;
+5. reconfirm the failed attempt created no Asset, Vault object, or provenance;
+6. rebuild the GPU backend image exactly once using the permanent Development
+   Compose file and GPU overlay, without the fixture override in the build;
+7. recreate only the backend using the permanent Development Compose file,
+   GPU overlay, and retained temporary fixture override;
+8. do not recreate PostgreSQL, Redis, or frontend;
+9. allow normal application startup to create the configured drop zone;
+10. verify the drop zone exists, is empty, and was created through normal
+    startup;
+11. verify all prior failure evidence remains unchanged;
+12. verify all four services are healthy;
+13. verify the fixture bind remains exact and read-only;
+14. verify database and Vault state have not otherwise changed.
+
+Do not create the drop zone manually.
+
+Do not create another Source Profile.
+
+Do not delete, edit, replace, or reset Run `1`, Ingestion Run `1`, or their
+report.
+
+### Exactly one authorized recovery dispatch
+
+After every recovery preflight gate passes, submit exactly one additional
+dispatch:
+
+```json
+{
+  "source_profile_id": 1,
+  "filesystem_options": {
+    "source_intake_limit": 4,
+    "ingest_batch_size": 4,
+    "acknowledge_legacy_or_review": true
+  }
+}
+```
+
+This is the only authorized recovery dispatch.
+
+It must create Source Intake Run `2` and Ingestion Run `2` without altering
+the failed history.
+
+### Revised expected totals after successful recovery
+
+Expected history:
+
+- Source Profiles: `1`;
+- Source Endpoints: `0`;
+- Source Intake Runs: `2`;
+  - Run `1`: preserved as failed;
+  - Run `2`: terminal successful;
+- Ingestion Runs: `2`;
+  - Ingestion Run `1`: preserved failed-attempt context;
+  - Ingestion Run `2`: successful recovery context;
+- Assets: `3`;
+- Vault media objects: `3`;
+- successful fixture provenance observations: `4`;
+- no provenance observation from failed Run `1`;
+- no extra Asset or Vault object for the exact duplicate;
+- one eligible TIFF preview under existing behavior.
+
+The successful recovery must preserve the four source files and all fixture
+hashes.
+
+### Recovery stop conditions
+
+If the recovery:
+
+- fails;
+- stalls;
+- creates unexpected partial state;
+- produces incorrect counts;
+- changes fixture content;
+- changes failed Run `1` evidence;
+- exposes another missing runtime prerequisite;
+- requires manual repair;
+- requires another application, schema, dependency, Dockerfile, Compose, or
+  configuration change;
+
+then:
+
+- preserve all evidence;
+- do not dispatch a third time;
+- do not manually repair state;
+- do not delete Run `1` or Run `2`;
+- do not broaden directory creation;
+- stop and escalate.
+
+No further retry is authorized without separate Product Owner approval.
