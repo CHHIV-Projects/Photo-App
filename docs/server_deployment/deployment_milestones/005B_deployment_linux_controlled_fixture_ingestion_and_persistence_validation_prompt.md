@@ -148,6 +148,85 @@ The fixture adapter remains:
 
 This milestone does not implement general Linux Source identity.
 
+### Approved execution clarification
+
+The Product Owner approved the following exact execution lock-ins after
+targeted review of the committed Source Profile, selection, readiness, and
+dispatch contracts.
+
+The one controlled Source Profile must be created through:
+
+```text
+POST /api/admin/source-profiles
+```
+
+using exactly:
+
+```json
+{
+  "source_label": "M005 Controlled Fixture Source",
+  "source_type": "local_folder",
+  "source_root_path": "/mnt/photo-organizer-fixtures/m005",
+  "profile_status": "active"
+}
+```
+
+Do not use:
+
+```text
+/api/admin/source-creation/plan
+/api/admin/source-creation/confirm
+```
+
+for this fixture. That flow would create a Source Endpoint and conflict with
+the approved path-only Development fixture contract. The compatibility
+endpoint is authorized only for this exact controlled fixture Source and does
+not become the preferred general Linux Source-creation architecture.
+
+Provider selection and acknowledgment are transient execution gates. They
+must not be added to the Source Profile creation payload or persisted as
+durable Source identity.
+
+Use the existing public selection and readiness endpoints without
+acknowledgment for the required negative checks. They must remain fail-closed
+and must not create application state.
+
+After those checks, perform exactly one read-only in-container diagnostic
+using the existing Source Selection and Source Profile readiness services with
+`operator_acknowledged=True`. The diagnostic must:
+
+- run inside the existing backend container;
+- use the existing application code and database-session factory;
+- use only the approved Source Profile ID;
+- use no direct SQL or manual ORM mutation;
+- call no creation, update, delete, dispatch, intake, or processing operation;
+- create no run, Asset, provenance, Source Endpoint, or Vault state;
+- commit no transaction;
+- explicitly roll back and close the session;
+- print only sanitized diagnostic fields;
+- expose no environment secret or database/Redis credential.
+
+If a short read-only invocation of the committed services cannot perform that
+diagnostic, stop before changing code.
+
+The one public dispatch payload is locked to:
+
+```json
+{
+  "source_profile_id": "<created Source Profile ID>",
+  "filesystem_options": {
+    "source_intake_limit": 4,
+    "ingest_batch_size": 4,
+    "acknowledge_legacy_or_review": true
+  }
+}
+```
+
+Do not add provider, source root, Source Endpoint, durable identifier,
+fingerprint, selection fingerprint, or invented processing fields. The
+committed services must derive and enforce provider choice, runtime root,
+fixture configuration, readiness, and acknowledgment internally.
+
 ### Source Intake authority
 
 The supported execution route must remain:
@@ -443,6 +522,18 @@ Before running it:
 A correction limited to command syntax or overriding the image entrypoint is
 allowed when required to ensure the container runs only the generator.
 
+This includes choosing a valid read-only destination for the individual
+script mount and explicitly overriding the image entrypoint with Python when
+needed. Any correction must preserve:
+
+- `--rm`;
+- `--network none`;
+- UID/GID `1000:1000`;
+- the read-only container root;
+- only the isolated writable M005 fixture-root bind;
+- no application startup;
+- no database, Redis, credential, or application-storage access.
+
 Do not modify code to accommodate the command.
 
 ## Phase 5 — Generate the Controlled Fixture Set Once
@@ -596,36 +687,51 @@ evidence later proves it.
 
 ## Phase 8 — Create Exactly One Controlled Source Profile
 
-Before creation, inspect the current committed Source Profile creation API,
-request schema, plan/confirm flow, and tests.
+Before creation, inspect the current committed path-only compatibility Source
+Profile API, request schema, service, and tests.
 
 Use only the supported public API and existing ORM-backed service flow.
 
 Do not manually insert a database row.
 
-Create exactly one Source Profile with the approved meaning:
+Create exactly one Source Profile through:
 
-- alias/name:
-  `M005 Controlled Fixture Source`;
-- source type:
-  the exact existing local-folder/local-source value required by the API;
-- selected/runtime root:
-  `/mnt/photo-organizer-fixtures/m005`;
-- explicit provider:
-  `linux_development_fixture_probe_v1`;
-- explicit acknowledgment:
-  supplied through the existing supported field;
-- Development-only path-only identity;
-- no Source Endpoint;
-- no durable fingerprint;
-- no durable identifier;
-- no Windows provider evidence;
-- no durable match.
+```text
+POST /api/admin/source-profiles
+```
 
-Do not invent request fields.
+Use exactly:
 
-If the current API cannot create this Source Profile through its supported
-plan/confirm or creation flow without:
+```json
+{
+  "source_label": "M005 Controlled Fixture Source",
+  "source_type": "local_folder",
+  "source_root_path": "/mnt/photo-organizer-fixtures/m005",
+  "profile_status": "active"
+}
+```
+
+Do not add:
+
+- provider fields;
+- acknowledgment fields;
+- endpoint fields;
+- durable identifier fields;
+- fingerprint fields;
+- selection-fingerprint fields;
+- invented request properties.
+
+Do not use:
+
+```text
+/api/admin/source-creation/plan
+/api/admin/source-creation/confirm
+```
+
+Provider selection and operator acknowledgment remain transient execution
+gates. They must not be persisted as durable Source identity.
+
+If the compatibility API cannot create this exact Source Profile without:
 
 - a public schema change;
 - a manual database write;
@@ -641,14 +747,16 @@ stop and escalate before creating state.
 Immediately validate:
 
 - exactly one Source Profile exists;
-- its alias is correct;
-- stored root is correct;
-- source type is correct;
-- provider/path-only classification is explicit;
+- its label is `M005 Controlled Fixture Source`;
+- its stored root is `/mnt/photo-organizer-fixtures/m005`;
+- its source type is `local_folder`;
+- its status is active;
 - no Source Endpoint exists;
 - no durable identifier or fingerprint exists;
+- no Windows identity evidence exists;
 - no other Source Profile was created;
-- no Asset, Run, Provenance, or Vault state was created by enrollment alone.
+- no Asset, ingestion run, Provenance, or Vault state was created by
+  enrollment alone.
 
 Record the Source Profile ID.
 
@@ -656,51 +764,96 @@ Do not create a second profile if the first result is unexpected.
 
 ## Phase 9 — Live Selection and Readiness Validation
 
-Using the newly created Source Profile, exercise the supported live selection
-and readiness path.
+Using the newly created Source Profile, first exercise the public fail-closed
+selection and readiness paths without acknowledgment.
 
-Required negative check:
+Use the existing public endpoints and record their actual status codes and
+responses. Do not invent a public acknowledgment request field.
 
-- without explicit acknowledgment, selection/readiness remains blocked or
-  requires review according to the existing contract.
+Confirm:
 
-Required positive check:
+- public Source Selection without acknowledgment does not authorize
+  execution;
+- public readiness without acknowledgment remains blocked or requires review
+  according to the current contract;
+- neither operation creates a run, Asset, provenance record, Source Endpoint,
+  durable identifier, or Vault object.
 
-- with explicit acknowledgment and all exact fixture gates present:
-  - selected Source Profile is the approved profile;
-  - runtime root is exactly `/mnt/photo-organizer-fixtures/m005`;
-  - provider is `linux_development_fixture_probe_v1`;
-  - identity remains `not_verified`;
-  - readiness remains `needs_review`;
-  - no durable match is claimed;
-  - no endpoint is created;
-  - no durable identifier is created;
-  - acknowledgment allows controlled continuation but does not convert the
-    Source into verified or durable-ready identity.
+After both public negative checks pass, perform exactly one read-only
+in-container positive diagnostic using the existing Source Selection and
+Source Profile readiness services with:
+
+```text
+operator_acknowledged=True
+```
+
+The diagnostic may use the existing application database-session factory but
+must:
+
+- use the approved Source Profile ID;
+- use no direct SQL;
+- perform no manual ORM mutation;
+- call no creation, update, delete, dispatch, intake, or processing operation;
+- create no run;
+- write no Asset, provenance, Source Endpoint, or Vault state;
+- commit no transaction;
+- explicitly roll back and close the session after the read-only invocation;
+- print only sanitized diagnostic fields;
+- expose no environment secret or database credential.
+
+Use the actual service field names and enum values. Expected meaning:
+
+- selected Source is the approved M005 profile;
+- runtime root is `/mnt/photo-organizer-fixtures/m005`;
+- provider is `linux_development_fixture_probe_v1`;
+- identity remains `not_verified`;
+- readiness remains `needs_review`;
+- acknowledgment permits controlled continuation;
+- no durable match, fingerprint, identifier, or Source Endpoint exists.
 
 Do not start ingestion during readiness testing.
 
-Reconfirm database and Vault state remain unchanged except for the one approved
-Source Profile.
+Record database and storage counts immediately before and after the diagnostic
+and prove they are unchanged except for the already-created Source Profile.
+
+If the diagnostic cannot be performed through a short invocation of the
+existing committed services, stop before adding an endpoint, script, service,
+schema field, or tracked helper.
 
 ## Phase 10 — Prepare Exactly One Controlled Dispatch
 
 Inspect the current public dispatch API and service tests.
 
-Prepare the exact request using:
+Prepare exactly:
 
-- the approved Source Profile ID;
-- explicit provider selection when required;
-- exact controlled source root;
-- existing:
-  `filesystem_options.acknowledge_legacy_or_review=true`;
-- the smallest supported batch that includes all four source filenames in one
-  Source Intake run;
-- existing normal Source Intake settings;
-- no duplicate-lineage stage added solely for this milestone;
-- no face processing added solely to create GPU evidence;
-- no personal-media or NAS path;
-- no retry or automatic repeat.
+```json
+{
+  "source_profile_id": "<created Source Profile ID>",
+  "filesystem_options": {
+    "source_intake_limit": 4,
+    "ingest_batch_size": 4,
+    "acknowledge_legacy_or_review": true
+  }
+}
+```
+
+Do not include:
+
+- provider;
+- source root;
+- Source Endpoint;
+- durable identifier;
+- fingerprint;
+- selection fingerprint;
+- invented processing fields.
+
+Provider choice, exact runtime root, fixture configuration, readiness, and
+acknowledgment must be derived and enforced internally by the committed
+services.
+
+Do not add duplicate-lineage or face-processing behavior solely for this
+milestone. Do not add a personal-media or NAS path, retry, or automatic
+repeat.
 
 Before submission, show the sanitized request shape and explain each
 non-secret field.
