@@ -356,13 +356,68 @@ Fixture generation and ingestion remain paused until:
 3. the clean server checkout is fast-forwarded;
 4. only the Development GPU backend image is rebuilt;
 5. PostgreSQL, Redis, application storage, and existing state are preserved;
-6. the temporary fixture setting is absent during negative gate checks;
-7. live read-only gate validation proves arbitrary Linux paths remain
-   unsupported, missing acknowledgment is blocked, Test/Production/local-mode
-   gates fail closed, and only the exact configured root can return
-   `needs_review`;
-8. live gate validation creates no Source Profile, Source Endpoint, fixture, or
+6. pre-override live checks prove the fixture provider cannot activate without
+   configuration and arbitrary Linux paths remain unsupported;
+7. the temporary fixture setting and exact read-only bind are then introduced
+   for the separate post-override gate checks;
+8. post-override live probe validation proves missing acknowledgment and
+   unrelated paths fail closed and only the exact configured root communicates
+   `needs_review` and unverified path-only identity;
+9. live gate validation creates no Source Profile, Source Endpoint, fixture, or
    ingestion state.
+
+#### Approved 005A live-validation clarification
+
+Milestone 005A uses two live stages.
+
+Before the temporary override exists, the public live probe must prove:
+
+- no default Linux provider exists;
+- the fixture adapter is not advertised as a general Linux provider;
+- the adapter cannot activate without
+  `DEVELOPMENT_FIXTURE_SOURCE_ROOT`;
+- an arbitrary Linux path remains unsupported;
+- database, Vault, and application-storage fixture state remains unchanged.
+
+Only after those checks pass may the empty fixture directories and temporary
+override be created. The backend may then be recreated once with the exact
+configured root and bind for the remaining public-probe gate checks.
+
+Milestone 005A does not create a Source Profile. Because Source Selection and
+`SourceProfileReadinessService` require an existing Source Profile ID, 005A
+must not claim a live `SourceProfileReadinessResponse`. It must report the
+actual public probe response fields and values that communicate:
+
+- provider `linux_development_fixture_probe_v1`;
+- `needs_review`;
+- unverified, path-only identity;
+- no durable match, fingerprint, or identifier.
+
+Committed automated tests remain the 005A evidence for dispatch acknowledgment
+propagation, acknowledgment-aware Source Selection and readiness, the
+independent `start_source_intake()` launch guard, fail-closed missing
+acknowledgment, and unavailable Production or unrelated-Linux behavior. Live
+readiness and dispatch validation are deferred to 005B after creation of the
+one approved controlled Source Profile.
+
+The provider's current filesystem check proves effective non-writability to
+the application process. Separate Docker inspection must prove that the actual
+fixture bind has `RW=false`. The provider is not required to inspect Docker
+mount metadata. Host-side symlink safety is an operational gate: the approved
+host root and source must not be symlinks, their resolved paths must be exact,
+and no parent may redirect into NAS, the repository, application storage,
+Test, or Production. Automated tests remain evidence for container-visible
+symlink, resolved-path, and effectively-writable-root rejection.
+
+Approved ownership and modes are:
+
+- fixture directories: `chuck:chuck`, mode `0755`;
+- generated JPEG and TIFF files: `chuck:chuck`, mode `0644`;
+- `fixture_manifest.json`: `chuck:chuck`, mode `0644`.
+
+The backend must remain non-root UID 999. Live evidence must prove UID 999 can
+read but not write the fixture source and that Docker reports the exact host
+source at the exact container destination with `RW=false`.
 
 If implementation or live validation requires a broader Source-identity
 architecture, public API change, permanent Compose change, schema change,
@@ -540,9 +595,14 @@ If no suitable generator exists, this prompt authorizes one small deterministic 
 
 `scripts/fixtures/create_controlled_photo_fixture_set.py`
 
-The caller must supply this fixture root:
+The caller must supply this fixture root and the sanitized effective live
+minimum-file-size threshold:
 
 `/home/chuck/photo-organizer-fixtures/m005`
+
+```text
+--minimum-file-size-bytes <sanitized-live-value>
+```
 
 The generator may create only:
 
@@ -553,6 +613,7 @@ Requirements:
 
 - use Pillow, which is already pinned;
 - add or change no dependency;
+- require a positive caller-supplied `--minimum-file-size-bytes` value;
 - require no internet access;
 - produce deterministic content;
 - write only beneath the caller-supplied fixture root;
@@ -574,6 +635,24 @@ Requirements:
 A small focused test for deterministic generation is authorized.
 
 Before generation, verify the effective live minimum-file-size threshold. Do not assume the configured default when the Development environment overrides it.
+
+The generator must not be run on the server through an unestablished host
+Python environment. In 005B, the committed generator must run in a one-off
+existing approved backend image containing Python and Pillow. The reviewed
+command must use `docker run`, `--rm`, `--network none`, no published port, and
+UID/GID `1000:1000`. It may mount only:
+
+- the individual committed generator script, read-only;
+- the controlled fixture root, writable.
+
+It must mount no repository directory, database, Redis, application storage,
+NAS, Windows, Test, Production, credential, SSH, or Docker-socket path. It must
+receive no application secret or database/Redis connection environment value,
+must pass the sanitized minimum threshold explicitly, and must write only
+beneath `/home/chuck/photo-organizer-fixtures/m005`.
+
+Do not modify the backend Docker build context or create a server Python
+virtual environment solely for fixture generation.
 
 If the generator requires a new dependency, stop and request approval rather than changing dependency files.
 
@@ -791,7 +870,7 @@ Requirements:
 
 - verify the parent path before creation;
 - owner/group `chuck:chuck`;
-- ordinary restrictive permissions;
+- directory mode `0755`;
 - no `chmod 777`;
 - no symlink to NAS or application storage;
 - no unexpected existing content.
@@ -808,7 +887,12 @@ Before generation:
 
 - verify the effective live minimum-file-size threshold;
 - record the effective value and its configuration source;
+- pass it explicitly through
+  `--minimum-file-size-bytes <sanitized-live-value>`;
 - confirm every planned fixture will intentionally exceed that threshold.
+
+Use the approved one-off backend-image execution model. Do not use an
+unestablished host Python virtual environment.
 
 Validate the manifest:
 
@@ -822,6 +906,9 @@ Validate the manifest:
 - source directory contains no extra file;
 - fixture files are readable;
 - fixture files are not writable by the application container if mounted read-only.
+
+Confirm generated JPEG and TIFF files and `fixture_manifest.json` are owned by
+`chuck:chuck` with mode `0644`.
 
 Record source-file hashes before ingestion.
 
@@ -845,6 +932,13 @@ Preferred boundary when a container bind is required:
 - do not expose a new port.
 
 A temporary non-secret Compose override may be used only for the fixture bind and must not alter permanent environment behavior.
+
+Before using the bind, prove the host root and source are not symlinks, resolve
+to the exact approved local-NVMe paths, and have no parent redirection into NAS,
+the repository, application storage, Test, or Production. After backend
+recreation, inspect Docker's mount record and require the exact source,
+destination, and `RW=false`. Also prove backend UID 999 can read but not write
+the fixture source.
 
 Do not commit a host-specific absolute path into the normal Compose file.
 

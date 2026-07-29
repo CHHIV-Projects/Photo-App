@@ -28,7 +28,7 @@ All results from this work must be incorporated into the final parent closeout:
 
 Continue Milestone 005 in two bounded phases:
 
-1. Validate the newly implemented Development-only Linux fixture adapter on the live Ubuntu mini-server without creating fixture files, Source records, Source Endpoints, ingestion runs, Assets, provenance, or Vault state.
+1. Validate the newly implemented Development-only Linux fixture adapter on the live Ubuntu mini-server in two stages: first with no fixture-root configuration, then with the temporary fixture override. Create no fixture files, Source records, Source Endpoints, ingestion runs, Assets, provenance, or Vault state.
 
 2. Only after the live adapter gates pass, implement and locally validate the deterministic controlled-fixture generator and its focused tests.
 
@@ -327,7 +327,34 @@ Expected count for each remains zero.
 
 Stop if baseline application data is not empty.
 
-## Phase 2 — Prepare an Empty Controlled Fixture Root
+## Phase 2 — Stage 1 Live Validation Before the Override
+
+Complete these checks before creating the temporary fixture override or
+introducing `DEVELOPMENT_FIXTURE_SOURCE_ROOT`.
+
+Use the existing public live probe endpoint and report the exact response
+fields and values. Confirm:
+
+- the live backend has no default Linux Source-identity provider;
+- the Development fixture provider is not advertised as a general Linux
+  provider;
+- the fixture provider cannot activate without
+  `DEVELOPMENT_FIXTURE_SOURCE_ROOT`;
+- an arbitrary Linux path remains unsupported;
+- no Source Profile is required or created for these checks.
+
+Record database counts before and after this stage for:
+
+- Assets;
+- ingestion sources;
+- Source Endpoints;
+- Ingestion Runs;
+- Provenance.
+
+Confirm the counts remain zero and that no fixture artifact was added to the
+Vault or application storage.
+
+## Phase 3 — Prepare an Empty Controlled Fixture Root
 
 Inspect before creating:
 
@@ -344,7 +371,7 @@ If the paths do not exist, this sub-prompt authorizes creating only:
 Requirements:
 
 - owner/group `chuck:chuck`;
-- ordinary restrictive permissions;
+- directory mode `0755`;
 - no `chmod 777`;
 - no symlink;
 - local NVMe only;
@@ -363,7 +390,19 @@ Creating these empty directories is not fixture generation.
 
 Do not create any image, TIFF, manifest, Source Profile, or application record.
 
-## Phase 3 — Create the Temporary Fixture Compose Override
+Before using the bind, prove operationally that:
+
+- `/home/chuck/photo-organizer-fixtures/m005` is not a symlink;
+- `/home/chuck/photo-organizer-fixtures/m005/source` is not a symlink;
+- the resolved source path is exactly
+  `/home/chuck/photo-organizer-fixtures/m005/source`;
+- no parent component redirects into NAS, the repository, application storage,
+  Test, or Production.
+
+Host-side symlink safety is a deployment gate. The provider is not required to
+recover the original host path after Docker has resolved and mounted it.
+
+## Phase 4 — Create the Temporary Fixture Compose Override
 
 Create one temporary, non-secret override outside the Git repository.
 
@@ -410,7 +449,7 @@ Do not commit the override.
 
 Retain it through the later Milestone 005 ingestion and restart validation, unless a failure requires preservation.
 
-## Phase 4 — Rebuild and Restart Only the Backend
+## Phase 5 — Rebuild and Restart Only the Backend
 
 Rebuild only the GPU backend using the committed adapter code and temporary override.
 
@@ -441,7 +480,9 @@ After startup, confirm:
 - frontend remains healthy;
 - GPU remains available;
 - storage mode remains local;
-- exact fixture bind is read-only;
+- backend runtime user remains UID 999;
+- the fixture directory is readable but not writable by UID 999;
+- Docker inspection reports the exact fixture bind as `RW=false`;
 - no other host bind exists;
 - no secret appears in logs.
 
@@ -452,11 +493,16 @@ If backend startup fails:
 - do not retry repeatedly;
 - stop and escalate.
 
-## Phase 5 — Live Adapter Gate Validation
+## Phase 6 — Stage 2 Live Adapter Gate Validation
 
 Perform live validation without creating a Source Profile or application state.
 
 Record database counts before and after each check.
+
+Use the existing public live probe endpoint. Live
+`SourceProfileReadinessService`, Source Selection, dispatch, and Source Intake
+validation are deferred to 005B because those paths require the one approved
+Source Profile.
 
 ### Required negative checks
 
@@ -466,9 +512,8 @@ Prove that:
 
 2. The adapter cannot be invoked without explicit provider selection.
 
-3. The adapter cannot proceed without:
-   
-   `filesystem_options.acknowledge_legacy_or_review=true`
+3. The probe fails closed when its existing public invocation does not contain
+   the explicit acknowledged intended-use value required by the provider.
 
 4. A parent path is rejected.
 
@@ -478,23 +523,32 @@ Prove that:
 
 7. A traversal form is rejected.
 
-8. A symlink escape is rejected.
+8. A NAS path is rejected.
 
-9. A writable fixture mount is rejected.
+9. A repository path is rejected.
 
-10. A NAS path is rejected.
+10. Application storage is rejected.
 
-11. A repository path is rejected.
+11. Test and Production paths are rejected.
 
-12. Application storage is rejected.
-
-13. Test and Production paths are rejected.
-
-14. Windows drive and UNC paths are rejected.
+12. Windows drive and UNC paths are rejected.
 
 Do not change the live server to Test or Production merely to test profile gates.
 
-Use committed automated tests as evidence for unavailable runtime profiles, and use live configuration evidence to prove the current backend is Development/local only.
+Use committed automated tests as evidence for:
+
+- unavailable runtime profiles;
+- container-visible symlink and resolved-path protections;
+- rejection of an effectively writable fixture root;
+- dispatch acknowledgment propagation;
+- acknowledgment-aware Source Selection and readiness;
+- the independent `start_source_intake()` launch guard;
+- fail-closed no-acknowledgment behavior;
+- Production and unrelated-Linux blocking.
+
+Use live configuration evidence to prove the current backend is
+Development/local only. Use host-path inspection as evidence for the
+host-side symlink gate.
 
 ### Required positive gate check
 
@@ -514,8 +568,8 @@ with:
 confirm:
 
 - provider result is `linux_development_fixture_probe_v1`;
-- readiness result is `needs_review`;
-- identity status is `not_verified`;
+- the actual public probe response communicates `needs_review`;
+- the actual public probe response communicates unverified, path-only identity;
 - no durable match is claimed;
 - no fingerprint or durable identifier is returned;
 - no Source Endpoint is created;
@@ -523,6 +577,10 @@ confirm:
 - no ingestion is dispatched.
 
 Do not interpret `needs_review` as a durable-ready state.
+
+Report the exact response field names and values rather than inventing a
+`SourceProfileReadinessResponse` or forcing terminology that is not present in
+the public probe schema.
 
 ### Database and storage preservation
 
@@ -569,7 +627,7 @@ Use:
 - Recommendation
 - Exact approval required
 
-## Phase 6 — Implement the Deterministic Fixture Generator
+## Phase 7 — Implement the Deterministic Fixture Generator
 
 Proceed only if every live adapter gate passes.
 
@@ -594,7 +652,8 @@ The caller must supply the parent fixture root.
 Expected later server invocation:
 
     python scripts/fixtures/create_controlled_photo_fixture_set.py \
-      --fixture-root /home/chuck/photo-organizer-fixtures/m005
+      --fixture-root /home/chuck/photo-organizer-fixtures/m005 \
+      --minimum-file-size-bytes <sanitized-live-value>
 
 The generator must create only:
 
@@ -678,6 +737,7 @@ Expected logical totals:
 The generator must:
 
 - require an absolute caller-supplied fixture root;
+- require a positive caller-supplied `--minimum-file-size-bytes` value;
 - refuse dangerous roots;
 - refuse `/`;
 - refuse the repository;
@@ -704,6 +764,32 @@ Every generated media file must exceed that threshold deliberately, with reasona
 
 Do not lower the application threshold to accommodate fixtures.
 
+### Approved 005B server execution model
+
+The generator must not rely on an unestablished host Python virtual
+environment. In 005B, run the committed script through a one-off existing
+approved backend image containing Python and Pillow.
+
+The exact command must be reviewed before execution and must:
+
+- use `docker run`, `--rm`, and `--network none`;
+- publish no port;
+- run as UID/GID `1000:1000`;
+- mount only the individual committed generator script read-only;
+- mount only the controlled fixture root writable;
+- mount no database, Redis, application storage, NAS, Windows, Test,
+  Production, credential, SSH, repository directory, or Docker socket;
+- receive no application secret or database/Redis connection value;
+- pass `--minimum-file-size-bytes <sanitized-live-value>`;
+- write only beneath `/home/chuck/photo-organizer-fixtures/m005` through its
+  dedicated writable mount.
+
+Do not modify the backend Docker build context or create a server Python
+virtual environment for fixture generation.
+
+Generated JPEG and TIFF files and `fixture_manifest.json` must be owned by
+`chuck:chuck` with normal mode `0644`.
+
 ### Determinism tests
 
 Required focused tests must prove:
@@ -723,7 +809,7 @@ Required focused tests must prove:
 
 Do not use current date/time, randomness without a fixed deterministic seed, machine hostname, username, or operating-system-specific metadata in generated content.
 
-## Phase 7 — Local Validation
+## Phase 8 — Local Validation
 
 Run:
 
