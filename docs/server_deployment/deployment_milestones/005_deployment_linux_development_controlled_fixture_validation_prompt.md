@@ -452,6 +452,216 @@ If implementation or live validation requires a broader Source-identity
 architecture, public API change, permanent Compose change, schema change,
 manual Source creation, or Source Intake bypass, stop and escalate again.
 
+#### Milestone 005A live-validation and fixture-generator implementation record
+
+The approved Milestone 005A sequencing was completed on 2026-07-29 through
+the public Source Identity API. This record is pre-ingestion evidence only.
+No Source Profile, Source Endpoint, ingestion run, Asset, provenance row,
+Vault object, or generated server fixture was created.
+
+The server checkout was clean on
+`feature/deployment-linux-runtime` and was fast-forwarded from
+`e6961e8ae95dd0f30b869e03325205445cbb4618` to the approved commit
+`3a46f20b020085692405496756ced5dbff2388cc`. The protected
+`docker/.env.development` file remained present and ignored.
+
+Before mutation:
+
+- PostgreSQL, Redis, backend, and frontend were healthy with restart count
+  zero;
+- PostgreSQL container ID was
+  `42bbb232f702da07dd6a302153c0a4aebd910aa148a7d82b7285ed4080112712`;
+- Redis container ID was
+  `107e680b822a993871afff260e4e55273e8d30ea405b2474070678f849a08a57`;
+- frontend container ID was
+  `4403b0d146f730581fa725dc62bc330b3fe92241011e8e4ce3f39689756904e9`;
+- the PostgreSQL, Redis, and application-storage volumes were present;
+- `assets`, `ingestion_runs`, `ingestion_sources`, `provenance`, and
+  `source_endpoints` each contained zero rows;
+- Vault, previews, thumbnails, review, ingestion-failures, and known M005
+  fixture-artifact counts were all zero;
+- the sanitized effective `MINIMUM_FILE_SIZE_BYTES` value was `51200`;
+- `DEVELOPMENT_FIXTURE_SOURCE_ROOT`, the fixture bind, the fixture host
+  directories, and the temporary override were absent.
+
+Exactly one GPU backend image build was performed with:
+
+```text
+sudo docker compose \
+  --env-file docker/.env.development \
+  --file docker/compose.development.yml \
+  --file docker/compose.development.gpu.yml \
+  build backend
+```
+
+The build passed in 5.536 seconds and produced
+`photo-organizer-dev-backend:latest` with image ID
+`sha256:823e68da6a74883920b934931a18f7d1d96f1a83082c10a9b67a4e97dfa1b2b7`,
+runtime user `photo-organizer`, and working directory `/app`.
+
+The first backend-only recreation used the permanent Compose topology with no
+temporary override and no fixture setting. It passed in 6.938 seconds and
+produced healthy backend container
+`1759f38decf5d7b5e594fbd03bf0a465e34609d303704637d422206d9a52bd84`
+with restart count zero. PostgreSQL, Redis, and frontend retained their exact
+container IDs. The backend had only the application-storage volume and no
+fixture bind. PyTorch GPU validation passed under UID 999 with
+PyTorch `2.11.0+cu130`, CUDA `13.0`, one
+`NVIDIA GeForce RTX 5070 Ti`, and a successful CUDA tensor calculation.
+The retained TensorFlow/DeepFace startup warning about CUDA drivers was not
+treated as PyTorch GPU evidence.
+
+Stage 1 used `GET /api/admin/source-identity/capabilities` and
+`POST /api/admin/source-identity/probe` and passed all required checks:
+
+- Linux had no default provider and advertised no supported provider;
+- `linux_development_fixture_probe_v1` was not advertised as a general Linux
+  capability;
+- explicitly requesting that provider while configuration was absent returned
+  blocked status with `development_fixture_root_not_configured`;
+- an arbitrary Linux path without an explicit provider remained unsupported
+  with `unsupported_os_provider`;
+- database and application-storage counts remained unchanged at zero;
+- all fixture host paths remained absent.
+
+Only after Stage 1 passed, these empty local-NVMe directories were created:
+
+```text
+/home/chuck/photo-organizer-fixtures
+/home/chuck/photo-organizer-fixtures/m005
+/home/chuck/photo-organizer-fixtures/m005/source
+```
+
+Each directory was `chuck:chuck`, mode `0755`, contained no symlink
+component, and resolved to the local `ext4` filesystem. The source entry count
+was zero.
+
+The temporary non-secret override was created at:
+
+```text
+/home/chuck/photo-organizer-fixtures/m005/compose.fixture.override.yml
+```
+
+It was `chuck:chuck`, mode `0644`, and had SHA-256:
+
+```text
+6e6d7d26cd18f5ec628b4ebd0cb8fa296a8d02674fa3aa382370c83325742614
+```
+
+The override configured only:
+
+```text
+DEVELOPMENT_FIXTURE_SOURCE_ROOT=/mnt/photo-organizer-fixtures/m005
+/home/chuck/photo-organizer-fixtures/m005/source
+  -> /mnt/photo-organizer-fixtures/m005 (read-only)
+```
+
+Combined Compose validation passed with Development/local-storage/GPU
+settings retained, one backend bind, loopback-only application ports, and no
+published PostgreSQL or Redis port.
+
+The second backend-only recreation used that override and the already-built
+image. No second image build occurred. It passed in 6.864 seconds and produced
+healthy backend container
+`6a451fec30281470dffa50990b76c41939ac948585dc4522fceee9b39805c454`
+with restart count zero. PostgreSQL, Redis, and frontend again retained their
+exact container IDs and all volumes remained intact. Docker inspection proved
+the exact bind had `RW=false`; UID 999 could read but not write the empty
+container root. The same PyTorch/CUDA/device/tensor checks passed after this
+recreation.
+
+Stage 2 public probes passed the following fail-closed cases:
+
+- arbitrary Linux path without a provider;
+- exact root without an explicit provider;
+- exact root without acknowledgment;
+- parent, descendant, sibling, and traversal paths;
+- NAS path and NAS source type;
+- repository and application-storage paths;
+- Test and Production paths;
+- Windows drive-letter and UNC paths.
+
+The exact acknowledged root returned the following actual public response
+semantics:
+
+- provider `linux_development_fixture_probe_v1`, version `1`;
+- `probe_status=completed_with_warnings`;
+- `safe_to_run=needs_review`;
+- `match_status=not_compared`;
+- `confidence_tier=weak_manual_confirmation_required`;
+- valid `local_folder` source-root candidate for the exact configured path;
+- evidence summary `identity_evidence=unverified_path_only` and
+  `path_evidence=exact_readable_read_only_fixture_root`;
+- no durable fingerprint, identifier, access-node identity, or match;
+- warning `development_fixture_identity_unverified`.
+
+After Stage 2, all four services were healthy, the backend remained on the
+single built image with restart count zero, PostgreSQL/Redis/frontend
+container identities and all volumes were preserved, the controlled source
+was empty, and every database and application-storage fixture count remained
+zero. The temporary override and read-only empty bind remain available for
+the separately reviewed Milestone 005B generator and ingestion work.
+
+No suitable existing tracked deterministic fixture generator was found. The
+approved local implementation therefore adds:
+
+```text
+scripts/fixtures/create_controlled_photo_fixture_set.py
+backend/tests/test_controlled_photo_fixture_generator.py
+```
+
+The generator:
+
+- uses pinned Pillow and adds no dependency;
+- requires an absolute `--fixture-root` and a positive explicit
+  `--minimum-file-size-bytes`;
+- generates deterministic synthetic RGB content without network access,
+  personal data, current time, randomness, host identity, or user identity;
+- writes only the four approved media files beneath `source/` and
+  `fixture_manifest.json`;
+- preserves the separately managed `compose.fixture.override.yml`;
+- refuses broad, relative, traversal, symlinked, repository,
+  application-storage, NAS, Test, and Production roots;
+- refuses unknown content and requires `--replace-known` plus exact
+  byte-for-byte agreement before replacing a complete known managed set;
+- writes directories with mode `0755` and managed files with mode `0644`;
+- requires every media payload to exceed the supplied threshold by more than
+  a 32 KiB safety margin;
+- records hashes, sizes, dimensions, controlled metadata, duplicate
+  relationships, display/preview expectations, and expected ingestion totals
+  in the manifest.
+
+At the sanitized threshold of `51200`, two independent local generations and
+an explicit safe replacement were byte-for-byte deterministic:
+
+| File | SHA-256 | Bytes | Dimensions |
+|---|---|---:|---:|
+| `unique_a.jpg` | `4d52dee4a8c4d53f292d00966e5d63a6c536f011ce64d0fa7c177ce826c163cb` | 1,594,899 | 1024 x 768 |
+| `unique_a_duplicate.jpg` | `4d52dee4a8c4d53f292d00966e5d63a6c536f011ce64d0fa7c177ce826c163cb` | 1,594,899 | 1024 x 768 |
+| `unique_b.jpg` | `957a34f43fbb17ca7efe9b77b376c1b3737c4f1108fa436f1c5d237fa52d57ae` | 1,401,458 | 960 x 720 |
+| `preview_source.tiff` | `46b4b7e8fcc21974e6ed89b37461d0ea9c34bff6e41d531153f7c13e5aa9bac8` | 1,440,356 | 800 x 600 |
+
+The deterministic manifest was 4,318 bytes with SHA-256
+`bce699c85d0bfa608bba03e62813fe9d5a3fbc01e4e0b1ebd840987e42a7cc6b`.
+It records four observations, three unique hashes, three expected Assets,
+three expected Vault objects, and one TIFF eligible for the existing preview
+pathway.
+
+Focused generator regression coverage passed 13 tests in 2.744 seconds with
+one Windows-only real-directory-symlink test skipped because the local account
+lacked symlink privilege. An independent mocked symlink-component rejection
+test passed. Coverage includes deterministic bytes, manifest agreement,
+hashes, sizes, dimensions, metadata, duplicate relationships, exact file set,
+threshold enforcement, no-network generation, unsafe-root rejection,
+unknown-content preservation, protected override preservation, and
+fail-closed replacement.
+
+Python compilation passed for `backend/app`, `backend/scripts`,
+`backend/tests`, and `scripts/fixtures`. The complete backend regression suite
+passed 578 tests in 55.091 seconds with the same single symlink-privilege skip.
+No server fixture-generation command has been run. The generator, tests, and
+this evidence record remain uncommitted pending Product Owner review.
+
 ### 6. Ingestion authority
 
 Source Intake remains the authority that copies accepted content into the immutable Vault and creates operational records.
