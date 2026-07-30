@@ -253,6 +253,178 @@ Authorized non-repository mutations are limited to:
 
 No application source change is expected.
 
+## Approved Pre-Execution Clarifications
+
+The Product Owner approved the following lock-ins before interactive execution.
+
+### Focused backend test execution
+
+The running Development backend image contains the committed application code
+under `/app/app` and the committed application scripts under `/app/scripts`.
+It does not contain the repository test tree.
+
+Therefore, do not use:
+
+```text
+docker compose exec -T backend ...
+```
+
+for the focused test. Do not copy tests into the running backend container and
+do not modify or rebuild the backend image for this validation.
+
+Use one disposable, isolated test container created from the exact image ID
+used by the running backend. Before execution, inspect and record:
+
+- the running backend container ID;
+- the exact running backend image ID;
+- the image runtime user and resolved UID/GID;
+- the image working directory;
+- the installed Python version;
+- confirmation that the committed application code required by the test is
+  present in the image.
+
+The test container must:
+
+- use the exact running backend image ID;
+- use `--rm`;
+- use `--network none`;
+- publish no ports;
+- use a read-only container root;
+- use a temporary writable `/tmp`;
+- run as the existing non-root backend runtime UID/GID;
+- set `PYTHONDONTWRITEBYTECODE=1`;
+- set only a non-secret Python import path when required;
+- mount only
+  `/home/chuck/projects/photo-organizer-dev/backend/tests`
+  read-only at `/app/tests`;
+- attach no named or anonymous application volume;
+- attach no application storage;
+- attach no PostgreSQL or Redis resource;
+- attach no GPU;
+- attach no Docker socket;
+- attach no NAS, Windows, Test, Production, SSH, credential, or secret path;
+- receive no protected environment file;
+- receive no database, Redis, application, or authentication secret;
+- start only Python and the focused test runner.
+
+A syntax-only correction is authorized when needed for:
+
+- the exact runtime UID/GID;
+- the test discovery start directory;
+- the Python import path;
+- the `unittest` module form;
+- overriding the image command or entrypoint.
+
+If the focused test requires network access, application storage, PostgreSQL,
+Redis, GPU, secrets, or another repository mount, do not add that access. Stop
+and report the exact requirement.
+
+The running four-service stack must remain unchanged while the disposable test
+container runs.
+
+### Final repository-authority transition
+
+After the Remote SSH workflow is successfully validated, create the Milestone
+006 closeout only in the authoritative server repository:
+
+`/home/chuck/projects/photo-organizer-dev/docs/server_deployment/deployment_milestones/006_deployment_remote_vscode_development_workflow_closeout.md`
+
+Create and edit it through the VS Code Remote SSH workspace.
+
+Do not create or edit the closeout in the Windows repository. The current
+Windows Codex session may guide the interactive transition, provide bounded
+commands, interpret sanitized evidence, and identify failures before authority
+transfers. After the remote workflow is validated, it must not:
+
+- edit the Windows repository;
+- create the closeout in the Windows clone;
+- duplicate remote repository changes locally;
+- treat the Windows clone as the normal editable checkout.
+
+This prompt may be revised and committed from the Windows clone before
+execution. The closeout must be created in the server clone. Subsequent normal
+repository edits occur in the server clone through Remote SSH.
+
+The Product Owner will review, stage, commit, and push the closeout from the
+server repository. Do not automatically synchronize or edit the Windows clone
+afterward.
+
+### Official extension-host placement
+
+Remote SSH must remain a Windows-local VS Code extension unless the official
+extension itself requires another supported placement.
+
+For Copilot and Codex:
+
+- inspect the exact displayed name, publisher, and extension identifier;
+- record whether VS Code classifies it as local, remote, or available in both
+  extension hosts;
+- follow the official extension's supported placement;
+- use `Install in SSH: henderson-server1` only when VS Code offers and supports
+  that action;
+- do not force remote installation;
+- do not copy extension files, binaries, tokens, or authentication state;
+- do not infer Codex's identifier from its display name;
+- do not install a similarly named substitute.
+
+The Product Owner must complete any interactive sign-in.
+
+### VS Code Server location
+
+Do not predetermine the exact versioned VS Code Server directory. After
+connection, record its actual installed location and ownership.
+
+It must:
+
+- be under the `chuck` user context;
+- require no sudo for normal installation;
+- remain outside the Git repository;
+- create no root-owned repository file.
+
+Stop if normal VS Code Server installation requests sudo.
+
+### Repository-artifact prohibition
+
+Do not create or retain:
+
+- `.vscode/settings.json`;
+- `.vscode/extensions.json`;
+- `.code-workspace` files;
+- saved port-forward configuration;
+- extension-token files;
+- SSH configuration inside the repository;
+- remote-session state inside the repository.
+
+The only authorized temporary repository file is:
+
+`REMOTE_VSCODE_VALIDATION.tmp`
+
+It must be deleted before completion. The only expected retained repository
+change after successful execution is the Milestone 006 closeout.
+
+If another repository file appears, do not stage it. Identify its source and
+stop before deleting or retaining it unless it is unequivocally the authorized
+temporary validation file.
+
+### Interactive Product Owner actions
+
+This milestone is necessarily interactive. The Product Owner will perform:
+
+- VS Code Command Palette actions;
+- Remote SSH host selection;
+- Linux platform confirmation;
+- extension sign-in;
+- supported extension-placement actions offered by VS Code;
+- visual confirmation of the remote indicator;
+- Ports-panel operations;
+- browser validation;
+- interactive sudo commands in the remote terminal.
+
+The Coder must provide one bounded step at a time where Product Owner action is
+required and assess the result before proceeding. The Coder must never request,
+receive, store, or transmit the Product Owner's sudo password or extension
+authentication credentials.
+
 ## Phase 1 — Repository and Runtime Preflight
 
 ### Windows PowerShell
@@ -328,6 +500,10 @@ Stop if:
 - the protected environment file is missing or tracked;
 - an unexpected branch is active.
 
+Begin this synchronization only after the revised Milestone 006 prompt has
+been reviewed, committed, and pushed. Use `git merge --ff-only` only. Do not
+use reset, clean, stash, rebase, forced checkout, or a non-fast-forward merge.
+
 ## Phase 2 — Reconnoiter VS Code and Extensions
 
 Before installing or changing anything, record:
@@ -343,6 +519,10 @@ Before installing or changing anything, record:
 - whether an existing entry already targets the mini-server.
 
 Do not install a similarly named substitute extension.
+
+Remote SSH remains Windows-local. For Copilot and Codex, record the extension
+host placement VS Code actually supports. Do not assume remote installation is
+required merely because the repository is remote.
 
 Use the Product Owner’s existing Copilot and Codex extensions.
 
@@ -432,6 +612,9 @@ Guide the Product Owner through these Windows VS Code actions:
    home directory.
 
 7. Do not use sudo for VS Code Server installation.
+
+   After connection, record the actual versioned VS Code Server path and its
+   ownership. Do not create it manually.
 
 8. Open the remote folder:
    
@@ -526,6 +709,10 @@ Do not retain or commit this file.
 
 Do not edit an application or tracked documentation file for this validation.
 
+Also confirm that no `.vscode` file, `.code-workspace` file, saved port
+configuration, extension state, or SSH configuration appeared in the
+repository.
+
 ## Phase 7 — Validate Copilot in the Remote Repository
 
 Using the existing Copilot interface in the remote VS Code window, issue one
@@ -616,20 +803,43 @@ Confirm:
 - backend and frontend loopback-only;
 - PostgreSQL and Redis unpublished.
 
-Run one focused server-side test through the existing backend container:
+The running backend container does not contain the repository test tree. Run
+one focused server-side test in a disposable isolated container created from
+the exact image ID used by the running backend.
 
-    sudo docker compose \
-      --env-file docker/.env.development \
-      --file docker/compose.development.yml \
-      --file docker/compose.development.gpu.yml \
-      exec -T backend \
-      python -m unittest discover \
-      -s tests \
+Before running it, inspect:
+
+    sudo docker inspect \
+      --format 'CONTAINER_ID={{.Id}} IMAGE_ID={{.Image}} USER={{.Config.User}} WORKDIR={{.Config.WorkingDir}}' \
+      photo-organizer-dev-backend-1
+
+Resolve the image's non-root runtime UID/GID and confirm the application code
+and Python version without exposing environment secrets.
+
+Use this command shape with the exact inspected values:
+
+    sudo docker run \
+      --rm \
+      --network none \
+      --read-only \
+      --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+      --user <EXACT_BACKEND_RUNTIME_UID:GID> \
+      --env PYTHONDONTWRITEBYTECODE=1 \
+      --env PYTHONPATH=/app \
+      --mount type=bind,src=/home/chuck/projects/photo-organizer-dev/backend/tests,dst=/app/tests,readonly \
+      --entrypoint python \
+      <EXACT_RUNNING_BACKEND_IMAGE_ID> \
+      -m unittest discover \
+      -s /app/tests \
       -p 'test_runtime_configuration.py' \
       -v
 
-If the committed image uses a different verified test-module location, inspect
-the container and present the exact corrected command before execution.
+The container must have no network, ports, application storage, named or
+anonymous volumes, PostgreSQL, Redis, GPU, Docker socket, NAS, Windows, Test,
+Production, SSH, credential, protected environment, or secret access.
+
+Inspect the actual image and test imports before execution. Present any
+authorized syntax-only correction before running it.
 
 Do not install a host Python environment merely for this milestone.
 
@@ -665,14 +875,17 @@ Validate from the Windows browser:
 Record the exact local forwarded port assigned by VS Code when it differs from
 the remote port.
 
-Close the forwarded ports after validation.
+Close both forwarded ports after validation and confirm that no saved
+port-forward configuration was created in the repository.
 
-Confirm direct LAN access to:
+Separately confirm direct Windows LAN access to:
 
 - `192.168.1.173:13000`;
 - `192.168.1.173:18001`;
 
 remains unavailable.
+
+Do not infer LAN isolation merely because a VS Code forward works.
 
 This milestone validates VS Code forwarding only. Persistent start, stop,
 status, logs, and tunnel controls belong to Milestone 007.
@@ -849,6 +1062,10 @@ Expected tracked changes are limited to:
 
 `docs/server_deployment/deployment_milestones/006_deployment_remote_vscode_development_workflow_closeout.md`
 
+The closeout must be created and reviewed in the authoritative server
+repository through the Remote SSH workspace. It must not be created or edited
+in the Windows clone.
+
 Optional Product Owner-created screenshots may also be added under the existing
 server-deployment evidence directory after review.
 
@@ -901,6 +1118,9 @@ After creating the closeout, report:
 
 Because the new closeout is untracked, ordinary `git diff` output will omit it
 until staged.
+
+Run these checks from the authoritative server repository. Do not reproduce
+the closeout in the Windows clone.
 
 Perform separate checks for:
 
