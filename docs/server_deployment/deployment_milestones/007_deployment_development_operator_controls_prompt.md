@@ -65,7 +65,7 @@ The toolkit must preserve:
 
 Before planning or editing, read and obey:
 
-- `CODING_AGENT_RULES.md`;
+- `docs/context/coding_agent_rules_v6.md`;
 - the current project context, architecture, and workflow documents;
 - the current server deployment guide;
 - `docs/server_deployment/deployment_milestones/006_deployment_remote_vscode_development_workflow_closeout.md`;
@@ -86,7 +86,7 @@ Windows tools required for this milestone.
 - Windows 11;
 - VS Code 1.130.0;
 - Remote SSH working through `henderson-server1`;
-- WinSCP installed with a saved `Henderson Server` session;
+- WinSCP installed with a saved `henderson-server1` session;
 - `ssh.exe`, PowerShell, VS Code, and WinSCP available;
 - Windows repository retained for administrative/recovery purposes only.
 
@@ -219,22 +219,22 @@ All actions must come from a fixed allowlist.
 
 ## Expected Tracked Files
 
-Preferred tracked implementation:
+Approved tracked implementation:
 
-`script/operator/development/photo_organizer_dev_operator.sh`
+`scripts/operator/development/photo_organizer_dev_operator.sh`
 
-`script/operator/windows/PhotoOrganizer-Development-Operator.ps1`
+`scripts/operator/windows/PhotoOrganizer-Development-Operator.ps1`
 
-`script/operator/windows/PhotoOrganizer-Development-Operator.cmd`
+`scripts/operator/windows/PhotoOrganizer-Development-Operator.cmd`
 
 `docs/server_deployment/Photo_Organizer_Development_Operator_Controls.md`
 
-Before creating files, inspect repository naming conventions. If the existing
-repository consistently uses `scripts/` rather than `script/`, use:
+Use the existing `scripts/` tree. Do not create a parallel `script/` tree.
 
-`scripts/operator/...`
-
-Do not create both trees.
+Do not reuse the former Windows runtime scripts for active control. Their
+obsolete ports, build/down behavior, and broad process handling do not match
+the approved Linux Development architecture. They may be inspected for
+historical context only.
 
 The closeout is the only additional expected tracked file after live
 validation.
@@ -270,9 +270,14 @@ Confirm on Windows:
 - whether local ports 13000 or 18001 are already occupied;
 - suitable local installation folder.
 
-Preferred local installation folder:
+Approved local installation folder:
 
-`C:\Users\chhen\Documents\Photo Organizer Operator`
+`C:\Users\chhen\OneDrive\Documents\Photo Organizer Operator`
+
+The folder already exists. The installed operator files must contain no
+password, token, private key, protected environment value, or other secret.
+Tunnel state, secret-bearing logs, SSH material, and credentials must not be
+stored in this folder.
 
 Do not modify anything during reconnaissance.
 
@@ -317,6 +322,19 @@ Approved subcommands:
 - `logs`
 - `follow-logs`
 
+Every Docker Compose subcommand must use this fixed command prefix and no
+other project, environment file, or Compose file:
+
+```text
+sudo docker compose \
+  --project-name photo-organizer-dev \
+  --env-file /home/chuck/projects/photo-organizer-dev/docker/.env.development \
+  --file /home/chuck/projects/photo-organizer-dev/docker/compose.development.yml \
+  --file /home/chuck/projects/photo-organizer-dev/docker/compose.development.gpu.yml
+```
+
+The script runs as `chuck` and elevates only this fixed Compose invocation.
+
 The script must:
 
 - use strict Bash error handling;
@@ -341,16 +359,23 @@ The script must:
 The `start` action should use the existing permanent Development topology and
 ensure all four services reach their defined healthy/running state.
 
-Preferred command semantics:
+Approved command semantics:
 
-`docker compose up --detach --wait --wait-timeout 180`
+```text
+docker compose up --detach --wait --wait-timeout 180 \
+  --no-build --pull never --no-recreate
+```
 
-A syntax adjustment is allowed only when required by the installed Compose
-version.
+The command must explicitly use project `photo-organizer-dev`,
+`docker/.env.development`, `docker/compose.development.yml`, and
+`docker/compose.development.gpu.yml`.
 
 The script must invoke Docker through interactive sudo.
 
-It must not rebuild or pull images.
+It must not build, pull, or recreate an existing container. If
+`--no-recreate` prevents recovery from a legitimate missing-container
+condition during live validation, stop and report before weakening this
+contract.
 
 ### Stop behavior
 
@@ -364,11 +389,17 @@ The `stop` action must stop the four Development services while retaining:
 - networks;
 - images.
 
-Use controlled Compose stop behavior with a reasonable timeout.
+Use:
+
+`docker compose stop --timeout 30`
 
 Do not use `down`.
 
 ### Status behavior
+
+Use:
+
+`docker compose ps --all`
 
 Show all four services, publication, state, and health.
 
@@ -385,10 +416,15 @@ Show clear PASS or FAIL results without requiring `jq`.
 
 ### Logs behavior
 
-`logs` should show a bounded recent tail, preferably 200 lines.
+`logs` must use:
 
-`follow-logs` may follow current logs until the Product Owner presses
-`Ctrl+C`.
+`docker compose logs --no-color --timestamps --tail 200`
+
+`follow-logs` must use:
+
+`docker compose logs --no-color --timestamps --tail 200 --follow`
+
+It follows current logs until the Product Owner presses `Ctrl+C`.
 
 Neither logs action may delete or rotate logs.
 
@@ -460,6 +496,12 @@ through the existing `henderson-server1` Remote SSH target.
 
 Use the supported VS Code CLI when available.
 
+Approved CLI invocation:
+
+```text
+code --folder-uri vscode-remote://ssh-remote+henderson-server1/home/chuck/projects/photo-organizer-dev
+```
+
 If the CLI is unavailable, open VS Code normally and show a short instruction
 rather than installing or modifying it automatically.
 
@@ -467,12 +509,21 @@ rather than installing or modifying it automatically.
 
 Prefer opening the existing saved session:
 
-`Henderson Server`
+`henderson-server1`
 
 only when WinSCP’s supported local command syntax can do so without embedding
 credentials.
 
-Do not put passwords or key contents in the command.
+Use:
+
+`WinSCP.exe "henderson-server1"`
+
+or the safely quoted equivalent required by the installed executable path.
+
+Do not put passwords, private-key paths, or key contents in the command.
+Do not inspect or export WinSCP credential state. If WinSCP requests a key
+passphrase, host confirmation, or other authentication, leave that
+interaction to WinSCP and the Product Owner.
 
 Do not trigger synchronize, mirror, upload, or download automatically.
 
@@ -492,22 +543,28 @@ The Windows controller must manage one private SSH tunnel process.
 Required command semantics:
 
 - `ssh -N`;
+- `BatchMode=yes`;
 - `ExitOnForwardFailure=yes`;
 - `ServerAliveInterval=60`;
 - `ServerAliveCountMax=3`;
-- forward local 13000 to server loopback 13000;
-- forward local 18001 to server loopback 18001;
+- forward `127.0.0.1:13000` to server `127.0.0.1:13000`;
+- forward `127.0.0.1:18001` to server `127.0.0.1:18001`;
 - connect through `henderson-server1`.
 
 ### Tunnel-state storage
 
-Store only minimal local process state under:
+Store only minimal local process state at:
 
-`%LOCALAPPDATA%\PhotoOrganizer\DevelopmentOperator`
+`%LOCALAPPDATA%\PhotoOrganizer\DevelopmentOperator\tunnel-state.json`
 
-A PID file may be used.
+The state may contain only non-secret process-identification data, including:
 
-It must contain no secret.
+- PID;
+- process start time;
+- executable path;
+- expected host;
+- exact local and remote forwards;
+- controller version when useful.
 
 ### Starting the tunnel
 
@@ -533,10 +590,15 @@ If forwarding fails:
 Before terminating a stored PID, prove that:
 
 - the process still exists;
-- it is the expected SSH executable;
-- its command line matches the managed host and exact forwarded ports.
+- its process start time matches;
+- it is the expected Windows SSH executable;
+- its command line contains the exact managed host;
+- its command line contains both exact managed forwards;
+- it was created as the managed Photo Organizer tunnel.
 
 Do not terminate a process based only on a reused PID.
+
+Do not adopt or terminate an unmanaged SSH process.
 
 Remove the local PID file after a confirmed stop or confirmed stale state.
 
@@ -554,7 +616,29 @@ The backend-health action should open or query:
 
 `http://localhost:18001/health`
 
+The **Open Backend Health** button requires an active, valid managed tunnel.
+When the tunnel is inactive, it must not use direct LAN access or silently
+start an untracked tunnel. It must instruct the Product Owner to use
+**Start Tunnel and Open Photo Organizer**. It may offer to invoke the same
+managed tunnel-start operation only after explicit Product Owner confirmation.
+
 Do not use direct LAN application URLs.
+
+### Exit behavior
+
+**Exit** closes only the graphical control panel. It must not stop an active
+managed tunnel, the Development stack, VS Code, WinSCP, or any unrelated
+process.
+
+When a managed tunnel is active, display:
+
+```text
+The Photo Organizer tunnel is still active.
+Use Stop Tunnel when you are finished.
+```
+
+The managed tunnel must remain discoverable after the controller reopens
+through the state file and complete process-identity checks.
 
 ### Persistence boundary
 
@@ -681,8 +765,8 @@ Only after Product Owner review, commit, and push:
 
 2. Use WinSCP to copy only the reviewed Windows operator files from the server
    repository to:
-   
-   `C:\Users\chhen\Documents\Photo Organizer Operator`
+
+   `C:\Users\chhen\OneDrive\Documents\Photo Organizer Operator`
 
 3. Do not copy the Git repository.
 
