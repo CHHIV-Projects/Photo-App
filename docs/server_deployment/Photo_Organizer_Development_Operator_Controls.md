@@ -44,9 +44,15 @@ Windows runs:
 
 ### NAS
 
-The NAS remains durable storage and backup infrastructure. It is not the
-editable Git repository and the operator controls do not change its
-configuration.
+The current Development storage authority is local Docker named volumes:
+PostgreSQL uses `postgres_data`, Redis uses `redis_data`, and Vault, previews,
+and application storage use `application_storage`. The configured mode is
+`STORAGE_MODE=local`.
+
+The NAS remains separate durable storage and backup infrastructure. Its
+availability is reported independently and is not a prerequisite for starting
+the current local-storage Development stack. It is not the editable Git
+repository, and the operator controls do not change its configuration.
 
 ## 3. Source of Truth and Installed Copy
 
@@ -59,7 +65,8 @@ Tracked operator files are:
 - `scripts/operator/development/photo_organizer_dev_operator.sh`;
 - `scripts/operator/windows/PhotoOrganizer-Development-Operator.ps1`;
 - `scripts/operator/windows/PhotoOrganizer-Development-Operator.cmd`;
-- `docs/server_deployment/Photo_Organizer_Development_Operator_Controls.md`.
+- `docs/server_deployment/Photo_Organizer_Development_Operator_Controls.md`;
+- `docs/server_deployment/Photo_Organizer_Development_Restart_and_Recovery_Guide.md`.
 
 The Windows installation folder is:
 
@@ -223,6 +230,26 @@ action is reported as `Live log following stopped by user.` and treated as
 normal user cancellation. Other nonzero exits remain failures. Press Enter
 afterward to close the terminal.
 
+### Check Restart and Recovery Status
+
+Opens a visible terminal and runs the fixed, read-only server-side
+`recovery-status` action. Interactive sudo may be requested for Docker
+inspection.
+
+The action is scoped to Compose project `photo-organizer-dev`. It validates the
+expected project services, Compose labels, local named volumes, service-volume
+mounts, health, loopback publication, unpublished PostgreSQL and Redis, and the
+independent NAS mount identity. It does not inspect unrelated containers as
+Photo Organizer resources and does not start, stop, restart, recreate, remove,
+or otherwise manage any container.
+
+The terminal clearly reports `PASS`, `WARNING`, or `FAILURE`. PASS and WARNING
+return exit code 0; FAILURE returns nonzero. A NAS outage normally produces a
+WARNING while `STORAGE_MODE=local`. A failure of the configured local storage
+authority, project identity, or approved publication fails closed. Follow the
+[Development Restart and Recovery Guide](Photo_Organizer_Development_Restart_and_Recovery_Guide.md)
+for the safe next action.
+
 ### Start Tunnel and Open Photo Organizer
 
 Starts or reuses the one verified managed SSH tunnel, waits for both local
@@ -340,11 +367,14 @@ temporary working message and all tunnel controls are enabled again.
 
 1. Double-click the operator launcher.
 2. Review the server and tunnel status.
-3. Select **Start Development Stack** if the stack is stopped.
-4. Enter the Ubuntu sudo password in the visible terminal if requested.
-5. Confirm the terminal reports success.
-6. Select **Start Tunnel and Open Photo Organizer**.
-7. Use **Open Remote VS Code** for repository work.
+3. Select **Check Restart and Recovery Status** when recovery readiness is
+   uncertain.
+4. Select **Start Development Stack** only if the stack is stopped and the
+   recovery result does not contain a FAILURE.
+5. Enter the Ubuntu sudo password in the visible terminal if requested.
+6. Confirm the terminal reports success.
+7. Select **Start Tunnel and Open Photo Organizer**.
+8. Use **Open Remote VS Code** for repository work.
 
 ### Finish work
 
@@ -365,6 +395,7 @@ Sudo is expected for:
 - Start Development Stack;
 - Stop Development Stack;
 - Show Stack Status;
+- Check Restart and Recovery Status;
 - Show Recent Logs;
 - Follow Live Logs.
 
@@ -392,6 +423,7 @@ Examples include:
 
 ```text
 PASS: Development application health checks completed
+PASS: Current Development restart and recovery status is healthy.
 Managed tunnel started on localhost ports 13000 and 18001.
 The managed tunnel is already active.
 Managed tunnel stopped and both local ports are free.
@@ -497,8 +529,9 @@ run:
 
 The self-test validates fixed paths, executable discovery, the remote action
 allowlist, detached hidden-launcher construction, follow-log cancellation
-handling, background-worker command construction, launcher placement, and
-exact tunnel command construction. It does not connect through SSH, start a
+handling, fixed recovery-status visible-terminal construction,
+background-worker command construction, launcher placement, and exact tunnel
+command construction. It does not connect through SSH, start a
 tunnel, open a browser, inspect Docker, or change the Development stack.
 
 ## 14. Actions That Are Never Approved

@@ -50,6 +50,7 @@ $script:AllowedRemoteActions = @{
     "status" = "Show Stack Status"
     "logs" = "Show Recent Logs"
     "follow-logs" = "Follow Live Logs"
+    "recovery-status" = "Check Restart and Recovery Status"
 }
 $script:LastAction = "Controller opened"
 $script:LastMessage = "Checking tunnel and server status in the background."
@@ -967,7 +968,7 @@ function Invoke-ControllerSelfTest {
         (($actualTunnelArguments -join [char]0) -ceq ($expectedTunnelArguments -join [char]0)) `
         ($actualTunnelArguments -join " ")
 
-    $expectedActions = @("follow-logs", "logs", "start", "status", "stop")
+    $expectedActions = @("follow-logs", "logs", "recovery-status", "start", "status", "stop")
     $actualActions = @($script:AllowedRemoteActions.Keys | Sort-Object)
     Record-SelfTest `
         "remote action allowlist" `
@@ -976,6 +977,12 @@ function Invoke-ControllerSelfTest {
 
     $followCommand = Get-RemoteActionTerminalCommand -Action "follow-logs"
     $logsCommand = Get-RemoteActionTerminalCommand -Action "logs"
+    $recoveryCommand = Get-RemoteActionTerminalCommand -Action "recovery-status"
+    Record-SelfTest `
+        "recovery-status visible-terminal construction" `
+        ($recoveryCommand.Contains("recovery-status") -and
+            $recoveryCommand.Contains("Photo Organizer - Check Restart and Recovery Status")) `
+        "fixed recovery-status action uses the visible SSH terminal pattern"
     Record-SelfTest `
         "follow-logs Ctrl+C cancellation" `
         ($followCommand.Contains('if ($remoteExitCode -eq 130)') -and
@@ -1085,12 +1092,12 @@ $buttonPanel = New-Object System.Windows.Forms.TableLayoutPanel
 $buttonPanel.Location = New-Object System.Drawing.Point(20, 82)
 $buttonPanel.Size = New-Object System.Drawing.Size(864, 330)
 $buttonPanel.ColumnCount = 2
-$buttonPanel.RowCount = 6
+$buttonPanel.RowCount = 7
 $buttonPanel.Anchor = "Top,Left,Right"
 $buttonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50))) | Out-Null
 $buttonPanel.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50))) | Out-Null
-for ($row = 0; $row -lt 6; $row++) {
-    $buttonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 16.6667))) | Out-Null
+for ($row = 0; $row -lt 7; $row++) {
+    $buttonPanel.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 14.2857))) | Out-Null
 }
 $form.Controls.Add($buttonPanel)
 
@@ -1162,7 +1169,8 @@ function Add-OperatorButton {
         [Parameter(Mandatory = $true)][string]$Text,
         [Parameter(Mandatory = $true)][int]$Column,
         [Parameter(Mandatory = $true)][int]$Row,
-        [Parameter(Mandatory = $true)][scriptblock]$OnClick
+        [Parameter(Mandatory = $true)][scriptblock]$OnClick,
+        [ValidateRange(1, 2)][int]$ColumnSpan = 1
     )
 
     $button = New-Object System.Windows.Forms.Button
@@ -1171,6 +1179,9 @@ function Add-OperatorButton {
     $button.Margin = New-Object System.Windows.Forms.Padding(6)
     $button.Add_Click($OnClick)
     $buttonPanel.Controls.Add($button, $Column, $Row)
+    if ($ColumnSpan -gt 1) {
+        $buttonPanel.SetColumnSpan($button, $ColumnSpan)
+    }
 
     switch ($Text) {
         "Start Tunnel and Open Photo Organizer" { $script:StartTunnelButton = $button }
@@ -1486,7 +1497,14 @@ Add-OperatorButton -Text "Follow Live Logs" -Column 1 -Row 3 -OnClick {
     }
 }
 
-Add-OperatorButton -Text "Start Tunnel and Open Photo Organizer" -Column 0 -Row 4 -OnClick {
+Add-OperatorButton -Text "Check Restart and Recovery Status" -Column 0 -Row 4 -ColumnSpan 2 -OnClick {
+    Invoke-GuiAction -Action "Check Restart and Recovery Status" -Operation {
+        Start-VisibleRemoteAction -Action "recovery-status"
+        Set-ControllerResult -Action "Check Restart and Recovery Status" -Message "Opened a visible terminal for the fixed read-only recovery status." -Severity "SUCCESS"
+    }
+}
+
+Add-OperatorButton -Text "Start Tunnel and Open Photo Organizer" -Column 0 -Row 5 -OnClick {
     Invoke-GuiAction -Action "Start Tunnel and Open Photo Organizer" -Operation {
         Begin-TunnelOperation `
             -WorkerAction "Start" `
@@ -1495,7 +1513,7 @@ Add-OperatorButton -Text "Start Tunnel and Open Photo Organizer" -Column 0 -Row 
     }
 }
 
-Add-OperatorButton -Text "Open Backend Health" -Column 1 -Row 4 -OnClick {
+Add-OperatorButton -Text "Open Backend Health" -Column 1 -Row 5 -OnClick {
     Invoke-GuiAction -Action "Open Backend Health" -Operation {
         if (-not $script:CachedTunnelActive) {
             Set-ControllerResult `
@@ -1512,13 +1530,13 @@ Add-OperatorButton -Text "Open Backend Health" -Column 1 -Row 4 -OnClick {
     }
 }
 
-Add-OperatorButton -Text "Stop Tunnel" -Column 0 -Row 5 -OnClick {
+Add-OperatorButton -Text "Stop Tunnel" -Column 0 -Row 6 -OnClick {
     Invoke-GuiAction -Action "Stop Tunnel" -Operation {
         Begin-TunnelOperation -WorkerAction "Stop" -DisplayAction "Stop Tunnel"
     }
 }
 
-Add-OperatorButton -Text "Exit" -Column 1 -Row 5 -OnClick {
+Add-OperatorButton -Text "Exit" -Column 1 -Row 6 -OnClick {
     $form.Close()
 }
 
