@@ -507,6 +507,11 @@ function Start-ManagedTunnel {
             Success = $true
             Reused = $true
             Message = "The managed tunnel is already active."
+            TunnelActive = $true
+            TunnelStatus = "ACTIVE - verified managed SSH tunnel (PID $($validation.Process.Id))"
+            TunnelPid = $validation.Process.Id
+            Port13000Available = $false
+            Port18001Available = $false
         }
     }
 
@@ -566,6 +571,25 @@ function Start-ManagedTunnel {
         Success = $true
         Reused = $false
         Message = "Managed tunnel started on localhost ports 13000 and 18001."
+        TunnelActive = $true
+        TunnelStatus = "ACTIVE - managed SSH tunnel started (PID $($process.Id))"
+        TunnelPid = $process.Id
+        Port13000Available = $false
+        Port18001Available = $false
+    }
+}
+
+function New-InactiveTunnelActionResult {
+    param([Parameter(Mandatory = $true)][string]$Message)
+
+    return [pscustomobject]@{
+        Success = $true
+        Message = $Message
+        TunnelActive = $false
+        TunnelStatus = "INACTIVE"
+        TunnelPid = $null
+        Port13000Available = Test-LocalPortAvailable -Port 13000
+        Port18001Available = Test-LocalPortAvailable -Port 18001
     }
 }
 
@@ -574,16 +598,10 @@ function Stop-ManagedTunnel {
     if (-not $validation.IsValid) {
         if ($validation.IsStale) {
             Clear-ConfirmedStaleState -Validation $validation | Out-Null
-            return [pscustomobject]@{
-                Success = $true
-                Message = "Stale tunnel state was removed. No process was terminated."
-            }
+            return New-InactiveTunnelActionResult -Message "Stale tunnel state was removed. No process was terminated."
         }
         if (-not $validation.State) {
-            return [pscustomobject]@{
-                Success = $true
-                Message = "No managed tunnel is active."
-            }
+            return New-InactiveTunnelActionResult -Message "No managed tunnel is active."
         }
         throw "Tunnel process identity cannot be proven; nothing was terminated. $($validation.Reason)"
     }
@@ -597,23 +615,17 @@ function Stop-ManagedTunnel {
 
     Remove-TunnelState
 
+    $result = New-InactiveTunnelActionResult -Message "Managed tunnel stopped."
     $occupiedAfterStop = @()
-    foreach ($port in @(13000, 18001)) {
-        if (-not (Test-LocalPortAvailable -Port $port)) {
-            $occupiedAfterStop += $port
-        }
-    }
+    if (-not $result.Port13000Available) { $occupiedAfterStop += 13000 }
+    if (-not $result.Port18001Available) { $occupiedAfterStop += 18001 }
     if ($occupiedAfterStop.Count -gt 0) {
-        return [pscustomobject]@{
-            Success = $true
-            Message = "Managed tunnel stopped. Port $($occupiedAfterStop -join ', ') is now occupied by another process; it was left untouched."
-        }
+        $result.Message = "Managed tunnel stopped. Port $($occupiedAfterStop -join ', ') is now occupied by another process; it was left untouched."
+        return $result
     }
 
-    return [pscustomobject]@{
-        Success = $true
-        Message = "Managed tunnel stopped and both local ports are free."
-    }
+    $result.Message = "Managed tunnel stopped and both local ports are free."
+    return $result
 }
 
 function Test-ServerConnection {
@@ -669,13 +681,19 @@ function Get-TunnelOperationResultPath {
 }
 
 function Get-TunnelSnapshot {
+    param([switch]$IncludeServerConnection)
+
     $validation = Test-ManagedTunnel
     if ($validation.IsStale) {
         Clear-ConfirmedStaleState -Validation $validation | Out-Null
         $validation = Test-ManagedTunnel
     }
 
-    $server = Test-ServerConnection
+    $server = if ($IncludeServerConnection) {
+        Test-ServerConnection
+    } else {
+        $null
+    }
     $tunnelStatus = if ($validation.IsValid) {
         "ACTIVE - verified managed SSH tunnel (PID $($validation.Process.Id))"
     } elseif ($validation.State) {
@@ -685,13 +703,15 @@ function Get-TunnelSnapshot {
     }
 
     return [ordered]@{
+        TunnelSnapshotIncluded = $true
         TunnelActive = [bool]$validation.IsValid
         TunnelStatus = $tunnelStatus
         TunnelPid = if ($validation.IsValid) { $validation.Process.Id } else { $null }
         Port13000Available = Test-LocalPortAvailable -Port 13000
         Port18001Available = Test-LocalPortAvailable -Port 18001
-        ServerAvailable = [bool]$server.Success
-        ServerMessage = [string]$server.Message
+        ServerStatusIncluded = [bool]$IncludeServerConnection
+        ServerAvailable = if ($server) { [bool]$server.Success } else { $null }
+        ServerMessage = if ($server) { [string]$server.Message } else { "" }
     }
 }
 
@@ -725,6 +745,8 @@ function Invoke-TunnelWorkerMode {
 
     $actionMessage = "Tunnel status refreshed."
     $actionSucceeded = $true
+    $actionResult = $null
+    $snapshot = $null
     try {
         switch ($TunnelWorkerAction) {
             "Start" {
@@ -737,6 +759,7 @@ function Invoke-TunnelWorkerMode {
             }
             "Status" {
                 $null = Invoke-WithTunnelMutex -Operation { $true }
+                $snapshot = Get-TunnelSnapshot -IncludeServerConnection
             }
             default {
                 throw "Tunnel worker action is not allowlisted."
@@ -747,21 +770,30 @@ function Invoke-TunnelWorkerMode {
         $actionMessage = $_.Exception.Message
     }
 
-    try {
-        $snapshot = Get-TunnelSnapshot
-    } catch {
+    if ($actionSucceeded -and $null -ne $actionResult) {
         $snapshot = [ordered]@{
+            TunnelSnapshotIncluded = $true
+            TunnelActive = [bool]$actionResult.TunnelActive
+            TunnelStatus = [string]$actionResult.TunnelStatus
+            TunnelPid = $actionResult.TunnelPid
+            Port13000Available = $actionResult.Port13000Available
+            Port18001Available = $actionResult.Port18001Available
+            ServerStatusIncluded = $false
+            ServerAvailable = $null
+            ServerMessage = ""
+        }
+    } elseif ($null -eq $snapshot) {
+        $isStatusAction = $TunnelWorkerAction -eq "Status"
+        $snapshot = [ordered]@{
+            TunnelSnapshotIncluded = $isStatusAction
             TunnelActive = $false
             TunnelStatus = "UNKNOWN - background validation failed"
             TunnelPid = $null
             Port13000Available = $null
             Port18001Available = $null
+            ServerStatusIncluded = $isStatusAction
             ServerAvailable = $false
-            ServerMessage = $_.Exception.Message
-        }
-        if ($actionSucceeded) {
-            $actionSucceeded = $false
-            $actionMessage = $_.Exception.Message
+            ServerMessage = $actionMessage
         }
     }
 
@@ -769,11 +801,13 @@ function Invoke-TunnelWorkerMode {
         Action = $TunnelWorkerAction
         Success = $actionSucceeded
         Message = $actionMessage
+        TunnelSnapshotIncluded = $snapshot.TunnelSnapshotIncluded
         TunnelActive = $snapshot.TunnelActive
         TunnelStatus = $snapshot.TunnelStatus
         TunnelPid = $snapshot.TunnelPid
         Port13000Available = $snapshot.Port13000Available
         Port18001Available = $snapshot.Port18001Available
+        ServerStatusIncluded = $snapshot.ServerStatusIncluded
         ServerAvailable = $snapshot.ServerAvailable
         ServerMessage = $snapshot.ServerMessage
     }
@@ -957,6 +991,14 @@ function Invoke-ControllerSelfTest {
             $workerCommand.Contains("-TunnelOperationId '11111111-2222-3333-4444-555555555555'")) `
         $workerCommand
 
+    $controllerText = Get-Content -LiteralPath $PSCommandPath -Raw
+    Record-SelfTest `
+        "atomic worker completion protocol" `
+        ($controllerText.Contains('[Environment]::Exit([int]$workerExitCode)') -and
+            $controllerText.Contains('$resultReady = Test-Path -LiteralPath $operation.ResultPath') -and
+            $controllerText.Contains('ServerStatusIncluded = $false')) `
+        "action results complete before worker exit or optional server refresh"
+
     Write-Host "SELF-TEST: no SSH connection, tunnel, browser, Docker, or stack action was invoked."
     if ($failures.Count -gt 0) {
         Write-Host "SELF-TEST FAILED: $($failures.Count) check(s) failed."
@@ -968,7 +1010,8 @@ function Invoke-ControllerSelfTest {
 }
 
 if ($TunnelWorkerAction -ne "None") {
-    exit (Invoke-TunnelWorkerMode)
+    $workerExitCode = Invoke-TunnelWorkerMode
+    [Environment]::Exit([int]$workerExitCode)
 }
 
 if ($SelfTest) {
@@ -1196,6 +1239,7 @@ function Begin-TunnelOperation {
     $resultPath = Get-TunnelOperationResultPath -OperationId $operationId
     $workerCommand = Get-TunnelWorkerInvocationCommand -Action $WorkerAction -OperationId $operationId
     $encodedCommand = ConvertTo-EncodedPowerShellCommand -Command $workerCommand
+    # Do not redirect worker output or error streams; there are no UI-owned pipes to drain or close.
     $workerProcess = Start-Process `
         -FilePath $script:PowerShellExecutable `
         -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-EncodedCommand", $encodedCommand) `
@@ -1236,6 +1280,7 @@ function Complete-TunnelOperation {
         return
     }
 
+    $resultReady = Test-Path -LiteralPath $operation.ResultPath -PathType Leaf
     $workerExited = $false
     try {
         $operation.Process.Refresh()
@@ -1244,13 +1289,22 @@ function Complete-TunnelOperation {
         $workerExited = $true
     }
 
-    $timedOut = (-not $workerExited -and [DateTime]::UtcNow -ge $operation.DeadlineUtc)
-    if (-not $workerExited -and -not $timedOut) {
+    $timedOut = (-not $resultReady -and -not $workerExited -and [DateTime]::UtcNow -ge $operation.DeadlineUtc)
+    if (-not $resultReady -and -not $workerExited -and -not $timedOut) {
         return
     }
 
     $script:TunnelCompletionInProgress = $true
     try {
+        if ($resultReady -and -not $workerExited) {
+            try {
+                # The atomic result is authoritative; stop only the directly created PowerShell worker.
+                $operation.Process.Kill()
+            } catch {
+                # The worker normally exits itself immediately after publishing the result.
+            }
+        }
+
         if ($timedOut) {
             try {
                 $operation.Process.Kill()
@@ -1268,21 +1322,28 @@ function Complete-TunnelOperation {
             return
         }
 
-        if (-not (Test-Path -LiteralPath $operation.ResultPath -PathType Leaf)) {
+        if (-not $resultReady) {
             throw "The background tunnel worker exited without a result. No tunnel or port-owner state is assumed."
         }
 
         $result = Get-Content -LiteralPath $operation.ResultPath -Raw -ErrorAction Stop |
             ConvertFrom-Json -ErrorAction Stop
-        $script:CachedTunnelActive = [bool]$result.TunnelActive
-        $script:CachedTunnelStatus = [string]$result.TunnelStatus
-        $script:CachedTunnelPid = $result.TunnelPid
-        $script:CachedPort13000Available = $result.Port13000Available
-        $script:CachedPort18001Available = $result.Port18001Available
-        $script:CachedServerStatus = if ([bool]$result.ServerAvailable) {
-            "AVAILABLE - $([string]$result.ServerMessage)"
-        } else {
-            "UNAVAILABLE - $([string]$result.ServerMessage)"
+        if ([string]$result.Action -ne [string]$operation.WorkerAction) {
+            throw "The background tunnel result did not match the requested operation."
+        }
+        if ([bool]$result.TunnelSnapshotIncluded) {
+            $script:CachedTunnelActive = [bool]$result.TunnelActive
+            $script:CachedTunnelStatus = [string]$result.TunnelStatus
+            $script:CachedTunnelPid = $result.TunnelPid
+            $script:CachedPort13000Available = $result.Port13000Available
+            $script:CachedPort18001Available = $result.Port18001Available
+        }
+        if ([bool]$result.ServerStatusIncluded) {
+            $script:CachedServerStatus = if ([bool]$result.ServerAvailable) {
+                "AVAILABLE - $([string]$result.ServerMessage)"
+            } else {
+                "UNAVAILABLE - $([string]$result.ServerMessage)"
+            }
         }
 
         $succeeded = [bool]$result.Success
@@ -1320,9 +1381,7 @@ function Complete-TunnelOperation {
             }
         }
 
-        if (-not $operation.Quiet -or -not $succeeded) {
-            Set-ControllerResult -Action $operation.DisplayAction -Message $message -Severity $severity
-        }
+        Set-ControllerResult -Action $operation.DisplayAction -Message $message -Severity $severity
     } catch {
         $failureMessage = $_.Exception.Message
         $script:CachedTunnelStatus = "UNKNOWN - background result could not be processed"

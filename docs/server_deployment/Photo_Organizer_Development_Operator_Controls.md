@@ -250,6 +250,13 @@ Health**, and **Stop Tunnel** are disabled. The controller restores the buttons
 and refreshes status when the bounded operation finishes. The worker never
 adopts or terminates an unmanaged SSH process or an unrelated port owner.
 
+Start and Stop publish their confirmed local tunnel and port result through an
+atomic result file without waiting for an additional server-connection refresh.
+The controller completes from that result immediately and does not wait for
+PowerShell output pipes or worker disposal on the graphical thread. The worker
+uses no redirected output streams and exits after publishing its result. A
+separate status refresh has its own bounded worker lifetime.
+
 ### Open Backend Health
 
 Requires an active, verified managed tunnel and opens:
@@ -284,6 +291,10 @@ The stop runs in the same bounded background mechanism, leaving the graphical
 window responsive. Closing the controller is temporarily blocked while a
 tunnel operation is still finishing so the controller does not abandon its
 worker.
+
+Once termination of the strictly verified managed process and local port state
+are confirmed, **Stop Tunnel** reports that result immediately. A slow optional
+server-status check cannot convert that confirmed stop into a timeout failure.
 
 Before terminating anything, the controller checks:
 
@@ -320,6 +331,8 @@ Use Stop Tunnel when you are finished.
 
 Reopening the controller rediscovers the tunnel only after complete state and
 process-identity validation. It does not start a tunnel automatically.
+When the initial bounded refresh completes, its terminal result replaces the
+temporary working message and all tunnel controls are enabled again.
 
 ## 7. Normal Start and Stop Procedures
 
