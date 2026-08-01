@@ -16,10 +16,9 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=5 \
 CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]
 
 FROM dependencies AS builder
-ARG NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:18001
-ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 COPY . .
 RUN mkdir -p public \
+    && npm run lint \
     && npm run build
 
 FROM node:22.23.1-bookworm-slim AS production-dependencies

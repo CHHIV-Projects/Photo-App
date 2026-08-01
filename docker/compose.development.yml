@@ -86,7 +86,7 @@ services:
       dockerfile: Dockerfile
       target: development
     environment:
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:18001}
+      BACKEND_INTERNAL_BASE_URL: "http://backend:8001"
     ports:
       - "${DEVELOPMENT_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_HOST_PORT:-13000}:3000"
     networks:

@@ -184,8 +184,7 @@ export interface SearchPhotoQueryOptions extends PhotoQueryOptions {
   limit?: number;
 }
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.trim() || "http://127.0.0.1:8001";
+const API_BASE_URL = "";
 
 export interface IcloudAcquisitionStartErrorPayload {
   detail?: string;
@@ -371,13 +370,15 @@ export function resolveApiUrl(path: string | null | undefined): string | null {
     return null;
   }
 
-  if (path.startsWith("http://") || path.startsWith("https://")) {
+  if (/^https?:\/\//i.test(path)) {
     return path;
   }
+  if (path.startsWith("//")) {
+    return null;
+  }
 
-  const normalizedBase = API_BASE_URL.replace(/\/$/, "");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${normalizedBase}${normalizedPath}`;
+  return normalizedPath;
 }
 
 export { API_BASE_URL };

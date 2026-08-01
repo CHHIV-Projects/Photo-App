@@ -1,0 +1,36 @@
+import { proxyToBackend } from "@/lib/backendProxy";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function handle(request: Request): Promise<Response> {
+  return proxyToBackend(request, "/api");
+}
+
+export function GET(request: Request): Promise<Response> {
+  return handle(request);
+}
+
+export function HEAD(request: Request): Promise<Response> {
+  return handle(request);
+}
+
+export function POST(request: Request): Promise<Response> {
+  return handle(request);
+}
+
+export function PUT(request: Request): Promise<Response> {
+  return handle(request);
+}
+
+export function PATCH(request: Request): Promise<Response> {
+  return handle(request);
+}
+
+export function DELETE(request: Request): Promise<Response> {
+  return handle(request);
+}
+
+export function OPTIONS(request: Request): Promise<Response> {
+  return handle(request);
+}
