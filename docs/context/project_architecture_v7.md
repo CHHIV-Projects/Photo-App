@@ -1,14 +1,28 @@
-# PROJECT_ARCHITECTURE_v6.md
+# PROJECT_ARCHITECTURE_v7.md
 
 ## Document Status
 
-**Version:** v6  
-**Project phase:** Post-12.63.23.0  
-**Current branch state:** Source Identity and Intake Unification merged into `main`  
-**Merge commit:** `b7ef737 Merge source identity and intake unification`  
-**Current architectural emphasis:** v1.0 stabilization, provenance verification across the unified intake model, production deployment design, runtime reliability, Linux portability, backup/recovery, and remaining curation and display gaps.
+**Version:** v7
+**Project phase:** v1.0 stabilization with Linux-server Development and isolated Test foundations operational
+**Application architecture baseline:** Source Identity and Intake Unification is merged and remains the functional foundation
+**Deployment architecture baseline:** Server deployment milestones through Milestone 010 reconnaissance are documented under `docs/server_deployment/`
+**Authoritative Development repository:** `/home/chuck/projects/photo-organizer-dev` on `henderson-server1`
+**Current architectural emphasis:** continued application development, Linux runtime reliability, Development/Test isolation, Linux Source-provider gaps, backup and recovery design, and future controlled promotion, rollback, and Production deployment.
 
----
+### Provenance update boundary
+
+The provenance architecture and provenance verification sections in this version are intentionally retained from v6. Their post-12.64 reconciliation will be completed separately from the authoritative Milestone 12.64 record. This document must not be interpreted as the final post-12.64 provenance status until that focused update is completed.
+
+### Deployment documentation boundary
+
+Application-functionality milestone history remains in the project milestone-history document.
+
+Server construction, Windows-to-Linux runtime migration, Development and Test environment implementation, deployment validation, and operational procedures are maintained separately under:
+
+```text
+docs/server_deployment/
+docs/server_deployment/deployment_milestones/
+```
 
 ## 1. Architecture Purpose
 
@@ -88,37 +102,73 @@ Photo Organizer is a local-first photo intelligence, archival, and curation plat
 - background/admin operations;
 - durable iCloud import runs;
 - operational reports;
-- structured coding-agent workflows.
+- structured coding-agent and deployment workflows.
 
 The system is no longer a prototype.
 
 It is a working archival and curation platform moving through:
 
 ```text
-v1.0 stabilization
-→ provenance retesting
-→ production hardening
-→ deployment validation
-→ runtime portability
+continued application development
+→ v1.0 stabilization
+→ Linux runtime hardening
+→ backup and recovery design
+→ controlled environment promotion
+→ Production deployment
 → release readiness
 ```
 
-The iCloud Intake path is considered good enough for v1.0.
-
-The unified Source identity and selected-source intake architecture is also complete for the present v1.0 scope.
-
-The next architectural questions are no longer whether Source identity or unified intake can work.
-
-The next questions are:
+The current runtime architecture is now established:
 
 ```text
-Does provenance remain correct across every new intake path?
-Can the system be deployed and recovered repeatably?
-Can Source identity operate correctly on the future Linux host?
-Are runtime, storage, backup, and rollback safe enough for v1.0?
+Windows workstation
+→ client, browser, VS Code Remote SSH, operator controls, SSH tunnels,
+  and the only general filesystem Source-identity access node
+
+Ubuntu mini-server
+→ authoritative editable repository, Development runtime, Test runtime,
+  Docker execution, PostgreSQL, Redis, application storage, and GPU compute
+
+Synology NAS
+→ mounted durable-storage and backup infrastructure,
+  not current live Development/Test application or database storage
 ```
 
----
+Development and Test are operational on the Linux server as separate Compose environments.
+
+Development is workspace-built and mutable at build time. Source is copied into its images rather than bind-mounted at runtime. Applying code changes requires rebuilding the affected image and recreating or replacing the affected container; restarting an existing container alone does not load host edits.
+
+Test is release-like and isolated. It uses immutable full-SHA backend and frontend images, recorded image IDs, separate configuration and release state, separate PostgreSQL and Redis, separate application storage, separate networks, and loopback-only application ports. Routine Test start restarts the preserved candidate and does not rebuild or replace it.
+
+The current architecture does not yet provide:
+
+- general Linux durable Source identity for Local, External, Removable Media, NAS, or Optical Sources;
+- controlled replacement of the deployed Test candidate;
+- rollback;
+- Production promotion;
+- a current Linux Production runtime contract;
+- validated backup and restore;
+- NAS-backed Development or Test application storage.
+
+The controlled Linux Development fixture is a narrow path-only exception. It does not establish a general Linux Source provider and does not create durable Source identity.
+
+iCloud remains provider-specific and does not rely on the generic filesystem Source-identity provider.
+
+The iCloud Intake path is considered good enough for the current v1.0 scope.
+
+The unified Source identity and selected-source intake architecture is complete for its implemented provider scope, but Linux provider coverage remains an explicit platform gap.
+
+The next architectural questions include:
+
+```text
+Can continued application development remain safe and efficient on the server?
+Can Linux Source identity be implemented without weakening durable identity?
+Can Test candidate replacement and rollback preserve exact release identity?
+Can backup and recovery preserve Vault, database, provenance, and configuration together?
+Can a Production environment be introduced without crossing Development/Test boundaries?
+```
+
+The provenance sections remain intentionally pending separate post-12.64 reconciliation.
 
 ## 3. System Evolution
 
@@ -144,6 +194,14 @@ Pipeline foundation
 → Optical fingerprint v2 and intake
 → Admin/Ingestion UI consolidation
 → provenance and production-readiness checkpoint
+→ Ubuntu mini-server provisioning
+→ server-authoritative repository and Development runtime
+→ Windows Remote SSH and Development operator controls
+→ Development restart and recovery validation
+→ runtime-neutral frontend artifact
+→ isolated immutable Test environment foundation
+→ Test identity, data-isolation, browser, and stop/start validation
+→ deployment architecture documentation reconciliation
 ```
 
 The architecture preserves these core separations:
@@ -161,9 +219,14 @@ Database state records operational truth.
 Provenance explains origin.
 Review workflows curate.
 Cleanup acts only on verified temporary material.
-```
 
----
+Windows operates and accesses.
+Linux executes and hosts authority.
+Development permits controlled mutation.
+Test preserves an exact candidate.
+NAS provides durable infrastructure.
+Production remains unimplemented.
+```
 
 ## 4. Architecture North Star
 
@@ -182,9 +245,11 @@ Local-first archival truth
 + human-in-the-loop curation
 + reviewable AI evidence
 + durable long-running operations
-+ production-grade runtime
-+ mini-server compute
-+ NAS-backed durable storage
++ server-authoritative Development
++ isolated release-like Test
++ controlled promotion and rollback
++ Production-grade Linux runtime
++ NAS-backed durable storage where explicitly validated
 + tested backup and recovery
 + lightweight local/mobile access
 ```
@@ -192,25 +257,34 @@ Local-first archival truth
 The architecture no longer needs to prove:
 
 ```text
-durable Source identity
+durable Source identity as an abstract model
 unified Source Selection
 selected-source dispatch
-NAS intake
-Optical intake
+Windows NAS intake
+Windows Optical intake
+server-hosted Development
+isolated Test runtime foundations
 ```
 
 The next phase must make the system:
 
 ```text
-provenance-correct across all intake paths
-deployable
+safe for continued Development on the Linux server
+portable across Source-provider hosts
 recoverable
-portable across runtime hosts
-operationally reliable
-ready for v1.0 use
+promotable through explicit release identity
+rollback-capable
+Production-ready
+backed up as one coherent archival system
 ```
 
----
+Current-state qualification is essential:
+
+- Linux hosts the repository, Development, and Test.
+- Windows remains the operator/client and the only implemented general filesystem Source-identity provider.
+- The NAS mount exists, but Development and Test live storage remains server-local.
+- Test exists, but candidate replacement and rollback do not.
+- Production is not yet implemented.
 
 ## 5. Architectural Invariants
 
@@ -366,6 +440,88 @@ Durability should match operational risk.
 
 ---
 
+### 5.11 Runtime Environments Must Remain Isolated
+
+Development, Test, and future Production are separate runtime authorities.
+
+They may share:
+
+- the Linux host where explicitly approved;
+- application architecture;
+- controlled source commits;
+- approved base images;
+- operator conventions.
+
+They must not silently share:
+
+- PostgreSQL state;
+- Redis state;
+- application storage;
+- Vault state;
+- configuration files;
+- release manifests;
+- Compose project identity;
+- environment-specific networks or volumes.
+
+Cross-environment copying, mounting, migration, or promotion must be explicit, bounded, and validated.
+
+### 5.12 Development and Test Have Different Mutation Rules
+
+Development is workspace-oriented and may be rebuilt from the current authoritative server repository.
+
+Test is candidate-oriented and must run exact recorded images.
+
+Routine Test start must not:
+
+- build from the workspace;
+- use a dirty repository;
+- follow a floating tag;
+- replace the deployed candidate;
+- recreate mutable state;
+- import Development data.
+
+Candidate replacement requires a separately designed and authorized promotion workflow.
+
+### 5.13 Repository Authority Is Singular
+
+The authoritative editable repository is on the Linux server:
+
+```text
+/home/chuck/projects/photo-organizer-dev
+```
+
+VS Code Remote SSH is the normal editing interface.
+
+Windows-side script copies and any administrative/recovery clone must not become competing editable authorities.
+
+### 5.14 Application Exposure Is Private by Default
+
+Development and Test application ports bind to server loopback.
+
+PostgreSQL and Redis are not published to the host.
+
+Normal Windows access occurs through explicit SSH tunnels or approved operator controls.
+
+Public exposure, reverse proxying, TLS, and family access require separate design and authorization.
+
+### 5.15 NAS Availability Does Not Imply Storage Authority
+
+A mounted NAS path is infrastructure, not automatic permission to place live application state there.
+
+Development or Test storage may move to the NAS only after explicit validation of:
+
+- authority;
+- performance;
+- mount reliability;
+- startup ordering;
+- failure behavior;
+- permissions;
+- backup boundaries;
+- restore behavior.
+
+Live PostgreSQL and Redis data must not be moved or replicated as ordinary files without a database-aware design.
+
+
 ## 6. Core Architectural Layers
 
 ### 6.1 User and Curation Layer
@@ -414,14 +570,14 @@ Responsibilities:
 - compare current evidence with saved Source Endpoint identity;
 - resolve current access path.
 
-Examples:
+Current provider reality:
 
-- Windows volume/device provider;
-- NAS UNC identity logic;
-- Optical media fingerprint provider;
-- iCloud provider-specific logic;
-- future Linux provider;
-- future macOS provider.
+- Windows supplies the implemented general filesystem Source provider;
+- Linux has no general durable provider for Local, External, Removable Media, NAS, or Optical;
+- a controlled Linux Development fixture provides only a narrow acknowledged path-only exception;
+- iCloud uses provider-specific identity and workflow logic.
+
+Future providers must satisfy the same abstract identity contract without substituting path-only evidence for required durable identity.
 
 ### 6.4 Ingestion Layer
 
@@ -480,24 +636,60 @@ Responsibilities:
 - quarantine;
 - previews;
 - review derivatives;
-- logs and reports.
+- logs and reports;
+- environment-specific application storage;
+- database-aware backup artifacts.
 
 ### 6.8 Runtime and Deployment Layer
 
 Responsibilities:
 
-- application services;
+- authoritative repository hosting;
+- Development and Test Compose projects;
+- application image construction;
 - PostgreSQL;
 - Redis;
-- Docker;
-- runtime scripts;
+- Docker and NVIDIA runtime;
+- protected environment configuration;
+- runtime scripts and operator controls;
+- health and recovery checks;
+- SSH tunnel access;
 - host Source providers;
 - NAS mounts;
+- release identity;
 - backups;
-- service supervision;
-- release promotion and rollback.
+- future promotion, rollback, and Production supervision.
 
----
+Current environment roles:
+
+```text
+Windows
+→ operator/client, browser, VS Code Remote SSH, tunnels,
+  Windows-facing Development controls, filesystem Source access node
+
+Linux server
+→ authoritative repository, Development, Test, Docker,
+  PostgreSQL, Redis, application storage, GPU compute
+
+NAS
+→ mounted durable-storage and backup infrastructure
+
+Production
+→ not yet implemented
+```
+
+### 6.9 Release and Recovery Layer
+
+Responsibilities:
+
+- distinguish workspace state from deployed candidate identity;
+- record immutable application image identity;
+- preserve mutable state separately from application artifacts;
+- validate health and isolation;
+- support controlled restart;
+- eventually support candidate replacement, rollback, backup, restore, and Production promotion.
+
+This layer must not bypass the application’s Vault, database, provenance, or Source authority.
 
 ## 7. Source Model
 
@@ -661,70 +853,97 @@ Rules:
 
 ## 8. Source Identity by Type
 
+The abstract Source Endpoint model is host-portable, but current provider coverage is not.
+
+The Linux server can host the application while still lacking authority to identify general filesystem Sources. Runtime host and Source-identity access node are separate concepts.
+
 ### 8.1 Local
 
-Local represents storage internal to the current host.
+Local represents storage internal to the Source access node.
 
 Current implementation:
 
-- Windows-first;
-- durable volume/device evidence;
-- endpoint-relative folder root;
-- identity independent of ordinary drive-letter changes.
+- general durable Local identity is Windows-specific;
+- creation uses Windows drive-path and provider assumptions;
+- selection relies on Windows volume/device evidence;
+- Linux does not yet have a general durable Local provider.
 
-Future requirement:
+The only Linux exception is the exact controlled Development fixture.
 
-- Linux provider;
-- macOS provider;
-- host-specific evidence mapped to the same abstract Source Endpoint contract.
+That exception:
+
+- is deliberately path-only;
+- requires explicit acknowledgment;
+- creates no durable identifier;
+- cannot authorize an arbitrary Linux path;
+- is not a foundation for general Local intake.
+
+Future Linux support requires a provider that maps Linux filesystem/device evidence to the same durable Source Endpoint contract.
 
 ### 8.2 External
 
 External represents attached external HDD or SSD storage.
 
-Rules:
+Current implementation remains Windows-provider based.
+
+Rules remain:
 
 - external device identity is not the drive letter;
 - reconnecting at another letter may still resolve to the same endpoint;
 - operator alias does not establish identity;
 - one endpoint may support multiple intentional Source roots.
 
+On Linux, External Source creation, selection, readiness, and selected-source dispatch are currently unsupported because no durable Linux mounted-volume provider exists.
+
 ### 8.3 Removable Media
 
 Removable Media represents writable or rewritable removable storage such as a USB flash drive.
 
-It uses the endpoint-linked Source model.
-
-It remains a separate Source Type for:
+It uses the endpoint-linked Source model and remains a separate Source Type for:
 
 - operator clarity;
 - future media policy;
 - future safety distinctions.
 
-Modern creation persists the explicit Removable Media type.
+Current durable behavior is Windows-provider based.
 
-Legacy generic records may remain.
+On Linux, general Removable Media creation, selection, readiness, and dispatch are unsupported until a durable provider is implemented.
 
 ### 8.4 NAS
 
 NAS identity is anchored to canonical server/share authority.
 
-Example:
+Windows example:
 
 ```text
 \\HENDERSON-NAS\Photos
 ```
 
-Rules:
+Current Source identity rules:
 
-- direct UNC access is supported;
+- canonical server/share authority is durable identity;
 - server-only UNC is invalid;
 - mapped drive letter is not identity;
 - root must remain inside the share;
 - traversal is rejected;
-- backend resolves the current UNC runtime root;
+- backend resolves the current runtime root;
 - NAS reuses filesystem Source Intake;
 - no NAS-specific ingestion engine exists.
+
+Current Linux infrastructure mounts the Photo Organizer share at:
+
+```text
+/mnt/nas/photo-organizer
+```
+
+That mount does not yet provide a general Source-identity mapping from a POSIX path back to canonical NAS server/share identity.
+
+Therefore:
+
+- the NAS mount is available infrastructure;
+- Development recovery may validate that mount;
+- general Linux-mounted NAS Source creation, selection, readiness, and dispatch remain unsupported;
+- future Linux NAS support must preserve canonical share identity and endpoint-relative containment rather than treating the mount path alone as durable identity.
 
 ### 8.5 Optical
 
@@ -771,6 +990,8 @@ Exact matching remains fail-closed.
 
 Existing v1 records remain legacy.
 
+Current Optical probing and fingerprint execution are Windows-specific. Linux Optical discovery, runtime-root resolution, and durable fingerprint collection are not implemented.
+
 Optical supports filesystem-readable data discs only.
 
 It does not support:
@@ -802,7 +1023,28 @@ The app does not store:
 - session cookie;
 - credential secrets.
 
----
+Creation, readiness, selection, and selected-source dispatch are implemented through provider-specific services and tests.
+
+The generic Linux filesystem-provider gap does not by itself block iCloud because iCloud does not use that provider. A complete live Linux acquisition/import validation is not established by the current tracked test evidence and remains a separate operational question.
+
+### 8.7 Host Portability Rule
+
+A Source Type is not Linux-capable merely because the application runs on Linux.
+
+For each host, capability must be proven across:
+
+```text
+creation
+→ durable identity probe
+→ selection
+→ readiness
+→ launch-time revalidation
+→ runtime-root resolution
+→ containment
+→ dispatch
+```
+
+Unsupported provider states must remain fail-closed.
 
 ## 9. Unified Source Creation Architecture
 
@@ -1803,12 +2045,18 @@ Purpose:
 - content-addressed or content-identity-oriented storage;
 - durable archival truth.
 
+Vault authority is environment-specific.
+
+Development, Test, and future Production must not silently share one writable Vault.
+
 ### 25.2 Drop Zone
 
 Purpose:
 
 - controlled internal Source Intake staging;
 - temporary handoff inside canonical ingestion.
+
+Drop Zone state belongs to one runtime environment.
 
 ### 25.3 Cloud Acquisition Staging
 
@@ -1817,6 +2065,8 @@ Purpose:
 - temporary provider download location;
 - isolated by Source Profile;
 - cleanup only after verified intake.
+
+Cloud staging must not become a cross-environment transfer mechanism.
 
 ### 25.4 Quarantine
 
@@ -1850,184 +2100,525 @@ Purpose:
 
 Reports are not authoritative database state.
 
----
+### 25.7 Current Development Storage
+
+Development uses server-local Docker named volumes for:
+
+- PostgreSQL;
+- Redis;
+- application storage.
+
+The application-storage volume contains the environment’s Vault, previews, staging, logs, exports, model cache, and related runtime directories under `/app/storage`.
+
+Development storage mode is `local`.
+
+Development storage is not currently NAS-backed.
+
+### 25.8 Current Test Storage
+
+Test uses separate server-local Docker named volumes for:
+
+- PostgreSQL;
+- Redis;
+- application storage.
+
+Test storage mode is `local`.
+
+Test does not mount Development storage and does not use NAS-backed live application storage.
+
+### 25.9 NAS Storage Role
+
+The Synology NAS is mounted on the Linux server and is intended for:
+
+- durable storage infrastructure;
+- backups;
+- archive material;
+- future validated Production or Vault use;
+- offsite-protection workflows.
+
+The mount’s existence does not make it current application-storage authority.
+
+Future NAS-backed storage must define and validate:
+
+- ownership and permissions;
+- mount reliability;
+- startup behavior;
+- disconnect behavior;
+- performance;
+- backup boundaries;
+- restore order;
+- environment isolation.
+
+### 25.10 Database Storage
+
+Live PostgreSQL and Redis state currently remains in server-local named volumes for Development and Test.
+
+Live PostgreSQL data must not be copied, synchronized, or replicated as ordinary filesystem content while the database is running.
+
+Database protection requires database-aware backup, restore, or validated snapshot procedures.
 
 ## 26. Deployment Architecture
 
-### 26.1 Current Windows Development Runtime
+### 26.1 Current Three-Machine Architecture
 
-Current development remains Windows-first.
-
-Runtime scripts are under:
+The current architecture has three distinct authorities:
 
 ```text
-scripts/runtime/
+Windows workstation
+  operator and user interface
+
+Ubuntu mini-server
+  authoritative repository and runtime host
+
+Synology NAS
+  durable-storage and backup infrastructure
 ```
 
-Current dev startup:
+These roles must remain explicit.
 
-```powershell
-.\scripts\runtime\start_photo_organizer_dev.ps1
-```
+#### Windows workstation
 
-Windows currently provides the implemented host Source identity provider.
+Responsibilities:
 
-### 26.2 Mini-Server Runtime
+- VS Code client;
+- VS Code Remote SSH connection;
+- browser access;
+- Windows Development operator controls;
+- SSH tunnel initiation;
+- WinSCP access where needed;
+- general filesystem Source-identity access node;
+- administrative and recovery access.
 
-Planned production-like host:
+Windows is not the current Development runtime host.
 
-```text
-Ubuntu Server 24.04
-AMD Ryzen 9 7900
-RTX 4070 Super
-64GB RAM
-2TB NVMe
-```
+Any Windows Git clone is administrative or recovery-oriented and must not compete with the authoritative server repository.
 
-Expected responsibilities:
+#### Ubuntu mini-server
 
-- backend API;
-- frontend;
+Responsibilities:
+
+- authoritative editable repository;
+- Development runtime;
+- Test runtime;
+- Docker and Compose execution;
 - PostgreSQL;
 - Redis;
-- background processing;
-- local AI services;
-- semantic indexing;
-- GPU-assisted work;
-- local/mobile web access.
+- local Docker volumes;
+- NVIDIA/GPU compute;
+- operator shell scripts;
+- health and recovery checks;
+- NAS mount access.
 
-### 26.3 NAS Role
-
-NAS is the durable media and backup layer.
-
-Expected responsibilities:
-
-- Vault/media storage after validation;
-- backup;
-- snapshots;
-- offsite replication;
-- archive storage.
-
-PostgreSQL live data should remain on runtime-host local storage unless a supported database-storage design is explicitly validated.
-
-### 26.4 Host-Specific Source Identity
-
-Source Profiles and Source Endpoints are architectural concepts intended to survive deployment changes.
-
-Observed Paths are host-specific.
-
-Windows endpoint evidence cannot be assumed to work unchanged on Linux.
-
-Linux deployment requires:
-
-- Linux volume/device identity provider;
-- Linux removable-media identity;
-- Linux Optical probing;
-- mount-path observation;
-- NAS access validation;
-- containment behavior;
-- current-root resolution.
-
-The abstract contract remains:
+Authoritative repository:
 
 ```text
-durable endpoint identity
-+ endpoint-relative root
-+ host-specific observed path
-+ backend runtime-root resolution
+/home/chuck/projects/photo-organizer-dev
 ```
 
-### 26.5 NAS Mounting on Mini Server
+The server is headless and accessed through SSH, VS Code Remote SSH, Cockpit, Portainer, and approved operator controls.
 
-The mini server may access NAS storage through Linux mounts.
+Current hardware baseline is an Ubuntu Server 24.04.4 LTS system with Ryzen 9 7900X, 64 GB RAM, RTX 5070 Ti 16 GB, and 2 TB NVMe. Detailed hardware, provisioning, and execution evidence belongs in `docs/server_deployment/`, not in this architecture contract.
 
-Architecture must decide:
+#### Synology NAS
 
-- SMB versus NFS;
-- mount supervision;
-- credential handling;
-- startup ordering;
-- reconnect behavior;
-- path stability;
-- read/write policy;
-- performance;
-- backup boundaries.
+Responsibilities:
 
-The mounted path remains host-specific access evidence.
+- mounted durable-storage infrastructure;
+- backup destination;
+- archive and environment folder structure;
+- future validated storage integration;
+- future offsite replication support.
 
-The durable NAS Source identity remains the canonical server/share authority.
+Current mount contract:
 
-### 26.6 Service Supervision
+```text
+Source share: //192.168.1.171/PhotoOrganizer
+Hostname equivalent: //HENDERSON-NAS/PhotoOrganizer
+Linux mount: /mnt/nas/photo-organizer
+Protocol: CIFS / SMB
+```
 
-Production runtime should support:
+The NAS is not current live Development or Test PostgreSQL, Redis, or application-storage authority.
 
-- automatic service restart;
-- dependency ordering;
+### 26.2 Repository Authority and Editing Model
+
+The Linux server repository is the only normal editable authority.
+
+Normal workflow:
+
+```text
+Windows VS Code
+→ Remote SSH
+→ /home/chuck/projects/photo-organizer-dev
+→ edit, test, stage, commit, and push from the server repository
+```
+
+Windows operator scripts are convenience interfaces that invoke fixed server-side operations.
+
+Installed Windows script copies are not source truth.
+
+A Windows administrative/recovery clone must not be used for parallel application development.
+
+### 26.3 Development Environment
+
+Current Development contract:
+
+```text
+Compose project: photo-organizer-dev
+Runtime profile: development
+Storage mode: local
+Frontend: server 127.0.0.1:13000 → container 3000
+Backend: server 127.0.0.1:18001 → container 8001
+PostgreSQL: unpublished
+Redis: unpublished
+```
+
+Development networks:
+
+- internal application network;
+- browser-edge network.
+
+Development named volumes:
+
+- application storage;
+- PostgreSQL data;
+- Redis data.
+
+Development is mutable at build time:
+
+- backend and frontend images build from the authoritative workspace;
+- source is copied into images;
+- source is not bind-mounted at runtime;
+- backend does not use hot reload;
+- frontend Development uses `next dev` inside its image;
+- host edits require rebuilding the affected image and recreating or replacing the affected container;
+- routine start deliberately performs no build, pull, or recreation.
+
+The Development operator owns routine:
+
+- start;
+- stop;
+- status;
+- health;
+- logs;
+- restart and recovery validation;
+- managed tunnel access.
+
+Development contains test/sample state and is not archival Production authority.
+
+### 26.4 Test Environment
+
+Current Test contract:
+
+```text
+Compose project: photo-organizer-test
+Runtime profile: test
+Storage mode: local
+Frontend: server 127.0.0.1:13001 → container 3000
+Backend: server 127.0.0.1:18002 → container 8001
+PostgreSQL: unpublished
+Redis: unpublished
+Configuration: /home/chuck/.config/photo-organizer/test.env
+Release manifest: /home/chuck/.local/state/photo-organizer/test/release.json
+```
+
+Test characteristics:
+
+- immutable full-SHA backend and frontend image tags;
+- separately recorded exact image IDs;
+- no runtime source bind mounts;
+- separate PostgreSQL;
+- separate Redis;
+- separate application storage;
+- separate networks;
+- separate configuration;
+- separate release identity;
+- loopback-only access;
+- no Development data copied into Test;
+- no NAS-backed live storage.
+
+Routine Test start:
+
+- starts the preserved deployed candidate;
+- does not rebuild;
+- does not pull;
+- does not use current workspace contents;
+- does not replace candidate identity;
+- does not reset mutable state.
+
+Test is currently operated through the server-side Test operator.
+
+A Windows-facing Test control window is not implemented.
+
+### 26.5 Development and Test Isolation
+
+Development and Test share the Linux host but remain separate environments.
+
+Required separation includes:
+
+```text
+Compose project
+containers
+networks
+PostgreSQL
+Redis
+application storage
+Vault
+configuration
+runtime profile
+ports
+release state
+```
+
+Shared-host validation must also protect unrelated workloads such as Portainer.
+
+No broad Docker cleanup, prune, daemon reset, or cross-project Compose action is acceptable as an ordinary application operation.
+
+### 26.6 Private Access Model
+
+Development and Test application ports bind only to server loopback.
+
+Normal browser access from Windows uses explicit SSH tunnels.
+
+PostgreSQL and Redis are not published.
+
+Current architecture provides no:
+
+- public application exposure;
+- reverse proxy;
+- TLS endpoint;
+- external sharing;
+- persistent Internet-facing service.
+
+These require separate security and deployment design.
+
+### 26.7 Source-Identity Access Node
+
+The Linux runtime host is not yet a general filesystem Source-identity provider.
+
+Windows remains the only implemented general access node for:
+
+- Local;
+- External;
+- Removable Media;
+- NAS UNC/mapped-drive identity;
+- Optical.
+
+Therefore future operational design may require one or both of:
+
+- Linux durable Source providers;
+- a controlled remote Source-access/ingestion model using Windows as the identity and access node.
+
+Neither option may weaken backend authority, durable identity, containment, or provenance.
+
+### 26.8 Current Release Boundary
+
+The Test foundation currently supports:
+
+- preparing the initial exact candidate;
+- deploying that candidate once;
+- candidate identity reporting;
+- release identity validation;
 - health checks;
-- structured logs;
-- graceful stop;
-- stale-run recovery;
-- operator diagnostics;
-- controlled upgrade;
-- rollback.
+- logs;
+- stop;
+- start;
+- data-isolation validation;
+- browser same-origin validation.
 
----
+It does not yet support:
+
+- replacing the deployed candidate;
+- promoting current Development code into Test;
+- retaining multiple release slots;
+- rollback;
+- Production promotion.
+
+Manual Docker replacement is not an approved substitute.
+
+### 26.9 Production Status
+
+Current Linux Production is not implemented.
+
+The repository still contains legacy Windows Production scripts, environment examples, design documents, and a generic Compose file. These artifacts do not constitute an approved current Linux Production contract.
+
+No current Linux Production definition establishes:
+
+- Compose project;
+- protected configuration;
+- immutable release manifest;
+- approved ports;
+- networks;
+- named volumes;
+- storage authority;
+- promotion;
+- rollback;
+- backup;
+- operator controls.
+
+Production must be introduced through a separately scoped and validated architecture.
+
+### 26.10 Operational Documentation
+
+Detailed commands, evidence, and procedures belong under:
+
+```text
+docs/server_deployment/
+```
+
+Deployment prompts and closeouts belong under:
+
+```text
+docs/server_deployment/deployment_milestones/
+```
+
+This architecture document defines authority and boundaries. It should not duplicate full operator runbooks.
 
 ## 27. Backup, Recovery, and Release Architecture
 
-v1.0 production readiness requires explicit validation of:
+### 27.1 Current Validated Recovery Scope
 
-- Vault backup;
-- database backup;
-- configuration backup;
-- report/log retention;
-- Source Profile and Source Endpoint backup;
-- provenance backup;
-- restore order;
-- recovery after partial failure;
-- release promotion;
-- release rollback.
+Development currently has validated operator controls for:
+
+- start;
+- stop;
+- status;
+- health;
+- recent and live logs;
+- restart and recovery status;
+- Docker resource identity;
+- loopback publication checks;
+- local-volume authority;
+- NAS mount visibility.
+
+Test currently has validated controls for:
+
+- release identity;
+- candidate identity;
+- health;
+- logs;
+- stop;
+- restart of the same candidate;
+- preservation of container and image identity;
+- environment isolation.
+
+These controls improve operational safety but do not yet constitute complete archival recovery.
+
+### 27.2 Required Backup Scope
+
+v1.0 Production readiness requires explicit protection of:
+
+- Vault;
+- PostgreSQL data through database-aware backups;
+- Source Profiles and Source Endpoints;
+- provenance;
+- protected configuration;
+- release manifests;
+- reports and important logs;
+- application documentation;
+- restore procedures and evidence.
 
 Minimum recovery principle:
 
 ```text
 Vault without DB/provenance is incomplete.
 DB/provenance without Vault is incomplete.
+Configuration without release identity may be ambiguous.
+Backup without a tested restore is unproven.
 ```
 
-A backup strategy must preserve their relationship.
+A backup strategy must preserve these relationships.
 
-Offsite NAS replication should eventually protect:
+### 27.3 NAS Backup Role
 
-- Vault;
-- database backups;
-- important configuration;
-- milestone and architecture documentation.
+The NAS is the intended durable backup infrastructure.
+
+Future backup design may protect:
+
+- Vault or archival media;
+- database backup artifacts;
+- important configuration backups;
+- release records;
+- documentation;
+- selected reports;
+- offsite replication material.
+
+The live Development and Test named volumes are not currently equivalent to validated backups merely because the NAS is mounted.
+
+### 27.4 Database-Aware Protection
 
 Live PostgreSQL storage should not be replicated as ordinary files while the database is running.
 
-Use database-aware backup or snapshot procedures.
+Approved mechanisms must be database-aware, such as:
 
----
+- logical backup;
+- validated physical backup;
+- coordinated filesystem snapshot;
+- another explicitly supported PostgreSQL method.
+
+Redis protection policy should match its actual authority and recoverability requirements.
+
+### 27.5 Release Promotion
+
+Future release promotion must separate:
+
+```text
+application artifact identity
+from
+environment-specific mutable state
+```
+
+Promotion should operate on exact, clean, pushed commits and immutable image identities.
+
+It must not copy the Development database, Redis state, Vault, or configuration into Test or Production unless a separately approved data-migration procedure explicitly requires it.
+
+### 27.6 Rollback
+
+Rollback must define:
+
+- prior exact application image identities;
+- database-schema compatibility;
+- mutable-state preservation;
+- rollback eligibility;
+- stop conditions;
+- health validation;
+- operator authority;
+- evidence and audit trail.
+
+Rolling back application images is not automatically safe when database migrations are incompatible.
+
+### 27.7 Current Release Gap
+
+Candidate replacement, rollback, and Production promotion are not implemented.
+
+The current Test operator correctly preserves and verifies the existing candidate rather than silently replacing it.
+
+This gap is intentional until a separately scoped promotion and rollback workflow is designed and validated.
 
 ## 28. Current Architectural Risk Register
 
 ### High Priority
 
-- Provenance has not yet been comprehensively retested across every new Source Type and selected-source intake path.
-- Exact duplicate provenance behavior across multiple Sources needs confirmation.
-- Changed-drive-letter provenance behavior needs confirmation.
-- NAS and Optical Source-relative lineage need confirmation.
-- iCloud staging-to-final provenance needs revalidation against the unified Source model.
-- Production deployment architecture is not yet fully validated.
-- Linux Source Endpoint providers are not implemented.
-- NAS-backed Vault performance and reliability are not validated.
-- Backup, restore, promotion, and rollback need release-grade validation.
-- Runtime start/stop and port ownership can still fail unclearly.
+- General Linux Source identity is not implemented for Local, External, Removable Media, NAS, or Optical Sources.
+- The Linux-mounted NAS path is not yet mapped to canonical durable NAS Source identity.
+- Linux Optical discovery and stable fingerprint collection are not implemented.
+- Complete live Linux iCloud acquisition/import validation is not established by current tracked test evidence.
+- Controlled Dev-to-Test candidate replacement is not implemented.
+- Rollback is not implemented.
+- Current Linux Production architecture is not implemented.
+- Backup and restore are not release-grade or end-to-end validated.
+- Development and Test live state currently depends on server-local Docker volumes.
+- NAS-backed Vault/application-storage performance, permissions, disconnect behavior, and recovery are not validated.
+- Full host-reboot and Docker-daemon-restart validation remains incomplete for the isolated Test environment.
 - Full v1.0 end-to-end regression remains incomplete.
+- Provenance status requires separate post-12.64 documentation reconciliation.
 
 ### Medium Priority
 
+- Development code changes require explicit rebuild and container replacement; routine start does not activate edits.
+- Windows remains the only general filesystem Source-identity access node.
+- The controlled Linux fixture can be misunderstood as broader Linux Source support if not clearly documented.
+- Legacy Windows Production scripts and generic Compose artifacts can be mistaken for the current Linux Production design.
 - Broader USB bridge, filesystem, and device compatibility testing is limited.
 - Legacy Source records remain.
 - Optical v1 test Sources remain legacy.
@@ -2035,8 +2626,8 @@ Use database-aware backup or snapshot procedures.
 - iCloud provider exhaustion proof remains incomplete.
 - Cloud-native iCloud identifiers are not first-class provenance.
 - BMP preview support is missing.
-- Production Docker/Linux operation is not validated.
 - Source skipped/deferred inventory integration remains incomplete outside current iCloud work.
+- Windows Test GUI controls are not implemented.
 
 ### Lower Priority / Deferred
 
@@ -2047,9 +2638,27 @@ Use database-aware backup or snapshot procedures.
 - multi-account cloud management;
 - advanced semantic-search UX;
 - iCloud performance optimization beyond v1.0;
-- broader cloud provider support.
+- broader cloud provider support;
+- multi-user access;
+- public/TLS deployment.
 
----
+### Risks Reduced or Closed by Deployment Work
+
+The following are no longer wholly unvalidated:
+
+- Ubuntu mini-server provisioning;
+- server-authoritative repository use;
+- VS Code Remote SSH Development;
+- isolated Development Compose runtime;
+- loopback-only Development access;
+- Development operator and recovery checks;
+- GPU-enabled Docker execution;
+- runtime-neutral frontend artifact;
+- isolated Test Compose runtime;
+- immutable Test candidate identity;
+- Test/Development network and volume separation;
+- Test browser same-origin routing;
+- controlled Test stop/start without candidate recreation.
 
 ## 29. Development Phases
 
@@ -2115,11 +2724,11 @@ Delivered:
 - Person integration;
 - Admin operations.
 
-### Phase 5 — Operational Hardening, Unified Sources, and Production Readiness
+### Phase 5 — Operational Hardening, Unified Sources, and Linux Development Runtime
 
 **Status:** Current.
 
-Delivered:
+Delivered application architecture:
 
 - Source Profile model;
 - Source Endpoint model;
@@ -2139,23 +2748,55 @@ Delivered:
 - guarded cleanup;
 - Ingestion UI consolidation;
 - Admin UI cleanup;
-- live iCloud 1000-item validation;
-- live Optical intake validation.
+- live iCloud validation;
+- live Optical validation.
+
+Delivered deployment architecture:
+
+- Ubuntu mini-server;
+- authoritative Linux repository;
+- Docker and NVIDIA runtime;
+- server-hosted Development;
+- separate PostgreSQL, Redis, and application volumes;
+- Remote SSH workflow;
+- Windows Development operator controls;
+- Development restart and recovery validation;
+- runtime-neutral frontend artifact;
+- isolated immutable Test foundation;
+- Test release, isolation, browser, and stop/start validation;
+- mounted NAS infrastructure.
 
 Current focus:
 
+- continued Development code work;
 - documentation alignment;
-- provenance retesting;
-- v1.0 gap reassessment;
+- Linux Source-provider design;
 - runtime hardening;
-- production deployment architecture;
-- Linux provider design;
-- backup and restore;
+- backup and restore design;
+- future candidate promotion and rollback;
+- Production architecture;
 - full regression;
-- curation throughput;
-- remaining display gaps.
+- remaining curation and display gaps.
 
-### Phase 6 — Platform Expansion
+### Phase 6 — Controlled Release and Production
+
+**Status:** Future.
+
+Focus:
+
+- Dev-to-Test candidate replacement;
+- candidate acceptance;
+- rollback;
+- database-migration compatibility;
+- immutable Production release identity;
+- Production configuration;
+- Production storage authority;
+- backup and restore validation;
+- Production cutover;
+- service supervision;
+- host-reboot and Docker-restart recovery.
+
+### Phase 7 — Platform Expansion
 
 **Status:** Future.
 
@@ -2169,11 +2810,13 @@ Focus:
 - additional cloud providers;
 - multi-user scenarios.
 
----
-
 ## 30. Milestone Reality
 
-### Milestone 11.x
+### Application Functionality Milestones
+
+Application functionality remains documented in the project milestone history.
+
+#### Milestone 11.x
 
 Delivered the functional backbone:
 
@@ -2187,7 +2830,7 @@ Delivered the functional backbone:
 - events;
 - Presentation mode.
 
-### Milestone 12.x
+#### Milestone 12.x
 
 Transformed the project into an operationally controlled archival and curation platform.
 
@@ -2219,21 +2862,53 @@ Major delivered areas:
 - NAS intake;
 - Optical v2;
 - Admin/Ingestion consolidation;
-- coding-agent and git workflow hardening.
+- coding-agent and Git workflow hardening.
 
-Milestone 12 is now primarily concerned with:
+Milestone 12 remains concerned with continued product development, v1.0 stabilization, regression, and remaining functional gaps.
+
+### Deployment Milestones
+
+Server construction, runtime migration, environment isolation, and operational validation are intentionally documented outside the application milestone history.
+
+Deployment records are maintained under:
 
 ```text
-documentation consolidation
-provenance verification
-v1.0 gap review
-production hardening
-runtime reliability
-deployment validation
-remaining curation and display refinement
+docs/server_deployment/deployment_milestones/
 ```
 
----
+Completed deployment work includes:
+
+- current-runtime reconnaissance;
+- Linux runtime foundation;
+- server repository and configuration;
+- Development stack bring-up;
+- controlled fixture validation;
+- Remote VS Code workflow;
+- Windows Development operator controls;
+- restart and recovery validation;
+- runtime-neutral frontend artifact;
+- isolated Test environment foundation;
+- deployment architecture documentation reconnaissance.
+
+Deployment milestones do not replace the product milestone history.
+
+They document a different concern:
+
+```text
+where and how the application runs
+how environments remain isolated
+how operators control them
+how release identity is preserved
+how recovery and future promotion are governed
+```
+
+### Current Milestone Boundary
+
+The current Test environment is a validated foundation, not a completed promotion pipeline.
+
+Continued application development may proceed in Development.
+
+Dev-to-Test replacement, rollback, and Production remain later deployment milestones.
 
 ## 31. Parking Lot Integration Strategy
 
@@ -2245,31 +2920,50 @@ Features should move from Parking Lot to roadmap when they:
 - reduce operator risk;
 - improve reliability;
 - unlock multiple downstream capabilities;
-- support v1.0 release.
+- support v1.0 release;
+- close a verified deployment or recovery gap.
 
-### Immediate Promotion Candidates
+### Immediate or Near-Term Candidates
 
-- provenance retest across unified Sources;
+- continued high-value Development functionality;
 - v1.0 roadmap gap reassessment;
 - end-to-end release regression;
-- backup/restore validation;
-- runtime ghost-listener diagnostics;
-- production deployment architecture;
 - Linux Source Endpoint provider design;
+- Linux NAS Source mapping design;
+- Linux Optical provider design;
+- backup/restore architecture;
+- Development rebuild workflow clarity;
+- runtime and recovery refinements;
 - BMP preview support;
 - remaining high-value Photo Review or curation friction.
+
+### Deferred Deployment Candidates
+
+- controlled Dev-to-Test candidate replacement;
+- candidate acceptance workflow;
+- rollback;
+- Windows Test operator controls;
+- Test host-reboot and Docker-daemon-restart validation;
+- Production Compose and operator contract;
+- Production protected configuration;
+- Production promotion;
+- Production backup and restore;
+- NAS-backed Production application storage;
+- Production cutover.
+
+These items are intentionally deferred while application Development continues.
 
 ### Mid-Term Candidates
 
 - NAS-backed Vault validation;
-- mini-server runtime validation;
 - server-side Source/history pagination;
 - optional legacy Source cleanup tools;
 - scheduled Source runs;
 - cloud-native iCloud provenance identifiers;
 - semantic indexing;
 - GPU-assisted enrichment;
-- post-intake orchestration.
+- post-intake orchestration;
+- local AI services.
 
 ### Long-Term Candidates
 
@@ -2279,21 +2973,29 @@ Features should move from Parking Lot to roadmap when they:
 - sharing and access control;
 - richer AI assistant/search;
 - advanced video workflows;
-- broader family-facing scenarios.
+- broader family-facing scenarios;
+- multi-user operation.
 
-Completed items that should not remain described as future architecture:
+Completed items that should not remain described as wholly future architecture:
 
 ```text
+mini-server provisioning
+server-authoritative Development
+Remote SSH editing
+Development operator controls
+Development restart and recovery validation
+runtime-neutral frontend artifact
+isolated Test foundation
+immutable initial Test candidate
+Test environment isolation
 Source Endpoint model
-External stable identity foundation
-NAS share identity
-Optical media identity
+External stable identity foundation on Windows
+NAS share identity on Windows
+Optical media identity on Windows
 Unified Source Selection
 Selected-source dispatch
 Admin/Ingestion consolidation
 ```
-
----
 
 ## 32. Constraints for Future Work
 
@@ -2323,91 +3025,150 @@ Future work must:
 - treat AI/provider evidence as evidence, not truth;
 - ensure cleanup affects only verified local staging;
 - avoid storing Apple credentials;
-- support Linux deployment without breaking Windows development;
 - preserve CPU fallback where GPU support is added;
 - prevent NAS integration from compromising DB or Vault integrity;
-- validate backup and recovery before production reliance.
+- validate backup and recovery before Production reliance.
 
----
+Deployment work must also:
+
+- preserve the Linux server as authoritative editable repository;
+- use Windows as client/operator without restoring competing runtime authority;
+- keep Development, Test, and Production state separate;
+- keep PostgreSQL and Redis unpublished unless an explicit design changes that boundary;
+- keep application access loopback-only until public access is separately authorized;
+- distinguish workspace-built Development from immutable candidate environments;
+- refuse Test replacement until a controlled promotion workflow exists;
+- build candidates only from exact clean pushed commits;
+- record full-SHA image tags and exact image IDs;
+- preserve release manifests outside Git where appropriate;
+- avoid source bind mounts in release-like environments;
+- avoid floating application tags;
+- avoid broad Docker cleanup or cross-project operations;
+- protect unrelated shared-host workloads;
+- keep secrets outside Git and out of logs;
+- keep NAS mounting separate from storage authority;
+- use database-aware backup and restore;
+- define migration compatibility before rollback;
+- avoid treating legacy Windows Production artifacts as the current Linux Production design.
+
+Linux Source-provider work must:
+
+- provide durable evidence rather than path-only convenience;
+- support host-specific observed paths without rewriting endpoint identity;
+- preserve canonical NAS server/share authority;
+- define Linux Optical fingerprint evidence;
+- fail closed when required identity cannot be established;
+- keep the controlled Development fixture explicitly non-general.
 
 ## 33. Near-Term Architecture Direction
 
 Recommended sequence:
 
-### 1. Complete v6 Documentation
+### 1. Complete v7 Documentation Alignment
 
 Align:
 
 ```text
-PROJECT_CONTEXT_v6
-PROJECT_ARCHITECTURE_v6
-PROJECT_WORKFLOW
-CODING_AGENT_RULES
-MILESTONE_HISTORY
-Parking Lot
-New Chat Intro
-v1.0 release roadmap
+project_context_v7
+project_architecture_v7
+project_workflow_v7
+coding_agent_rules_v7
+canonical_parking_lot_v7
+new-chat introductions where needed
+v1.0 release roadmap where needed
 ```
 
-### 2. Provenance Verification Arc
+Application milestone history remains focused on application functionality.
 
-Perform focused recon and validation covering:
+Deployment implementation and operational history remain under `docs/server_deployment/`.
 
-- new unique Asset provenance;
-- same-Source exact duplicate;
-- cross-Source exact duplicate;
-- changed drive letter;
-- multiple roots on one endpoint;
-- NAS provenance;
-- Optical provenance;
-- iCloud staging provenance;
-- rejected/failed files;
-- repeated intake idempotency;
-- skipped/deferred separation;
-- Source status and alias behavior.
+### 2. Continue Development Functionality
 
-Any implementation changes should follow evidence from this retest.
+Use the Linux-server Development environment as the active workspace.
 
-### 3. v1.0 Gap Reassessment
+Continue product milestones without requiring immediate Test candidate replacement.
 
-Compare current implementation against:
+For each completed Development change:
 
-- release requirements;
-- operator workflows;
-- production environment;
-- recovery requirements;
-- curation throughput;
-- deployment blockers.
+- validate in Development;
+- commit and push through the authoritative server repository;
+- preserve clean Git history;
+- avoid manual Test replacement until the promotion workflow exists.
 
-### 4. Production Deployment Architecture
+### 3. Reconcile Provenance Separately
+
+Update the provenance architecture and verification sections from the authoritative post-12.64 milestone record.
+
+This work is intentionally separate from the deployment rewrite in this version.
+
+### 4. Design Linux Source Providers
+
+Define safe provider contracts for:
+
+- Local;
+- External;
+- Removable Media;
+- NAS mounted paths;
+- Optical media.
+
+The design must preserve:
+
+- durable endpoint identity;
+- host-specific observed paths;
+- endpoint-relative containment;
+- launch-time revalidation;
+- fail-closed behavior.
+
+### 5. Design Backup and Restore
 
 Define:
 
-- Windows-to-Ubuntu transition;
-- Linux endpoint provider;
-- Docker layout;
-- PostgreSQL/Redis placement;
-- NAS mount strategy;
-- Vault storage strategy;
+- Vault protection;
+- database-aware PostgreSQL backup;
+- Redis policy;
+- protected configuration backup;
+- release-manifest preservation;
+- NAS destination;
+- offsite replication;
+- restore order;
+- recovery validation.
+
+### 6. Controlled Dev-to-Test Promotion and Rollback
+
+When application Development is ready to exercise the Test pipeline, implement a separately scoped deployment milestone for:
+
+- exact clean pushed candidate selection;
+- immutable image preparation;
+- current/previous release identity;
+- candidate replacement;
+- health and isolation validation;
+- database migration policy;
+- rollback eligibility;
+- rollback execution;
+- operator evidence.
+
+This work is intentionally deferred, not abandoned.
+
+### 7. Production Architecture
+
+After promotion and recovery contracts are proven, define:
+
+- Linux Production Compose project;
+- immutable Production release identity;
+- protected configuration;
+- ports and access;
+- networks;
+- storage authority;
+- NAS role;
+- database placement;
 - backup;
 - restore;
 - promotion;
 - rollback;
 - service supervision;
-- local/mobile access.
+- cutover.
 
-### 5. Runtime Hardening
-
-Improve:
-
-- start/stop reliability;
-- port-owner diagnostics;
-- ghost listener detection;
-- stale-process handling;
-- health reporting;
-- recovery guidance.
-
-### 6. Remaining v1.0 Gaps
+### 8. Remaining v1.0 Gaps
 
 Likely candidates:
 
@@ -2416,9 +3177,8 @@ Likely candidates:
 - curation friction;
 - release operations;
 - server-side pagination if needed;
-- legacy test-data cleanup.
-
----
+- legacy test-data cleanup;
+- host reboot and Docker restart validation.
 
 ## 34. Long-Term Vision
 
