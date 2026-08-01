@@ -1,0 +1,119 @@
+name: ${COMPOSE_PROJECT_NAME:?Set COMPOSE_PROJECT_NAME in the protected Test environment file}
+
+services:
+  postgres:
+    image: postgres:16.9-bookworm
+    pull_policy: never
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in the protected Test environment file}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in the protected Test environment file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the protected Test environment file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - application_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.5-bookworm
+    pull_policy: never
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - application_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    image: ${TEST_BACKEND_IMAGE:?Supply the prepared Test backend image reference}
+    pull_policy: never
+    labels:
+      org.opencontainers.image.revision: ${TEST_RELEASE_SHA:?Supply the prepared Test release SHA}
+      com.photoorganizer.environment: test
+      com.photoorganizer.release: ${TEST_RELEASE_SHA:?Supply the prepared Test release SHA}
+    environment:
+      APP_RUNTIME_PROFILE: test
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in the protected Test environment file}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in the protected Test environment file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the protected Test environment file}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: "8001"
+      FRONTEND_ALLOWED_ORIGINS: ${FRONTEND_ALLOWED_ORIGINS:?Set FRONTEND_ALLOWED_ORIGINS in the protected Test environment file}
+      STORAGE_MODE: local
+      STORAGE_ROOT: /app/storage
+      DROP_ZONE_PATH: /app/storage/drop_zone
+      VAULT_PATH: /app/storage/vault
+      QUARANTINE_PATH: /app/storage/quarantine
+      INGEST_FAILURES_PATH: /app/storage/ingest_failures
+      PREVIEWS_PATH: /app/storage/previews
+      THUMBNAILS_PATH: /app/storage/thumbnails
+      REVIEW_PATH: /app/storage/review
+      LOGS_PATH: /app/storage/logs
+      REPORTS_PATH: /app/storage/logs
+      EXPORTS_ICLOUD_PATH: /app/storage/exports/icloud
+      MODEL_ROOT_PATH: /app/app/services/vision/models
+      MODEL_CACHE_PATH: /app/storage/models
+      DEEPFACE_HOME: /app/storage/models
+      FACE_MODEL_PATH: /app/app/services/vision/models/face_detection_yunet_2023mar.onnx
+      REQUIRE_GPU: "false"
+    volumes:
+      - application_storage:/app/storage
+    ports:
+      - "${TEST_BIND_ADDRESS:?Set TEST_BIND_ADDRESS in the protected Test environment file}:${BACKEND_HOST_PORT:?Set BACKEND_HOST_PORT in the protected Test environment file}:8001"
+    networks:
+      - application_internal
+      - browser_edge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      start_period: 90s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    image: ${TEST_FRONTEND_IMAGE:?Supply the prepared Test frontend image reference}
+    pull_policy: never
+    labels:
+      org.opencontainers.image.revision: ${TEST_RELEASE_SHA:?Supply the prepared Test release SHA}
+      com.photoorganizer.environment: test
+      com.photoorganizer.release: ${TEST_RELEASE_SHA:?Supply the prepared Test release SHA}
+    environment:
+      BACKEND_INTERNAL_BASE_URL: "http://backend:8001"
+    ports:
+      - "${TEST_BIND_ADDRESS:?Set TEST_BIND_ADDRESS in the protected Test environment file}:${FRONTEND_HOST_PORT:?Set FRONTEND_HOST_PORT in the protected Test environment file}:3000"
+    networks:
+      - browser_edge
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  application_internal:
+    internal: true
+  browser_edge:
+
+volumes:
+  postgres_data:
+  redis_data:
+  application_storage:
