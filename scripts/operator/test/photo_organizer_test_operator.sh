@@ -127,6 +127,30 @@ arrays_match() {
   done
 }
 
+network_sets_match() {
+  local expected_lines="$1"
+  local actual_lines="$2"
+  local network
+  local -a expected_set=() actual_set=()
+
+  while IFS= read -r network; do
+    [[ -n "${network}" ]] || continue
+    expected_set+=("${network}")
+  done <<<"${expected_lines}"
+  while IFS= read -r network; do
+    [[ -n "${network}" ]] || continue
+    actual_set+=("${network}")
+  done <<<"${actual_lines}"
+
+  if ((${#expected_set[@]} > 0)); then
+    mapfile -t expected_set < <(printf '%s\n' "${expected_set[@]}" | LC_ALL=C sort)
+  fi
+  if ((${#actual_set[@]} > 0)); then
+    mapfile -t actual_set < <(printf '%s\n' "${actual_set[@]}" | LC_ALL=C sort)
+  fi
+  arrays_match expected_set actual_set
+}
+
 candidate_inputs_are_eligible() {
   local clean_state="$1"
   local head_sha="$2"
@@ -782,9 +806,10 @@ inspect_release_service() {
     release_failure "Service ${service} has unexpected state ${state} and health ${health}."
   fi
 
-  networks="$(docker_cmd inspect --type container --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' -- "${container_id}" | sort)"
-  [[ "${networks}" == "${expected_networks}" ]] && release_pass "service ${service} uses only approved Test networks" ||
-    release_failure "Service ${service} has an unexpected network attachment."
+  networks="$(docker_cmd inspect --type container --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' -- "${container_id}")"
+  network_sets_match "${expected_networks}" "${networks}" &&
+    release_pass "service ${service} uses only its exact approved physical Test network set" ||
+    release_failure "Service ${service} has a missing, additional, or unexpected physical network attachment."
   bindings="$(docker_cmd inspect --type container --format '{{range $port, $entries := .HostConfig.PortBindings}}{{range $entries}}{{printf "%s|%s|%s\n" $port .HostIp .HostPort}}{{end}}{{end}}' -- "${container_id}")"
   [[ "${bindings}" == "${expected_binding}" ]] && release_pass "service ${service} publication matches the Test contract" ||
     release_failure "Service ${service} has unexpected host publication."
@@ -995,6 +1020,29 @@ self_test() {
   resource_inventory_is_empty "" "" "" || fail "Empty resource inventory was rejected."
   ! resource_inventory_is_empty "unexpected" "" "" || fail "Ambiguous resource inventory was accepted."
 
+  local backend_networks reversed_backend_networks logical_backend_networks
+  backend_networks="${TEST_NETWORK_INTERNAL}"$'\n'"${TEST_NETWORK_BROWSER}"
+  reversed_backend_networks="${TEST_NETWORK_BROWSER}"$'\n'"${TEST_NETWORK_INTERNAL}"
+  logical_backend_networks="application_internal"$'\n'"browser_edge"
+  network_sets_match "${TEST_NETWORK_INTERNAL}" "${TEST_NETWORK_INTERNAL}" ||
+    fail "Approved PostgreSQL physical network set was rejected."
+  network_sets_match "${TEST_NETWORK_INTERNAL}" "${TEST_NETWORK_INTERNAL}" ||
+    fail "Approved Redis physical network set was rejected."
+  network_sets_match "${backend_networks}" "${backend_networks}" ||
+    fail "Approved backend physical network set was rejected."
+  network_sets_match "${TEST_NETWORK_BROWSER}" "${TEST_NETWORK_BROWSER}" ||
+    fail "Approved frontend physical network set was rejected."
+  network_sets_match "${backend_networks}" "${reversed_backend_networks}" ||
+    fail "Backend physical network set incorrectly depends on inspection order."
+  ! network_sets_match "${backend_networks}" "${TEST_NETWORK_INTERNAL}" ||
+    fail "A backend network set missing browser-edge was accepted."
+  ! network_sets_match "${TEST_NETWORK_BROWSER}" "${TEST_NETWORK_BROWSER}"$'\n'"bridge" ||
+    fail "A frontend network set with an additional default bridge was accepted."
+  ! network_sets_match "${TEST_NETWORK_INTERNAL}" "photo-organizer-dev_application_internal" ||
+    fail "A Development network was accepted for a Test service."
+  ! network_sets_match "${backend_networks}" "${logical_backend_networks}" ||
+    fail "Logical Compose network names were accepted instead of physical Docker names."
+
   local temporary_directory temporary_manifest
   temporary_directory="$(mktemp -d)"
   trap 'rm -rf -- "${temporary_directory:-}"' RETURN
@@ -1031,6 +1079,7 @@ self_test() {
   done
   pass "script location, repository identity, and fixed action allowlist are valid"
   pass "candidate SHA, dirty-worktree, upstream-mismatch, and resource-ambiguity guards passed isolated tests"
+  pass "exact physical Test network sets, order independence, and missing/additional/logical/Development rejection passed isolated tests"
   pass "atomic manifest write produced valid mode-0600 JSON"
   pass "Test Compose has fixed profile, runtime backend routing, loopback template, no build, no source bind, and no Development reference"
   pass "self-test completed without Docker daemon access or resource mutation"
