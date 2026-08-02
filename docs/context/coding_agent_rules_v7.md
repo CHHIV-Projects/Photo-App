@@ -1,11 +1,14 @@
-# CODING_AGENT_RULES.md — Photo Organizer
+# CODING_AGENT_RULES_v7.md — Photo Organizer
 
 ## Document Status
 
-**Version:** v6  
-**Project phase:** Post-12.63.23.0  
-**Current architecture baseline:** Source Identity and Intake Unification merged into `main`  
-**Current verification priority:** Provenance correctness across the unified Source Creation, Selection, readiness, dispatch, and intake workflows.
+**Version:** v7
+**Project phase:** v1.0 stabilization with Linux-server Development and isolated Test foundations operational
+**Current architecture:** Windows client/operator + Linux authoritative repository/runtime + Synology NAS durable-storage/backup infrastructure
+**Authoritative repository:** `/home/chuck/projects/photo-organizer-dev` on `henderson-server1`
+**Current workflow baseline:** `project_workflow_v7.md`
+**Current architecture baseline:** `project_architecture_v7.md`
+**Current verification boundary:** Provenance rules remain in force, while the final post-12.64 provenance documentation reconciliation is handled separately.
 
 ---
 
@@ -28,7 +31,10 @@ Its purpose is to reduce repeated milestone-prompt boilerplate while preserving:
 - Source identity correctness;
 - provenance and data-integrity protection;
 - honest validation reporting;
-- separation between validation and repair.
+- separation between validation and repair;
+- Development/Test isolation;
+- explicit authority over Docker, database, NAS, secrets, and deployment operations;
+- correct use of the Windows-client/Linux-server operating model.
 
 Milestone prompts may reference this file instead of repeating every standing project rule.
 
@@ -39,9 +45,10 @@ This file is not a replacement for:
 - current repository code;
 - feature-specific reconnaissance;
 - approved reconnaissance closeouts;
-- product-owner decisions;
+- Product Owner decisions;
 - validation;
-- milestone closeout documentation.
+- milestone closeout documentation;
+- maintained deployment and operator guides.
 
 Use repository files and the active prompt as the source of truth.
 
@@ -58,8 +65,9 @@ Apply instructions in this order:
 3. this rules document;
 4. current architecture, workflow, and context documents;
 5. approved reconnaissance closeout;
-6. prior prompts and closeouts;
-7. agent assumptions.
+6. maintained deployment/operator guides when runtime behavior is in scope;
+7. prior prompts and closeouts;
+8. agent assumptions.
 
 When two instructions conflict:
 
@@ -68,7 +76,7 @@ When two instructions conflict:
 - ask for clarification before risky implementation;
 - do not silently choose a new architecture;
 - do not silently broaden scope;
-- do not silently change provenance, Source identity, or persistence semantics.
+- do not silently change provenance, Source identity, persistence, runtime, or deployment semantics.
 
 A milestone prompt may explicitly override a standing rule.
 
@@ -78,36 +86,152 @@ The closeout must document:
 - why it was necessary;
 - who approved it;
 - how safety was preserved;
-- whether data, provenance, or migration behavior changed.
+- whether data, provenance, migration, environment, or runtime behavior changed.
 
 ---
 
-# 2. Standard Agent Workflow
+# 2. Authoritative Environment and Repository
+
+## 2.1 Authoritative Repository
+
+The authoritative editable repository is:
+
+```text
+/home/chuck/projects/photo-organizer-dev
+```
+
+on:
+
+```text
+henderson-server1
+```
+
+Normal editing occurs through:
+
+```text
+VS Code Remote SSH from the Windows workstation
+```
+
+Normal Git and repository commands run in:
+
+```text
+VS Code Remote SSH / Linux terminal
+```
+
+The Windows Git clone is retained for administration or recovery.
+
+It is not the normal editable source of truth.
+
+Do not assume a Windows checkout path is authoritative.
+
+Do not edit both the Windows clone and the Linux repository as parallel working copies.
+
+---
+
+## 2.2 Current Machine Roles
+
+### Windows workstation
+
+Current roles:
+
+- Product Owner workstation;
+- VS Code client;
+- VS Code Remote SSH client;
+- browser;
+- Windows Development Operator host;
+- SSH tunnel origin;
+- WinSCP and administration/recovery access;
+- only implemented general filesystem Source-identity access node.
+
+### Linux mini-server
+
+Current roles:
+
+- authoritative editable repository;
+- Development runtime;
+- Test runtime;
+- Docker execution;
+- PostgreSQL;
+- Redis;
+- application storage;
+- GPU compute;
+- Cockpit and Portainer administration;
+- NAS mount access.
+
+### Synology NAS
+
+Current roles:
+
+- mounted durable-storage infrastructure;
+- backup infrastructure;
+- future archive/Production storage candidate.
+
+Current NAS role is not:
+
+- authoritative Git repository;
+- Development application-storage authority;
+- Test application-storage authority;
+- live Development/Test PostgreSQL storage;
+- live Development/Test Redis storage.
+
+Do not treat these machine roles as interchangeable.
+
+---
+
+## 2.3 Command Environment Labels
+
+Every operational command block must identify where it runs.
+
+Use labels such as:
+
+```text
+VS Code Remote SSH / Linux terminal
+Windows PowerShell
+Windows Development Operator
+server-side Development operator
+server-side Test operator
+browser / Developer Tools
+Portainer
+Cockpit
+Synology DSM
+```
+
+Do not provide or execute an unlabeled command when the wrong environment could cause confusion or risk.
+
+---
+
+# 3. Standard Agent Workflow
 
 For every task:
 
 1. Read this file.
 2. Read the active milestone prompt and approved addenda.
 3. Read the approved reconnaissance closeout when the prompt identifies one.
-4. Perform Git preflight.
-5. Confirm the current branch.
-6. Determine the milestone mode.
-7. Inspect the relevant current code or documentation.
-8. Confirm the milestone boundary.
-9. Ask only genuinely blocking questions.
-10. Escalate when the approved roadmap is materially insufficient.
-11. Implement or validate only the approved scope.
-12. Run the most relevant validation.
-13. Create exactly one closeout using the required filename.
-14. Leave commit, push, merge, branch, and tag actions to the User unless explicitly authorized.
+4. Confirm the authoritative repository.
+5. Perform Git preflight.
+6. Confirm the current branch and upstream.
+7. Determine the milestone mode.
+8. Confirm the target environment and command authority.
+9. Inspect the relevant current code or documentation.
+10. Confirm the milestone boundary.
+11. Ask only genuinely blocking questions.
+12. Escalate when the approved roadmap is materially insufficient.
+13. Implement or validate only the approved scope.
+14. Run the most relevant validation.
+15. Create exactly one closeout using the required filename.
+16. Leave commit, push, merge, branch, tag, Docker mutation, database mutation, NAS mutation, and deployment actions to the User unless explicitly authorized.
 
 Do not assume prior conversational context is complete or current.
 
 Do not implement from memory when current code, prompts, closeouts, or repository documents contradict it.
 
+Do not infer live runtime state solely from tracked files.
+
+Do not inspect or mutate live runtime state unless the prompt explicitly authorizes it.
+
 ---
 
-# 3. Milestone Modes
+# 4. Milestone Modes
 
 The milestone prompt should identify the intended mode.
 
@@ -127,7 +251,7 @@ Do not silently change milestone mode.
 
 ---
 
-## 3.1 Reconnaissance-Only Mode
+## 4.1 Reconnaissance-Only Mode
 
 Reconnaissance is the higher-reasoning phase.
 
@@ -139,9 +263,10 @@ Its purpose is to:
 - identify authority boundaries;
 - compare realistic implementation options;
 - resolve architecture questions;
-- identify safety, concurrency, recovery, persistence, and data-integrity concerns;
+- identify safety, concurrency, recovery, persistence, environment, and data-integrity concerns;
 - identify provenance implications;
 - identify migration or backfill requirements;
+- identify runtime or deployment implications;
 - select one recommended implementation direction;
 - produce a practical implementation roadmap.
 
@@ -158,9 +283,9 @@ When the prompt says reconnaissance only:
 - do not make schema changes;
 - do not repair defects;
 - do not create the implementation prompt unless requested;
-- do not run live ingestion, cleanup, deletion, migration, or other mutating workflows unless explicitly approved;
+- do not run live ingestion, cleanup, deletion, migration, Docker mutation, database mutation, NAS mutation, or other mutating workflows unless explicitly approved;
 - create the required reconnaissance closeout;
-- stop after the approved recon deliverables are complete.
+- stop after the approved reconnaissance deliverables are complete.
 
 Reconnaissance is not merely information gathering.
 
@@ -168,7 +293,7 @@ The closeout should be usable as the implementation roadmap.
 
 ---
 
-## 3.2 Implementation-After-Reconnaissance Mode
+## 4.2 Implementation-After-Reconnaissance Mode
 
 Implementation normally follows an approved reconnaissance closeout.
 
@@ -176,8 +301,8 @@ The reconnaissance closeout is the primary roadmap.
 
 Implementation should use a moderate, execution-focused reasoning posture:
 
-- verify recon assumptions against the current branch;
-- inspect the named files, services, schemas, routes, components, and tests;
+- verify reconnaissance assumptions against the current branch;
+- inspect the named files, services, schemas, routes, components, scripts, and tests;
 - make the smallest safe change satisfying the locked contract;
 - expand inspection only when current code materially contradicts the roadmap;
 - do not repeat broad reconnaissance;
@@ -187,9 +312,9 @@ Implementation should use a moderate, execution-focused reasoning posture:
 Recommended reading order:
 
 ```text
-1. CODING_AGENT_RULES.md
+1. coding_agent_rules_v7.md
 2. active implementation prompt
-3. approved recon closeout
+3. approved reconnaissance closeout
 4. named implementation files
 5. directly related tests
 6. broader documents only when necessary
@@ -197,21 +322,21 @@ Recommended reading order:
 
 Do not repeat repository-wide searching unless:
 
-- the repository changed materially after recon;
-- the recon omitted a required path;
-- targeted code contradicts the recon;
+- the repository changed materially after reconnaissance;
+- the reconnaissance omitted a required path;
+- targeted code contradicts the reconnaissance;
 - tests expose an undocumented dependency;
-- a persistence, provenance, or safety boundary remains unresolved.
+- a persistence, provenance, safety, environment, or runtime boundary remains unresolved.
 
-When escalating, identify the exact recon assumption that failed.
+When escalating, identify the exact reconnaissance assumption that failed.
 
 Implementation must not create alternative architectures merely because they are possible.
 
 ---
 
-## 3.3 Direct Low-Risk Implementation Mode
+## 4.3 Direct Low-Risk Implementation Mode
 
-A separate recon milestone is not required for:
+A separate reconnaissance milestone is not required for:
 
 - copy-only text changes;
 - small labels or wording changes;
@@ -229,11 +354,26 @@ Even for low-risk work:
 - run relevant validation;
 - create the required closeout.
 
-Do not classify work as low-risk merely to reduce effort when it touches provenance, Source identity, ingestion, cleanup, schema, Vault, credentials, or deployment.
+Do not classify work as low-risk merely to reduce effort when it touches:
+
+- provenance;
+- Source identity;
+- ingestion;
+- cleanup;
+- schema;
+- Vault;
+- credentials;
+- Docker;
+- database;
+- NAS;
+- environment isolation;
+- promotion;
+- rollback;
+- deployment.
 
 ---
 
-## 3.4 Validation-Only Mode
+## 4.4 Validation-Only Mode
 
 Validation-only milestones establish evidence about current behavior without changing implementation.
 
@@ -246,22 +386,25 @@ Examples include:
 - NAS Source lineage;
 - Optical eject/reinsert identity;
 - iCloud staging handoff;
-- runtime smoke testing;
+- Development runtime smoke testing;
+- Test environment validation;
 - backup and restore rehearsal;
 - performance baselining.
 
 In validation-only mode:
 
+- confirm the approved target environment;
 - inspect the approved test matrix;
 - create or use only approved controlled test data;
 - run the approved checks;
-- collect database, API, report, filesystem, and UI evidence;
+- collect database, API, report, filesystem, UI, container, image, network, and release evidence as applicable;
 - document pass/fail results;
 - do not modify implementation code;
 - do not silently repair defects;
 - do not modify schema;
 - do not perform unapproved data cleanup;
-- do not broaden the test matrix without explanation.
+- do not broaden the test matrix without explanation;
+- do not mutate Docker, database, NAS, or deployment state unless the prompt explicitly authorizes the exact operation.
 
 A validation milestone must not silently become a repair milestone.
 
@@ -276,7 +419,7 @@ When a defect is found:
 
 ---
 
-## 3.5 Documentation-Only Mode
+## 4.5 Documentation-Only Mode
 
 Documentation-only work may update:
 
@@ -288,23 +431,26 @@ Documentation-only work may update:
 - Parking Lot;
 - release roadmap;
 - chat handoff documents;
-- milestone documentation.
+- milestone documentation;
+- deployment and operator documentation.
 
 In documentation-only mode:
 
 - do not modify application code;
-- verify statements against current code, prompts, closeouts, and approved decisions;
+- verify statements against current code, prompts, closeouts, approved decisions, and maintained deployment guides;
 - distinguish implemented behavior from future direction;
+- distinguish tracked contract from live runtime evidence;
 - preserve historical prompt and closeout files;
 - do not delete historical milestone records;
 - create only the requested documents;
 - report new and superseded files;
 - use exact-file staging guidance;
-- ensure current global documents agree on major project state.
+- ensure current global documents agree on major project state;
+- do not inspect live containers, databases, protected configuration, release manifests, or NAS contents unless explicitly authorized.
 
 ---
 
-## 3.6 Bug-Fix Follow-Up Mode
+## 4.6 Bug-Fix Follow-Up Mode
 
 A bug-fix follow-up should remain limited to the documented defect.
 
@@ -323,7 +469,7 @@ A bug fix should not be hidden inside unrelated later work.
 
 ---
 
-## 3.7 Deployment or Operational Validation Mode
+## 4.7 Deployment or Operational Validation Mode
 
 Deployment and runtime work may require reconnaissance, implementation, or validation-only behavior.
 
@@ -333,9 +479,13 @@ Deployment work should explicitly consider:
 
 - target host;
 - operating system;
+- authoritative repository;
+- Development/Test/Production environment;
 - Docker;
+- Compose project identity;
 - PostgreSQL;
 - Redis;
+- application storage;
 - NAS mounts;
 - Vault paths;
 - permissions;
@@ -348,13 +498,22 @@ Deployment work should explicitly consider:
 - promotion;
 - rollback;
 - secrets;
-- network exposure.
+- network exposure;
+- release manifests;
+- image identity;
+- shared-host protection.
 
 Do not assume Windows identity behavior works unchanged on Linux.
 
+Do not assume infrastructure access equals Source identity support.
+
+Do not assume Development behavior is valid Test or Production behavior.
+
+Silence is not authorization to inspect or mutate live state.
+
 ---
 
-# 4. Reasoning-Level Guidance
+# 5. Reasoning-Level Guidance
 
 Recommended operating pattern:
 
@@ -376,6 +535,9 @@ Use for:
 - credential/session behavior;
 - deployment architecture;
 - backup and restore;
+- environment isolation;
+- candidate promotion;
+- rollback;
 - ambiguous cross-system behavior;
 - data-loss risk.
 
@@ -383,13 +545,14 @@ Use for:
 
 Use for:
 
-- targeted implementation after approved recon;
+- targeted implementation after approved reconnaissance;
 - bounded backend changes;
 - bounded frontend changes;
 - test additions;
 - implementation debugging;
 - closeout creation;
-- targeted validation automation.
+- targeted validation automation;
+- bounded operator-script changes with approved architecture.
 
 ### Lower reasoning
 
@@ -409,7 +572,7 @@ High reasoning should produce a concrete roadmap, not endless exploration.
 
 ---
 
-# 5. Escalation Protocol
+# 6. Escalation Protocol
 
 Do not continue experimenting indefinitely when the roadmap is insufficient.
 
@@ -421,13 +584,13 @@ STATUS: ESCALATION REQUIRED
 
 when:
 
-- current code materially contradicts the recon closeout;
+- current code materially contradicts the reconnaissance closeout;
 - two or more materially different architectures remain unresolved;
 - required behavior appears to need a new schema or migration;
 - a new persistence model appears necessary;
 - a new orchestration framework appears necessary;
 - an existing service cannot satisfy the contract without changing established semantics;
-- a safety, concurrency, data-integrity, Vault, provenance, recovery, or credential issue is discovered;
+- a safety, concurrency, data-integrity, Vault, provenance, recovery, credential, environment, or deployment issue is discovered;
 - focused investigation cannot explain a failing test or runtime result;
 - implementation would materially expand beyond the milestone;
 - a product decision is required;
@@ -436,7 +599,12 @@ when:
 - required manual or physical validation cannot be completed;
 - a frontend value would need to become backend execution authority;
 - a parallel ingestion or workflow engine appears necessary;
-- unrelated dirty files threaten commit isolation.
+- unrelated dirty files threaten commit isolation;
+- a Development change would affect Test or future Production;
+- a Docker, database, NAS, or deployment mutation is required but not authorized;
+- protected configuration or secrets would need to be exposed;
+- the only apparent route requires bypassing missing Test promotion or rollback controls;
+- the live environment contradicts the tracked contract.
 
 Required format:
 
@@ -445,9 +613,9 @@ STATUS: ESCALATION REQUIRED
 
 Observed conflict:
 Approved assumption that does not match:
-Files or systems inspected:
+Files, systems, and environments inspected:
 Evidence:
-Data/provenance implications:
+Data/provenance/runtime implications:
 Why proceeding is unsafe or materially broader:
 Smallest safe options:
 Recommended decision:
@@ -460,7 +628,7 @@ Stop at the escalation point.
 
 ---
 
-# 6. Simplicity and Restraint
+# 7. Simplicity and Restraint
 
 The project is complex.
 
@@ -493,7 +661,8 @@ Avoid unless clearly required:
 - framework changes;
 - abstractions for hypothetical providers;
 - multiple wrapper layers;
-- parallel implementations of existing pathways.
+- parallel implementations of existing pathways;
+- ad hoc deployment logic outside approved operators.
 
 Before adding an abstraction, answer:
 
@@ -502,7 +671,7 @@ Before adding an abstraction, answer:
 3. What is the smallest alternative?
 4. What maintenance burden will it add?
 5. Can a direct mapping, adapter, or conditional dispatch solve the problem?
-6. Does it alter authority, provenance, or failure behavior?
+6. Does it alter authority, provenance, failure, environment, or release behavior?
 
 Prefer the simpler safe implementation.
 
@@ -510,45 +679,46 @@ Do not overbuild merely because the agent can.
 
 ---
 
-# 7. Context Reading Rules
+# 8. Context Reading Rules
 
-## 7.1 Always Read
+## 8.1 Always Read
 
-- `docs/context/CODING_AGENT_RULES*.md` identified by the prompt;
+- `docs/context/coding_agent_rules_v7.md`;
 - the active milestone prompt;
 - approved prompt addenda;
-- the immediately preceding recon closeout when implementing from recon.
+- the immediately preceding reconnaissance closeout when implementing from reconnaissance.
 
-## 7.2 Read as Needed
+## 8.2 Read as Needed
 
 Use broader documents only when relevant:
 
 ```text
-docs/context/PROJECT_CONTEXT*.md
-docs/context/PROJECT_ARCHITECTURE*.md
-docs/context/ARCHITECTURE_ROADMAP*.md
-docs/context/PROJECT_WORKFLOW*.md
+docs/context/project_context_v7.md
+docs/context/project_architecture_v7.md
+docs/context/project_workflow_v7.md
 docs/context/MILESTONE_HISTORY*.md
-docs/context/Parking_Lot*.md
+docs/context/canonical_parking_lot_v7.md
 v1.0 release roadmap
 prior prompt and closeout files in the same feature area
+docs/server_deployment/ maintained guides
+docs/server_deployment/deployment_milestones/ relevant closeouts
 ```
 
-## 7.3 Targeted Implementation Reading
+## 8.3 Targeted Implementation Reading
 
-For implementation after recon, begin with:
+For implementation after reconnaissance, begin with:
 
 1. this rules document;
 2. implementation prompt;
-3. approved recon closeout;
+3. approved reconnaissance closeout;
 4. named files;
 5. directly related tests.
 
 Do not reread the entire repository unless required.
 
-## 7.4 High-Risk Context
+## 8.4 High-Risk Context
 
-Read relevant architecture and workflow sections before changing:
+Read relevant architecture, workflow, and deployment sections before changing:
 
 - ingestion;
 - Source Intake;
@@ -565,13 +735,19 @@ Read relevant architecture and workflow sections before changing:
 - backfills;
 - authentication;
 - sessions;
-- production runtime;
+- Development runtime;
+- Test release behavior;
+- Production design;
 - durable background routines;
-- backup and restore.
+- backup and restore;
+- Docker;
+- NAS mounts;
+- environment isolation;
+- promotion and rollback.
 
 ---
 
-# 8. Cost-Aware Investigation and Stopping
+# 9. Cost-Aware Investigation and Stopping
 
 Milestone prompts should be as long as needed, but no longer.
 
@@ -582,16 +758,19 @@ Use these principles:
 - standing rules belong here;
 - milestone prompts describe the current delta;
 - reconnaissance carries architecture into implementation;
-- implementation prompts should not restate the entire recon;
+- implementation prompts should not restate the entire reconnaissance;
 - start with likely relevant files;
 - stop broad investigation when the implementation path is stable;
-- do not repeat repository-wide scans without a reason.
+- do not repeat repository-wide scans without a reason;
+- use approved deployment guides and closeouts instead of rediscovering settled runtime facts.
 
 Stop broad investigation when:
 
 - the authority boundary is confirmed;
 - affected persistence is understood;
 - provenance impact is understood;
+- target environment is confirmed;
+- shared-host impact is understood;
 - required files are identified;
 - implementation path is known;
 - validation is defined;
@@ -607,7 +786,10 @@ Do not stop while any of these remain unclear:
 - execution authority;
 - persistence semantics;
 - identity matching;
-- rollback or recovery implications.
+- rollback or recovery implications;
+- environment isolation;
+- protected configuration handling;
+- release identity.
 
 Longer execution time is not itself evidence of better work.
 
@@ -615,16 +797,24 @@ The objective is the smallest safe and validated change.
 
 ---
 
-# 9. Git and Working Tree Rules
+# 10. Git and Working Tree Rules
 
-## 9.1 Git Preflight
+## 10.1 Git Preflight
 
-Before editing, report:
+Before editing, from the **VS Code Remote SSH / Linux terminal**:
 
-```powershell
+```bash
+cd /home/chuck/projects/photo-organizer-dev
 git branch --show-current
 git status --short
 git log --oneline --decorate -5
+```
+
+When upstream state matters, also use:
+
+```bash
+git rev-parse HEAD
+git rev-parse '@{upstream}'
 ```
 
 Expected normal state:
@@ -633,6 +823,7 @@ Expected normal state:
 correct branch
 working tree clean
 active prompt committed
+branch synchronized with upstream when required
 ```
 
 Allowed exception:
@@ -641,7 +832,7 @@ Allowed exception:
 only the active prompt contains expected Q&A or addenda
 ```
 
-## 9.2 Branch Correctness
+## 10.2 Branch Correctness
 
 Substantial implementation should normally occur on the approved feature branch.
 
@@ -655,9 +846,17 @@ stop and report the mismatch.
 
 Do not create or switch branches unless explicitly authorized.
 
-Documentation-only work may occur on `main` only when the prompt or User permits it.
+An explicitly approved long-running deployment/documentation branch may continue across related deployment milestones when:
 
-## 9.3 Dirty-Tree Classification
+- the branch purpose remains current;
+- the tree is clean;
+- the branch is synchronized;
+- the work remains inside the approved arc;
+- the Product Owner approves continuation.
+
+Documentation-only work may occur on the current approved branch when the prompt or User permits it.
+
+## 10.3 Dirty-Tree Classification
 
 Classify each unexpected dirty file as:
 
@@ -675,9 +874,9 @@ Report:
 - brief diff summary;
 - recommended handling.
 
-Do not edit, revert, stage, stash, commit, delete, or clean unexpected files without authorization.
+Do not edit, revert, stage, stash, commit, delete, move, or clean unexpected files without authorization.
 
-## 9.4 Git Write Commands
+## 10.4 Git Write Commands
 
 Do not run these without explicit authorization:
 
@@ -707,13 +906,14 @@ git diff --stat
 git log
 git branch
 git ls-files
+git rev-parse
 ```
 
-## 9.5 Specific-File Staging
+## 10.5 Specific-File Staging
 
 Do not use:
 
-```powershell
+```bash
 git add .
 ```
 
@@ -721,13 +921,13 @@ unless the User explicitly approves the full dirty tree.
 
 Preferred review and staging sequence:
 
-```powershell
+```bash
 git status --short
 git diff --name-only
 git diff --stat
 
-git add "<specific file>"
-git add "<specific file>"
+git add -- "<specific file>"
+git add -- "<specific file>"
 
 git diff --cached --name-only
 git diff --cached --stat
@@ -740,9 +940,21 @@ Do not commit unexplained files.
 
 Do not mix unrelated work in one commit.
 
+When replacing a versioned global document:
+
+```text
+stage new version
+stage removal of superseded version
+verify exact paths
+run whitespace check
+commit replacement together
+```
+
+Windows CRLF line endings should be normalized to Linux LF when they create whitespace-check failures.
+
 ---
 
-# 10. Prompt and Closeout File Names
+# 11. Prompt and Closeout File Names
 
 The active milestone prompt is authoritative for:
 
@@ -751,6 +963,8 @@ The active milestone prompt is authoritative for:
 - prompt filename;
 - closeout filename;
 - deliverables.
+
+## 11.1 Application Milestones
 
 Use:
 
@@ -766,15 +980,7 @@ Example:
 12.75.0_provenance_verification_recon_closeout.md
 ```
 
-Rules:
-
-- use the same basename;
-- replace `_prompt.md` with `_closeout.md`;
-- do not invent another closeout filename;
-- do not rename for convenience;
-- do not create additional human-authored report files unless requested.
-
-A new milestone arc normally begins at:
+A new application milestone arc normally begins at:
 
 ```text
 xx.xx.0
@@ -788,9 +994,33 @@ xx.xx.2
 xx.xx.3
 ```
 
+## 11.2 Deployment Milestones
+
+Use:
+
+```text
+<deployment_number>_deployment_<exact_snake_case_name>_prompt.md
+<deployment_number>_deployment_<exact_snake_case_name>_closeout.md
+```
+
+Example:
+
+```text
+010_deployment_architecture_documentation_reconnaissance_prompt.md
+010_deployment_architecture_documentation_reconnaissance_closeout.md
+```
+
+Rules:
+
+- use the same basename;
+- replace `_prompt.md` with `_closeout.md`;
+- do not invent another closeout filename;
+- do not rename for convenience;
+- do not create additional human-authored report files unless requested.
+
 ---
 
-# 11. Prompt Addenda and Q&A
+# 12. Prompt Addenda and Q&A
 
 When requested, append Coder questions, Product Owner answers, and final lock-ins to the same prompt file.
 
@@ -818,6 +1048,8 @@ Stop and ask when an addendum materially changes:
 - milestone mode;
 - safety boundaries;
 - live-operation approval;
+- Docker or deployment authority;
+- database or NAS authority;
 - destructive behavior;
 - Vault behavior;
 - Source identity;
@@ -826,19 +1058,21 @@ Stop and ask when an addendum materially changes:
 - migration;
 - backfill;
 - credential handling;
+- environment isolation;
+- release identity;
 - implementation architecture;
 - prompt filename;
 - closeout filename.
 
 ---
 
-# 12. Core Architecture Rules
+# 13. Core Architecture Rules
 
 These rules are mandatory unless a milestone explicitly changes them.
 
 ---
 
-## 12.1 Local-First
+## 13.1 Local-First
 
 Photo Organizer is a local-first archival system.
 
@@ -846,11 +1080,11 @@ Cloud providers may be acquisition Sources.
 
 They are not the system of record.
 
-The local Vault and database remain archival and operational truth.
+The configured Vault and database remain archival and operational truth.
 
 ---
 
-## 12.2 Original Media Preservation
+## 13.2 Original Media Preservation
 
 Do not modify original Source media in place.
 
@@ -866,7 +1100,7 @@ This applies to:
 
 ---
 
-## 12.3 Vault
+## 13.3 Vault
 
 The Vault is immutable canonical storage.
 
@@ -878,7 +1112,8 @@ Do not write directly to Vault from:
 - preview code;
 - identity providers;
 - helper utilities;
-- UI workflows.
+- UI workflows;
+- deployment scripts.
 
 Do not rewrite canonical originals for:
 
@@ -890,7 +1125,7 @@ Do not rewrite canonical originals for:
 
 ---
 
-## 12.4 Source Intake Authority
+## 13.4 Source Intake Authority
 
 Source Intake is the filesystem ingestion authority.
 
@@ -915,7 +1150,7 @@ Source Selection and dispatch do not ingest media.
 
 ---
 
-## 12.5 Cloud Acquisition Boundary
+## 13.5 Cloud Acquisition Boundary
 
 Cloud acquisition is staging-only.
 
@@ -931,7 +1166,7 @@ It must not directly write to:
 
 ---
 
-## 12.6 Cleanup
+## 13.6 Cleanup
 
 Cleanup may act only on verified temporary local staging.
 
@@ -957,7 +1192,7 @@ Cleanup must be:
 
 ---
 
-## 12.7 User Authority
+## 13.7 User Authority
 
 Do not silently undo user decisions, including:
 
@@ -974,7 +1209,7 @@ Do not silently undo user decisions, including:
 
 ---
 
-## 12.8 AI and Provider Evidence
+## 13.8 AI and Provider Evidence
 
 AI, computer vision, geocoding, metadata-provider, and cloud-provider output are evidence.
 
@@ -984,7 +1219,7 @@ Do not promote evidence automatically unless the milestone explicitly defines re
 
 ---
 
-## 12.9 Credential Safety
+## 13.9 Credential Safety
 
 Do not store or expose:
 
@@ -995,7 +1230,9 @@ Do not store or expose:
 - secrets;
 - credentials in logs;
 - credentials in database rows;
-- credentials in source-controlled files.
+- credentials in source-controlled files;
+- protected environment-file contents;
+- protected release-manifest contents unless explicitly authorized and necessary.
 
 Provider helpers may own external session mechanisms.
 
@@ -1003,9 +1240,177 @@ Photo Organizer may expose only approved non-secret status.
 
 ---
 
-# 13. Source Architecture Rules
+# 14. Environment Isolation and Release Rules
 
-## 13.1 Source Endpoint
+## 14.1 Development Environment
+
+Current Development contract:
+
+```text
+Host: henderson-server1
+Compose project: photo-organizer-dev
+Frontend: 127.0.0.1:13000
+Backend: 127.0.0.1:18001
+PostgreSQL: unpublished
+Redis: unpublished
+Storage mode: local
+Configuration: docker/.env.development
+```
+
+Development uses separate named volumes for:
+
+- PostgreSQL;
+- Redis;
+- application storage.
+
+Development source is copied into images at build time.
+
+It is not bind-mounted into running containers.
+
+Therefore:
+
+```text
+repository edit
+→ rebuild affected image
+→ recreate or replace affected container
+→ health check
+→ targeted validation
+```
+
+A restart alone does not activate repository edits.
+
+Routine start deliberately performs no build, pull, or replacement.
+
+Do not claim a code change is active until the affected image and container have been updated.
+
+---
+
+## 14.2 Test Environment
+
+Current Test contract:
+
+```text
+Host: henderson-server1
+Compose project: photo-organizer-test
+Frontend: 127.0.0.1:13001
+Backend: 127.0.0.1:18002
+PostgreSQL: unpublished
+Redis: unpublished
+Storage mode: local
+Protected configuration: /home/chuck/.config/photo-organizer/test.env
+Release state: /home/chuck/.local/state/photo-organizer/test/release.json
+```
+
+Test uses:
+
+- immutable full-SHA backend image;
+- immutable full-SHA frontend image;
+- recorded image IDs;
+- separate PostgreSQL;
+- separate Redis;
+- separate application storage;
+- separate networks;
+- separate configuration;
+- separate release state;
+- no runtime Source bind mounts.
+
+Routine Test start must not:
+
+- rebuild from the workspace;
+- pull an unapproved replacement;
+- silently replace the candidate;
+- use `latest`;
+- alter release identity.
+
+Candidate replacement, rollback, Production promotion, and Windows Test controls are not implemented.
+
+Do not use ad hoc Docker commands to bypass those missing workflows.
+
+---
+
+## 14.3 Production Boundary
+
+Current Linux Production is not implemented.
+
+Legacy Windows Production scripts, examples, and a generic Compose artifact remain tracked.
+
+They are not the current approved Linux Production contract.
+
+Do not infer Production capability from Development or Test.
+
+Production work requires explicit design and validation for:
+
+- Compose project;
+- protected configuration;
+- secrets;
+- networking;
+- storage authority;
+- Vault;
+- PostgreSQL;
+- Redis;
+- release identity;
+- promotion;
+- rollback;
+- backup;
+- restore;
+- supervision;
+- cutover.
+
+---
+
+## 14.4 Environment Separation
+
+Development, Test, and future Production must not silently share:
+
+```text
+PostgreSQL data
+Redis data
+application storage
+Vault data
+configuration
+release manifests
+Compose project identity
+environment-specific networks
+environment-specific volumes
+```
+
+Do not allow a Development milestone to mutate Test.
+
+Do not allow a Test milestone to create implicit Production behavior.
+
+Do not use Development state as evidence of Test state.
+
+Do not use Test state as evidence of Production state.
+
+---
+
+## 14.5 Network Exposure
+
+Current application services bind only to server loopback.
+
+PostgreSQL and Redis are not published.
+
+Windows browser access uses explicit SSH tunnels.
+
+Do not expose:
+
+- frontend;
+- backend;
+- PostgreSQL;
+- Redis;
+- Portainer;
+- Cockpit;
+- NAS shares;
+
+beyond approved home-network or loopback boundaries.
+
+Do not add public ingress without explicit architecture and security approval.
+
+---
+
+# 15. Source Architecture Rules
+
+## 15.1 Source Endpoint
 
 A Source Endpoint is the durable identity of a:
 
@@ -1031,11 +1436,12 @@ A Source Endpoint is not:
 - a friendly Source name;
 - an arbitrary folder path;
 - a physical Optical drive;
-- a temporary staging directory.
+- a temporary staging directory;
+- a Linux mount path by itself.
 
 ---
 
-## 13.2 Source Profile
+## 15.2 Source Profile
 
 A Source Profile is the user-facing saved Source.
 
@@ -1053,7 +1459,7 @@ The UI term **Source** normally means Source Profile.
 
 ---
 
-## 13.3 Endpoint-Relative Root
+## 15.3 Endpoint-Relative Root
 
 Semantics:
 
@@ -1077,7 +1483,7 @@ Do not treat an endpoint-relative root as a new endpoint.
 
 ---
 
-## 13.4 Observed Path
+## 15.4 Observed Path
 
 Observed Path is current host access evidence.
 
@@ -1087,15 +1493,16 @@ Examples:
 E:\
 F:\
 \\HENDERSON-NAS\Photos
+/mnt/nas/photo-organizer
 ```
 
 Observed Path is not durable identity.
 
-Do not use a changed drive letter alone to create a new Source identity.
+Do not use a changed drive letter or changed mount path alone to create a new Source identity.
 
 ---
 
-## 13.5 Runtime Root
+## 15.5 Runtime Root
 
 Runtime Root is the backend-resolved execution path for one launch.
 
@@ -1112,7 +1519,7 @@ The frontend must not authorize it.
 
 ---
 
-## 13.6 Source Selection
+## 15.6 Source Selection
 
 Source Selection verifies current identity and availability.
 
@@ -1135,7 +1542,7 @@ Source Selection must not:
 
 ---
 
-## 13.7 Readiness
+## 15.7 Readiness
 
 Readiness is non-mutating.
 
@@ -1153,7 +1560,7 @@ Launch-time revalidation remains required.
 
 ---
 
-## 13.8 Run Ingestion Dispatch
+## 15.8 Run Ingestion Dispatch
 
 Run Ingestion dispatch revalidates the saved Source immediately before launch.
 
@@ -1180,7 +1587,7 @@ iCloud continues to use provider-specific iCloud Intake.
 
 ---
 
-## 13.9 Frontend Values Are Not Execution Authority
+## 15.9 Frontend Values Are Not Execution Authority
 
 Do not treat these frontend values as authoritative:
 
@@ -1198,19 +1605,29 @@ The backend must recompute or verify them.
 
 ---
 
-# 14. Source-Type-Specific Rules
+# 16. Source-Type-Specific Rules
 
-## 14.1 Local
+## 16.1 Local
 
-Local represents storage internal to the current host.
+Local represents storage internal to the current Source-access host.
 
-Current implementation is Windows-first.
+The general provider is currently Windows-only.
 
 Do not assume Windows volume evidence works unchanged on Linux or macOS.
 
+The controlled Linux Development fixture is:
+
+- path-only;
+- explicitly acknowledged;
+- limited to one exact controlled root;
+- not durable identity;
+- not a general Linux Local provider.
+
+Do not broaden it casually.
+
 ---
 
-## 14.2 External
+## 16.2 External
 
 External represents attached HDD or SSD storage.
 
@@ -1219,11 +1636,12 @@ Rules:
 - drive letter is not identity;
 - reconnecting under another letter may still be the same endpoint;
 - alias is not identity;
-- one endpoint may support multiple intentional Source roots.
+- one endpoint may support multiple intentional Source roots;
+- general Linux durable External identity is not implemented.
 
 ---
 
-## 14.3 Removable Media
+## 16.3 Removable Media
 
 Removable Media represents writable removable storage such as USB flash media.
 
@@ -1231,9 +1649,11 @@ It uses the same endpoint-linked model but remains a separate Source Type.
 
 Do not collapse modern Removable Media into a legacy generic type.
 
+General Linux durable Removable identity is not implemented.
+
 ---
 
-## 14.4 NAS
+## 16.4 NAS
 
 NAS identity is anchored to canonical server/share authority.
 
@@ -1245,7 +1665,7 @@ Example:
 
 Rules:
 
-- direct UNC access is supported;
+- direct UNC access is supported through the Windows provider;
 - server-only UNC is invalid;
 - mapped drive letter is not NAS identity;
 - endpoint-relative root must remain inside the share;
@@ -1253,9 +1673,27 @@ Rules:
 - NAS reuses filesystem Source Intake;
 - do not introduce a NAS-specific ingestion engine.
 
+Current server infrastructure mount:
+
+```text
+/mnt/nas/photo-organizer
+```
+
+Current validated share source:
+
+```text
+//192.168.1.171/PhotoOrganizer
+```
+
+The working CIFS mount does not itself establish generic Linux NAS Source identity.
+
+No current Linux provider maps the POSIX mount path to the canonical NAS server/share contract.
+
+Do not confuse infrastructure mount access with supported Linux NAS Source Selection or dispatch.
+
 ---
 
-## 14.5 Optical
+## 16.5 Optical
 
 Optical identity represents the logical disc, not the drive.
 
@@ -1282,7 +1720,8 @@ Rules:
 - do not silently migrate v1 to v2;
 - do not treat v1 and v2 as interchangeable;
 - do not use the physical Optical drive as disc identity;
-- exact matching remains fail-closed.
+- exact matching remains fail-closed;
+- general Linux Optical discovery and fingerprinting are not implemented.
 
 Not supported unless explicitly scoped:
 
@@ -1294,7 +1733,7 @@ Not supported unless explicitly scoped:
 
 ---
 
-## 14.6 iCloud
+## 16.6 iCloud
 
 For iCloud:
 
@@ -1309,6 +1748,12 @@ For iCloud:
 - staging path alone is not sufficient final provenance;
 - working iCloud behavior must not be redesigned without a named requirement.
 
+iCloud uses provider-specific creation, readiness, selection, and dispatch rather than the generic filesystem provider.
+
+Provider-specific services are implemented and tested.
+
+Complete live Linux iCloud acquisition/import execution remains a separate validation item.
+
 Established operator concepts may include:
 
 ```text
@@ -1321,15 +1766,19 @@ Keep raw run IDs, provider diagnostics, historical counters, and low-level clean
 
 ---
 
-# 15. Provenance Rules
+# 17. Provenance Rules
 
 Provenance is a first-class architectural system.
 
 Do not treat it as a report-only concern.
 
+The detailed post-12.64 documentation reconciliation is handled separately.
+
+Until that reconciliation is complete, these rules remain mandatory and must not be weakened.
+
 ---
 
-## 15.1 Content Identity and Provenance Are Separate
+## 17.1 Content Identity and Provenance Are Separate
 
 SHA-256 identifies exact content.
 
@@ -1356,7 +1805,7 @@ The same Asset may have legitimate observations from:
 
 ---
 
-## 15.2 Asset, Vault, and Provenance Distinction
+## 17.2 Asset, Vault, and Provenance Distinction
 
 Agents must distinguish:
 
@@ -1366,7 +1815,7 @@ Vault file
 Source Endpoint
 Source Profile
 endpoint-relative root
-Source-relative asset path
+Source-relative Asset path
 Observed Path
 Runtime Root
 Source Intake run
@@ -1379,7 +1828,7 @@ Do not use these terms interchangeably.
 
 ---
 
-## 15.3 Provenance Anchor
+## 17.3 Provenance Anchor
 
 For modern Sources, provenance should be logically explainable through:
 
@@ -1397,7 +1846,7 @@ Do not obscure the architectural meaning.
 
 ---
 
-## 15.4 Source-Relative Path
+## 17.4 Source-Relative Path
 
 Distinguish:
 
@@ -1405,7 +1854,7 @@ Distinguish:
 runtime absolute path
 endpoint boundary
 configured endpoint-relative root
-asset Source-relative path
+Asset Source-relative path
 ```
 
 Runtime absolute paths are host-specific.
@@ -1414,7 +1863,7 @@ Source-relative paths should explain origin without depending on a transient dri
 
 ---
 
-## 15.5 Exact Duplicate Provenance
+## 17.5 Exact Duplicate Provenance
 
 When exact content already exists:
 
@@ -1429,7 +1878,7 @@ Do not “repair” duplicate provenance by deleting historical rows without an 
 
 ---
 
-## 15.6 Repeated Intake Idempotency
+## 17.6 Repeated Intake Idempotency
 
 Repeated unchanged intake should be deterministic.
 
@@ -1455,7 +1904,7 @@ Unchanged repeat observation should not generate duplicate event noise.
 
 ---
 
-## 15.7 Cross-Source Duplicate Behavior
+## 17.7 Cross-Source Duplicate Behavior
 
 When the same SHA-256 is ingested from another Source:
 
@@ -1473,7 +1922,7 @@ Do not create a second Asset merely to preserve origin.
 
 ---
 
-## 15.8 Provenance and Source Changes
+## 17.8 Provenance and Source Changes
 
 These changes must not erase historical origin:
 
@@ -1492,7 +1941,7 @@ These changes must not erase historical origin:
 
 ---
 
-## 15.9 Skipped and Deferred Inventory
+## 17.9 Skipped and Deferred Inventory
 
 Items seen in Source or provider inventory but not imported are not successful Asset provenance.
 
@@ -1513,7 +1962,7 @@ Do not falsely create Asset or provenance records for unsupported, deferred, amb
 
 ---
 
-## 15.10 Provenance and iCloud
+## 17.10 Provenance and iCloud
 
 Temporary staging paths do not fully explain cloud origin.
 
@@ -1525,7 +1974,7 @@ Do not use cleanup of local staging as justification to remove provenance.
 
 ---
 
-## 15.11 Provenance and Reports
+## 17.11 Provenance and Reports
 
 Reports may summarize provenance effects.
 
@@ -1535,7 +1984,7 @@ Database state remains authoritative.
 
 ---
 
-# 16. Provenance Evidence Standards
+# 18. Provenance Evidence Standards
 
 For provenance work, conclusions should be supported by appropriate combinations of:
 
@@ -1570,6 +2019,7 @@ The closeout should identify:
 - actual relationships;
 - whether behavior is confirmed;
 - whether behavior is inferred;
+- whether behavior is reconstructed;
 - whether behavior remains untested;
 - whether environment blocked validation.
 
@@ -1577,7 +2027,7 @@ Do not describe an inference as confirmed behavior.
 
 ---
 
-# 17. Provenance Validation Matrix Expectations
+# 19. Provenance Validation Matrix Expectations
 
 When a prompt scopes provenance validation, expect cases such as:
 
@@ -1604,11 +2054,11 @@ Test-data cleanup must be:
 - bounded;
 - verified;
 - documented;
-- separate from production data.
+- separate from retained data.
 
 ---
 
-# 18. Validation-Discovered Defects
+# 20. Validation-Discovered Defects
 
 When validation discovers a defect:
 
@@ -1632,7 +2082,121 @@ not tested
 
 ---
 
-# 19. Scope Discipline
+# 21. Runtime, Docker, Database, and NAS Authority
+
+## 21.1 Live Inspection and Mutation
+
+The Coder must not assume authority to:
+
+- run Docker commands;
+- inspect live containers;
+- inspect image IDs;
+- start or stop services;
+- build or pull images;
+- create, replace, or remove containers;
+- inspect or mutate volumes;
+- inspect or mutate databases;
+- inspect or mutate Redis;
+- access or mutate NAS contents;
+- alter mounts;
+- alter firewall rules;
+- alter SSH configuration;
+- alter system services;
+- read protected environment files;
+- read protected release manifests.
+
+The active prompt must state what is allowed.
+
+Read-only repository inspection does not imply live-runtime inspection authority.
+
+Read-only live inspection does not imply mutation authority.
+
+Authorization for one environment does not imply authorization for another.
+
+---
+
+## 21.2 Shared-Host Protection
+
+The Linux server is a shared host for:
+
+- Development;
+- Test;
+- Portainer;
+- Cockpit;
+- NAS mounts;
+- future additional services.
+
+Before any live operation, identify:
+
+- target Compose project;
+- target containers;
+- target images;
+- target networks;
+- target volumes;
+- target ports;
+- target configuration;
+- possible effects on Development, Test, Portainer, NAS, and unrelated services.
+
+Do not use broad commands that may affect unrelated resources.
+
+Do not use unscoped prune, remove, kill, stop-all, or network/volume cleanup commands.
+
+---
+
+## 21.3 Protected Configuration
+
+Protected Development configuration:
+
+```text
+docker/.env.development
+```
+
+Protected Test configuration:
+
+```text
+/home/chuck/.config/photo-organizer/test.env
+```
+
+Protected Test release state:
+
+```text
+/home/chuck/.local/state/photo-organizer/test/release.json
+```
+
+Rules:
+
+- do not print contents;
+- do not commit contents;
+- do not copy secrets into closeouts;
+- do not replace files without explicit scope;
+- distinguish tracked examples from live protected configuration;
+- report only approved non-secret metadata.
+
+---
+
+## 21.4 NAS Authority
+
+Current NAS contract:
+
+```text
+Server mount: /mnt/nas/photo-organizer
+Share source: //192.168.1.171/PhotoOrganizer
+Protocol: CIFS / SMB 3.1.1
+```
+
+Do not:
+
+- write to NAS without authorization;
+- change permissions without authorization;
+- change mount configuration without authorization;
+- treat NAS as current Dev/Test live storage;
+- place live PostgreSQL or Redis data on the NAS without approved design;
+- expose NAS credentials;
+- use NAS paths as an editable Git working tree.
+
+---
+
+# 22. Scope Discipline
 
 Implement only the approved milestone.
 
@@ -1648,7 +2212,10 @@ Do not:
 - add speculative future support;
 - broaden tests into unrelated systems without reason;
 - add compatibility work solely to preserve disposable test data;
-- reintroduce retired UI workflows.
+- reintroduce retired UI workflows;
+- mutate Test during Development work;
+- create Production behavior during Test work;
+- alter deployment behavior during an application milestone without explicit scope.
 
 When unrelated issues are discovered:
 
@@ -1661,18 +2228,19 @@ Prefer targeted changes over broad rewrites.
 
 ---
 
-# 20. Stop Conditions
+# 23. Stop Conditions
 
-Stop and ask before coding when:
+Stop and ask before coding or operating when:
 
 - the request conflicts with this document;
 - the branch is wrong;
+- the repository path is not authoritative;
 - unexpected dirty files exist;
 - safety cannot be established;
 - Source Intake would be bypassed;
 - cloud acquisition would write directly to Vault, Drop Zone, Assets, or provenance;
 - cleanup could affect anything outside verified temporary staging;
-- code materially differs from prompt or recon;
+- code materially differs from prompt or reconnaissance;
 - an unapproved migration or backfill is required;
 - destructive behavior was not explicitly scoped;
 - Source identity semantics must change;
@@ -1686,15 +2254,22 @@ Stop and ask before coding when:
 - an additional report file appears necessary;
 - an existing proven pathway would be duplicated;
 - a new framework or persistence model appears necessary;
-- required manual, physical, or provider validation cannot be completed.
+- required manual, physical, or provider validation cannot be completed;
+- a Development edit would affect Test;
+- Test candidate replacement is required but not supported;
+- rollback is required but not supported;
+- Production behavior is assumed but not implemented;
+- Docker, database, NAS, or deployment mutation is needed but not authorized;
+- live runtime state conflicts with tracked contract;
+- current Linux Source-provider capability is being over-assumed.
 
 Use the escalation protocol when the issue exceeds a normal clarification question.
 
 ---
 
-# 21. File and Data Safety
+# 24. File and Data Safety
 
-Before code can:
+Before code or operations can:
 
 - delete;
 - move;
@@ -1707,18 +2282,27 @@ Before code can:
 - backfill;
 - relink;
 - merge records;
+- rebuild;
+- recreate;
+- replace;
+- remove containers;
+- alter volumes;
+- alter databases;
+- alter NAS data;
 
 identify:
 
-- exact files or records affected;
+- exact files, records, containers, images, volumes, or resources affected;
 - positive verification protecting them;
+- target environment;
 - whether action is reversible;
 - Source type;
 - operator confirmation;
 - reporting;
 - provenance behavior;
 - interruption behavior;
-- recovery behavior.
+- recovery behavior;
+- shared-host effects.
 
 For destructive or mutating actions prefer:
 
@@ -1734,7 +2318,7 @@ resumable or reviewable failure state
 
 ---
 
-# 22. Migration and Backfill Rules
+# 25. Migration and Backfill Rules
 
 For milestones affecting:
 
@@ -1746,10 +2330,12 @@ For milestones affecting:
 - historical Source records;
 - cleanup state;
 - ingestion behavior;
+- environment data;
+- release state;
 
 consider:
 
-- current data;
+- current Development/Test/Production data;
 - forward-only compatibility;
 - migration requirement;
 - backfill requirement;
@@ -1757,7 +2343,8 @@ consider:
 - rollback;
 - historical record protection;
 - identity-version compatibility;
-- test versus retained production data.
+- test versus retained production data;
+- environment isolation.
 
 Do not silently add a migration or backfill.
 
@@ -1765,9 +2352,11 @@ Do not silently reinterpret old records.
 
 Do not treat v1 and v2 identity contracts as interchangeable.
 
+Do not use disposable Development data as justification to ignore future Production migration design without explicit approval.
+
 ---
 
-# 23. UI and UX Rules
+# 26. UI and UX Rules
 
 Normal workflows should expose operator concepts, not backend plumbing.
 
@@ -1830,53 +2419,111 @@ Use Advanced Details for:
 - report paths;
 - technical conflicts;
 - low-level counters;
-- low-level timings.
+- low-level timings;
+- image IDs;
+- release identifiers.
 
 Do not make the operator choose a value already determined by Source identity or workflow context.
 
 ---
 
-# 24. Runtime and Deployment Rules
+# 27. Runtime and Deployment Rules
 
-Preserve Windows development behavior unless a milestone targets Linux or mini-server deployment.
+## 27.1 Development Runtime
 
-Current development script path:
+Current Development runtime is Linux-hosted.
 
-```powershell
-.\scripts\runtime\start_photo_organizer_dev.ps1
-```
+Do not use the old Windows-host startup script as current runtime authority.
 
-When changing runtime scripts:
+Use the maintained Development operator and recovery guides.
 
-- preserve dev/prod separation;
-- do not fall back to development storage in production;
-- report occupied ports clearly;
-- report unresolved listeners clearly;
-- do not kill unrelated processes without confirmation;
-- keep startup and shutdown understandable to a non-programmer.
+When changing Development code:
 
-Future deployment model:
+- rebuild the affected image;
+- recreate or replace the affected container;
+- check health;
+- run targeted validation;
+- preserve Development data unless the prompt explicitly authorizes reset.
 
-```text
-Mini server = compute, runtime, web, and AI host
-NAS = durable media storage and backup layer
-```
-
-Do not place live PostgreSQL data on an unvalidated mapped NAS share.
-
-Linux deployment requires explicit consideration of:
-
-- Linux Source identity providers;
-- removable-media identity;
-- Optical probing;
-- mount-path behavior;
-- permissions;
-- NAS mount behavior;
-- Runtime Root resolution.
+Do not describe a restart as applying source changes.
 
 ---
 
-# 25. Testing and Validation
+## 27.2 Test Runtime
+
+Test is an immutable release-like environment.
+
+Rules:
+
+- preserve exact candidate identity;
+- preserve image identity;
+- preserve Test volumes;
+- preserve Test networks;
+- preserve Test configuration;
+- preserve Test release manifest;
+- do not rebuild from the workspace;
+- do not replace candidate informally;
+- do not reset Test data informally;
+- do not use Development images;
+- do not use floating tags;
+- do not mutate Test during Development work.
+
+Current Test operator actions may inspect or control the existing candidate as documented.
+
+Candidate replacement and rollback require later implementation.
+
+---
+
+## 27.3 Production
+
+Current Linux Production is not implemented.
+
+Do not claim Production validation.
+
+Do not claim Production storage, backup, restore, promotion, or rollback.
+
+Legacy Windows artifacts are not the approved Linux Production contract.
+
+---
+
+## 27.4 Runtime Safety
+
+When changing runtime or operator scripts:
+
+- preserve Development/Test separation;
+- do not fall back to Development storage in Test or Production;
+- report occupied ports clearly;
+- report unresolved listeners clearly;
+- do not kill unrelated processes without confirmation;
+- keep startup and shutdown understandable to a non-programmer;
+- preserve loopback-only application exposure;
+- preserve unpublished PostgreSQL and Redis;
+- preserve Portainer and unrelated shared-host services;
+- use exact Compose project scoping.
+
+---
+
+## 27.5 Linux Source Provider Boundary
+
+The application runtime is on Linux.
+
+That does not mean general Linux filesystem Source identity exists.
+
+Current general Linux gaps include:
+
+- Local durable identity;
+- External durable identity;
+- Removable durable identity;
+- mounted NAS path to canonical share identity;
+- Optical discovery and fingerprinting.
+
+Do not weaken fail-closed behavior to make Linux appear supported.
+
+Do not replace durable identity with arbitrary path trust.
+
+---
+
+# 28. Testing and Validation
 
 Run the most relevant validation available.
 
@@ -1892,6 +2539,10 @@ Possible validation includes:
 - database queries;
 - dry runs;
 - runtime health checks;
+- operator self-tests;
+- Compose rendering;
+- image and container identity checks;
+- network and volume isolation checks;
 - report inspection;
 - browser smoke tests;
 - physical-device validation;
@@ -1910,7 +2561,9 @@ API validation
 manual UI validation
 physical-device validation
 live provider validation
-production-runtime validation
+Development runtime validation
+Test release validation
+Production runtime validation
 ```
 
 Do not describe:
@@ -1919,7 +2572,10 @@ Do not describe:
 - API success as proof of correct DB provenance;
 - one Source Type as validation of all Source Types;
 - a mocked provider test as live provider validation;
-- application startup as complete workflow validation.
+- application startup as complete workflow validation;
+- Development health as Test validation;
+- Test health as Production validation;
+- tracked configuration as proof of live protected configuration.
 
 When required manual or physical validation has not occurred, describe the milestone as partially validated.
 
@@ -1932,9 +2588,41 @@ When a check cannot run:
 
 Do not run live ingestion or destructive operations unless explicitly approved.
 
+Do not run Docker, database, NAS, or deployment mutations unless explicitly approved.
+
 ---
 
-# 26. Closeout Requirements
+# 29. Development Change Activation
+
+Development backend and frontend source are copied into images.
+
+They are not runtime bind mounts.
+
+Therefore:
+
+```text
+edit source
+→ build affected image
+→ recreate or replace affected container
+→ verify health
+→ validate behavior
+```
+
+A container restart alone does not load the repository change.
+
+The closeout must state:
+
+- which image was rebuilt;
+- which container was recreated or replaced;
+- whether health passed;
+- what targeted behavior was validated;
+- whether Development data remained intact.
+
+Do not claim a change was tested against the new code unless the build/apply step occurred.
+
+---
+
+# 30. Closeout Requirements
 
 Create exactly one human-authored closeout per milestone.
 
@@ -1968,7 +2656,7 @@ Reference them from the closeout.
 
 ---
 
-## 26.1 Standard Closeout Structure
+## 30.1 Standard Closeout Structure
 
 Use this structure unless the prompt requires something different:
 
@@ -1976,7 +2664,7 @@ Use this structure unless the prompt requires something different:
 # Milestone <number> — <title>
 
 ## 1. Repository State
-Branch, HEAD, and working tree.
+Authoritative repository, branch, HEAD, upstream, and working tree.
 
 ## 2. Scope Completed
 What was implemented or validated.
@@ -1993,33 +2681,48 @@ Only when applicable.
 ## 6. Architecture and Authority Boundaries
 Existing authorities reused and boundaries preserved.
 
-## 7. Safety Boundaries Preserved
+## 7. Environment and Runtime Impact
+Development, Test, Production, Docker, database, NAS, network,
+configuration, release identity, and shared-host effects.
+
+## 8. Safety Boundaries Preserved
 What was intentionally not changed.
 
-## 8. Validation Performed
+## 9. Validation Performed
 Commands and results.
 
-## 9. Provenance / Data Integrity Evidence
+## 10. Provenance / Data Integrity Evidence
 Required when touching ingestion, exact duplicates, Source identity,
 cleanup, or provenance.
 
-## 10. Live / Manual Validation
+## 11. Live / Manual Validation
 Operator, physical-device, provider, or runtime testing.
 
-## 11. Untested Behavior
+## 12. Untested Behavior
 Anything not validated and why.
 
-## 12. Deviations from Prompt
+## 13. Deviations from Prompt
 Anything omitted, changed, or interpreted differently.
 
-## 13. Known Limitations
+## 14. Known Limitations
 Remaining issues and environment limitations.
 
-## 14. Recommended Next Milestone
+## 15. Recommended Next Milestone
 The next logical action.
 
-## 15. Git Status
+## 16. Git Status
 git status --short and relevant diff summary.
+```
+
+For deployment or live-operation work, additionally include:
+
+```markdown
+## Live Mutation Record
+Exact authorized runtime actions, safeguards, and observed result.
+
+## Release and Resource Identity
+Compose project, image tags, image IDs, containers, networks,
+volumes, configuration path, and release manifest path as applicable.
 ```
 
 The closeout must distinguish:
@@ -2027,6 +2730,7 @@ The closeout must distinguish:
 ```text
 confirmed
 inferred
+reconstructed
 not tested
 blocked
 ```
@@ -2037,7 +2741,7 @@ Do not create another closeout.
 
 ---
 
-# 27. Documentation Discipline
+# 31. Documentation Discipline
 
 Prompt and closeout files are the primary detailed milestone record.
 
@@ -2050,6 +2754,7 @@ Update global documents only when a milestone changes:
 - provenance model;
 - safety model;
 - deployment;
+- environment authority;
 - major operator behavior;
 - milestone process.
 
@@ -2060,7 +2765,16 @@ For documentation version changes:
 - report superseded global files;
 - do not overwrite unrelated files;
 - ensure new current documents agree;
-- use exact-file staging.
+- use exact-file staging;
+- stage the new version and removal of the superseded active version together.
+
+Application milestone history remains focused on application functionality.
+
+Deployment milestones remain under:
+
+```text
+docs/server_deployment/deployment_milestones/
+```
 
 Do not create conversational artifact files such as:
 
@@ -2074,7 +2788,7 @@ unless requested.
 
 ---
 
-# 28. Performance Awareness
+# 32. Performance Awareness
 
 Consider:
 
@@ -2086,7 +2800,11 @@ Consider:
 - network effects;
 - NAS latency;
 - cloud latency;
-- large-library scale.
+- large-library scale;
+- image rebuild time;
+- container startup time;
+- GPU use;
+- shared-host effects.
 
 Expensive operations include:
 
@@ -2099,7 +2817,9 @@ Expensive operations include:
 - NAS scans;
 - external-device scans;
 - AI inference;
-- preview generation.
+- preview generation;
+- full image rebuilds;
+- full test suites.
 
 Do not optimize speculatively.
 
@@ -2110,15 +2830,21 @@ When performance is observed but out of scope:
 - recommend a future milestone;
 - do not expand the current milestone without approval.
 
+Do not add arbitrary CPU, memory, or GPU limiters merely to appear production-ready.
+
+Resource controls require an observed need and explicit approval.
+
 ---
 
-# 29. Success Criteria
+# 33. Success Criteria
 
 A coding-agent session is successful when:
 
 - approved scope is completed;
+- the authoritative Linux repository is used;
 - the correct branch is used;
-- the recon roadmap is followed or a clear escalation is raised;
+- the target environment is explicit;
+- the reconnaissance roadmap is followed or a clear escalation is raised;
 - unnecessary architecture is avoided;
 - existing authorities are reused;
 - unrelated systems remain untouched;
@@ -2130,9 +2856,14 @@ A coding-agent session is successful when:
 - skipped/deferred inventory is not misrepresented as successful provenance;
 - Source Endpoint, Source Profile, Observed Path, and Runtime Root remain distinct;
 - Source Selection and dispatch remain backend-authoritative;
+- Windows and Linux Source-provider capabilities are not conflated;
+- Development edits are rebuilt and applied correctly;
+- Test candidate identity remains immutable;
+- Development and Test state remain isolated;
+- Docker, database, NAS, secrets, and deployment changes occur only with explicit authority;
 - validation is appropriate and honestly reported;
 - validation-only work remains non-mutating;
-- physical/provider limitations are clearly identified;
+- physical/provider/environment limitations are clearly identified;
 - exactly one correctly named closeout is created;
 - limitations and deviations are documented;
 - the working tree remains understandable;

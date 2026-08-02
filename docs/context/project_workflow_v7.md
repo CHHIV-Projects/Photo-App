@@ -1,11 +1,36 @@
-# PROJECT_WORKFLOW.md
+# PROJECT_WORKFLOW_v7.md
 
 ## Document Status
 
-**Version:** v6  
-**Project phase:** Post-12.63.23.0  
-**Current branch state:** Source Identity and Intake Unification merged into `main`  
-**Current workflow emphasis:** milestone discipline, reconnaissance as implementation roadmap, evidence-based validation, provenance protection, clean branch lifecycle, cost-aware coding-agent use, and reliable continuation between chats and tools.
+**Version:** v7
+**Project phase:** v1.0 stabilization with Linux-server Development and isolated Test foundations operational
+**Current architecture:** Windows client/operator + Linux authoritative repository/runtime + Synology NAS durable-storage/backup infrastructure
+**Current deployment branch:** `feature/deployment-linux-runtime`
+**Current workflow emphasis:** milestone discipline, reconnaissance as implementation roadmap, evidence-based validation, provenance protection, clean branch lifecycle, cost-aware coding-agent use, environment-aware operations, and reliable continuation between chats and tools.
+
+### Update Scope
+
+This v7 revision preserves the established application and deployment workflow.
+
+It does not introduce a materially different deployment methodology.
+
+Changes are limited to aligning the workflow with the current architecture:
+
+```text
+Windows workstation
+→ operator, browser, VS Code client, Remote SSH, tunnels,
+  administration/recovery access, and general filesystem Source access node
+
+Linux mini-server
+→ authoritative editable repository, Development runtime, Test runtime,
+  Docker execution, PostgreSQL, Redis, application storage, and GPU compute
+
+Synology NAS
+→ mounted durable-storage and backup infrastructure,
+  not current live Development/Test application or database storage
+```
+
+The provenance workflow remains unchanged pending the separate post-12.64 documentation reconciliation.
 
 ---
 
@@ -13,7 +38,7 @@
 
 This document defines the working collaboration model between:
 
-- **User / Project Owner**
+- **User / Product Owner**
 - **ChatGPT / Architect and Planner**
 - **Coder / Implementation Agent in VS Code or a similar coding environment**
 
@@ -30,9 +55,10 @@ This workflow exists to keep development:
 - aligned with current architecture;
 - protective of provenance and data integrity;
 - recoverable across long milestone arcs;
-- reviewable through clean Git history.
+- reviewable through clean Git history;
+- explicit about which machine, terminal, environment, and authority are involved.
 
-The project uses AI tools, but the User remains the final product owner and decision maker.
+The project uses AI tools, but the User remains the final Product Owner and decision maker.
 
 The workflow also ensures that:
 
@@ -41,6 +67,7 @@ reconnaissance becomes a usable implementation roadmap;
 implementation does not repeat unnecessary broad analysis;
 provenance and architecture decisions remain explicit;
 completed milestone arcs are merged and validated safely;
+deployment work remains controlled and evidence-based;
 current project documents become the durable source of truth.
 ```
 
@@ -59,6 +86,8 @@ Provenance and data integrity require evidence.
 User testing confirms real-world usability.
 Git history preserves logical work units.
 Documentation records actual behavior.
+Commands identify their execution environment.
+Deployment changes require explicit authority.
 ```
 
 Additional principles:
@@ -71,12 +100,15 @@ Additional principles:
 - Validation-only work must not silently become implementation work.
 - Coding-agent cost should be reduced through focused prompts and targeted reading, not by reducing safety.
 - Architectural and safety assumptions should be verified against the repository before implementation.
+- Windows, Linux, Development, Test, NAS, and future Production must not be treated as interchangeable execution contexts.
+- Repository edits, runtime mutations, and live validation are separate authorities.
+- Existing Development, Test, Portainer, NAS, and other shared-host resources must be protected from unrelated work.
 
 ---
 
 # Part I — Roles and Responsibilities
 
-## 3. User / Project Owner
+## 3. User / Product Owner
 
 The User:
 
@@ -88,12 +120,14 @@ The User:
 - saves milestone prompts into the repository;
 - provides prompts to the Coder;
 - brings Coder questions back to ChatGPT;
-- tests completed work locally;
+- tests completed work in the approved target environment;
 - performs or authorizes live validation;
 - reports real-world behavior;
 - provides screenshots, logs, error output, and usability feedback;
 - confirms milestone completion before final commit;
 - usually manages Git commits and pushes;
+- explicitly authorizes Coder Git write commands when desired;
+- explicitly authorizes Docker, database, NAS, deployment, and other live mutations;
 - decides whether completed feature branches are retained or deleted;
 - maintains or approves project documentation organization;
 - decides when a project chat should be continued in a new conversation.
@@ -117,6 +151,7 @@ ChatGPT:
 - defines scope and out-of-scope boundaries;
 - defines authority and safety boundaries;
 - defines validation evidence;
+- identifies the correct execution environment for commands;
 - anticipates likely Coder questions;
 - answers Coder questions clearly and decisively;
 - keeps answers aligned with current repository facts;
@@ -129,7 +164,8 @@ ChatGPT:
 - recommends branch creation and merge strategy;
 - proposes documentation updates;
 - prepares continuation-chat handoffs;
-- writes delta-focused prompts that reference standing coding-agent rules.
+- writes delta-focused prompts that reference standing coding-agent rules;
+- protects Development, Test, NAS, and future Production boundaries.
 
 ChatGPT should determine the appropriate milestone mode:
 
@@ -160,13 +196,14 @@ strategy
 intent
 required outcome
 authority boundaries
+environment and terminal
 out of scope
 validation evidence
 stopping conditions
 escalation conditions
 ```
 
-ChatGPT should not rely on chat memory alone when current repository documents, prompts, closeouts, or code evidence are available.
+ChatGPT should not rely on chat memory alone when current repository documents, prompts, closeouts, code evidence, or deployment guides are available.
 
 ---
 
@@ -175,8 +212,9 @@ ChatGPT should not rely on chat memory alone when current repository documents, 
 The Coder:
 
 - reads the milestone prompt;
-- follows `docs/context/CODING_AGENT_RULES.md`;
+- follows `docs/context/coding_agent_rules_v7.md` once that document is active;
 - performs Git preflight before coding;
+- confirms the authoritative repository and current branch;
 - performs reconnaissance when requested or required;
 - inspects targeted implementation paths;
 - uses approved reconnaissance closeouts as implementation roadmaps;
@@ -192,7 +230,9 @@ The Coder:
 - reports known limitations;
 - reports Git state;
 - stops before unsafe scope expansion;
-- does not run unauthorized Git write commands.
+- does not run unauthorized Git write commands;
+- does not run unauthorized Docker, database, NAS, deployment, or destructive runtime commands;
+- does not read or print protected secrets or configuration without explicit scope and authorization.
 
 The Coder should not:
 
@@ -204,7 +244,11 @@ The Coder should not:
 - silently add migrations or backfills;
 - treat frontend values as backend execution authority;
 - repeat broad repository reconnaissance when an approved roadmap already exists;
-- continue searching merely to create the appearance of thoroughness.
+- continue searching merely to create the appearance of thoroughness;
+- assume Windows paths when working in the authoritative Linux repository;
+- assume Linux Source identity exists because the application runtime is on Linux;
+- rebuild, recreate, replace, or remove containers without authorization;
+- use ad hoc Docker commands to bypass missing Test promotion or rollback workflows.
 
 Coder Git write commands such as the following require explicit authorization:
 
@@ -218,7 +262,7 @@ tag
 checkout
 switch
 stash
-branch deletion
+branch creation or deletion
 ```
 
 Read-only Git commands are expected during preflight and validation.
@@ -232,15 +276,17 @@ Read-only Git commands are expected during preflight and validation.
 The current system should remain understandable through:
 
 ```text
-PROJECT_CONTEXT.md
-PROJECT_ARCHITECTURE.md or ARCHITECTURE_ROADMAP.md
-PROJECT_WORKFLOW.md
-CODING_AGENT_RULES.md
+project_context_v7.md
+project_architecture_v7.md
+project_workflow_v7.md
+coding_agent_rules_v7.md
+canonical_parking_lot_v7.md
 MILESTONE_HISTORY.md
-Parking Lot documents
 v1.0 release roadmap
 milestone prompt files
 milestone closeout files
+deployment guides
+deployment milestone prompt and closeout files
 ```
 
 These documents support:
@@ -256,7 +302,9 @@ These documents support:
 
 Global documents describe current project truth.
 
-Milestone prompts and closeouts preserve historical milestone truth.
+Application milestone prompts and closeouts preserve application-history truth.
+
+Deployment milestone prompts and closeouts preserve server, runtime, environment, and operational-history truth.
 
 ---
 
@@ -268,6 +316,7 @@ When current documents conflict with old chat recollection:
 current repository documentation
 + current code
 + approved milestone closeouts
++ approved deployment guides and deployment closeouts
 ```
 
 should be treated as more authoritative than old conversational memory.
@@ -278,11 +327,15 @@ When a major implementation changes architecture or product state, relevant glob
 
 Not every small milestone requires a global documentation update.
 
+Operational detail should remain in maintained operator and deployment guides when duplicating it in a global context document would create drift.
+
 ---
 
-## 8. Milestone Documentation Location
+## 8. Milestone Documentation Locations
 
-Milestone documentation is organized under:
+### Application milestones
+
+Application-functionality milestone documentation is organized under:
 
 ```text
 docs/milestones/
@@ -291,14 +344,25 @@ docs/milestones/
 Milestone parent folders may use an arc-specific structure such as:
 
 ```text
-docs/milestones/milestone_012/012.063_source_profile_and_intake_unification.md/
+docs/milestones/milestone_012/012.064_unified_intake_provenance_verification/
 ```
 
 or another approved project structure.
 
-All prompts and closeouts for one arc should remain grouped logically.
+### Deployment milestones
 
-The User may refine folder organization as the documentation structure evolves.
+Server construction, runtime migration, environment isolation, deployment validation, and deployment operations are documented under:
+
+```text
+docs/server_deployment/
+docs/server_deployment/deployment_milestones/
+```
+
+Deployment prompt and closeout files remain beside one another.
+
+Application milestone history remains focused on application functionality.
+
+Deployment milestones do not need to be duplicated into the application milestone-history document.
 
 ---
 
@@ -306,9 +370,9 @@ The User may refine folder organization as the documentation structure evolves.
 
 ## 9. Prompt and Closeout Naming Standard
 
-### Required Filename Pattern
+### Application milestone filename pattern
 
-Every milestone prompt must explicitly state:
+Every application milestone prompt must explicitly state:
 
 - the exact prompt filename;
 - the exact closeout filename.
@@ -327,7 +391,23 @@ Example:
 12.75.0_provenance_verification_recon_closeout.md
 ```
 
-Rules:
+### Deployment milestone filename pattern
+
+Deployment milestones use the established separate sequence:
+
+```text
+<deployment_number>_deployment_<exact_snake_case_name>_prompt.md
+<deployment_number>_deployment_<exact_snake_case_name>_closeout.md
+```
+
+Example:
+
+```text
+010_deployment_architecture_documentation_reconnaissance_prompt.md
+010_deployment_architecture_documentation_reconnaissance_closeout.md
+```
+
+Rules for both forms:
 
 - no spaces;
 - lowercase snake case for the descriptive portion;
@@ -336,9 +416,9 @@ Rules:
 - do not invent a different closeout name;
 - do not create a separate report file unless explicitly required.
 
-### Milestone Arc Numbering
+### Application milestone arc numbering
 
-A new milestone arc should normally begin with:
+A new application milestone arc should normally begin with:
 
 ```text
 xx.xx.0
@@ -352,15 +432,7 @@ xx.xx.2
 xx.xx.3
 ```
 
-Example:
-
-```text
-12.75.0_provenance_verification_recon_prompt.md
-12.75.1_provenance_verification_implementation_prompt.md
-12.75.2_provenance_live_validation_prompt.md
-```
-
-The exact milestone number should be selected only after reviewing current history and roadmap.
+Deployment milestones use their independent sequential numbering and do not consume application milestone numbers.
 
 ---
 
@@ -373,6 +445,9 @@ strategy
 intent
 required outcome
 current context
+authoritative repository
+target environment
+command execution location
 scope
 out of scope
 authority boundaries
@@ -392,7 +467,7 @@ Potential tools, libraries, files, services, or functions may be mentioned when 
 They should not be over-prescribed unless:
 
 - the mechanism is part of the safety contract;
-- the recon established an exact implementation path;
+- reconnaissance established an exact implementation path;
 - a specific existing authority must be reused;
 - introducing alternatives would create risk.
 
@@ -404,36 +479,39 @@ Prompts should be complete enough to execute, but not longer merely because more
 
 Milestone prompts should generally use:
 
-1. Title  
-2. Required file names  
-3. Reasoning level  
-4. Milestone mode  
-5. Goal  
-6. Background and current context  
-7. Required documents or closeouts to read  
-8. Scope  
-9. Out of scope  
-10. Architecture and authority boundaries  
-11. Backend requirements, if applicable  
-12. Frontend requirements, if applicable  
-13. Data/provenance requirements, if applicable  
-14. Safety boundaries  
-15. Validation checklist  
-16. Manual or live validation plan  
-17. Escalation and stop conditions  
-18. Deliverables  
-19. Definition of done  
-20. Required closeout structure  
-21. Recommended next milestone  
+1. Title
+2. Required file names
+3. Reasoning level
+4. Milestone mode
+5. Goal
+6. Background and current context
+7. Authoritative repository and target environment
+8. Required documents or closeouts to read
+9. Scope
+10. Out of scope
+11. Architecture and authority boundaries
+12. Backend requirements, if applicable
+13. Frontend requirements, if applicable
+14. Data/provenance requirements, if applicable
+15. Runtime/deployment requirements, if applicable
+16. Safety boundaries
+17. Validation checklist
+18. Manual or live validation plan
+19. Escalation and stop conditions
+20. Deliverables
+21. Definition of done
+22. Required closeout structure
+23. Recommended next milestone
 
 Standing instructions should include:
 
 ```text
-Read and obey docs/context/CODING_AGENT_RULES.md.
+Read and obey docs/context/coding_agent_rules_v7.md.
 Create one closeout document only.
 Do not create a separate report file.
 Use the exact closeout filename.
 Do not run Git write commands unless explicitly authorized.
+Do not mutate Docker, database, NAS, or deployment state unless authorized.
 Escalate before materially broadening scope.
 ```
 
@@ -451,14 +529,16 @@ Rules:
 - avoid broken nested code fences;
 - preserve all prompt headings in one block;
 - answers intended for repasting to the Coder should be self-contained;
-- Git commands should normally appear in one complete PowerShell block;
+- commands should identify their execution environment;
+- Git commands should normally appear in one complete Linux-shell block when acting on the authoritative server repository;
+- Windows PowerShell blocks should be used only for Windows-specific operations;
 - do not scatter a single Git operation across multiple disconnected command blocks unless troubleshooting requires observation between stages.
 
 ---
 
 ## 13. Prompt File Lifecycle
 
-### Initial Prompt Commit
+### Initial prompt commit
 
 The initial prompt should normally be committed before Coder handoff.
 
@@ -475,13 +555,7 @@ Recommended commit message:
 Docs: add <milestone> <short name> prompt
 ```
 
-Example:
-
-```text
-Docs: add 12.75.0 provenance verification recon prompt
-```
-
-### Prompt Addenda and Coder Q&A
+### Prompt addenda and Coder Q&A
 
 Coder questions and approved answers should be appended to the same prompt file.
 
@@ -506,7 +580,7 @@ It is acceptable for the active prompt to remain modified during implementation 
 - the changes are expected Q&A or lock-ins;
 - the User confirms the modification is intentional.
 
-### Material Prompt Changes
+### Material prompt changes
 
 A prompt update should be committed before implementation continues when it materially changes:
 
@@ -521,18 +595,14 @@ A prompt update should be committed before implementation continues when it mate
 - Vault behavior;
 - cleanup or destructive behavior;
 - live-operation approval;
+- Docker or deployment authority;
+- database or NAS authority;
 - credential/session behavior;
 - prompt or closeout filename;
 - implementation direction;
 - handoff to another Coder after a long pause.
 
-Recommended commit message:
-
-```text
-Docs: update <milestone> prompt with Q&A
-```
-
-### Final Prompt State
+### Final prompt state
 
 At final milestone commit, the prompt should contain:
 
@@ -548,6 +618,8 @@ implementation files
 updated prompt file
 one closeout file
 ```
+
+Documentation-only reconnaissance may commit the prompt and closeout as one logical evidence package when explicitly approved.
 
 ---
 
@@ -577,6 +649,7 @@ logs
 screenshots
 diagnostic exports
 database query output
+deployment validation evidence
 ```
 
 These artifacts should be referenced from the closeout when relevant.
@@ -629,6 +702,17 @@ The next logical action.
 Branch, git status --short, and relevant diff summary.
 ```
 
+Deployment closeouts may additionally include:
+
+```markdown
+## Environment Identity
+Host, Compose project, ports, networks, volumes, configuration path,
+release identity, and affected shared-host resources.
+
+## Live Mutation Record
+Exact authorized runtime actions, safeguards, and observed result.
+```
+
 For provenance or data-integrity work, include:
 
 ```markdown
@@ -641,6 +725,7 @@ The closeout must distinguish:
 - confirmed facts;
 - assumptions;
 - inferences;
+- reconstructed evidence;
 - untested behavior.
 
 ---
@@ -662,7 +747,7 @@ Use reconnaissance-only when:
 
 The Coder should not edit implementation files.
 
-A recon milestone may create only:
+A reconnaissance milestone may create only:
 
 - the approved prompt file;
 - one reconnaissance closeout;
@@ -677,6 +762,7 @@ authority boundaries
 data and schema implications
 provenance implications
 current failure behavior
+environment and runtime implications
 recommended implementation shape
 exact likely files to change
 tests to run
@@ -697,14 +783,14 @@ For approved work, it should become the implementation roadmap.
 
 Use after a reconnaissance plan has been reviewed and approved.
 
-The implementation prompt should identify the recon closeout as the primary roadmap.
+The implementation prompt should identify the reconnaissance closeout as the primary roadmap.
 
 Coder reading order:
 
 ```text
-1. CODING_AGENT_RULES.md
+1. coding_agent_rules_v7.md
 2. implementation prompt
-3. approved recon closeout
+3. approved reconnaissance closeout
 4. targeted implementation files
 5. additional context only when needed
 ```
@@ -712,8 +798,8 @@ Coder reading order:
 The Coder should not repeat broad repository exploration unless:
 
 - the repository changed materially;
-- the recon closeout is incomplete;
-- targeted inspection contradicts the recon;
+- the reconnaissance closeout is incomplete;
+- targeted inspection contradicts the reconnaissance;
 - a safety-relevant path was missed.
 
 The implementation should follow the approved shape and escalate if reality differs materially.
@@ -733,7 +819,7 @@ Use for low-risk, tightly bounded changes such as:
 
 Even small prompts should:
 
-- reference `CODING_AGENT_RULES.md`;
+- reference `coding_agent_rules_v7.md`;
 - state scope and out of scope;
 - require validation;
 - require one closeout;
@@ -752,12 +838,15 @@ Examples:
 - changed-drive-letter behavior;
 - NAS path validation;
 - Optical eject/reinsert behavior;
-- production runtime smoke testing;
+- Development runtime smoke testing;
+- Test environment validation;
+- Production runtime smoke testing;
 - backup/restore rehearsal;
 - performance baselining.
 
 A validation-only milestone should:
 
+- define the target environment;
 - define the test matrix;
 - define controlled test data;
 - define database evidence;
@@ -765,7 +854,8 @@ A validation-only milestone should:
 - define API evidence;
 - define expected pass/fail criteria;
 - define whether testing stops on critical failure;
-- prohibit implementation changes unless separately approved.
+- prohibit implementation changes unless separately approved;
+- prohibit unapproved runtime mutation.
 
 A validation milestone must not silently become a repair milestone.
 
@@ -788,10 +878,12 @@ Use for:
 - global context refresh;
 - architecture refresh;
 - workflow refresh;
+- coding-agent-rules refresh;
 - milestone-history updates;
 - roadmap updates;
 - Parking Lot consolidation;
-- chat handoff documents.
+- chat handoff documents;
+- deployment documentation reconciliation.
 
 Documentation-only work should:
 
@@ -799,7 +891,9 @@ Documentation-only work should:
 - avoid inventing unimplemented behavior;
 - clearly distinguish current state from future direction;
 - preserve historical milestone documents;
-- use exact-file staging.
+- use exact-file staging;
+- avoid live Docker, database, NAS, or deployment inspection unless separately authorized;
+- identify when a detail belongs in an operator guide rather than a global document.
 
 ---
 
@@ -814,6 +908,7 @@ same milestone closeout addendum
 small .1 follow-up milestone
 tracked bug-fix document
 Parking Lot item
+deployment follow-up milestone
 ```
 
 Choice depends on:
@@ -822,7 +917,8 @@ Choice depends on:
 - scope;
 - safety impact;
 - whether the original milestone can still be considered complete;
-- whether implementation has already been committed.
+- whether implementation has already been committed;
+- whether runtime state or release identity is affected.
 
 A bug fix should not be hidden inside unrelated later work.
 
@@ -844,8 +940,10 @@ Use High reasoning for:
 - migrations and backfills;
 - credential/session handling;
 - ambiguous cross-system behavior;
-- production deployment architecture;
+- Production deployment architecture;
 - backup and recovery design;
+- environment isolation;
+- candidate promotion and rollback;
 - safety-sensitive workflow redesign.
 
 High reasoning should produce a concrete roadmap, not endless exploration.
@@ -856,13 +954,14 @@ High reasoning should produce a concrete roadmap, not endless exploration.
 
 Use Medium reasoning for:
 
-- targeted implementation after approved recon;
+- targeted implementation after approved reconnaissance;
 - bounded backend changes;
 - bounded frontend changes;
 - test implementation;
 - closeout creation;
 - implementation-level debugging;
-- targeted validation automation.
+- targeted validation automation;
+- bounded operator-script changes with approved architecture.
 
 Medium reasoning is normally appropriate when:
 
@@ -883,7 +982,7 @@ Use lower reasoning for:
 - small isolated tests;
 - low-risk formatting corrections.
 
-Lower reasoning should not be used merely to reduce cost when architecture or data integrity is uncertain.
+Lower reasoning should not be used merely to reduce cost when architecture, runtime state, or data integrity is uncertain.
 
 ---
 
@@ -900,6 +999,9 @@ The milestone should state:
 - exact file names;
 - goal;
 - context;
+- authoritative repository;
+- target environment;
+- command execution location;
 - approved architecture;
 - scope;
 - out of scope;
@@ -913,9 +1015,22 @@ The User reviews and approves the prompt.
 
 ## 26. Step 2 — Branch and Repository Preflight
 
+The authoritative editable repository is:
+
+```text
+/home/chuck/projects/photo-organizer-dev
+```
+
+Normal Git and repository commands run in:
+
+```text
+VS Code Remote SSH / Linux terminal on henderson-server1
+```
+
 Before a new implementation arc begins:
 
-```powershell
+```bash
+cd /home/chuck/projects/photo-organizer-dev
 git branch --show-current
 git status --short
 git log --oneline --decorate -5
@@ -925,14 +1040,12 @@ git fetch origin
 Normal starting state:
 
 ```text
-current main branch
+expected branch
 working tree clean
-local main current with origin/main
+local branch synchronized with its upstream
 ```
 
-For a substantial new arc, create a fresh feature branch from updated `main`.
-
-Conceptual lifecycle:
+For a substantial new application arc, the normal lifecycle remains:
 
 ```text
 main
@@ -945,7 +1058,17 @@ main
 → optionally delete branch
 ```
 
+An explicitly approved long-running deployment or documentation branch may continue across related deployment milestones when:
+
+- the branch purpose remains current;
+- the worktree is clean;
+- the branch is synchronized with its upstream;
+- the next work remains within the approved branch arc;
+- the Product Owner approves continuing there.
+
 Do not continue new unrelated work on a completed feature branch merely because it still exists.
+
+The Windows administrative/recovery clone is not the normal editable repository.
 
 ---
 
@@ -953,12 +1076,13 @@ Do not continue new unrelated work on a completed feature branch merely because 
 
 The User saves the prompt under its exact filename.
 
-Recommended sequence:
+Recommended sequence in the **VS Code Remote SSH / Linux terminal**:
 
-```powershell
+```bash
+cd /home/chuck/projects/photo-organizer-dev
 git status --short
 
-git add "<exact prompt path>"
+git add -- "<exact prompt path>"
 
 git diff --cached --name-only
 git diff --cached --stat
@@ -972,6 +1096,8 @@ git status --short
 
 The staged file list should match the expected prompt file exactly.
 
+Windows CRLF line endings should be normalized to Linux LF before commit when they cause whitespace-check failures.
+
 ---
 
 ## 28. Step 4 — Handoff to Coder
@@ -982,8 +1108,9 @@ The Coder:
 
 - reads standing rules;
 - reads the prompt;
-- reads approved recon when applicable;
+- reads approved reconnaissance when applicable;
 - performs Git preflight;
+- confirms the authoritative repository and environment;
 - inspects relevant paths;
 - identifies conflicts;
 - asks questions or escalates before coding when needed.
@@ -992,9 +1119,9 @@ The Coder:
 
 ## 29. Step 5 — Coder Git Preflight
 
-Before editing:
+Before editing, in the authoritative Linux repository:
 
-```powershell
+```bash
 git branch --show-current
 git status --short
 git log --oneline --decorate -5
@@ -1003,7 +1130,7 @@ git log --oneline --decorate -5
 Expected state:
 
 ```text
-correct feature branch
+correct branch
 clean working tree
 prompt committed
 ```
@@ -1025,15 +1152,15 @@ C. accidental/noise
 D. required current-milestone work
 ```
 
-The Coder must not revert, stage, commit, stash, or discard files without authorization.
+The Coder must not revert, stage, commit, stash, discard, or move files without authorization.
 
 ---
 
 ## 30. Step 6 — Reconnaissance or Targeted Inspection
 
-For a recon milestone, inspect broadly enough to produce the roadmap.
+For a reconnaissance milestone, inspect broadly enough to produce the roadmap.
 
-For implementation after recon, inspect only enough to confirm the roadmap and perform the targeted change.
+For implementation after reconnaissance, inspect only enough to confirm the roadmap and perform the targeted change.
 
 Stop broad exploration when:
 
@@ -1053,7 +1180,10 @@ For safety-sensitive work, do not stop before confirming:
 - failure path;
 - rollback or recovery implications;
 - provenance impact;
-- data migration needs.
+- data migration needs;
+- target environment;
+- shared-host effects;
+- whether live inspection or mutation is authorized.
 
 ---
 
@@ -1093,7 +1223,12 @@ Escalation is required when:
 - unrelated dirty files threaten commit isolation;
 - required validation cannot be performed;
 - implementation is materially larger than represented;
-- the approved milestone cannot be completed safely.
+- the approved milestone cannot be completed safely;
+- live runtime state contradicts tracked contract;
+- a Development change would affect Test or future Production;
+- a Docker, database, NAS, or deployment mutation is needed but not authorized;
+- protected configuration or secret contents would need to be exposed;
+- a missing promotion or rollback workflow would need to be bypassed.
 
 Required escalation format:
 
@@ -1102,8 +1237,8 @@ STATUS: ESCALATION REQUIRED
 
 Observed conflict:
 Why the approved plan cannot safely proceed:
-Files or systems involved:
-Data/provenance implications:
+Files, systems, and environments involved:
+Data/provenance/runtime implications:
 Smallest safe options:
 Recommended decision:
 ```
@@ -1119,7 +1254,7 @@ The Coder should not improvise through material architecture or safety conflicts
 The Coder implements according to:
 
 - approved prompt;
-- approved recon;
+- approved reconnaissance;
 - Q&A;
 - final lock-ins;
 - standing rules.
@@ -1134,7 +1269,10 @@ The Coder should:
 - add focused tests;
 - document unavoidable deviations;
 - keep generated artifacts out of milestone commits unless explicitly required;
-- avoid Git write commands unless authorized.
+- avoid Git write commands unless authorized;
+- avoid runtime mutation unless authorized;
+- preserve Development/Test isolation;
+- preserve the Windows Source-provider boundary unless explicitly changing it.
 
 ---
 
@@ -1149,6 +1287,9 @@ Validation may include:
 - API checks;
 - database queries;
 - structured report review;
+- operator self-tests;
+- Compose rendering;
+- container and image identity checks;
 - manual workflow checks;
 - `git diff --check`.
 
@@ -1157,6 +1298,19 @@ Validation should match milestone risk.
 A small copy edit does not require a full live intake.
 
 A provenance or ingestion change requires stronger evidence.
+
+A Development code change normally requires:
+
+```text
+build affected image
+recreate or replace affected Development container
+check Development health
+perform targeted application validation
+```
+
+A simple container restart is insufficient to activate repository edits because Development source is copied into images and is not bind-mounted.
+
+A Test validation must preserve the existing candidate unless replacement is explicitly authorized and supported by an approved workflow.
 
 ---
 
@@ -1169,6 +1323,8 @@ The closeout records:
 - actual implementation;
 - actual files;
 - actual validation;
+- affected environment;
+- runtime mutations, when authorized;
 - deviations;
 - limitations;
 - unresolved questions;
@@ -1176,11 +1332,24 @@ The closeout records:
 
 The closeout must not claim validation that was not performed.
 
+When evidence is reconstructed rather than directly captured, it must be labeled as reconstructed.
+
 ---
 
 ## 36. Step 12 — User Testing
 
-The User tests behavior locally.
+The User tests behavior in the approved target environment.
+
+User testing may occur through:
+
+- the Windows Development Operator;
+- a browser reached through an SSH tunnel;
+- VS Code Remote SSH;
+- the server-side Development operator;
+- the server-side Test operator;
+- Windows filesystem Source workflows;
+- controlled live media or Source validation;
+- other explicitly approved tools.
 
 User testing should focus on:
 
@@ -1190,7 +1359,8 @@ User testing should focus on:
 - failure behavior;
 - edge cases;
 - usability;
-- regression risk.
+- regression risk;
+- environment isolation.
 
 Screenshots, reports, and terminal output should be retained when useful.
 
@@ -1207,7 +1377,8 @@ ChatGPT determines whether:
 - milestone passes;
 - closeout needs a live-validation addendum;
 - a contained fix belongs in the current milestone;
-- a `.1` follow-up is required;
+- a `.1` application follow-up is required;
+- a deployment follow-up milestone is required;
 - a defect belongs in the Parking Lot;
 - the milestone should remain open.
 
@@ -1217,19 +1388,21 @@ A feature should not be marked complete merely because automated tests passed if
 
 ## 38. Step 14 — Final Staging and Commit
 
-ChatGPT provides exact-file Git commands.
+ChatGPT provides exact-file Git commands for the **VS Code Remote SSH / Linux terminal** unless a Windows-specific operation is required.
 
 Preferred sequence:
 
-```powershell
+```bash
+cd /home/chuck/projects/photo-organizer-dev
+
 git status --short
 git diff --name-only
 git diff --stat
 
-git add "<specific implementation file>"
-git add "<specific implementation file>"
-git add "<exact prompt file if modified>"
-git add "<exact closeout file>"
+git add -- "<specific implementation file>"
+git add -- "<specific implementation file>"
+git add -- "<exact prompt file if modified>"
+git add -- "<exact closeout file>"
 
 git diff --cached --name-only
 git diff --cached --stat
@@ -1244,7 +1417,7 @@ git log --oneline --decorate -5
 
 Do not use:
 
-```powershell
+```bash
 git add .
 ```
 
@@ -1258,6 +1431,8 @@ The staged file list must be compared against the expected milestone file list.
 
 Unexpected staged files must be removed or explained before commit.
 
+The Coder must not commit or push without explicit Product Owner authorization.
+
 ---
 
 ## 39. Step 15 — Documentation Updates
@@ -1267,13 +1442,15 @@ Potential updates:
 - milestone prompt;
 - milestone closeout;
 - `MILESTONE_HISTORY.md`;
-- `PROJECT_CONTEXT.md`;
-- `PROJECT_ARCHITECTURE.md`;
-- `PROJECT_WORKFLOW.md`;
-- `CODING_AGENT_RULES.md`;
-- Parking Lot;
+- `project_context_v7.md`;
+- `project_architecture_v7.md`;
+- `project_workflow_v7.md`;
+- `coding_agent_rules_v7.md`;
+- `canonical_parking_lot_v7.md`;
 - v1.0 roadmap;
-- new-chat intro.
+- new-chat intro;
+- deployment guides;
+- deployment milestone prompt and closeout.
 
 When replacing a current global document version:
 
@@ -1281,12 +1458,15 @@ When replacing a current global document version:
 create new version
 review new version
 stage new version
-remove superseded active version when appropriate
-verify add and removal
+stage removal of superseded active version
+verify exact add and removal paths
+run whitespace check
 commit together
 ```
 
 Do not delete historical milestone prompts and closeouts merely because global documents were versioned.
+
+Application milestone history does not need to absorb deployment milestone detail.
 
 ---
 
@@ -1316,28 +1496,33 @@ finish feature branch
 
 Do not begin the next unrelated arc before confirming the merge result.
 
+An active deployment/documentation branch may remain open across related deployment milestones when explicitly approved.
+
 ---
 
 ## 41. Step 17 — Post-Merge Validation
 
-Before declaring the arc closed, confirm:
+Before declaring a major application arc closed, confirm:
 
 ```text
+authoritative repository path is correct
 current branch is main
 working tree is clean
 main contains the merge commit
 origin/main matches local main
-application starts from main
-key merged workflow passes smoke testing
+affected Development image is rebuilt when code changed
+affected Development container is recreated or replaced
+Development health passes
+Development recovery status remains acceptable
+targeted application smoke testing passes through the approved access path
+Windows Source-access validation is performed when Windows-provider behavior changed
 ```
 
-Current development startup script:
+Exact commands should come from the maintained Development operator and recovery guides.
 
-```powershell
-.\scripts\runtime\start_photo_organizer_dev.ps1
-```
+The obsolete Windows-host startup command is not the current runtime authority.
 
-A Git merge may be correct even when a runtime command, environment issue, or script-path assumption needs separate correction.
+A Git merge may be correct even when a runtime command, environment issue, or operator procedure needs separate correction.
 
 Post-merge runtime validation is therefore required for major arcs.
 
@@ -1364,7 +1549,7 @@ Retaining merged branches is safe.
 
 Too many stale branches may cause confusion.
 
-New work should begin from a new branch based on current `main`.
+New unrelated application work should begin from a new branch based on current `main`.
 
 ---
 
@@ -1409,6 +1594,8 @@ Milestones involving provenance must explicitly define:
 - migration or backfill policy.
 
 Provenance must not be changed as an incidental side effect.
+
+This section remains unchanged in principle pending the separate post-12.64 documentation reconciliation.
 
 ---
 
@@ -1475,7 +1662,7 @@ Any milestone affecting:
 
 must consider:
 
-- current production/test data;
+- current Development/Test/Production data;
 - forward-only compatibility;
 - migration requirements;
 - backfill requirements;
@@ -1484,7 +1671,7 @@ must consider:
 - legacy records;
 - historical record protection.
 
-Coder should raise these issues during recon or escalation.
+Coder should raise these issues during reconnaissance or escalation.
 
 ---
 
@@ -1492,16 +1679,17 @@ Coder should raise these issues during recon or escalation.
 
 ## 48. Core Cost-Control Principles
 
-- Keep durable rules in `CODING_AGENT_RULES.md`.
+- Keep durable rules in `coding_agent_rules_v7.md`.
 - Keep prompts focused on the milestone delta.
-- Use recon closeouts as roadmaps.
+- Use reconnaissance closeouts as roadmaps.
 - Avoid rereading all global documents for small work.
 - Identify likely files and systems when known.
-- Use targeted inspection after recon.
+- Use targeted inspection after reconnaissance.
 - Split broad risky work.
 - Stop broad exploration when the implementation path is established.
 - Do not reduce safety checks merely to save tokens.
 - Do not repeat explanations already available in standing documents.
+- Use deployment guides and closeouts instead of rediscovering settled runtime facts.
 
 ---
 
@@ -1511,11 +1699,11 @@ For most implementation prompts:
 
 ```text
 Before coding:
-1. Read docs/context/CODING_AGENT_RULES.md.
+1. Read docs/context/coding_agent_rules_v7.md.
 2. Read this milestone prompt.
-3. Read the approved recon closeout, if listed.
+3. Read the approved reconnaissance closeout, if listed.
 4. Inspect the targeted code paths.
-5. Read broader context documents only when affected behavior remains unclear.
+5. Read broader context or deployment documents only when affected behavior remains unclear.
 ```
 
 ---
@@ -1536,6 +1724,8 @@ Broader context reading is justified when work touches:
 - cross-cutting UI workflow;
 - deployment;
 - backup/recovery;
+- environment isolation;
+- promotion or rollback;
 - broad runtime changes.
 
 ---
@@ -1546,12 +1736,14 @@ Split when:
 
 - backend, frontend, migration, and destructive work are mixed;
 - safety is not understood;
-- recon may change the plan;
-- user testing should precede the next stage;
+- reconnaissance may change the plan;
+- User testing should precede the next stage;
 - implementation would span unrelated systems;
 - failure would be expensive;
 - validation and repair should remain separate;
-- live operation should be approved separately.
+- live operation should be approved separately;
+- Development and Test mutation would otherwise be mixed;
+- promotion, rollback, and Production concerns would otherwise be conflated.
 
 A milestone should not be split mechanically when one bounded implementation can be completed safely.
 
@@ -1577,7 +1769,10 @@ The Coder should continue investigation when:
 - data migration risk exists;
 - an authority boundary is unclear;
 - cleanup or destructive scope is uncertain;
-- existing tests contradict assumptions.
+- existing tests contradict assumptions;
+- runtime and tracked contract disagree;
+- shared-host impact is unclear;
+- required environment identity is unproven.
 
 ---
 
@@ -1585,9 +1780,9 @@ The Coder should continue investigation when:
 
 ## 53. Read-Only Git Reconnaissance
 
-Expected before coding:
+Expected before coding in the authoritative Linux repository:
 
-```powershell
+```bash
 git branch --show-current
 git status --short
 git log --oneline --decorate -5
@@ -1595,12 +1790,14 @@ git log --oneline --decorate -5
 
 Additional read-only commands may include:
 
-```powershell
+```bash
 git diff --name-only
 git diff --stat
 git diff
 git ls-files
 git branch --all
+git rev-parse HEAD
+git rev-parse '@{upstream}'
 ```
 
 ---
@@ -1611,7 +1808,7 @@ Specific-file staging is the default.
 
 Required verification:
 
-```powershell
+```bash
 git diff --cached --name-only
 git diff --cached --stat
 git diff --cached --check
@@ -1620,6 +1817,8 @@ git diff --cached --check
 The expected file list should be stated before commit.
 
 Do not commit unexplained files.
+
+When replacing a versioned global document, verify the exact old-file removal and new-file addition.
 
 ---
 
@@ -1633,6 +1832,7 @@ material prompt Q&A
 prior-milestone fix
 unrelated maintenance
 current implementation and closeout
+reconnaissance prompt and closeout evidence
 global documentation alignment
 merge commit
 tag or version update
@@ -1644,7 +1844,7 @@ Do not mix unrelated systems because they happen to be dirty simultaneously.
 
 ## 56. Branch Lifecycle
 
-Recommended branch lifecycle:
+Recommended application branch lifecycle:
 
 ```text
 updated main
@@ -1659,49 +1859,135 @@ updated main
 → optional branch deletion
 ```
 
-Substantial arcs should normally use a feature branch.
+Substantial application arcs should normally use a feature branch.
 
-Small documentation-only changes may be performed on `main` only when that matches project practice and the User approves.
+An approved deployment/documentation branch may continue across related deployment milestones.
+
+Small documentation-only changes may be performed on the current approved branch when that matches project practice and the User approves.
 
 ---
 
 # Part X — Runtime and Deployment Workflow
 
-## 57. Runtime Validation
+## 57. Environment and Terminal Identification
 
-Runtime-related milestones should define:
+Every operational command block should identify where it runs.
 
-- target runtime;
-- startup command;
-- expected services;
-- expected ports;
-- health endpoints;
-- failure behavior;
-- log location;
-- stop command;
-- recovery behavior.
+Supported labels include:
 
-Current development startup command:
-
-```powershell
-Set-Location "C:\Users\chhen\My Drive\AI Photo Organizer\Photo Organizer_v1"
-.\scripts\runtime\start_photo_organizer_dev.ps1
+```text
+VS Code Remote SSH / Linux terminal
+Windows PowerShell
+Windows Development Operator
+server-side Development operator
+server-side Test operator
+browser / Developer Tools
+Synology DSM
+Portainer
+Cockpit
 ```
 
-Runtime validation should not rely only on process startup.
+Do not provide an unlabeled command when running it in the wrong environment could create confusion or risk.
 
-It should confirm key application behavior.
+The authoritative repository is operated from the Linux terminal.
+
+Windows PowerShell remains appropriate for Windows-specific Source access, SSH tunnels, and Windows operator tasks.
 
 ---
 
-## 58. Production and Deployment Milestones
+## 58. Current Development Runtime Workflow
+
+Current Development authority:
+
+```text
+Host: henderson-server1
+Repository: /home/chuck/projects/photo-organizer-dev
+Compose project: photo-organizer-dev
+Frontend: 127.0.0.1:13000
+Backend: 127.0.0.1:18001
+PostgreSQL: unpublished
+Redis: unpublished
+Storage mode: local
+```
+
+Current operator paths:
+
+```text
+scripts/operator/development/photo_organizer_dev_operator.sh
+scripts/operator/windows/PhotoOrganizer-Development-Operator.ps1
+```
+
+Development source behavior:
+
+```text
+repository edit
+→ rebuild affected image
+→ recreate or replace affected container
+→ health check
+→ targeted validation
+```
+
+Development source is not bind-mounted into running containers.
+
+A restart alone does not activate repository edits.
+
+Routine start deliberately performs no build, pull, or container replacement.
+
+Detailed command syntax belongs in the maintained Development operator and recovery guides.
+
+---
+
+## 59. Current Test Runtime Workflow
+
+Current Test authority:
+
+```text
+Host: henderson-server1
+Compose project: photo-organizer-test
+Frontend: 127.0.0.1:13001
+Backend: 127.0.0.1:18002
+PostgreSQL: unpublished
+Redis: unpublished
+Storage mode: local
+Protected configuration: /home/chuck/.config/photo-organizer/test.env
+Release state: /home/chuck/.local/state/photo-organizer/test/release.json
+```
+
+Test characteristics:
+
+- immutable full-SHA backend and frontend images;
+- separately recorded image IDs;
+- separate PostgreSQL, Redis, storage, networks, configuration, and release state;
+- no runtime Source bind mounts;
+- routine start restarts the preserved candidate;
+- routine start does not rebuild or replace the candidate;
+- Test is operated through the server-side Test operator;
+- browser access uses an explicit SSH tunnel.
+
+Current limitations:
+
+```text
+candidate replacement not implemented
+rollback not implemented
+Production promotion not implemented
+Windows Test operator not implemented
+```
+
+Do not use ad hoc Docker commands to bypass these missing workflows.
+
+---
+
+## 60. Deployment and Operational Milestones
 
 Deployment milestones should consider:
 
 - Windows versus Linux host behavior;
+- authoritative repository location;
 - Docker services;
+- Compose project identity;
 - PostgreSQL placement;
 - Redis placement;
+- application storage;
 - NAS mounts;
 - Vault paths;
 - permissions;
@@ -1714,15 +2000,98 @@ Deployment milestones should consider:
 - logging;
 - health checks;
 - network access;
-- secrets.
+- secrets;
+- release manifests;
+- image identity;
+- shared-host protection;
+- exact stop conditions.
 
 Deployment reconnaissance and implementation should normally be separate unless scope is narrow and already understood.
+
+A deployment prompt must explicitly state whether the Coder may:
+
+- run Docker commands;
+- inspect live containers;
+- start or stop services;
+- build or pull images;
+- create or remove containers;
+- inspect or mutate volumes;
+- inspect or mutate databases;
+- access the NAS;
+- read protected configuration;
+- alter firewall, SSH, mount, or system services.
+
+Silence is not authorization.
+
+---
+
+## 61. NAS and Storage Authority
+
+Current NAS contract:
+
+```text
+Server mount: /mnt/nas/photo-organizer
+Share source: //192.168.1.171/PhotoOrganizer
+Protocol: CIFS / SMB 3.1.1
+```
+
+Current NAS role:
+
+- durable-storage infrastructure;
+- backup infrastructure;
+- future archive/Production storage candidate.
+
+Current NAS role is not:
+
+- Development application-storage authority;
+- Test application-storage authority;
+- Development PostgreSQL storage;
+- Test PostgreSQL storage;
+- Development Redis storage;
+- Test Redis storage;
+- editable Git repository.
+
+NAS access, permission changes, mount changes, and data mutation require explicit authorization.
+
+Protected NAS credentials must not be printed or committed.
+
+---
+
+## 62. Production Boundary
+
+Current Linux Production is not implemented.
+
+Legacy Windows Production scripts, examples, and generic Compose artifacts remain tracked.
+
+They are not the current approved Linux Production contract.
+
+No milestone should infer that Production exists merely because Development and Test are operational.
+
+Production work requires explicit design and validation for:
+
+```text
+Compose project
+configuration
+secrets
+networking
+storage authority
+Vault
+database
+Redis
+release identity
+promotion
+rollback
+backup
+restore
+service supervision
+cutover
+```
 
 ---
 
 # Part XI — Communication Rules
 
-## 59. ChatGPT Communication
+## 63. ChatGPT Communication
 
 ChatGPT should:
 
@@ -1736,15 +2105,17 @@ ChatGPT should:
 - use exact filenames;
 - use one complete prompt block;
 - use one complete Git command block;
+- label command execution environment;
 - distinguish fact from assumption;
 - recommend validation evidence;
 - identify escalation triggers;
 - avoid agreeing merely because the User suggested an idea;
-- recommend against an approach when architecture or evidence indicates a better option.
+- recommend against an approach when architecture or evidence indicates a better option;
+- avoid treating current Test or Production capabilities as more complete than they are.
 
 ---
 
-## 60. Coder Communication
+## 64. Coder Communication
 
 Coder should:
 
@@ -1754,13 +2125,15 @@ Coder should:
 - state when evidence is incomplete;
 - report deviations;
 - report validation honestly;
+- identify the environment inspected or changed;
 - use the required closeout filename;
 - avoid broad unsolicited proposals;
-- escalate before material scope expansion.
+- escalate before material scope expansion;
+- state whether evidence is direct, inferred, or reconstructed.
 
 ---
 
-## 61. User Communication
+## 65. User Communication
 
 User should:
 
@@ -1773,16 +2146,17 @@ User should:
 - share screenshots and output when useful;
 - avoid committing before reviewing staged files;
 - decide when to retain or delete branches;
-- initiate documentation checkpoints at natural arc boundaries.
+- initiate documentation checkpoints at natural arc boundaries;
+- confirm which terminal or tool is being used when troubleshooting environment-specific commands.
 
 ---
 
 # Part XII — Scope and Safety Discipline
 
-## 62. Scope Rules
+## 66. Scope Rules
 
 - Each milestone must remain tightly scoped.
-- New ideas normally move to Parking Lot.
+- New ideas normally move to the Parking Lot.
 - Related low-risk work may be grouped deliberately.
 - Unrelated systems should not be combined.
 - Validation should match scope.
@@ -1790,10 +2164,13 @@ User should:
 - No validation-only milestone should silently become implementation.
 - No UI milestone should alter backend authority incidentally.
 - No compatibility work should be added solely to preserve disposable test data without approval.
+- No Development milestone should silently mutate Test.
+- No Test milestone should silently create Production behavior.
+- No deployment milestone should silently alter application semantics.
 
 ---
 
-## 63. Safety Rules
+## 67. Safety Rules
 
 - Do not modify original Source media.
 - Keep Vault immutable.
@@ -1806,39 +2183,46 @@ User should:
 - Do not silently migrate identity versions.
 - Do not perform destructive Git actions without authorization.
 - Do not run live operations beyond approved limits.
-- Fail closed when identity or data safety is unclear.
+- Do not mutate Docker, database, NAS, secrets, mounts, services, or deployment state without authorization.
+- Do not expose application, PostgreSQL, or Redis publicly.
+- Do not use ad hoc Test replacement or rollback commands.
+- Preserve Development/Test isolation.
+- Fail closed when identity, environment, authority, or data safety is unclear.
 
 ---
 
 # Part XIII — Documentation Checkpoints and Chat Continuation
 
-## 64. Documentation Checkpoint
+## 68. Documentation Checkpoint
 
 A major documentation checkpoint is appropriate:
 
-- after a major arc;
+- after a major application arc;
 - after architecture changes;
+- after deployment milestones materially change runtime state;
 - after branch merge;
 - before a new development phase;
 - before starting a continuation chat;
-- before production deployment work.
+- before Production deployment work.
 
 Checkpoint documents may include:
 
 ```text
-Project Context
-Project Architecture
-Project Workflow
-Coding Agent Rules
-Milestone History
-Parking Lot
-v1.0 Roadmap
-New Chat Intro
+project_context_v7.md
+project_architecture_v7.md
+project_workflow_v7.md
+coding_agent_rules_v7.md
+MILESTONE_HISTORY.md
+canonical_parking_lot_v7.md
+v1.0 roadmap
+new-chat intro
+deployment guides
+latest application or deployment closeout
 ```
 
 ---
 
-## 65. Chat and Context Health
+## 69. Chat and Context Health
 
 A new continuation chat should be considered:
 
@@ -1855,21 +2239,24 @@ Do not wait for severe degradation when a natural documentation boundary already
 
 ---
 
-## 66. Continuation Package
+## 70. Continuation Package
 
 A continuation chat should begin with current copies of:
 
 ```text
-PROJECT_CONTEXT.md
-PROJECT_ARCHITECTURE.md
-PROJECT_WORKFLOW.md
-CODING_AGENT_RULES.md
+project_context_v7.md
+project_architecture_v7.md
+project_workflow_v7.md
+coding_agent_rules_v7.md
 MILESTONE_HISTORY.md
-Parking Lot
+canonical_parking_lot_v7.md
 v1.0 release roadmap
-latest relevant milestone prompt
-latest relevant milestone closeout
+latest relevant application milestone prompt
+latest relevant application milestone closeout
+latest relevant deployment milestone prompt
+latest relevant deployment milestone closeout
 short current-branch and Git-state summary
+current Development/Test environment summary when relevant
 ```
 
 The new chat should treat these documents as primary context.
@@ -1878,14 +2265,14 @@ Old chat recollection is secondary.
 
 ---
 
-# Part XIV — Key Principles
+# Part XIV — Key Principles and Success Criteria
 
-## 67. Key Principles
+## 71. Key Principles
 
 - Milestone-driven development
 - Separation of design and implementation
 - Reconnaissance as implementation roadmap
-- Targeted implementation after recon
+- Targeted implementation after reconnaissance
 - Human-in-the-loop validation
 - Validation-only work remains non-mutating
 - Provenance claims require evidence
@@ -1906,10 +2293,16 @@ Old chat recollection is secondary.
 - Explicit escalation before unsafe scope expansion
 - Reliable post-merge validation
 - Portable project context across chats and tools
+- Authoritative Linux repository
+- Explicit terminal and environment labeling
+- Development/Test isolation
+- Immutable Test release identity
+- Product Owner authority over Git and live mutation
+- Separate application and deployment histories
 
 ---
 
-## 68. Success Criteria
+## 72. Success Criteria
 
 This workflow is successful when:
 
@@ -1917,7 +2310,7 @@ This workflow is successful when:
 - the Coder knows exactly what to implement;
 - architecture and authority boundaries remain clear;
 - reconnaissance closeouts become useful implementation roadmaps;
-- implementation does not repeat unnecessary broad recon;
+- implementation does not repeat unnecessary broad reconnaissance;
 - clarification loops are shorter;
 - escalations happen before unsafe expansion;
 - provenance and data-integrity conclusions are supported by evidence;
@@ -1931,8 +2324,13 @@ This workflow is successful when:
 - unrelated work is not mixed;
 - feature branches are merged cleanly;
 - merged `main` is runtime-validated;
+- Development edits are correctly rebuilt and applied;
+- Test candidate identity is preserved;
+- Development and Test mutable state remain isolated;
+- Docker, database, NAS, and deployment changes occur only with explicit authority;
+- commands run in the correct terminal and environment;
 - regressions are minimized;
 - global documents describe current truth;
 - project state remains portable across chats;
-- user confidence increases with each milestone;
-- the system moves steadily toward safe v1.0 production use.
+- User confidence increases with each milestone;
+- the system moves steadily toward safe v1.0 Production use.
