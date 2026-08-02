@@ -382,3 +382,7 @@ Do not use:
 Routine actions and application conclusions remain strictly scoped to Compose
 project `photo-organizer-dev`. Unrelated containers are never treated as Photo
 Organizer-owned or managed by these controls.
+
+## Linux Source Access Recovery Boundary
+
+Recovery status now verifies the broker/config/socket and the exact Development backend Source binds and supplemental groups. A Source-access failure blocks Local/NAS Source use; it does not change the current local named-volume authority for PostgreSQL, Redis, Vault, previews, or application storage. Do not restart Docker, remount NAS, recreate Development, or change GIDs as an automatic recovery action. Follow the staged Product Owner gates in `Photo_Organizer_Linux_Source_Access_Guide.md`.

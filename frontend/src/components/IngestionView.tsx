@@ -16,6 +16,7 @@ import {
   IcloudAcquisitionStartError,
   getSourceProfileIcloudReadiness,
   getSourceProfileDetail,
+  getLinuxSourceLocations,
   getSourceIntakeReportDetail,
   getSourceIntakeReports,
   getSourceIntakeRunStatus,
@@ -46,6 +47,7 @@ import type {
   SourceCreationType,
   SourceIdentityProbeRequest,
   SourceIdentityProbeSourceType,
+  LinuxSourceLocationsResponse,
   SourceProfileCreateRequest,
   SourceProfileDetail,
   SourceProfileMetadataUpdateRequest,
@@ -1365,6 +1367,25 @@ export default function IngestionView() {
   const [sourceCreationSourceName, setSourceCreationSourceName] = useState("");
   const [sourceCreationSelectedCanonicalSourceId, setSourceCreationSelectedCanonicalSourceId] = useState<number | null>(null);
   const [sourceCreationDuplicateIdsToInactivate, setSourceCreationDuplicateIdsToInactivate] = useState<number[]>([]);
+  const [linuxSourceLocations, setLinuxSourceLocations] = useState<LinuxSourceLocationsResponse | null>(null);
+  const [linuxSourceLocationId, setLinuxSourceLocationId] = useState("");
+  const [linuxSourceRelativeRoot, setLinuxSourceRelativeRoot] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void getLinuxSourceLocations()
+      .then((response) => {
+        if (!cancelled) {
+          setLinuxSourceLocations(response);
+        }
+      })
+      .catch(() => {
+        // Existing Windows forms remain available when the Linux capability endpoint is absent.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>("create");
@@ -2304,6 +2325,8 @@ export default function IngestionView() {
     setSourceCreationSourceName("");
     setSourceCreationSelectedCanonicalSourceId(null);
     setSourceCreationDuplicateIdsToInactivate([]);
+    setLinuxSourceLocationId("");
+    setLinuxSourceRelativeRoot("");
   }, []);
 
   const handleIdentifySourceLocation = useCallback(async (selectedEndpointId: number | null = null) => {
@@ -2313,11 +2336,16 @@ export default function IngestionView() {
 
     const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
     const observedPath = createSourceForm.sourceRootPath.trim();
+    const usesLinuxLocation = linuxSourceLocations !== null && (sourceType === "local" || sourceType === "nas");
     if (!sourceType) {
       setSourceCreationError("Choose Local, External, or NAS before identifying the location.");
       return;
     }
-    if (!observedPath) {
+    if (usesLinuxLocation && !linuxSourceLocationId) {
+      setSourceCreationError("Choose an available server Source location.");
+      return;
+    }
+    if (!usesLinuxLocation && !observedPath) {
       setSourceCreationError("Root Path or Mount Point is required.");
       return;
     }
@@ -2326,7 +2354,9 @@ export default function IngestionView() {
     try {
       const plan = await planSourceCreation({
         source_type: sourceType,
-        observed_path: observedPath,
+        observed_path: usesLinuxLocation ? null : observedPath,
+        location_id: usesLinuxLocation ? linuxSourceLocationId : null,
+        relative_root: usesLinuxLocation ? linuxSourceRelativeRoot.trim() : null,
         selected_existing_endpoint_id: selectedEndpointId,
       });
       setSourceCreationPlan(plan);
@@ -2351,7 +2381,13 @@ export default function IngestionView() {
       setSourceCreationPhase("idle");
       setSourceCreationError(error instanceof Error ? error.message : "Failed to identify the source location.");
     }
-  }, [createSourceForm.operatorSourceType, createSourceForm.sourceRootPath]);
+  }, [
+    createSourceForm.operatorSourceType,
+    createSourceForm.sourceRootPath,
+    linuxSourceLocationId,
+    linuxSourceLocations,
+    linuxSourceRelativeRoot,
+  ]);
 
   const handleCreateSource = useCallback(async (confirmReview = false) => {
     const deviceName = createSourceForm.sourceLabel.trim();
@@ -2406,7 +2442,8 @@ export default function IngestionView() {
 
     const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
     const observedPath = createSourceForm.sourceRootPath.trim();
-    if (!sourceType || !observedPath || !sourceCreationPlan) {
+    const usesLinuxLocation = linuxSourceLocations !== null && (sourceType === "local" || sourceType === "nas");
+    if (!sourceType || (!usesLinuxLocation && !observedPath) || (usesLinuxLocation && !linuxSourceLocationId) || !sourceCreationPlan) {
       setSourceCreationError("Identify the location before completing Create Source.");
       return;
     }
@@ -2438,7 +2475,9 @@ export default function IngestionView() {
 
     const request = {
       source_type: sourceType,
-      observed_path: observedPath,
+      observed_path: usesLinuxLocation ? null : observedPath,
+      location_id: usesLinuxLocation ? linuxSourceLocationId : null,
+      relative_root: usesLinuxLocation ? linuxSourceRelativeRoot.trim() : null,
       source_name: sourceCreationAllowsEditableSourceName(sourceCreationPlan)
         ? sourceCreationSourceName.trim()
         : null,
@@ -2502,6 +2541,9 @@ export default function IngestionView() {
     clearSourceCreationInputsAfterSuccess,
     handleIdentifySourceLocation,
     loadProfiles,
+    linuxSourceLocationId,
+    linuxSourceLocations,
+    linuxSourceRelativeRoot,
     sourceCreationDuplicateIdsToInactivate,
     sourceCreationNamingAction,
     sourceCreationPlan,
@@ -2678,8 +2720,9 @@ export default function IngestionView() {
     }
     const sourceType = sourceCreationTypeForOperator(createSourceForm.operatorSourceType);
     const observedPath = createSourceForm.sourceRootPath.trim();
-    if (!sourceType || !observedPath) {
-      setSourceCreationError("Root Path or Mount Point is required.");
+    const usesLinuxLocation = linuxSourceLocations !== null && (sourceType === "local" || sourceType === "nas");
+    if (!sourceType || (!usesLinuxLocation && !observedPath) || (usesLinuxLocation && !linuxSourceLocationId)) {
+      setSourceCreationError("A valid Source location is required.");
       return;
     }
     if (sourceCreationSelectedCanonicalSourceId == null) {
@@ -2692,7 +2735,9 @@ export default function IngestionView() {
     try {
       const plan = await planSourceCreation({
         source_type: sourceType,
-        observed_path: observedPath,
+        observed_path: usesLinuxLocation ? null : observedPath,
+        location_id: usesLinuxLocation ? linuxSourceLocationId : null,
+        relative_root: usesLinuxLocation ? linuxSourceRelativeRoot.trim() : null,
         source_name: sourceCreationAllowsEditableSourceName(sourceCreationPlan)
           ? sourceCreationSourceName.trim()
           : null,
@@ -2717,6 +2762,9 @@ export default function IngestionView() {
     createSourceForm.operatorSourceType,
     createSourceForm.sourceLabel,
     createSourceForm.sourceRootPath,
+    linuxSourceLocationId,
+    linuxSourceLocations,
+    linuxSourceRelativeRoot,
     sourceCreationDuplicateIdsToInactivate,
     sourceCreationNamingAction,
     sourceCreationPlan,
@@ -4219,10 +4267,22 @@ export default function IngestionView() {
                     type="button"
                     className={`${styles.segmentButton} ${createSourceForm.operatorSourceType === option.value ? styles.segmentButtonActive : ""}`}
                     aria-pressed={createSourceForm.operatorSourceType === option.value}
-                    disabled={option.disabled || sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
-                    title={option.disabled ? "Coming later" : undefined}
+                    disabled={
+                      option.disabled
+                      || (linuxSourceLocations !== null && ["external", "removable", "optical"].includes(option.value))
+                      || sourceCreationPhase === "planning"
+                      || sourceCreationPhase === "confirming"
+                      || sourceCreationPhase === "selecting_existing"
+                    }
+                    title={
+                      linuxSourceLocations !== null && ["external", "removable", "optical"].includes(option.value)
+                        ? "Linux support is deferred to a later milestone"
+                        : option.disabled ? "Coming later" : undefined
+                    }
                     onClick={() => {
                       resetSourceCreationOutcome();
+                      setLinuxSourceLocationId("");
+                      setLinuxSourceRelativeRoot("");
                       setCreateSourceForm((current) => ({
                         ...current,
                         operatorSourceType: option.value,
@@ -4277,7 +4337,52 @@ export default function IngestionView() {
                 </>
               )}
 
-              {createSourceForm.operatorSourceType !== "icloud" && (
+              {linuxSourceLocations !== null
+                && (createSourceForm.operatorSourceType === "local" || createSourceForm.operatorSourceType === "nas") ? (
+                <>
+                  <label className={styles.formLabel}>
+                    Server Source Location
+                    <select
+                      className={styles.formInput}
+                      value={linuxSourceLocationId}
+                      disabled={
+                        sourceCreationPhase === "planning"
+                        || sourceCreationPhase === "confirming"
+                        || sourceCreationPhase === "selecting_existing"
+                      }
+                      onChange={(event) => {
+                        resetSourceCreationOutcome();
+                        setLinuxSourceLocationId(event.target.value);
+                      }}
+                    >
+                      <option value="">Choose a server-discovered location</option>
+                      {linuxSourceLocations.locations
+                        .filter((location) => location.source_type === createSourceForm.operatorSourceType)
+                        .map((location) => (
+                          <option key={location.location_id} value={location.location_id} disabled={location.availability !== "available"}>
+                            {location.display_name} — {location.status_message}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                  <label className={styles.formLabel}>
+                    Folder within location (optional)
+                    <input
+                      className={styles.formInput}
+                      value={linuxSourceRelativeRoot}
+                      disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                      placeholder="family/photos"
+                      onChange={(event) => {
+                        resetSourceCreationOutcome();
+                        setLinuxSourceRelativeRoot(event.target.value);
+                      }}
+                    />
+                  </label>
+                  {linuxSourceLocations.blockers.map((blocker) => (
+                    <p className={styles.helperText} key={blocker.code}>{blocker.message}</p>
+                  ))}
+                </>
+              ) : createSourceForm.operatorSourceType !== "icloud" && (
                 <label className={styles.formLabel}>
                   {createSourceForm.operatorSourceType === "optical" ? "Current Optical Path" : "Root Path or Mount Point"}
                   <input

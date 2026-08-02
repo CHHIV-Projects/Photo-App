@@ -48,6 +48,15 @@ class SourceEndpointEnrollmentCandidate(BaseModel):
     provider_version: str
     access_node_label: str
     access_node_os_family: str
+    access_node_id: str | None = Field(default=None, exclude=True)
+    access_node_host_fingerprint_hash: str | None = Field(default=None, exclude=True)
+    access_node_host_fingerprint_masked: str | None = Field(default=None, exclude=True)
+    access_node_capabilities: dict[str, bool] = Field(default_factory=dict, exclude=True)
+    location_id: str | None = None
+    relative_root: str | None = None
+    host_slot: str | None = Field(default=None, exclude=True)
+    runtime_slot: str | None = Field(default=None, exclude=True)
+    runtime_root: str | None = Field(default=None, exclude=True)
     identity_fingerprint_hash: str | None = None
     identity_fingerprint_version: str | None = None
     identity_fingerprint_strength: IdentityFingerprintStrength = "unavailable"

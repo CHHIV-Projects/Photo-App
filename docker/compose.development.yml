@@ -66,8 +66,21 @@ services:
       DEEPFACE_HOME: /app/storage/models
       FACE_MODEL_PATH: /app/app/services/vision/models/face_detection_yunet_2023mar.onnx
       REQUIRE_GPU: "false"
+    group_add:
+      - "${SOURCE_ACCESS_SOCKET_GID:?Set SOURCE_ACCESS_SOCKET_GID to the photo-organizer-source-access group GID}"
+      - "${SOURCE_ACCESS_DATA_GID:?Set SOURCE_ACCESS_DATA_GID to the photo-organizer-source-data group GID}"
     volumes:
       - application_storage:/app/storage
+      - type: bind
+        source: /mnt/photo-organizer-sources
+        target: /app/sources
+        read_only: true
+        bind:
+          propagation: rslave
+      - type: bind
+        source: /run/photo-organizer-source-access
+        target: /run/photo-organizer-source-access
+        read_only: true
     ports:
       - "${DEVELOPMENT_BIND_ADDRESS:-127.0.0.1}:${BACKEND_HOST_PORT:-18001}:8001"
     networks:

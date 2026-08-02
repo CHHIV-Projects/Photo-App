@@ -1537,6 +1537,25 @@ export interface SourceIdentityProbeRequest {
   probe_mode?: "setup_probe" | "readiness_probe" | "run_launch_verification" | "diagnostic_probe";
   intended_use?: string | null;
   os_family?: "windows" | "linux" | "macos" | "unknown";
+  location_id?: string | null;
+  relative_root?: string | null;
+}
+
+export interface LinuxSourceLocationSummary {
+  location_id: string;
+  source_type: "local" | "nas";
+  display_name: string;
+  availability: "available" | "unavailable" | "blocked";
+  status_message: string;
+  relative_root_supported: boolean;
+}
+
+export interface LinuxSourceLocationsResponse {
+  os_family: "linux";
+  provider_name: string;
+  provider_version: string;
+  locations: LinuxSourceLocationSummary[];
+  blockers: Array<{ code: string; message: string }>;
 }
 
 export interface SourceIdentityProbeEvidenceItem {
@@ -1721,7 +1740,9 @@ export interface SourceCreationSourceMatch {
 
 export interface SourceCreationPlanRequest {
   source_type: SourceCreationType;
-  observed_path: string;
+  observed_path?: string | null;
+  location_id?: string | null;
+  relative_root?: string | null;
   source_name?: string | null;
   device_name?: string | null;
   naming_action?: SourceCreationNameAction | null;

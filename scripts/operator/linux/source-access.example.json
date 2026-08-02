@@ -1,0 +1,30 @@
+{
+  "protocol_version": 1,
+  "access_node_label": "henderson-server1",
+  "access_node_id_file": "/var/lib/photo-organizer-source-access/access-node-id",
+  "source_namespace": "/mnt/photo-organizer-sources",
+  "data_read_group": "REPLACE_WITH_APPROVED_EXISTING_DATA_READ_GROUP",
+  "locations": [
+    {
+      "location_id": "linux-local-server-photos",
+      "source_type": "local",
+      "display_name": "Server Photos",
+      "host_slot": "/mnt/photo-organizer-sources/local/server-photos",
+      "runtime_slot": "/app/sources/local/server-photos",
+      "filesystem_type": "REPLACE_WITH_APPROVED_FILESYSTEM_TYPE",
+      "filesystem_uuid": "REPLACE_WITH_APPROVED_FILESYSTEM_UUID",
+      "slot_device": 0,
+      "slot_inode": 0
+    },
+    {
+      "location_id": "linux-nas-photo-organizer",
+      "source_type": "nas",
+      "display_name": "Photo Organizer NAS",
+      "host_slot": "/mnt/photo-organizer-sources/nas/photo-organizer",
+      "runtime_slot": "/app/sources/nas/photo-organizer",
+      "filesystem_type": "cifs",
+      "canonical_source": "//192.168.1.171/PhotoOrganizer",
+      "authoritative_target": "/mnt/nas/photo-organizer"
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import hashlib
 import json
 import ntpath
 import os
+import posixpath
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -44,6 +45,10 @@ from app.services.source_identity.identity_fingerprint import (
 from app.services.source_identity.probe_schema import (
     SourceIdentityProbeRequest,
     SourceIdentityProbeResponse,
+)
+from app.services.source_identity.posix_source_paths import (
+    PosixSourcePathError,
+    require_exact_mapping,
 )
 from app.services.source_identity.probe_service import SourceIdentityProbeService
 
@@ -163,6 +168,8 @@ class SourceCreationService:
         plan_request = SourceCreationPlanRequest(
             source_type=request.source_type,
             observed_path=request.observed_path,
+            location_id=request.location_id,
+            relative_root=request.relative_root,
             source_name=request.source_name,
             device_name=request.device_name,
             naming_action=request.naming_action,
@@ -215,18 +222,44 @@ class SourceCreationService:
 
         requested_device_name = _normalize_device_name(request.device_name)
         observed_path = (request.observed_path or "").strip()
-        shape_blocker = _path_shape_blocker(request.source_type, observed_path)
-        if shape_blocker is not None:
-            blockers.append(shape_blocker)
+        linux_location_request = request.location_id is not None
+        if linux_location_request:
+            if request.source_type not in {"local", "nas"}:
+                blockers.append(
+                    _message(
+                        "linux_source_type_not_supported",
+                        "Linux stable-mount creation supports only Local and NAS.",
+                    )
+                )
+            if observed_path:
+                blockers.append(
+                    _message(
+                        "linux_absolute_path_not_accepted",
+                        "Do not supply a path for a server-discovered Linux location.",
+                    )
+                )
+        else:
+            shape_blocker = _path_shape_blocker(request.source_type, observed_path)
+            if shape_blocker is not None:
+                blockers.append(shape_blocker)
 
         probe: SourceIdentityProbeResponse | None = None
         technical_source_type = request.source_type
         if not blockers:
-            probe_type = _initial_probe_source_type(request.source_type, observed_path)
-            probe = self._run_probe(probe_type, observed_path, "drive_agnostic_source_creation")
-            if request.source_type in {"local", "external"} and _probe_reports_mapped_nas(probe):
-                probe = self._run_probe("nas", observed_path, "mapped_nas_source_creation")
-            technical_source_type = _operator_source_type_from_probe(probe, request.source_type)
+            if linux_location_request:
+                probe = self._run_linux_probe(
+                    request.source_type,
+                    request.location_id or "",
+                    request.relative_root or "",
+                    "stable_mount_source_creation",
+                )
+                observed_path = probe.observed_path or ""
+            else:
+                probe_type = _initial_probe_source_type(request.source_type, observed_path)
+                probe = self._run_probe(probe_type, observed_path, "drive_agnostic_source_creation")
+                if request.source_type in {"local", "external"} and _probe_reports_mapped_nas(probe):
+                    probe = self._run_probe("nas", observed_path, "mapped_nas_source_creation")
+                technical_source_type = _operator_source_type_from_probe(probe, request.source_type)
             blockers.extend(_probe_blockers(probe))
             warnings.extend(_probe_warnings(probe))
 
@@ -272,11 +305,15 @@ class SourceCreationService:
         safe_legacy_upgrade_endpoint_ids = {
             match.source_endpoint_id for match in legacy_matches
         }
-        revalidated_legacy_matches = self._find_revalidated_legacy_matches(
-            endpoint_source_types=match_endpoint_types,
-            endpoint_boundary=derived_root.endpoint_boundary,
-            fingerprint=fingerprint,
-            excluded_endpoint_ids=strong_ids | safe_legacy_upgrade_endpoint_ids,
+        revalidated_legacy_matches = (
+            []
+            if probe is not None and probe.os_family == "linux"
+            else self._find_revalidated_legacy_matches(
+                endpoint_source_types=match_endpoint_types,
+                endpoint_boundary=derived_root.endpoint_boundary,
+                fingerprint=fingerprint,
+                excluded_endpoint_ids=strong_ids | safe_legacy_upgrade_endpoint_ids,
+            )
         )
         legacy_matches.extend(revalidated_legacy_matches)
         safe_legacy_upgrade_endpoint_ids.update(
@@ -505,6 +542,7 @@ class SourceCreationService:
             endpoint_id=selected_endpoint.id if selected_endpoint is not None else None,
             endpoint_relative_root=derived_root.endpoint_relative_root,
             canonical_source_root_path=derived_root.canonical_source_root_path,
+            posix_case_sensitive=probe is not None and probe.os_family == "linux",
         )
         reference_summaries = {
             source.id: self._source_reference_summary(source.id) for source in exact_sources
@@ -578,6 +616,7 @@ class SourceCreationService:
                     display_name=requested_source_name,
                     persisted_source_type=_persisted_source_type(recognized_source_type),
                     canonical_source_root_path=derived_root.canonical_source_root_path,
+                    posix_case_sensitive=probe is not None and probe.os_family == "linux",
                 ):
                     source_name_suggested_alternative, _ = self._source_display_name_for_plan(
                         endpoint_relative_root=derived_root.endpoint_relative_root,
@@ -682,8 +721,16 @@ class SourceCreationService:
                 "requested_source_name": requested_source_name,
                 "naming_action": naming_action,
                 "use_registered_source_type": request.use_registered_source_type,
-                "canonical_source_root_path": derived_root.canonical_source_root_path.casefold(),
-                "endpoint_relative_root": derived_root.endpoint_relative_root.casefold(),
+                "canonical_source_root_path": (
+                    derived_root.canonical_source_root_path
+                    if probe is not None and probe.os_family == "linux"
+                    else derived_root.canonical_source_root_path.casefold()
+                ),
+                "endpoint_relative_root": (
+                    derived_root.endpoint_relative_root
+                    if probe is not None and probe.os_family == "linux"
+                    else derived_root.endpoint_relative_root.casefold()
+                ),
                 "fingerprint_hash": fingerprint.hash_value,
                 "fingerprint_version": fingerprint.version,
                 "selected_endpoint": (
@@ -794,6 +841,24 @@ class SourceCreationService:
                 probe_mode="setup_probe",
                 intended_use=intended_use,
                 os_family="windows",
+            )
+        )
+
+    def _run_linux_probe(
+        self,
+        probe_source_type: str,
+        location_id: str,
+        relative_root: str,
+        intended_use: str,
+    ) -> SourceIdentityProbeResponse:
+        return self._probe_service.probe(
+            SourceIdentityProbeRequest(
+                source_type=probe_source_type,  # type: ignore[arg-type]
+                probe_mode="setup_probe",
+                intended_use=intended_use,
+                os_family="linux",
+                location_id=location_id,
+                relative_root=relative_root,
             )
         )
 
@@ -909,20 +974,29 @@ class SourceCreationService:
         endpoint_id: int | None,
         endpoint_relative_root: str,
         canonical_source_root_path: str,
+        posix_case_sensitive: bool = False,
     ) -> list[IngestionSource]:
         matches: dict[int, IngestionSource] = {}
         if endpoint_id is not None:
+            relative_predicate = (
+                IngestionSource.endpoint_relative_root == endpoint_relative_root
+                if posix_case_sensitive
+                else func.lower(IngestionSource.endpoint_relative_root) == endpoint_relative_root.casefold()
+            )
             modern = self._db.scalars(
                 select(IngestionSource).where(
                     IngestionSource.endpoint_id == endpoint_id,
                     IngestionSource.endpoint_relative_root.is_not(None),
-                    func.lower(IngestionSource.endpoint_relative_root)
-                    == endpoint_relative_root.casefold(),
+                    relative_predicate,
                 )
             ).all()
             matches.update({source.id: source for source in modern})
 
-        normalized_root = normalize_source_root_path(canonical_source_root_path)
+        normalized_root = (
+            posixpath.normpath(canonical_source_root_path)
+            if posix_case_sensitive
+            else normalize_source_root_path(canonical_source_root_path)
+        )
         legacy = self._db.scalars(
             select(IngestionSource).where(
                 IngestionSource.source_root_path_normalized == normalized_root,
@@ -1185,6 +1259,7 @@ class SourceCreationService:
         display_name: str,
         persisted_source_type: str,
         canonical_source_root_path: str,
+        posix_case_sensitive: bool = False,
     ) -> bool:
         existing_id = self._db.scalar(
             select(IngestionSource.id)
@@ -1192,7 +1267,11 @@ class SourceCreationService:
                 IngestionSource.source_label_normalized == normalize_source_label(display_name),
                 IngestionSource.source_type == persisted_source_type,
                 IngestionSource.source_root_path_normalized
-                == normalize_source_root_path(canonical_source_root_path),
+                == (
+                    posixpath.normpath(canonical_source_root_path)
+                    if posix_case_sensitive
+                    else normalize_source_root_path(canonical_source_root_path)
+                ),
             )
             .limit(1)
         )
@@ -1372,7 +1451,11 @@ class SourceCreationService:
                 source_label_normalized=normalize_source_label(plan.source_display_name),
                 source_type=plan.persisted_source_type,
                 source_root_path=plan.canonical_source_root_path,
-                source_root_path_normalized=normalize_source_root_path(plan.canonical_source_root_path),
+                source_root_path_normalized=(
+                    posixpath.normpath(plan.canonical_source_root_path)
+                    if probe.os_family == "linux"
+                    else normalize_source_root_path(plan.canonical_source_root_path)
+                ),
                 endpoint_relative_root=plan.endpoint_relative_root,
                 profile_status="active",
                 endpoint_id=endpoint.id,
@@ -1484,22 +1567,28 @@ class SourceCreationService:
         self,
         probe: SourceIdentityProbeResponse,
     ) -> tuple[AccessNode, bool]:
-        access_node_uuid = "access-node:" + hashlib.sha256(
-            _safe_json(
-                {
-                    "label": probe.access_node_summary.label,
-                    "os_family": probe.access_node_summary.os_family,
-                    "provider_name": probe.provider_name,
-                    "provider_version": probe.provider_version,
-                }
-            ).encode("utf-8")
-        ).hexdigest()[:48]
+        access_node_uuid = probe.access_node_summary.access_node_id or (
+            "access-node:" + hashlib.sha256(
+                _safe_json(
+                    {
+                        "label": probe.access_node_summary.label,
+                        "os_family": probe.access_node_summary.os_family,
+                        "provider_name": probe.provider_name,
+                        "provider_version": probe.provider_version,
+                    }
+                ).encode("utf-8")
+            ).hexdigest()[:48]
+        )
         existing = self._db.scalar(
             select(AccessNode).where(AccessNode.access_node_uuid == access_node_uuid)
         )
         now = datetime.now(timezone.utc)
         if existing is not None:
             existing.last_seen_at = now
+            if probe.os_family == "linux":
+                existing.host_fingerprint_hash = probe.access_node_summary.host_fingerprint_hash
+                existing.host_fingerprint_masked = probe.access_node_summary.host_fingerprint_masked
+                existing.capabilities_json = _safe_json(probe.access_node_summary.capabilities)
             self._db.add(existing)
             self._db.flush()
             return existing, False
@@ -1510,6 +1599,9 @@ class SourceCreationService:
             os_family=probe.access_node_summary.os_family,
             provider_name=probe.provider_name,
             provider_version=probe.provider_version,
+            host_fingerprint_hash=probe.access_node_summary.host_fingerprint_hash,
+            host_fingerprint_masked=probe.access_node_summary.host_fingerprint_masked,
+            capabilities_json=_safe_json(probe.access_node_summary.capabilities),
             status="active",
             last_seen_at=now,
         )
@@ -1526,7 +1618,9 @@ class SourceCreationService:
         plan: SourceCreationPlanResponse,
     ) -> tuple[SourceEndpointObservedPath, bool]:
         observed_path = probe.observed_path or plan.observed_path
-        normalized_path = probe.normalized_observed_path or observed_path.replace("/", "\\").casefold()
+        normalized_path = probe.normalized_observed_path or (
+            observed_path if probe.os_family == "linux" else observed_path.replace("/", "\\").casefold()
+        )
         existing = self._db.scalar(
             select(SourceEndpointObservedPath).where(
                 SourceEndpointObservedPath.source_endpoint_id == endpoint.id,
@@ -1566,6 +1660,10 @@ class SourceCreationService:
                     "durable_identity_status": plan.durable_identity_status,
                     "identifier_type": plan.durable_identity_identifier_type,
                     "identifier": plan.durable_identity_identifier,
+                    "location_id": probe.location_id,
+                    "relative_root": probe.relative_root,
+                    "host_slot": probe.host_slot,
+                    "runtime_slot": probe.runtime_slot,
                 }
             ),
             last_seen_at=now,
@@ -1680,6 +1778,8 @@ def _match_endpoint_types(
     probe: SourceIdentityProbeResponse | None,
     technical_source_type: str,
 ) -> set[str]:
+    if probe is not None and probe.os_family == "linux":
+        return {probe.source_type}
     if probe is not None and probe.source_type in {"local", "external_device", "removable_media"}:
         return set(_LOCAL_ENDPOINT_TYPES)
     return {_endpoint_source_type(technical_source_type)}
@@ -1812,6 +1912,32 @@ def _derive_root(
     observed_path: str,
     probe: SourceIdentityProbeResponse | None,
 ) -> tuple[_DerivedRoot | None, SourceCreationMessage | None]:
+    if probe is not None and probe.os_family == "linux":
+        if not probe.host_slot or not probe.runtime_slot:
+            return None, _message("linux_mapping_missing", "Linux Source slot mapping is unavailable.")
+        try:
+            mapping = require_exact_mapping(
+                host_slot=probe.host_slot,
+                runtime_slot=probe.runtime_slot,
+                relative_root=probe.relative_root,
+                host_observed_path=probe.observed_path,
+                runtime_root=probe.runtime_root,
+            )
+        except PosixSourcePathError as exc:
+            return None, _message("linux_mapping_mismatch", str(exc))
+        return (
+            _DerivedRoot(
+                canonical_source_root_path=mapping.host_observed_path,
+                endpoint_relative_root=mapping.relative_root,
+                entire_endpoint=mapping.relative_root == "",
+                entire_endpoint_label=(
+                    "Entire share" if mapping.relative_root == "" and source_type == "nas"
+                    else "Entire device" if mapping.relative_root == "" else None
+                ),
+                endpoint_boundary=mapping.host_slot,
+            ),
+            None,
+        )
     if source_type in {"local", "external", "removable", "optical"}:
         normalized = ntpath.normpath(observed_path.replace("/", "\\"))
         drive, tail = ntpath.splitdrive(normalized)

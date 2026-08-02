@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 SourceIdentitySourceType = Literal["local", "external_device", "removable_media", "optical_media", "nas", "cloud"]
@@ -69,6 +69,8 @@ PrivacyLevel = Literal[
 class SourceIdentityProbeRequest(BaseModel):
     """Read-only source identity probe request."""
 
+    model_config = ConfigDict(extra="forbid")
+
     source_type: SourceIdentitySourceType
     observed_path: str | None = None
     probe_mode: ProbeMode = "setup_probe"
@@ -81,6 +83,8 @@ class SourceIdentityProbeRequest(BaseModel):
     redaction_level: str = "standard"
     expected_endpoint_evidence: dict[str, Any] | None = None
     expected_source_root: str | None = None
+    location_id: str | None = None
+    relative_root: str | None = None
 
 
 class AccessNodeSummary(BaseModel):
@@ -90,6 +94,8 @@ class AccessNodeSummary(BaseModel):
     label: str = "Current Access Node"
     os_family: OsFamily = "unknown"
     host_fingerprint_masked: str | None = None
+    host_fingerprint_hash: str | None = Field(default=None, exclude=True)
+    capabilities: dict[str, bool] = Field(default_factory=dict)
 
 
 class SourceRootCandidate(BaseModel):
@@ -167,6 +173,11 @@ class SourceIdentityProbeResponse(BaseModel):
     privacy_redaction_applied: bool = True
     capabilities: SourceIdentityProviderCapabilities = Field(default_factory=SourceIdentityProviderCapabilities)
     raw_evidence_reference: str | None = None
+    location_id: str | None = None
+    relative_root: str | None = None
+    host_slot: str | None = Field(default=None, exclude=True)
+    runtime_slot: str | None = Field(default=None, exclude=True)
+    runtime_root: str | None = Field(default=None, exclude=True)
 
 
 class SourceIdentityCapabilitiesResponse(BaseModel):

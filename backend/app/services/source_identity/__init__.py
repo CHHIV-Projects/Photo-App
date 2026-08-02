@@ -14,6 +14,7 @@ from app.services.source_identity.enrollment_schema import (
     SourceEndpointEnrollmentPlanResponse,
 )
 from app.services.source_identity.enrollment_service import SourceEndpointEnrollmentService
+from app.services.source_identity.linux_source_access import LinuxSourceLocationsResponse
 from app.services.source_identity.probe_schema import (
     SourceIdentityCapabilitiesResponse,
     SourceIdentityProbeRequest,
@@ -30,6 +31,7 @@ from app.services.source_identity.source_selection_schema import (
 from app.services.source_identity.source_selection_service import SourceSelectionService
 
 __all__ = [
+    "LinuxSourceLocationsResponse",
     "SelectedSourceContext",
     "SourceCreationConfirmRequest",
     "SourceCreationConfirmResponse",

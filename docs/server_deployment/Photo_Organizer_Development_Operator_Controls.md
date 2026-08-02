@@ -551,3 +551,7 @@ Do not:
 - create a Scheduled Task, startup item, Windows service, or automatic tunnel
   restart;
 - treat the NAS as the editable Git working tree.
+
+## Linux Source Access (Milestone 012)
+
+The Development backend has a tracked, fixed, read-only Linux Source-access contract. Host installation and live activation remain Product Owner approval-gated. Use `source-access-status` for bounded project-scoped verification; it does not mount, enable, recreate, or mutate resources. Full architecture, security boundaries, and staged commands are in `Photo_Organizer_Linux_Source_Access_Guide.md`. Test receives no Source access.

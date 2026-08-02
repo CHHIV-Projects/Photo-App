@@ -14,8 +14,10 @@ from app.services.source_identity.probe_schema import (
     SourceIdentityProviderCapabilities,
     SourceRootCandidate,
 )
+from app.services.source_identity.linux_source_access import LinuxSourceLocationsResponse
 from app.services.source_identity.probe_service import (
     LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+    LINUX_STABLE_MOUNT_PROVIDER_NAME,
     SourceIdentityProbeService,
 )
 
@@ -90,6 +92,40 @@ class _FakeLinuxDevelopmentFixtureProvider:
         return SourceIdentityProviderCapabilities(path_exists_check=True, path_readable_check=True)
 
 
+class _FakeLinuxStableMountProvider:
+    provider_name = LINUX_STABLE_MOUNT_PROVIDER_NAME
+    provider_version = "1"
+
+    def __init__(self) -> None:
+        self.requests: list[SourceIdentityProbeRequest] = []
+
+    def probe(self, request: SourceIdentityProbeRequest) -> SourceIdentityProbeResponse:
+        self.requests.append(request)
+        return SourceIdentityProbeResponse(
+            probe_status="completed",
+            source_type=request.source_type,
+            os_family="linux",
+            provider_name=self.provider_name,
+            provider_version=self.provider_version,
+            access_node_summary=AccessNodeSummary(os_family="linux"),
+            source_root_candidate=SourceRootCandidate(
+                is_valid_source_root_candidate=True,
+                filesystem_boundary_type="local_folder",
+                root_reason="stable mount",
+            ),
+            confidence_tier="strong_match",
+            safe_to_run=True,
+            location_id=request.location_id,
+            relative_root=request.relative_root,
+        )
+
+    def capabilities(self) -> SourceIdentityProviderCapabilities:
+        return SourceIdentityProviderCapabilities(path_exists_check=True, volume_identity=True)
+
+    def locations(self) -> LinuxSourceLocationsResponse:
+        return LinuxSourceLocationsResponse()
+
+
 class SourceIdentityProbeServiceTests(unittest.TestCase):
     def test_windows_request_selects_windows_provider(self) -> None:
         provider = _FakeWindowsProvider()
@@ -102,21 +138,34 @@ class SourceIdentityProbeServiceTests(unittest.TestCase):
         self.assertEqual(len(provider.requests), 1)
         self.assertEqual(provider.requests[0].os_family, "windows")
 
-    def test_linux_request_returns_unsupported_provider(self) -> None:
-        service = SourceIdentityProbeService(windows_provider=_FakeWindowsProvider())  # type: ignore[arg-type]
-        request = SourceIdentityProbeRequest(source_type="local", observed_path="/mnt/photos", os_family="linux")
+    def test_linux_request_selects_stable_mount_provider(self) -> None:
+        provider = _FakeLinuxStableMountProvider()
+        service = SourceIdentityProbeService(
+            windows_provider=_FakeWindowsProvider(),  # type: ignore[arg-type]
+            linux_stable_mount_provider=provider,  # type: ignore[arg-type]
+        )
+        request = SourceIdentityProbeRequest(
+            source_type="local",
+            os_family="linux",
+            location_id="linux-local-server-photos",
+            relative_root="family",
+        )
 
         response = service.probe(request)
 
-        self.assertEqual(response.probe_status, "unsupported_provider")
-        self.assertFalse(response.safe_to_run)
-        self.assertIn("unsupported_os_provider", [item.code for item in response.blockers])
+        self.assertEqual(response.provider_name, LINUX_STABLE_MOUNT_PROVIDER_NAME)
+        self.assertTrue(response.safe_to_run)
+        self.assertEqual(
+            provider.requests,
+            [request.model_copy(update={"provider_name": LINUX_STABLE_MOUNT_PROVIDER_NAME})],
+        )
 
     def test_linux_fixture_provider_requires_explicit_provider_selection(self) -> None:
         provider = _FakeLinuxDevelopmentFixtureProvider()
         service = SourceIdentityProbeService(
             windows_provider=_FakeWindowsProvider(),  # type: ignore[arg-type]
             linux_development_fixture_provider=provider,  # type: ignore[arg-type]
+            linux_stable_mount_provider=_FakeLinuxStableMountProvider(),  # type: ignore[arg-type]
         )
 
         default_response = service.probe(
@@ -136,7 +185,7 @@ class SourceIdentityProbeServiceTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(default_response.probe_status, "unsupported_provider")
+        self.assertEqual(default_response.provider_name, LINUX_STABLE_MOUNT_PROVIDER_NAME)
         self.assertEqual(explicit_response.provider_name, LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME)
         self.assertEqual(explicit_response.safe_to_run, "needs_review")
         self.assertEqual(len(provider.requests), 1)
@@ -172,12 +221,10 @@ class SourceIdentityProbeServiceTests(unittest.TestCase):
         ):
             response = service.capabilities()
 
-        self.assertEqual(response.supported_providers, [])
-        self.assertIsNone(response.default_provider)
-        self.assertNotIn(
-            LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
-            response.capabilities,
-        )
+        self.assertEqual(response.supported_providers, [LINUX_STABLE_MOUNT_PROVIDER_NAME])
+        self.assertEqual(response.default_provider, LINUX_STABLE_MOUNT_PROVIDER_NAME)
+        self.assertIn(LINUX_STABLE_MOUNT_PROVIDER_NAME, response.capabilities)
+        self.assertNotIn(LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME, response.capabilities)
 
     def test_macos_request_returns_unsupported_provider(self) -> None:
         service = SourceIdentityProbeService(windows_provider=_FakeWindowsProvider())  # type: ignore[arg-type]

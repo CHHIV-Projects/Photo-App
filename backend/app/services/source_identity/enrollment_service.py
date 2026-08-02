@@ -336,6 +336,15 @@ class SourceEndpointEnrollmentService:
             provider_version=probe.provider_version,
             access_node_label=probe.access_node_summary.label,
             access_node_os_family=probe.access_node_summary.os_family,
+            access_node_id=probe.access_node_summary.access_node_id,
+            access_node_host_fingerprint_hash=probe.access_node_summary.host_fingerprint_hash,
+            access_node_host_fingerprint_masked=probe.access_node_summary.host_fingerprint_masked,
+            access_node_capabilities=probe.access_node_summary.capabilities,
+            location_id=probe.location_id,
+            relative_root=probe.relative_root,
+            host_slot=probe.host_slot,
+            runtime_slot=probe.runtime_slot,
+            runtime_root=probe.runtime_root,
             identity_fingerprint_hash=fingerprint.hash_value,
             identity_fingerprint_version=fingerprint.version,
             identity_fingerprint_strength=fingerprint.strength,
@@ -621,13 +630,17 @@ class SourceEndpointEnrollmentService:
         candidate = plan.candidate
         if candidate is None:
             raise ValueError("Candidate is required.")
-        access_node_uuid = _access_node_uuid(candidate)
+        access_node_uuid = candidate.access_node_id or _access_node_uuid(candidate)
         existing = self._db.scalar(
             select(AccessNode).where(AccessNode.access_node_uuid == access_node_uuid)
         )
         now = datetime.now(timezone.utc)
         if existing is not None:
             existing.last_seen_at = now
+            if candidate.access_node_os_family == "linux":
+                existing.host_fingerprint_hash = candidate.access_node_host_fingerprint_hash
+                existing.host_fingerprint_masked = candidate.access_node_host_fingerprint_masked
+                existing.capabilities_json = _safe_json(candidate.access_node_capabilities)
             self._db.add(existing)
             self._db.flush()
             return existing, False
@@ -638,6 +651,9 @@ class SourceEndpointEnrollmentService:
             os_family=candidate.access_node_os_family,
             provider_name=candidate.provider_name,
             provider_version=candidate.provider_version,
+            host_fingerprint_hash=candidate.access_node_host_fingerprint_hash,
+            host_fingerprint_masked=candidate.access_node_host_fingerprint_masked,
+            capabilities_json=_safe_json(candidate.access_node_capabilities),
             status="active",
             last_seen_at=now,
         )
@@ -695,6 +711,10 @@ class SourceEndpointEnrollmentService:
                     "filesystem_boundary_type": candidate.filesystem_boundary_type,
                     "probe_status": candidate.probe_status,
                     "confidence_tier": candidate.confidence_tier,
+                    "location_id": candidate.location_id,
+                    "relative_root": candidate.relative_root,
+                    "host_slot": candidate.host_slot,
+                    "runtime_slot": candidate.runtime_slot,
                 }
             ),
             last_seen_at=now,
@@ -824,6 +844,12 @@ def _plan_fingerprint(
                 "provider_version": candidate.provider_version,
                 "access_node_label": candidate.access_node_label,
                 "access_node_os_family": candidate.access_node_os_family,
+                "access_node_id": candidate.access_node_id,
+                "location_id": candidate.location_id,
+                "relative_root": candidate.relative_root,
+                "host_slot": candidate.host_slot,
+                "runtime_slot": candidate.runtime_slot,
+                "runtime_root": candidate.runtime_root,
             },
             # Existing endpoint aliases are immutable and are not confirmation
             # input when a profile is linked to an existing endpoint.

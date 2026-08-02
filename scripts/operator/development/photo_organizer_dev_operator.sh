@@ -10,6 +10,13 @@ readonly EXPECTED_NAS_TARGET="/mnt/nas/photo-organizer"
 readonly EXPECTED_NAS_SOURCE_IP="//192.168.1.171/PhotoOrganizer"
 readonly EXPECTED_NAS_SOURCE_HOST="//HENDERSON-NAS/PhotoOrganizer"
 readonly EXPECTED_NAS_FSTYPE="cifs"
+readonly SOURCE_NAMESPACE="/mnt/photo-organizer-sources"
+readonly SOURCE_RUNTIME_ROOT="/app/sources"
+readonly SOURCE_BROKER_DIRECTORY="/run/photo-organizer-source-access"
+readonly SOURCE_BROKER_SOCKET="${SOURCE_BROKER_DIRECTORY}/broker.sock"
+readonly SOURCE_BROKER_CONFIG="/etc/photo-organizer/source-access.json"
+readonly SOURCE_BROKER_SERVICE="photo-organizer-source-identity-broker.service"
+readonly SOURCE_BROKER_SOCKET_GROUP="photo-organizer-source-access"
 readonly -a EXPECTED_SERVICES=(backend frontend postgres redis)
 readonly -a EXPECTED_VOLUMES=(application_storage postgres_data redis_data)
 readonly -a EXPECTED_STORAGE_CONFIG_LINES=(
@@ -36,6 +43,7 @@ readonly environment_file="${repository_root}/docker/.env.development"
 readonly compose_file="${repository_root}/docker/compose.development.yml"
 readonly gpu_compose_file="${repository_root}/docker/compose.development.gpu.yml"
 readonly expected_script="${repository_root}/scripts/operator/development/photo_organizer_dev_operator.sh"
+readonly source_broker_check_script="${repository_root}/scripts/operator/linux/check_source_identity_broker.py"
 
 readonly -a compose_config=(
   docker compose
@@ -58,7 +66,7 @@ readonly -a recovery_docker=(timeout --foreground 60s sudo -- docker)
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: photo_organizer_dev_operator.sh {self-test|start|stop|status|health|logs|follow-logs|recovery-status}
+Usage: photo_organizer_dev_operator.sh {self-test|start|stop|status|health|logs|follow-logs|recovery-status|source-access-status}
 USAGE
 }
 
@@ -273,6 +281,110 @@ verify_recovery_static_contract() {
     recovery_pass "configured Vault, preview, staging, log, export, and model-cache paths remain under /app/storage"
   else
     recovery_failure "Configured Development application storage paths do not match the approved local /app/storage named-volume topology."
+  fi
+}
+
+verify_source_access_static_contract() {
+  local required_line
+  local -a required_lines=(
+    '        source: /mnt/photo-organizer-sources'
+    '        target: /app/sources'
+    '          propagation: rslave'
+    '        source: /run/photo-organizer-source-access'
+    '        target: /run/photo-organizer-source-access'
+  )
+  for required_line in "${required_lines[@]}"; do
+    if ! grep -Fqx "${required_line}" "${compose_file}"; then
+      recovery_failure "Development Compose is missing a required fixed Source-access bind contract."
+      return
+    fi
+  done
+  if [[ "$(grep -Fc '        read_only: true' "${compose_file}")" -lt 2 ]]; then
+    recovery_failure "Development Compose Source-access binds are not both read-only."
+    return
+  fi
+  if ! grep -Eq '^SOURCE_ACCESS_SOCKET_GID=[0-9]+$' "${environment_file}" ||
+    ! grep -Eq '^SOURCE_ACCESS_DATA_GID=[0-9]+$' "${environment_file}"; then
+    recovery_failure "Protected Development configuration is missing one or both numeric Source-access supplemental GIDs."
+    return
+  fi
+  recovery_pass "Development Compose declares fixed read-only Source and broker binds with rslave propagation"
+  recovery_pass "protected Development configuration provides both Source-access supplemental GIDs"
+}
+
+verify_source_access_runtime() {
+  local backend_container_id="$1"
+  local config_mode socket_metadata mounts group_add
+  if [[ ! -f "${SOURCE_BROKER_CONFIG}" || -L "${SOURCE_BROKER_CONFIG}" ]]; then
+    recovery_failure "Protected Linux Source broker configuration is missing or unsafe."
+  else
+    config_mode="$(stat -c '%a' -- "${SOURCE_BROKER_CONFIG}")"
+    if (( (8#${config_mode} & 8#022) != 0 )); then
+      recovery_failure "Protected Linux Source broker configuration is group/world writable."
+    else
+      recovery_pass "protected Linux Source broker configuration exists with non-writable group/world permissions"
+    fi
+  fi
+
+  if systemctl is-active --quiet "${SOURCE_BROKER_SERVICE}"; then
+    recovery_pass "non-root Linux Source identity broker service is active"
+  else
+    recovery_failure "Non-root Linux Source identity broker service is not active."
+  fi
+  if [[ ! -f "${source_broker_check_script}" ]]; then
+    recovery_failure "Tracked bounded broker protocol checker is missing."
+  elif timeout --foreground 10s sudo -- python3 "${source_broker_check_script}" --socket "${SOURCE_BROKER_SOCKET}"; then
+    recovery_pass "broker protocol, provider version, and exact location identities are verified"
+  else
+    recovery_failure "Broker protocol, provider version, or exact location identity check failed."
+  fi
+
+  if [[ ! -S "${SOURCE_BROKER_SOCKET}" ]]; then
+    recovery_failure "Linux Source identity broker socket is unavailable."
+  else
+    socket_metadata="$(stat -c '%a|%G' -- "${SOURCE_BROKER_SOCKET}")"
+    if [[ "${socket_metadata}" == "660|${SOURCE_BROKER_SOCKET_GROUP}" ]]; then
+      recovery_pass "broker socket has exact mode 0660 and protected socket group ownership"
+    else
+      recovery_failure "Broker socket permissions or group identity differ from the approved contract."
+    fi
+  fi
+
+  if [[ ! -d "${SOURCE_NAMESPACE}" || -L "${SOURCE_NAMESPACE}" ]]; then
+    recovery_failure "Fixed host Source namespace is missing or is a symbolic link."
+  else
+    recovery_pass "fixed host Source namespace exists and is not a symbolic link"
+  fi
+
+  if [[ -z "${backend_container_id}" ]]; then
+    recovery_failure "Cannot verify backend Source binds because its project-scoped container is unavailable."
+    return
+  fi
+  mounts="$("${recovery_docker[@]}" inspect --type container --format '{{range .Mounts}}{{printf "%s|%s|%s|%t|%s\n" .Type .Source .Destination .RW .Propagation}}{{end}}' -- "${backend_container_id}")" || {
+    recovery_failure "Could not inspect bounded backend Source mounts."
+    return
+  }
+  if grep -Fqx "bind|${SOURCE_NAMESPACE}|${SOURCE_RUNTIME_ROOT}|false|rslave" <<<"${mounts}"; then
+    recovery_pass "backend has the exact read-only rslave host Source namespace bind"
+  else
+    recovery_failure "Backend Source namespace bind differs from the approved source/target/read-only/propagation contract."
+  fi
+  if grep -Fqx "bind|${SOURCE_BROKER_DIRECTORY}|${SOURCE_BROKER_DIRECTORY}|false|rprivate" <<<"${mounts}"; then
+    recovery_pass "backend has the exact read-only broker-directory bind"
+  else
+    recovery_failure "Backend broker-directory bind differs from the approved read-only contract."
+  fi
+  group_add="$("${recovery_docker[@]}" inspect --type container --format '{{range .HostConfig.GroupAdd}}{{println .}}{{end}}' -- "${backend_container_id}")" || {
+    recovery_failure "Could not inspect backend supplemental group configuration."
+    return
+  }
+  local socket_gid data_gid
+  socket_gid="$(grep -E '^SOURCE_ACCESS_SOCKET_GID=[0-9]+$' "${environment_file}" | cut -d= -f2)"
+  data_gid="$(grep -E '^SOURCE_ACCESS_DATA_GID=[0-9]+$' "${environment_file}" | cut -d= -f2)"
+  if grep -Fqx "${socket_gid}" <<<"${group_add}" && grep -Fqx "${data_gid}" <<<"${group_add}"; then
+    recovery_pass "backend has both protected Source-access supplemental groups"
+  else
+    recovery_failure "Backend is missing one or both protected Source-access supplemental groups."
   fi
 }
 
@@ -545,7 +657,7 @@ recovery_status() {
   printf 'Storage mode: local\n\n'
 
   local command_name
-  for command_name in docker findmnt git grep id readlink sort sudo timeout; do
+  for command_name in cut docker findmnt git grep id python3 readlink sort stat sudo systemctl timeout; do
     if command -v -- "${command_name}" >/dev/null 2>&1; then
       recovery_pass "required command is available: ${command_name}"
     else
@@ -554,6 +666,7 @@ recovery_status() {
   done
 
   verify_recovery_static_contract
+  verify_source_access_static_contract
 
   if ((recovery_failure_count > 0)); then
     verify_nas_status
@@ -573,11 +686,31 @@ recovery_status() {
   local -A container_states=()
   inspect_recovery_containers container_ids container_states
   verify_recovery_volumes container_ids container_states
+  verify_source_access_runtime "${container_ids[backend]:-}"
   verify_exact_port_bindings "backend" "${container_ids[backend]:-}" "8001/tcp|127.0.0.1|18001"
   verify_exact_port_bindings "frontend" "${container_ids[frontend]:-}" "3000/tcp|127.0.0.1|13000"
   verify_no_port_bindings "postgres" "${container_ids[postgres]:-}"
   verify_no_port_bindings "redis" "${container_ids[redis]:-}"
   verify_nas_status
+  print_recovery_summary
+}
+
+source_access_status() {
+  verify_execution_identity
+  recovery_pass_count=0
+  recovery_warning_count=0
+  recovery_failure_count=0
+  recovery_stack_attention=0
+  for command_name in cut docker git grep id python3 stat sudo systemctl timeout; do
+    command -v -- "${command_name}" >/dev/null 2>&1 || recovery_failure "Required command is unavailable: ${command_name}"
+  done
+  verify_recovery_static_contract
+  verify_source_access_static_contract
+  local backend_id=""
+  if ((recovery_failure_count == 0)); then
+    backend_id="$("${recovery_compose[@]}" ps --all --quiet backend)"
+    verify_source_access_runtime "${backend_id}"
+  fi
   print_recovery_summary
 }
 
@@ -676,6 +809,9 @@ main() {
       ;;
     recovery-status)
       recovery_status
+      ;;
+    source-access-status)
+      source_access_status
       ;;
     *)
       usage
