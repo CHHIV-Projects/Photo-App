@@ -15,13 +15,14 @@ The tracked implementation now provides the Development-only path:
       -> creation, enrollment, readiness, selection, and dispatch revalidation
       -> existing Source Intake execution seam
 
-No database schema change, real Source Intake, live host mutation, Docker
-command, Development recreation, Test change, commit, or push occurred.
+No database schema change, real Source Intake, Development recreation, Test
+change, or Production change occurred. The original implementation was later
+committed and pushed for Product Owner live validation.
 
-Acceptance is not yet claimed. Dependency-backed backend tests, the full
-backend suite, frontend lint/build, Compose rendering, recursive read-only
-behavior, broker/systemd installation, container access, and live Local/NAS
-application behavior remain at the Product Owner approval gates below.
+Acceptance is not yet claimed. Gate A and Gate B passed. Gate C initially
+failed safely on deterministic multi-row findmnt parsing, and this bounded
+correction awaits commit, push, installation, review, and a Gate C-only retry.
+Gate D and all later gates remain unstarted.
 
 Status at handoff:
 
@@ -32,15 +33,18 @@ Status at handoff:
 - Repository: /home/chuck/projects/photo-organizer-dev
 - Branch: feature/deployment-linux-runtime
 - Initial working tree: clean
-- Initial and current pre-closeout HEAD:
-  469980e5039a35366e1b362a7b2e548ebba1ebf9
-- Upstream:
+- Initial pre-implementation HEAD:
   469980e5039a35366e1b362a7b2e548ebba1ebf9
 - Prompt commit: 469980e Add Linux source access foundation prompt
-- HEAD remained equal to upstream throughout implementation.
+- Final implementation commit: 81a9bc5 Implement Linux source access foundation
+- Current correction baseline HEAD and upstream:
+  81a9bc5b7482cb4a90711a80e6a303146be46b4d
+- Git was clean and HEAD equaled upstream throughout Gates A through the failed
+  Gate C attempt. The bounded Gate C correction is now intentionally
+  uncommitted for Product Owner review.
 
 No branch operation, commit, push, merge, rebase, tag, reset, clean, or history
-rewrite was performed.
+rewrite was performed during this correction turn.
 
 ## 3. Files Changed
 
@@ -82,6 +86,7 @@ rewrite was performed.
 - backend/tests/test_linux_stable_mount_provider.py
 - backend/tests/test_posix_source_paths.py
 - backend/tests/test_check_source_read_only.py
+- backend/tests/test_prepare_source_namespace.py
 - docs/server_deployment/Photo_Organizer_Linux_Source_Access_Guide.md
 - scripts/operator/linux/check_source_identity_broker.py
 - scripts/operator/linux/check_source_read_only.py
@@ -367,13 +372,14 @@ executed in this host environment.
 Passed locally without Docker:
 
     python3 -m unittest \
+      backend.tests.test_prepare_source_namespace \
       backend.tests.test_check_source_read_only \
       backend.tests.test_linux_source_access_broker \
       backend.tests.test_posix_source_paths
 
 Result:
 
-    Ran 31 tests in 0.007s
+    Ran 39 tests in 0.027s
     OK
 
 Coverage includes Local/NAS allowlists, exact NAS hash/source, wrong source and
@@ -384,7 +390,11 @@ stable Access Node identity, POSIX normalization, containment, and exact
 host/runtime mapping. The added validation-helper coverage proves exact
 O_WRONLY|O_CLOEXEC flags, EROFS-only success, separate EACCES/EPERM handling,
 immediate close without write/truncation, and blocking of missing files,
-directories, symlinks, escapes, and unexpected open errors.
+directories, symlinks, escapes, and unexpected open errors. Eight isolated
+namespace-parser tests cover autofs-plus-CIFS in either order, CIFS alone,
+autofs alone, wrong and hostname-form sources, wrong filesystems, duplicate or
+conflicting active rows, malformed rows, wrong targets, and exact NAS-slot
+cardinality.
 
 Also passed:
 
@@ -422,8 +432,9 @@ Not yet run:
 - operator self-test in the dependency-complete runtime;
 - live systemd, broker, Local/NAS, and Development checks.
 
-No Docker command was run because the approved lock-in prohibited it before
-the live approval gate.
+Codex ran no Docker command. Product Owner Gate A used only its approved
+read-only Docker inventory before Gate B; Gate D Docker validation was not
+started.
 
 ## 15. Compose and Operator Assets
 
@@ -451,25 +462,31 @@ fixed namespace preparation, systemd units, GID configuration, and bounded
 operator-safe protocol checking. Installation does not enable or start either
 unit.
 
-## 16. Live Changes Not Yet Performed
+## 16. Live Validation Evidence and Current Pause
 
-The following were not created, installed, enabled, started, or changed by
-this implementation turn; their pre-existing live state was not inspected:
+Product Owner live evidence records:
 
-- /mnt/photo-organizer-sources;
-- photo-organizer-source-broker user;
-- photo-organizer-source-access group;
-- /etc/photo-organizer/source-access.json;
-- /var/lib/photo-organizer-source-access/access-node-id;
-- broker/namespace installed programs or systemd units;
-- broker socket;
-- Source namespace binds/propagation;
-- protected Development GIDs;
-- Development images or containers.
+- Gate A passed;
+- Gate B passed and created the protected stable Access Node identity;
+- the existing Source/NAS data-read group is chuck;
+- Gate C initially failed closed;
+- findmnt returned one systemd-1/autofs placeholder and one exact active
+  //192.168.1.171/PhotoOrganizer/cifs row for the authoritative target;
+- the installed namespace script stored both rows in one scalar and a single
+  read consumed the first autofs row;
+- the script therefore rejected the authoritative identity without weakening
+  the canonical IP-only CIFS contract;
+- both services were disabled and reset after failure;
+- no partial Source namespace mount or broker socket remained;
+- protected configuration and the Gate B Access Node ID remain preserved;
+- Git remained clean and synchronized during live validation;
+- Gate D was not started.
 
-No sudo, Docker, Compose, systemctl mutation, mount, unmount, NAS access,
-container execution, database write, Redis operation, storage write, or
-browser action was performed.
+This coding turn performed no sudo, Docker, Compose, systemctl mutation,
+mount, unmount, NAS access/write, container execution, Source Intake, database
+write, Redis operation, storage write, Test change, commit, or push. Gate C
+must be retried only after the correction is committed, pushed, installed, and
+reviewed.
 
 ## 17. Exact Product Owner Live-Validation Plan and Commands
 
@@ -487,6 +504,9 @@ implementation defect, stop and return to a separately reviewed correction;
 do not edit code during the gate.
 
 ### Gate A — read-only repository and host preflight
+
+Live result: PASSED. The commands remain below as the record of the approved
+gate; do not rerun Gate A as part of the bounded Gate C correction.
 
     cd /home/chuck/projects/photo-organizer-dev
     git branch --show-current
@@ -513,6 +533,10 @@ uncertainty, missing/overbroad data group, ambiguous Local identity, or wrong
 NAS source/type. Do not print configuration contents.
 
 ### Gate B — protected config and additive install
+
+Live result: PASSED. Do not rerun configuration generation or the full
+installer for the bounded correction. Preserve the existing protected config,
+data-read group chuck, and stable Access Node ID.
 
     cd /home/chuck/projects/photo-organizer-dev
     git branch --show-current
@@ -548,46 +572,29 @@ both services remain disabled/inactive.
 
 ### Gate C — namespace and non-root broker activation
 
-    cd /home/chuck/projects/photo-organizer-dev
-    git branch --show-current
-    git status --short
-    git rev-parse HEAD
-    git rev-parse '@{upstream}'
+Live result: FAILED SAFELY on the first attempt; Gate C has not passed. The
+root cause and preserved state are recorded in Section 16.
 
-    sudo systemctl enable --now photo-organizer-source-namespace.service
-    sudo systemctl enable --now photo-organizer-source-identity-broker.service
-    systemctl --no-pager --full status photo-organizer-source-namespace.service
-    systemctl --no-pager --full status photo-organizer-source-identity-broker.service
-    sudo findmnt -rn -M /mnt/photo-organizer-sources \
-      -o TARGET,SOURCE,FSTYPE,UUID,PROPAGATION
-    sudo findmnt -rn -M /mnt/photo-organizer-sources/nas/photo-organizer \
-      -o TARGET,SOURCE,FSTYPE,PROPAGATION
-    sudo stat -c '%U|%G|%a|%F|%n' \
-      /run/photo-organizer-source-access/broker.sock
+The exact correction-install and Gate C-only retry commands are maintained in
+the authoritative Linux Source Access Guide, Gate C. They require:
 
-    if python3 scripts/operator/linux/check_source_identity_broker.py; then
-      printf 'FAIL: Product Owner has unintended direct broker socket authority.\n' >&2
-      exit 1
-    else
-      printf 'PASS: Product Owner has no direct broker socket authority.\n'
-    fi
-    sudo python3 scripts/operator/linux/check_source_identity_broker.py
+1. clean branch feature/deployment-linux-runtime with HEAD equal upstream;
+2. both exact services disabled and inactive;
+3. hashes of protected config and Access Node ID captured privately and
+   compared without printing them;
+4. installation of only the corrected tracked prepare_source_namespace.sh to
+   /usr/local/lib/photo-organizer/prepare-source-namespace.sh;
+5. exact cmp proof between tracked and installed scripts;
+6. a separate evidence pause before the Gate C retry;
+7. exact retry failure cleanup limited to the two Gate C services, fixed
+   Source namespace/slot mounts created by that retry, and fixed broker socket;
+8. ordered-independent authoritative and slot row/cardinality evidence;
+9. unchanged protected config, unchanged Access Node ID, clean Git, and a hard
+   stop before Gate D.
 
-    git branch --show-current
-    git status --short
-    git rev-parse HEAD
-    git rev-parse '@{upstream}'
-
-The Product Owner must lack direct socket authority; visible interactive sudo
-is the exact bounded operator access path, while the broker remains non-root.
-The checker verifies protocol/provider versions, stable Access Node presence
-without printing it, bounded Local/NAS summaries, and arbitrary-path
-rejection. It prints no raw JSON, credentials, UUIDs, machine IDs, hashes,
-mount options, or protected configuration. Stop for direct Product Owner
-socket access, checker failure, a root broker, wrong Local identity,
-hostname-form/wrong NAS, non-CIFS NAS, world-writable socket, unexpected mount,
-or any NAS permission/mount-option change. Do not unmount automatically on
-failure.
+Do not use the superseded first-attempt Gate C command block. Do not rerun Gate
+A or B, regenerate configuration/identity, invoke the full installer, or start
+Gate D while this correction remains under review.
 
 ### Gate D — protected GIDs, Compose render, and isolated automated validation
 
@@ -815,8 +822,9 @@ After browser validation:
 ## 19. Test Environment Confirmation
 
 Test Compose, configuration, images, containers, networks, volumes, release
-state, operator, Source visibility, and broker access were not changed or
-inspected live. No Source bind or broker socket was added to Test.
+state, operator, Source visibility, and broker access were not changed. Gate A
+performed only its approved read-only inventory. No Source bind or broker
+socket was added to Test.
 
 The final scoped Git check for docker/compose.test.yml and
 scripts/operator/test produced no output.
@@ -829,15 +837,12 @@ Assets/provenance. Dispatch tests use a mock execution seam only.
 
 ## 21. Git Status and Diff Summary
 
-At closeout creation the implementation and closeout are intentionally
+The implementation is committed at 81a9bc5 and was the clean synchronized
+baseline for live validation. The bounded Gate C correction is intentionally
 unstaged and uncommitted. Run:
 
     git status --short
     git diff --stat
     git -c core.whitespace=cr-at-eol diff --check
 
-Note: normal git diff and git diff --stat do not include untracked added files
-until they are staged. The status output is therefore the authoritative list
-of added files during Product Owner review.
-
-No commit or push was performed.
+No correction commit or push was performed.

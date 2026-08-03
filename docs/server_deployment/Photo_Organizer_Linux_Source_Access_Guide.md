@@ -55,6 +55,8 @@ Do not run this section until Codex reports `STATUS: PRODUCT OWNER LIVE APPROVAL
 
 At the start and end of every gate, verify branch `feature/deployment-linux-runtime`, an empty `git status --short`, and identical full `HEAD` and `@{upstream}` SHAs. The reviewed implementation must be committed and pushed before Gate A. Ignored protected Development configuration may change only through the explicitly approved helper; validation must not change tracked source or documentation or generate a tracked file. If validation reveals an implementation defect, stop the gate and return to a separately reviewed correction step; do not edit during live validation.
 
+Live evidence status: Gate A passed and Gate B passed. The first Gate C attempt failed closed because the namespace script treated multi-row `findmnt` output as one row and consumed the systemd `autofs` placeholder instead of evaluating the exact active CIFS row. Both services were disabled and reset; no Source namespace mount or broker socket remained; Git stayed clean and synchronized; and Gate D was not started. Gate C must not be retried until this correction is committed, pushed, installed, and reviewed.
+
 ### Gate A — read-only preflight
 
 Prerequisites: authoritative branch and clean repository; current Development/Test/Portainer topology known; no unrelated workload may be harmed by later Development backend recreation. Choose the existing host group that already grants the required read-only traversal of both approved Local/NAS Source data without broad write authority.
@@ -124,12 +126,103 @@ Expected: the fixed empty Source namespace root and Local slot are created under
 
 ### Gate C — fixed namespace and broker activation
 
+After the correction commit is pushed and reviewed, install only the corrected
+tracked namespace script. Do not rerun protected configuration generation or
+the full installer. This preserves the existing configuration, data-read group
+`chuck`, and stable Access Node ID:
+
 ```bash
+set -Eeuo pipefail
 cd /home/chuck/projects/photo-organizer-dev
-git branch --show-current
-git status --short
-git rev-parse HEAD
-git rev-parse '@{upstream}'
+
+test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
+test -z "$(git status --short)"
+HEAD_SHA="$(git rev-parse --verify HEAD)"
+UPSTREAM_SHA="$(git rev-parse --verify '@{upstream}')"
+test "${HEAD_SHA}" = "${UPSTREAM_SHA}"
+
+test "$(systemctl is-enabled photo-organizer-source-namespace.service || true)" = disabled
+test "$(systemctl is-active photo-organizer-source-namespace.service || true)" = inactive
+test "$(systemctl is-enabled photo-organizer-source-identity-broker.service || true)" = disabled
+test "$(systemctl is-active photo-organizer-source-identity-broker.service || true)" = inactive
+
+sudo -v
+CONFIG_SHA_BEFORE="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
+ACCESS_NODE_SHA_BEFORE="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
+
+sudo install --owner root --group root --mode 0755 \
+  scripts/operator/linux/prepare_source_namespace.sh \
+  /usr/local/lib/photo-organizer/prepare-source-namespace.sh
+sudo cmp --silent -- \
+  scripts/operator/linux/prepare_source_namespace.sh \
+  /usr/local/lib/photo-organizer/prepare-source-namespace.sh
+
+CONFIG_SHA_AFTER="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
+ACCESS_NODE_SHA_AFTER="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
+test "${CONFIG_SHA_BEFORE}" = "${CONFIG_SHA_AFTER}"
+test "${ACCESS_NODE_SHA_BEFORE}" = "${ACCESS_NODE_SHA_AFTER}"
+
+test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
+test -z "$(git status --short)"
+test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')"
+printf 'PASS: corrected namespace script installed; protected config and Access Node ID are unchanged.\n'
+```
+
+Pause for evidence review. With separate approval, rerun Gate C only. The
+failure handler stops/disables both exact services, resets only their failed
+state, removes only an exact retry-created slot/namespace mount if one remains,
+and removes only the fixed socket after the broker is inactive:
+
+```bash
+set -Eeuo pipefail
+cd /home/chuck/projects/photo-organizer-dev
+
+test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
+test -z "$(git status --short)"
+test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')"
+test "$(systemctl is-enabled photo-organizer-source-namespace.service || true)" = disabled
+test "$(systemctl is-active photo-organizer-source-namespace.service || true)" = inactive
+test "$(systemctl is-enabled photo-organizer-source-identity-broker.service || true)" = disabled
+test "$(systemctl is-active photo-organizer-source-identity-broker.service || true)" = inactive
+sudo -v
+test -z "$(sudo findmnt -rn -M /mnt/photo-organizer-sources -o TARGET || true)"
+test -z "$(sudo findmnt -rn -M /mnt/photo-organizer-sources/nas/photo-organizer -o TARGET || true)"
+test ! -S /run/photo-organizer-source-access/broker.sock
+
+CONFIG_SHA_BEFORE="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
+ACCESS_NODE_SHA_BEFORE="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
+
+cleanup_gate_c_retry() {
+  set +e
+  cleanup_failed=0
+  sudo systemctl disable --now photo-organizer-source-identity-broker.service || cleanup_failed=1
+  sudo systemctl disable --now photo-organizer-source-namespace.service || cleanup_failed=1
+  sudo systemctl reset-failed photo-organizer-source-identity-broker.service photo-organizer-source-namespace.service || cleanup_failed=1
+  if test -n "$(sudo findmnt -rn -M /mnt/photo-organizer-sources/nas/photo-organizer -o TARGET || true)"; then
+    sudo umount -- /mnt/photo-organizer-sources/nas/photo-organizer || cleanup_failed=1
+  fi
+  if test -n "$(sudo findmnt -rn -M /mnt/photo-organizer-sources -o TARGET || true)"; then
+    sudo umount -- /mnt/photo-organizer-sources || cleanup_failed=1
+  fi
+  if test -S /run/photo-organizer-source-access/broker.sock && \
+    ! systemctl is-active --quiet photo-organizer-source-identity-broker.service; then
+    sudo rm -- /run/photo-organizer-source-access/broker.sock || cleanup_failed=1
+  fi
+  test -z "$(sudo findmnt -rn -M /mnt/photo-organizer-sources -o TARGET || true)" || cleanup_failed=1
+  test -z "$(sudo findmnt -rn -M /mnt/photo-organizer-sources/nas/photo-organizer -o TARGET || true)" || cleanup_failed=1
+  test ! -S /run/photo-organizer-source-access/broker.sock || cleanup_failed=1
+  if test "${cleanup_failed}" -ne 0; then
+    printf 'FAIL: Gate C retry cleanup is incomplete; stop and report bounded evidence.\n' >&2
+    return 1
+  fi
+}
+on_gate_c_error() {
+  rc=$?
+  trap - ERR
+  cleanup_gate_c_retry
+  exit "${rc}"
+}
+trap on_gate_c_error ERR
 
 sudo systemctl enable --now photo-organizer-source-namespace.service
 sudo systemctl enable --now photo-organizer-source-identity-broker.service
@@ -142,19 +235,24 @@ sudo stat -c '%U|%G|%a|%F|%n' /run/photo-organizer-source-access/broker.sock
 
 if python3 scripts/operator/linux/check_source_identity_broker.py; then
   printf 'FAIL: Product Owner has unintended direct broker socket authority.\n' >&2
-  exit 1
+  false
 else
   printf 'PASS: Product Owner has no direct broker socket authority.\n'
 fi
 sudo python3 scripts/operator/linux/check_source_identity_broker.py
 
-git branch --show-current
-git status --short
-git rev-parse HEAD
-git rev-parse '@{upstream}'
+CONFIG_SHA_AFTER="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
+ACCESS_NODE_SHA_AFTER="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
+test "${CONFIG_SHA_BEFORE}" = "${CONFIG_SHA_AFTER}"
+test "${ACCESS_NODE_SHA_BEFORE}" = "${ACCESS_NODE_SHA_AFTER}"
+test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
+test -z "$(git status --short)"
+test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')"
+trap - ERR
+printf 'PASS: Gate C retry completed. Stop before Gate D for evidence review.\n'
 ```
 
-Expected: namespace root is a shared fixed-path bind; NAS slot matches the exact canonical CIFS source when available; broker runs as the dedicated non-root user; socket is mode 0660 and group `photo-organizer-source-access`. The Product Owner cannot connect directly; visible interactive `sudo` is the intended bounded operator access path, while the broker process itself remains non-root. The checker verifies the protocol/provider versions, stable Access Node presence without printing its value, bounded Local/NAS summaries, and arbitrary-path rejection. It prints no raw JSON, credentials, UUIDs, machine IDs, hashes, mount options, or protected configuration. Stop on unintended direct socket access, checker failure, root-run broker, hostname-form or wrong NAS source, non-CIFS NAS, unexpected nested mount, world-writable socket, missing Local slot, or any NAS ownership/mount-option change. Do not unmount automatically on failure; stop and report.
+Expected: the authoritative target may have one `systemd-1`/`autofs` placeholder and must have exactly one `//192.168.1.171/PhotoOrganizer`/`cifs` active row, independent of row order. The prepared NAS slot must have exactly one approved CIFS row and no placeholder, duplicate, or conflicting active row. Namespace root is a shared fixed-path bind; broker runs as the dedicated non-root user; socket is mode 0660 and group `photo-organizer-source-access`. The Product Owner cannot connect directly; visible interactive `sudo` is the intended bounded operator access path. The checker prints no protected raw evidence. Stop on any row cardinality/conflict/parsing failure, unintended direct socket access, checker failure, root-run broker, hostname-form or wrong NAS source, non-CIFS NAS, world-writable socket, missing Local slot, protected-state change, or cleanup failure. Do not proceed to Gate D until the retry evidence is separately approved.
 
 ### Gate D — protected Development GIDs and Compose render
 
