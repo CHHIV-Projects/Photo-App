@@ -30,7 +30,7 @@ The tracked broker installs as `/usr/local/lib/photo-organizer/source-identity-b
 
 The broker accepts one bounded JSON-lines request on a protected Unix socket. It accepts only `list_locations` or an allowlisted location ID, Source Type, and safe relative root. It executes fixed no-shell `findmnt` and `lsblk` commands with timeouts and performs path resolution/readability checks in a timeout-bounded isolated subprocess. It never mounts, unmounts, writes Source data, copies bytes, performs intake, calls Docker, accepts shell input, or runs as root. Responses omit credentials, credential paths, usernames, passwords, unrestricted mount options, and raw protected identifiers.
 
-The separate root oneshot namespace unit performs only fixed-path directory and bind preparation. It does not accept client paths and does not change NAS ownership or NAS mount options. NAS absence leaves the Local slot available; a wrong existing mount fails closed.
+The separate root oneshot namespace unit performs only fixed-path directory and bind preparation in the host mount namespace. It intentionally uses no systemd filesystem-sandboxing directive that would disconnect mount propagation to the host. It retains bounded capabilities, no-new-privileges, private network/IPC, hostname, namespace-creation, realtime, personality, executable-memory, and architecture restrictions. It does not accept client paths or change NAS ownership or mount options. NAS absence, wrong identity, or ambiguous rows fail preparation closed without changing the authoritative NAS mount.
 
 ## Development container boundary
 
@@ -55,7 +55,7 @@ Do not run this section until Codex reports `STATUS: PRODUCT OWNER LIVE APPROVAL
 
 At the start and end of every gate, verify branch `feature/deployment-linux-runtime`, an empty `git status --short`, and identical full `HEAD` and `@{upstream}` SHAs. The reviewed implementation must be committed and pushed before Gate A. Ignored protected Development configuration may change only through the explicitly approved helper; validation must not change tracked source or documentation or generate a tracked file. If validation reveals an implementation defect, stop the gate and return to a separately reviewed correction step; do not edit during live validation.
 
-Live evidence status: Gate A passed and Gate B passed. The first Gate C attempt failed closed because the namespace script treated multi-row `findmnt` output as one row and consumed the systemd `autofs` placeholder instead of evaluating the exact active CIFS row. Both services were disabled and reset; no Source namespace mount or broker socket remained; Git stayed clean and synchronized; and Gate D was not started. Gate C must not be retried until this correction is committed, pushed, installed, and reviewed.
+Live evidence status: Gate A passed after correction commit `5fc5b91`. The corrected multi-row parser accepted the systemd `autofs` placeholder plus the exact active CIFS row, and the namespace script completed successfully. Gate C then failed because filesystem-sandboxing directives placed the oneshot mount work in a private service mount namespace; both exact mounts disappeared when its process exited. Both failed Gate C attempts cleaned up safely, leaving both services disabled/inactive with no Source namespace mount, NAS slot mount, or broker socket. Git stayed clean and synchronized, and Gate D was not started. Synology backup, Ollama, Open WebUI, `local-ai`, Portainer, Development, Test, and NAS configuration were unchanged. Gate C remains unpassed and must not be retried until the namespace-unit correction is committed, pushed, installed, and reviewed.
 
 ### Gate A — read-only preflight
 
@@ -126,12 +126,14 @@ Expected: the fixed empty Source namespace root and Local slot are created under
 
 ### Gate C — fixed namespace and broker activation
 
-After the correction commit is pushed and reviewed, install only the corrected
-tracked namespace script. Do not rerun protected configuration generation or
-the full installer. This preserves the existing configuration, data-read group
-`chuck`, and stable Access Node ID:
+After the unit correction is committed, pushed, and reviewed, install only the
+corrected tracked namespace unit. Do not reinstall the already corrected
+namespace script, regenerate protected configuration, or run the full
+installer. This preserves the existing configuration, data-read group `chuck`,
+and stable Access Node ID:
 
 ```bash
+if bash <<'UNIT_INSTALL'
 set -Eeuo pipefail
 cd /home/chuck/projects/photo-organizer-dev
 
@@ -150,97 +152,188 @@ sudo -v
 CONFIG_SHA_BEFORE="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
 ACCESS_NODE_SHA_BEFORE="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
 
-sudo install --owner root --group root --mode 0755 \
-  scripts/operator/linux/prepare_source_namespace.sh \
-  /usr/local/lib/photo-organizer/prepare-source-namespace.sh
+sudo install --owner root --group root --mode 0644 \
+  scripts/operator/linux/photo-organizer-source-namespace.service \
+  /etc/systemd/system/photo-organizer-source-namespace.service
+sudo systemctl daemon-reload
 sudo cmp --silent -- \
-  scripts/operator/linux/prepare_source_namespace.sh \
-  /usr/local/lib/photo-organizer/prepare-source-namespace.sh
+  scripts/operator/linux/photo-organizer-source-namespace.service \
+  /etc/systemd/system/photo-organizer-source-namespace.service
 
 CONFIG_SHA_AFTER="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
 ACCESS_NODE_SHA_AFTER="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
 test "${CONFIG_SHA_BEFORE}" = "${CONFIG_SHA_AFTER}"
 test "${ACCESS_NODE_SHA_BEFORE}" = "${ACCESS_NODE_SHA_AFTER}"
-
-test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
-test -z "$(git status --short)"
-test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')"
-printf 'PASS: corrected namespace script installed; protected config and Access Node ID are unchanged.\n'
-```
-
-Pause for evidence review. With separate approval, rerun Gate C only. The
-failure handler stops/disables both exact services, resets only their failed
-state, removes only an exact retry-created slot/namespace mount if one remains,
-and removes only the fixed socket after the broker is inactive:
-
-```bash
-set -Eeuo pipefail
-cd /home/chuck/projects/photo-organizer-dev
-
-test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
-test -z "$(git status --short)"
-test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')"
 test "$(systemctl is-enabled photo-organizer-source-namespace.service || true)" = disabled
 test "$(systemctl is-active photo-organizer-source-namespace.service || true)" = inactive
 test "$(systemctl is-enabled photo-organizer-source-identity-broker.service || true)" = disabled
 test "$(systemctl is-active photo-organizer-source-identity-broker.service || true)" = inactive
-sudo -v
-test -z "$(sudo findmnt -rn -M /mnt/photo-organizer-sources -o TARGET || true)"
-test -z "$(sudo findmnt -rn -M /mnt/photo-organizer-sources/nas/photo-organizer -o TARGET || true)"
-test ! -S /run/photo-organizer-source-access/broker.sock
 
-CONFIG_SHA_BEFORE="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
-ACCESS_NODE_SHA_BEFORE="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
+test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
+test -z "$(git status --short)"
+test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')"
+exit 0
+UNIT_INSTALL
+then
+  printf 'PASS: corrected namespace unit installed; services remain disabled/inactive and protected state is unchanged.\n'
+else
+  unit_install_rc=$?
+  printf 'FAIL: corrected namespace unit installation returned %s; interactive terminal remains available.\n' \
+    "${unit_install_rc}" >&2
+  printf 'STOP: report the unit-install failure; do not continue to the Gate C retry.\n' >&2
+fi
+```
+
+Pause for evidence review. With separate approval, rerun Gate C only. The
+retry runs in a child Bash process, reports the exact failed step, and returns
+to the Product Owner's interactive terminal after failure. Cleanup touches
+only the two exact services, exact retry-created Source mounts, and fixed
+socket after the broker is inactive:
+
+```bash
+if bash <<'GATE_C_RETRY'
+set -Eeuo pipefail
+cd /home/chuck/projects/photo-organizer-dev
+
+NAMESPACE_SERVICE='photo-organizer-source-namespace.service'
+BROKER_SERVICE='photo-organizer-source-identity-broker.service'
+SOURCE_NAMESPACE='/mnt/photo-organizer-sources'
+NAS_SLOT='/mnt/photo-organizer-sources/nas/photo-organizer'
+BROKER_SOCKET='/run/photo-organizer-source-access/broker.sock'
+FAILED_STEP='initialize Gate C retry'
+
+services_disabled_inactive() {
+  test "$(systemctl is-enabled "${NAMESPACE_SERVICE}" || true)" = disabled &&
+    test "$(systemctl is-active "${NAMESPACE_SERVICE}" || true)" = inactive &&
+    test "$(systemctl is-enabled "${BROKER_SERVICE}" || true)" = disabled &&
+    test "$(systemctl is-active "${BROKER_SERVICE}" || true)" = inactive
+}
 
 cleanup_gate_c_retry() {
   set +e
   cleanup_failed=0
-  sudo systemctl disable --now photo-organizer-source-identity-broker.service || cleanup_failed=1
-  sudo systemctl disable --now photo-organizer-source-namespace.service || cleanup_failed=1
-  sudo systemctl reset-failed photo-organizer-source-identity-broker.service photo-organizer-source-namespace.service || cleanup_failed=1
-  if test -n "$(sudo findmnt -rn -M /mnt/photo-organizer-sources/nas/photo-organizer -o TARGET || true)"; then
-    sudo umount -- /mnt/photo-organizer-sources/nas/photo-organizer || cleanup_failed=1
+  sudo systemctl disable --now "${BROKER_SERVICE}" || cleanup_failed=1
+  sudo systemctl disable --now "${NAMESPACE_SERVICE}" || cleanup_failed=1
+
+  reset_output=''
+  if ! reset_output="$(sudo systemctl reset-failed "${BROKER_SERVICE}" "${NAMESPACE_SERVICE}" 2>&1)"; then
+    if grep -qi 'not loaded' <<<"${reset_output}" && services_disabled_inactive; then
+      printf 'WARNING: reset-failed reported an unloaded unit after both services were confirmed disabled/inactive.\n'
+    else
+      cleanup_failed=1
+    fi
   fi
-  if test -n "$(sudo findmnt -rn -M /mnt/photo-organizer-sources -o TARGET || true)"; then
-    sudo umount -- /mnt/photo-organizer-sources || cleanup_failed=1
+
+  if test -n "$(sudo findmnt -rn -M "${NAS_SLOT}" -o TARGET || true)"; then
+    sudo umount -- "${NAS_SLOT}" || cleanup_failed=1
   fi
-  if test -S /run/photo-organizer-source-access/broker.sock && \
-    ! systemctl is-active --quiet photo-organizer-source-identity-broker.service; then
-    sudo rm -- /run/photo-organizer-source-access/broker.sock || cleanup_failed=1
+  if test -n "$(sudo findmnt -rn -M "${SOURCE_NAMESPACE}" -o TARGET || true)"; then
+    sudo umount -- "${SOURCE_NAMESPACE}" || cleanup_failed=1
   fi
-  test -z "$(sudo findmnt -rn -M /mnt/photo-organizer-sources -o TARGET || true)" || cleanup_failed=1
-  test -z "$(sudo findmnt -rn -M /mnt/photo-organizer-sources/nas/photo-organizer -o TARGET || true)" || cleanup_failed=1
-  test ! -S /run/photo-organizer-source-access/broker.sock || cleanup_failed=1
+  if test -S "${BROKER_SOCKET}" && ! systemctl is-active --quiet "${BROKER_SERVICE}"; then
+    sudo rm -- "${BROKER_SOCKET}" || cleanup_failed=1
+  fi
+
+  services_disabled_inactive || cleanup_failed=1
+  test -z "$(sudo findmnt -rn -M "${SOURCE_NAMESPACE}" -o TARGET || true)" || cleanup_failed=1
+  test -z "$(sudo findmnt -rn -M "${NAS_SLOT}" -o TARGET || true)" || cleanup_failed=1
+  test ! -S "${BROKER_SOCKET}" || cleanup_failed=1
   if test "${cleanup_failed}" -ne 0; then
     printf 'FAIL: Gate C retry cleanup is incomplete; stop and report bounded evidence.\n' >&2
     return 1
   fi
 }
+
 on_gate_c_error() {
   rc=$?
   trap - ERR
-  cleanup_gate_c_retry
+  printf 'FAIL: Gate C retry step failed: %s\n' "${FAILED_STEP}" >&2
+  cleanup_gate_c_retry || true
   exit "${rc}"
 }
 trap on_gate_c_error ERR
 
-sudo systemctl enable --now photo-organizer-source-namespace.service
-sudo systemctl enable --now photo-organizer-source-identity-broker.service
+FAILED_STEP='verify clean synchronized repository'
+test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
+test -z "$(git status --short)"
+test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')"
 
-systemctl --no-pager --full status photo-organizer-source-namespace.service
-systemctl --no-pager --full status photo-organizer-source-identity-broker.service
-sudo findmnt -rn -M /mnt/photo-organizer-sources -o TARGET,SOURCE,FSTYPE,PROPAGATION
-sudo findmnt -rn -M /mnt/photo-organizer-sources/nas/photo-organizer -o TARGET,SOURCE,FSTYPE,PROPAGATION
-sudo stat -c '%U|%G|%a|%F|%n' /run/photo-organizer-source-access/broker.sock
+FAILED_STEP='verify disabled inactive Source services'
+services_disabled_inactive
 
+FAILED_STEP='obtain visible interactive sudo authorization'
+sudo -v
+
+FAILED_STEP='verify installed namespace unit matches reviewed tracked unit'
+sudo cmp --silent -- \
+  scripts/operator/linux/photo-organizer-source-namespace.service \
+  /etc/systemd/system/photo-organizer-source-namespace.service
+
+FAILED_STEP='verify empty retry mount and socket targets'
+test -z "$(sudo findmnt -rn -M "${SOURCE_NAMESPACE}" -o TARGET || true)"
+test -z "$(sudo findmnt -rn -M "${NAS_SLOT}" -o TARGET || true)"
+test ! -S "${BROKER_SOCKET}"
+
+FAILED_STEP='capture protected-state comparison hashes'
+CONFIG_SHA_BEFORE="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
+ACCESS_NODE_SHA_BEFORE="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
+
+FAILED_STEP='start fixed namespace-preparation service'
+sudo systemctl enable --now "${NAMESPACE_SERVICE}"
+
+FAILED_STEP='verify namespace service active after oneshot completion'
+systemctl is-active --quiet "${NAMESPACE_SERVICE}"
+
+FAILED_STEP='verify persistent host Source namespace mount'
+NAMESPACE_ROWS="$(sudo findmnt -rn -M "${SOURCE_NAMESPACE}" -o TARGET,SOURCE,FSTYPE,PROPAGATION)"
+mapfile -t namespace_rows <<<"${NAMESPACE_ROWS}"
+test "${#namespace_rows[@]}" -eq 1
+read -r namespace_target namespace_source namespace_fstype namespace_propagation namespace_extra <<<"${namespace_rows[0]}"
+test "${namespace_target}" = "${SOURCE_NAMESPACE}"
+test "${namespace_propagation}" = shared
+test -z "${namespace_extra}"
+printf '%s\n' "${NAMESPACE_ROWS}"
+
+FAILED_STEP='verify persistent exact NAS Source slot mount'
+SLOT_ROWS="$(
+  sudo findmnt -rn \
+    -M "${NAS_SLOT}" \
+    -o TARGET,SOURCE,FSTYPE
+)"
+mapfile -t slot_rows <<<"${SLOT_ROWS}"
+test "${#slot_rows[@]}" -eq 1
+read -r \
+  slot_target \
+  slot_source \
+  slot_fstype \
+  slot_extra \
+  <<<"${slot_rows[0]}"
+test "${slot_target}" = "${NAS_SLOT}"
+test "${slot_source}" = '//192.168.1.171/PhotoOrganizer'
+test "${slot_fstype}" = cifs
+test -z "${slot_extra}"
+printf '%s\n' "${SLOT_ROWS}"
+
+FAILED_STEP='start non-root identity broker service'
+sudo systemctl enable --now "${BROKER_SERVICE}"
+
+FAILED_STEP='verify service and bounded socket state'
+systemctl --no-pager --full status "${NAMESPACE_SERVICE}"
+systemctl --no-pager --full status "${BROKER_SERVICE}"
+sudo stat -c '%U|%G|%a|%F|%n' "${BROKER_SOCKET}"
+
+FAILED_STEP='verify Product Owner lacks direct broker socket authority'
 if python3 scripts/operator/linux/check_source_identity_broker.py; then
   printf 'FAIL: Product Owner has unintended direct broker socket authority.\n' >&2
   false
 else
   printf 'PASS: Product Owner has no direct broker socket authority.\n'
 fi
+
+FAILED_STEP='verify bounded broker protocol through intended sudo path'
 sudo python3 scripts/operator/linux/check_source_identity_broker.py
 
+FAILED_STEP='verify protected state and repository remained unchanged'
 CONFIG_SHA_AFTER="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
 ACCESS_NODE_SHA_AFTER="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
 test "${CONFIG_SHA_BEFORE}" = "${CONFIG_SHA_AFTER}"
@@ -249,10 +342,17 @@ test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
 test -z "$(git status --short)"
 test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')"
 trap - ERR
-printf 'PASS: Gate C retry completed. Stop before Gate D for evidence review.\n'
+exit 0
+GATE_C_RETRY
+then
+  printf 'PASS: Gate C retry completed. Stop before Gate D for evidence review.\n'
+else
+  gate_c_retry_rc=$?
+  printf 'FAIL: Gate C retry returned %s after bounded cleanup; interactive terminal remains available.\n' "${gate_c_retry_rc}" >&2
+fi
 ```
 
-Expected: the authoritative target may have one `systemd-1`/`autofs` placeholder and must have exactly one `//192.168.1.171/PhotoOrganizer`/`cifs` active row, independent of row order. The prepared NAS slot must have exactly one approved CIFS row and no placeholder, duplicate, or conflicting active row. Namespace root is a shared fixed-path bind; broker runs as the dedicated non-root user; socket is mode 0660 and group `photo-organizer-source-access`. The Product Owner cannot connect directly; visible interactive `sudo` is the intended bounded operator access path. The checker prints no protected raw evidence. Stop on any row cardinality/conflict/parsing failure, unintended direct socket access, checker failure, root-run broker, hostname-form or wrong NAS source, non-CIFS NAS, world-writable socket, missing Local slot, protected-state change, or cleanup failure. Do not proceed to Gate D until the retry evidence is separately approved.
+Expected: the oneshot completes and remains active while both exact mounts persist in the host mount namespace. The Source namespace is shared. Independent bounded evidence requires exactly one NAS-slot row with the exact fixed target, canonical IP-form CIFS source, `cifs` filesystem, and no extra field; no executable operational script is sourced into the validation shell. The broker remains non-root and identity-only. Any failure names its exact step, returns to the interactive terminal, and invokes bounded cleanup. An unloaded-unit `reset-failed` result is nonfatal only after both exact services are confirmed disabled/inactive. Cleanup never touches `/mnt/nas/photo-organizer`, Synology backup, Docker, `local-ai`, Ollama, Open WebUI, Portainer, Development, Test, or unrelated mounts. Do not proceed to Gate D until retry evidence is separately approved.
 
 ### Gate D — protected Development GIDs and Compose render
 

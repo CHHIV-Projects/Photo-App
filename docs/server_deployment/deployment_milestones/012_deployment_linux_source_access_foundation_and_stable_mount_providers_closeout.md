@@ -19,14 +19,16 @@ No database schema change, real Source Intake, Development recreation, Test
 change, or Production change occurred. The original implementation was later
 committed and pushed for Product Owner live validation.
 
-Acceptance is not yet claimed. Gate A and Gate B passed. Gate C initially
-failed safely on deterministic multi-row findmnt parsing, and this bounded
-correction awaits commit, push, installation, review, and a Gate C-only retry.
-Gate D and all later gates remain unstarted.
+Acceptance is not yet claimed. Gate A passed after parser correction commit
+5fc5b91. The corrected multi-row parser and namespace script then succeeded,
+but Gate C failed because systemd filesystem sandboxing isolated the oneshot's
+mounts from the host namespace. This bounded unit correction awaits commit,
+push, installation, review, and a Gate C-only retry. Gate D and all later gates
+remain unstarted.
 
 Status at handoff:
 
-    STATUS: PRODUCT OWNER LIVE APPROVAL REQUIRED
+    STATUS: PRODUCT OWNER UNIT CORRECTION REVIEW REQUIRED
 
 ## 2. Repository and Branch State
 
@@ -37,10 +39,11 @@ Status at handoff:
   469980e5039a35366e1b362a7b2e548ebba1ebf9
 - Prompt commit: 469980e Add Linux source access foundation prompt
 - Final implementation commit: 81a9bc5 Implement Linux source access foundation
-- Current correction baseline HEAD and upstream:
-  81a9bc5b7482cb4a90711a80e6a303146be46b4d
-- Git was clean and HEAD equaled upstream throughout Gates A through the failed
-  Gate C attempt. The bounded Gate C correction is now intentionally
+- NAS parser correction commit: 5fc5b91 Fix Linux source namespace mount parsing
+- Current unit-correction baseline HEAD and upstream:
+  5fc5b91c017945b2799b4615e5bfc1d1b122231e
+- Git was clean and HEAD equaled upstream throughout the corrected Gate A and
+  second failed Gate C attempt. The bounded namespace-unit correction is now intentionally
   uncommitted for Product Owner review.
 
 No branch operation, commit, push, merge, rebase, tag, reset, clean, or history
@@ -86,6 +89,7 @@ rewrite was performed during this correction turn.
 - backend/tests/test_linux_stable_mount_provider.py
 - backend/tests/test_posix_source_paths.py
 - backend/tests/test_check_source_read_only.py
+- backend/tests/test_linux_source_namespace_unit.py
 - backend/tests/test_prepare_source_namespace.py
 - docs/server_deployment/Photo_Organizer_Linux_Source_Access_Guide.md
 - scripts/operator/linux/check_source_identity_broker.py
@@ -170,7 +174,12 @@ The separate root oneshot unit performs only fixed directory, self-bind,
 propagation, and exact NAS bind preparation. Root helpers reject symlinked
 fixed targets before privileged writes. The namespace unit verifies the
 protected Local UUID/type before changing propagation and accepts only the
-exact canonical NAS mount.
+exact canonical NAS mount. It intentionally avoids systemd filesystem
+sandboxing directives so these fixed mounts persist in the host mount
+namespace. It retains bounded capabilities, no-new-privileges, private
+network/IPC, hostname, namespace-creation, realtime, personality,
+executable-memory, and architecture restrictions. The separate broker unit
+retains its full non-root filesystem hardening and remains identity-only.
 
 ## 6. Stable Access Node Implementation
 
@@ -372,6 +381,7 @@ executed in this host environment.
 Passed locally without Docker:
 
     python3 -m unittest \
+      backend.tests.test_linux_source_namespace_unit \
       backend.tests.test_prepare_source_namespace \
       backend.tests.test_check_source_read_only \
       backend.tests.test_linux_source_access_broker \
@@ -379,7 +389,7 @@ Passed locally without Docker:
 
 Result:
 
-    Ran 39 tests in 0.027s
+    Ran 43 tests in 0.028s
     OK
 
 Coverage includes Local/NAS allowlists, exact NAS hash/source, wrong source and
@@ -394,7 +404,10 @@ directories, symlinks, escapes, and unexpected open errors. Eight isolated
 namespace-parser tests cover autofs-plus-CIFS in either order, CIFS alone,
 autofs alone, wrong and hostname-form sources, wrong filesystems, duplicate or
 conflicting active rows, malformed rows, wrong targets, and exact NAS-slot
-cardinality.
+cardinality. Four unit-contract tests reject every reviewed implicit
+filesystem-namespace directive from the root oneshot, lock its exact fixed
+ExecStart/oneshot/capability contract and retained non-filesystem hardening,
+and prove the broker unit remains non-root, identity-only, and hardened.
 
 Also passed:
 
@@ -430,7 +443,8 @@ Not yet run:
 - frontend lint/TypeScript/production build;
 - Compose render;
 - operator self-test in the dependency-complete runtime;
-- live systemd, broker, Local/NAS, and Development checks.
+- unit-corrected host mount persistence, broker activation, remaining
+  Local/NAS behavior, and Development checks.
 
 Codex ran no Docker command. Product Owner Gate A used only its approved
 read-only Docker inventory before Gate B; Gate D Docker validation was not
@@ -466,27 +480,33 @@ unit.
 
 Product Owner live evidence records:
 
-- Gate A passed;
+- Gate A passed after correction commit 5fc5b91;
 - Gate B passed and created the protected stable Access Node identity;
 - the existing Source/NAS data-read group is chuck;
-- Gate C initially failed closed;
-- findmnt returned one systemd-1/autofs placeholder and one exact active
-  //192.168.1.171/PhotoOrganizer/cifs row for the authoritative target;
-- the installed namespace script stored both rows in one scalar and a single
-  read consumed the first autofs row;
-- the script therefore rejected the authoritative identity without weakening
-  the canonical IP-only CIFS contract;
-- both services were disabled and reset after failure;
-- no partial Source namespace mount or broker socket remained;
+- the corrected multi-row parser accepted one systemd-1/autofs placeholder and
+  one exact //192.168.1.171/PhotoOrganizer/cifs active row;
+- the namespace script reported that fixed Source namespace and stable slots
+  were prepared successfully;
+- Gate C then failed because ProtectSystem, ProtectHome, PrivateTmp,
+  ProtectKernelTunables, ProtectKernelModules, ProtectKernelLogs,
+  ProtectControlGroups, ProtectClock, ReadOnlyPaths, and ReadWritePaths caused
+  systemd to execute the mount work in a private filesystem namespace;
+- the exact Source namespace root and NAS slot mounts therefore disappeared
+  immediately after the oneshot process exited;
+- both failed Gate C attempts cleaned up safely, with both services disabled
+  and reset after each failure;
+- no Source namespace mount, NAS slot mount, or broker socket remained;
 - protected configuration and the Gate B Access Node ID remain preserved;
 - Git remained clean and synchronized during live validation;
+- Synology backup, Ollama, Open WebUI, local-ai, Portainer, Development, Test,
+  and NAS configuration were unchanged;
 - Gate D was not started.
 
 This coding turn performed no sudo, Docker, Compose, systemctl mutation,
 mount, unmount, NAS access/write, container execution, Source Intake, database
 write, Redis operation, storage write, Test change, commit, or push. Gate C
-must be retried only after the correction is committed, pushed, installed, and
-reviewed.
+must be retried only after the unit correction is committed, pushed, installed,
+and reviewed.
 
 ## 17. Exact Product Owner Live-Validation Plan and Commands
 
@@ -505,8 +525,9 @@ do not edit code during the gate.
 
 ### Gate A — read-only repository and host preflight
 
-Live result: PASSED. The commands remain below as the record of the approved
-gate; do not rerun Gate A as part of the bounded Gate C correction.
+Live result: PASSED after correction commit 5fc5b91. The commands remain below
+as the record of the approved gate; do not rerun Gate A as part of the bounded
+Gate C unit correction.
 
     cd /home/chuck/projects/photo-organizer-dev
     git branch --show-current
@@ -572,8 +593,9 @@ both services remain disabled/inactive.
 
 ### Gate C — namespace and non-root broker activation
 
-Live result: FAILED SAFELY on the first attempt; Gate C has not passed. The
-root cause and preserved state are recorded in Section 16.
+Live result: FAILED SAFELY after the corrected parser and namespace script
+succeeded; Gate C has not passed. The conclusive systemd mount-namespace root
+cause and preserved state are recorded in Section 16.
 
 The exact correction-install and Gate C-only retry commands are maintained in
 the authoritative Linux Source Access Guide, Gate C. They require:
@@ -582,19 +604,25 @@ the authoritative Linux Source Access Guide, Gate C. They require:
 2. both exact services disabled and inactive;
 3. hashes of protected config and Access Node ID captured privately and
    compared without printing them;
-4. installation of only the corrected tracked prepare_source_namespace.sh to
-   /usr/local/lib/photo-organizer/prepare-source-namespace.sh;
-5. exact cmp proof between tracked and installed scripts;
+4. installation of only the corrected tracked namespace unit to
+   /etc/systemd/system/photo-organizer-source-namespace.service;
+5. a child-Bash unit-install block that runs systemctl daemon-reload, proves
+   exact tracked/installed unit equality, and returns control to the
+   interactive terminal on failure without starting either service;
 6. a separate evidence pause before the Gate C retry;
-7. exact retry failure cleanup limited to the two Gate C services, fixed
-   Source namespace/slot mounts created by that retry, and fixed broker socket;
-8. ordered-independent authoritative and slot row/cardinality evidence;
-9. unchanged protected config, unchanged Access Node ID, clean Git, and a hard
-   stop before Gate D.
+7. a child-Bash retry that names the exact failed step and returns to the
+   interactive terminal after bounded cleanup;
+8. an independent exact one-row NAS-slot target/source/filesystem check that
+   does not source the executable namespace-preparation script;
+9. cleanup limited to the two exact services, exact retry-created Source
+   namespace/slot mounts, and fixed broker socket;
+10. unchanged protected config, unchanged Access Node ID, clean Git, and a hard
+    stop before Gate D.
 
-Do not use the superseded first-attempt Gate C command block. Do not rerun Gate
-A or B, regenerate configuration/identity, invoke the full installer, or start
-Gate D while this correction remains under review.
+Do not use either superseded Gate C command block. Do not reinstall the
+corrected namespace script, rerun Gate A or B, regenerate
+configuration/identity, invoke the full installer, or start Gate D while this
+unit correction remains under review.
 
 ### Gate D — protected GIDs, Compose render, and isolated automated validation
 
@@ -837,9 +865,9 @@ Assets/provenance. Dispatch tests use a mock execution seam only.
 
 ## 21. Git Status and Diff Summary
 
-The implementation is committed at 81a9bc5 and was the clean synchronized
-baseline for live validation. The bounded Gate C correction is intentionally
-unstaged and uncommitted. Run:
+The parser correction is committed at 5fc5b91 and was the clean synchronized
+baseline for the conclusive Gate C diagnosis. The bounded namespace-unit
+correction is intentionally unstaged and uncommitted. Run:
 
     git status --short
     git diff --stat
