@@ -20,11 +20,12 @@ change, or Production change occurred. The original implementation was later
 committed and pushed for Product Owner live validation.
 
 Acceptance is not yet claimed. Gate A passed after parser correction commit
-5fc5b91. The corrected multi-row parser and namespace script then succeeded,
-but Gate C failed because systemd filesystem sandboxing isolated the oneshot's
-mounts from the host namespace. This bounded unit correction awaits commit,
-push, installation, review, and a Gate C-only retry. Gate D and all later gates
-remain unstarted.
+5fc5b91. Correction commit 5e5d80d removed the first explicit filesystem
+sandbox directives, was pushed and installed, and matched the tracked unit.
+Gate C still failed because retained PrivateNetwork isolation implicitly kept
+the oneshot behind a private mount namespace. This bounded explicit
+host-mount correction awaits commit, push, installation, review, and a Gate
+C-only retry. Gate D and all later gates remain unstarted.
 
 Status at handoff:
 
@@ -40,11 +41,12 @@ Status at handoff:
 - Prompt commit: 469980e Add Linux source access foundation prompt
 - Final implementation commit: 81a9bc5 Implement Linux source access foundation
 - NAS parser correction commit: 5fc5b91 Fix Linux source namespace mount parsing
-- Current unit-correction baseline HEAD and upstream:
-  5fc5b91c017945b2799b4615e5bfc1d1b122231e
-- Git was clean and HEAD equaled upstream throughout the corrected Gate A and
-  second failed Gate C attempt. The bounded namespace-unit correction is now intentionally
-  uncommitted for Product Owner review.
+- First namespace-unit correction commit: 5e5d80d
+- Current explicit host-mount correction baseline HEAD and upstream:
+  5e5d80d103c93847c4a91e4c26879baa847bfb4c
+- Git was clean and HEAD equaled upstream throughout the latest failed Gate C
+  attempt and bounded diagnostic. The explicit host-mount correction is now
+  intentionally uncommitted for Product Owner review.
 
 No branch operation, commit, push, merge, rebase, tag, reset, clean, or history
 rewrite was performed during this correction turn.
@@ -174,12 +176,13 @@ The separate root oneshot unit performs only fixed directory, self-bind,
 propagation, and exact NAS bind preparation. Root helpers reject symlinked
 fixed targets before privileged writes. The namespace unit verifies the
 protected Local UUID/type before changing propagation and accepts only the
-exact canonical NAS mount. It intentionally avoids systemd filesystem
-sandboxing directives so these fixed mounts persist in the host mount
-namespace. It retains bounded capabilities, no-new-privileges, private
-network/IPC, hostname, namespace-creation, realtime, personality,
-executable-memory, and architecture restrictions. The separate broker unit
-retains its full non-root filesystem hardening and remains identity-only.
+exact canonical NAS mount. It explicitly sets PrivateMounts=false and
+avoids filesystem, network, IPC, and UTS namespace directives so these fixed mounts execute in and persist
+in the host mount namespace. It retains bounded capabilities,
+no-new-privileges, the AF_UNIX address-family restriction, namespace-creation,
+realtime, personality, executable-memory, and architecture restrictions. The
+separate broker unit retains its full non-root filesystem hardening and remains
+identity-only.
 
 ## 6. Stable Access Node Implementation
 
@@ -404,10 +407,25 @@ directories, symlinks, escapes, and unexpected open errors. Eight isolated
 namespace-parser tests cover autofs-plus-CIFS in either order, CIFS alone,
 autofs alone, wrong and hostname-form sources, wrong filesystems, duplicate or
 conflicting active rows, malformed rows, wrong targets, and exact NAS-slot
-cardinality. Four unit-contract tests reject every reviewed implicit
-filesystem-namespace directive from the root oneshot, lock its exact fixed
-ExecStart/oneshot/capability contract and retained non-filesystem hardening,
-and prove the broker unit remains non-root, identity-only, and hardened.
+cardinality. Four unit-contract tests require explicit
+PrivateMounts=false; reject private network, IPC, UTS, and every reviewed
+filesystem-namespace directive from the root oneshot; lock its exact fixed
+ExecStart/oneshot/capability and remaining hardening contract; and prove the
+broker unit remains non-root, identity-only, and hardened.
+
+Latest explicit host-mount correction validation:
+
+    python3 -m unittest \
+      backend.tests.test_linux_source_namespace_unit \
+      backend.tests.test_prepare_source_namespace
+
+Result:
+
+    Ran 12 tests in 0.020s
+    OK
+
+All nine Markdown Bash blocks passed `bash -n`. The requested `compileall`,
+namespace/helper `bash -n`, and whitespace checks also passed.
 
 Also passed:
 
@@ -480,27 +498,28 @@ unit.
 
 Product Owner live evidence records:
 
-- Gate A passed after correction commit 5fc5b91;
+- Gate A passed after parser correction commit 5fc5b91;
 - Gate B passed and created the protected stable Access Node identity;
 - the existing Source/NAS data-read group is chuck;
-- the corrected multi-row parser accepted one systemd-1/autofs placeholder and
-  one exact //192.168.1.171/PhotoOrganizer/cifs active row;
-- the namespace script reported that fixed Source namespace and stable slots
-  were prepared successfully;
-- Gate C then failed because ProtectSystem, ProtectHome, PrivateTmp,
-  ProtectKernelTunables, ProtectKernelModules, ProtectKernelLogs,
-  ProtectControlGroups, ProtectClock, ReadOnlyPaths, and ReadWritePaths caused
-  systemd to execute the mount work in a private filesystem namespace;
-- the exact Source namespace root and NAS slot mounts therefore disappeared
-  immediately after the oneshot process exited;
-- both failed Gate C attempts cleaned up safely, with both services disabled
-  and reset after each failure;
-- no Source namespace mount, NAS slot mount, or broker socket remained;
+- correction commit 5e5d80d removed the first explicit filesystem-sandboxing
+  directives, was pushed and installed, and matched the tracked unit;
+- Gate C still failed with a NAS-slot identity warning inside the service;
+- the bounded diagnostic showed the authoritative target still had exactly the
+  expected systemd-1/autofs placeholder and canonical
+  //192.168.1.171/PhotoOrganizer/cifs active row, both with shared propagation;
+- after the service exited, the host had no exact Source namespace root, no NAS
+  Source-slot mount, and no Source-namespace mount rows;
+- retained PrivateNetwork=true implicitly preserved a private mount namespace,
+  so the in-service NAS-slot failure is not evidence to loosen parser semantics;
+- PrivateIPC and ProtectHostname are also removed from this special root helper
+  to keep its host-namespace contract minimal and explicit;
+- diagnostic cleanup passed, leaving both services disabled/inactive with no
+  Source namespace mount, NAS slot mount, or broker socket;
 - protected configuration and the Gate B Access Node ID remain preserved;
 - Git remained clean and synchronized during live validation;
-- Synology backup, Ollama, Open WebUI, local-ai, Portainer, Development, Test,
-  and NAS configuration were unchanged;
-- Gate D was not started.
+- Synology Active Backup for Business, Ollama, Open WebUI, local-ai, Docker,
+  Portainer, Development, Test, and NAS configuration were unchanged;
+- Gate C remains unpassed, and Gate D was not started.
 
 This coding turn performed no sudo, Docker, Compose, systemctl mutation,
 mount, unmount, NAS access/write, container execution, Source Intake, database
@@ -593,9 +612,10 @@ both services remain disabled/inactive.
 
 ### Gate C — namespace and non-root broker activation
 
-Live result: FAILED SAFELY after the corrected parser and namespace script
-succeeded; Gate C has not passed. The conclusive systemd mount-namespace root
-cause and preserved state are recorded in Section 16.
+Live result: FAILED SAFELY after correction commit 5e5d80d was installed
+and matched. The bounded diagnostic proved retained PrivateNetwork isolation
+still hid all Source mounts from the host after service exit. Gate C has not
+passed; the conclusive evidence and preserved state are recorded in Section 16.
 
 The exact correction-install and Gate C-only retry commands are maintained in
 the authoritative Linux Source Access Guide, Gate C. They require:
@@ -607,11 +627,14 @@ the authoritative Linux Source Access Guide, Gate C. They require:
 4. installation of only the corrected tracked namespace unit to
    /etc/systemd/system/photo-organizer-source-namespace.service;
 5. a child-Bash unit-install block that runs systemctl daemon-reload, proves
-   exact tracked/installed unit equality, and returns control to the
-   interactive terminal on failure without starting either service;
+   exact tracked/installed unit equality, verifies effective PrivateMounts,
+   PrivateNetwork, PrivateIPC, and ProtectHostname are all no, and returns
+   control to the interactive terminal on failure without starting either
+   service;
 6. a separate evidence pause before the Gate C retry;
-7. a child-Bash retry that names the exact failed step and returns to the
-   interactive terminal after bounded cleanup;
+7. a child-Bash retry that verifies the four effective namespace
+   properties before service start, names the exact failed step, and returns to
+   the interactive terminal after bounded cleanup;
 8. an independent exact one-row NAS-slot target/source/filesystem check that
    does not source the executable namespace-preparation script;
 9. cleanup limited to the two exact services, exact retry-created Source
@@ -865,9 +888,10 @@ Assets/provenance. Dispatch tests use a mock execution seam only.
 
 ## 21. Git Status and Diff Summary
 
-The parser correction is committed at 5fc5b91 and was the clean synchronized
-baseline for the conclusive Gate C diagnosis. The bounded namespace-unit
-correction is intentionally unstaged and uncommitted. Run:
+The first namespace-unit correction is committed at 5e5d80d and was the
+clean synchronized baseline for the latest Gate C result and bounded
+diagnostic. The explicit host-mount correction is intentionally unstaged and
+uncommitted. Run:
 
     git status --short
     git diff --stat

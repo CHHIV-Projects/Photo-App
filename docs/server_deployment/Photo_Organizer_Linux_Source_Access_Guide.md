@@ -30,7 +30,7 @@ The tracked broker installs as `/usr/local/lib/photo-organizer/source-identity-b
 
 The broker accepts one bounded JSON-lines request on a protected Unix socket. It accepts only `list_locations` or an allowlisted location ID, Source Type, and safe relative root. It executes fixed no-shell `findmnt` and `lsblk` commands with timeouts and performs path resolution/readability checks in a timeout-bounded isolated subprocess. It never mounts, unmounts, writes Source data, copies bytes, performs intake, calls Docker, accepts shell input, or runs as root. Responses omit credentials, credential paths, usernames, passwords, unrestricted mount options, and raw protected identifiers.
 
-The separate root oneshot namespace unit performs only fixed-path directory and bind preparation in the host mount namespace. It intentionally uses no systemd filesystem-sandboxing directive that would disconnect mount propagation to the host. It retains bounded capabilities, no-new-privileges, private network/IPC, hostname, namespace-creation, realtime, personality, executable-memory, and architecture restrictions. It does not accept client paths or change NAS ownership or mount options. NAS absence, wrong identity, or ambiguous rows fail preparation closed without changing the authoritative NAS mount.
+The separate root oneshot namespace unit performs only fixed-path directory and bind preparation in the host mount namespace. It explicitly sets `PrivateMounts=false` and uses no filesystem, network, IPC, or UTS namespace directive that could isolate its fixed mount work from the host. It retains bounded capabilities, no-new-privileges, an `AF_UNIX` address-family boundary, namespace-creation, realtime, personality, executable-memory, and architecture restrictions. It does not accept client paths or change NAS ownership or mount options. NAS absence, wrong identity, or ambiguous rows fail preparation closed without changing the authoritative NAS mount.
 
 ## Development container boundary
 
@@ -55,7 +55,7 @@ Do not run this section until Codex reports `STATUS: PRODUCT OWNER LIVE APPROVAL
 
 At the start and end of every gate, verify branch `feature/deployment-linux-runtime`, an empty `git status --short`, and identical full `HEAD` and `@{upstream}` SHAs. The reviewed implementation must be committed and pushed before Gate A. Ignored protected Development configuration may change only through the explicitly approved helper; validation must not change tracked source or documentation or generate a tracked file. If validation reveals an implementation defect, stop the gate and return to a separately reviewed correction step; do not edit during live validation.
 
-Live evidence status: Gate A passed after correction commit `5fc5b91`. The corrected multi-row parser accepted the systemd `autofs` placeholder plus the exact active CIFS row, and the namespace script completed successfully. Gate C then failed because filesystem-sandboxing directives placed the oneshot mount work in a private service mount namespace; both exact mounts disappeared when its process exited. Both failed Gate C attempts cleaned up safely, leaving both services disabled/inactive with no Source namespace mount, NAS slot mount, or broker socket. Git stayed clean and synchronized, and Gate D was not started. Synology backup, Ollama, Open WebUI, `local-ai`, Portainer, Development, Test, and NAS configuration were unchanged. Gate C remains unpassed and must not be retried until the namespace-unit correction is committed, pushed, installed, and reviewed.
+Live evidence status: Gate A passed after parser correction commit `5fc5b91`. Correction commit `5e5d80d` removed the first set of explicit filesystem-sandboxing directives, was pushed and installed, and matched the tracked unit. Gate C still failed. A bounded diagnostic showed the authoritative target retained its exact `systemd-1`/`autofs` placeholder and canonical IP-form CIFS active row, but no Source namespace root or NAS slot existed in the host namespace after the service exited. The retained `PrivateNetwork=true` still implicitly allocated a private mount namespace; `PrivateIPC` and `ProtectHostname` are now also removed from this special root helper so its namespace contract is minimal and explicit. Diagnostic cleanup passed, leaving both services disabled/inactive with no Source mount or broker socket. Protected configuration and Access Node ID remain preserved; Git stayed clean and synchronized; Gate D was not started. Synology Active Backup for Business, Ollama, Open WebUI, `local-ai`, Docker, Portainer, Development, Test, and NAS configuration were unchanged. Gate C remains unpassed and must not be retried until this explicit host-mount correction is committed, pushed, installed, and reviewed.
 
 ### Gate A — read-only preflight
 
@@ -126,8 +126,8 @@ Expected: the fixed empty Source namespace root and Local slot are created under
 
 ### Gate C — fixed namespace and broker activation
 
-After the unit correction is committed, pushed, and reviewed, install only the
-corrected tracked namespace unit. Do not reinstall the already corrected
+After the explicit host-mount correction is committed, pushed, and reviewed,
+install only the corrected tracked namespace unit. Do not reinstall the already corrected
 namespace script, regenerate protected configuration, or run the full
 installer. This preserves the existing configuration, data-read group `chuck`,
 and stable Access Node ID:
@@ -160,6 +160,11 @@ sudo cmp --silent -- \
   scripts/operator/linux/photo-organizer-source-namespace.service \
   /etc/systemd/system/photo-organizer-source-namespace.service
 
+test "$(systemctl show --property=PrivateMounts --value photo-organizer-source-namespace.service)" = no
+test "$(systemctl show --property=PrivateNetwork --value photo-organizer-source-namespace.service)" = no
+test "$(systemctl show --property=PrivateIPC --value photo-organizer-source-namespace.service)" = no
+test "$(systemctl show --property=ProtectHostname --value photo-organizer-source-namespace.service)" = no
+
 CONFIG_SHA_AFTER="$(sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}')"
 ACCESS_NODE_SHA_AFTER="$(sudo sha256sum /var/lib/photo-organizer-source-access/access-node-id | awk '{print $1}')"
 test "${CONFIG_SHA_BEFORE}" = "${CONFIG_SHA_AFTER}"
@@ -175,7 +180,7 @@ test "$(git rev-parse --verify HEAD)" = "$(git rev-parse --verify '@{upstream}')
 exit 0
 UNIT_INSTALL
 then
-  printf 'PASS: corrected namespace unit installed; services remain disabled/inactive and protected state is unchanged.\n'
+  printf 'PASS: corrected namespace unit installed; effective host-mount properties verified; services remain disabled/inactive and protected state is unchanged.\n'
 else
   unit_install_rc=$?
   printf 'FAIL: corrected namespace unit installation returned %s; interactive terminal remains available.\n' \
@@ -269,6 +274,12 @@ sudo cmp --silent -- \
   scripts/operator/linux/photo-organizer-source-namespace.service \
   /etc/systemd/system/photo-organizer-source-namespace.service
 
+FAILED_STEP='verify effective host mount namespace properties'
+test "$(systemctl show --property=PrivateMounts --value "${NAMESPACE_SERVICE}")" = no
+test "$(systemctl show --property=PrivateNetwork --value "${NAMESPACE_SERVICE}")" = no
+test "$(systemctl show --property=PrivateIPC --value "${NAMESPACE_SERVICE}")" = no
+test "$(systemctl show --property=ProtectHostname --value "${NAMESPACE_SERVICE}")" = no
+
 FAILED_STEP='verify empty retry mount and socket targets'
 test -z "$(sudo findmnt -rn -M "${SOURCE_NAMESPACE}" -o TARGET || true)"
 test -z "$(sudo findmnt -rn -M "${NAS_SLOT}" -o TARGET || true)"
@@ -352,7 +363,7 @@ else
 fi
 ```
 
-Expected: the oneshot completes and remains active while both exact mounts persist in the host mount namespace. The Source namespace is shared. Independent bounded evidence requires exactly one NAS-slot row with the exact fixed target, canonical IP-form CIFS source, `cifs` filesystem, and no extra field; no executable operational script is sourced into the validation shell. The broker remains non-root and identity-only. Any failure names its exact step, returns to the interactive terminal, and invokes bounded cleanup. An unloaded-unit `reset-failed` result is nonfatal only after both exact services are confirmed disabled/inactive. Cleanup never touches `/mnt/nas/photo-organizer`, Synology backup, Docker, `local-ai`, Ollama, Open WebUI, Portainer, Development, Test, or unrelated mounts. Do not proceed to Gate D until retry evidence is separately approved.
+Expected: before service start, effective `PrivateMounts`, `PrivateNetwork`, `PrivateIPC`, and `ProtectHostname` are all `no`. The oneshot then completes and remains active while both exact mounts persist in the host mount namespace. The Source namespace is shared. Independent bounded evidence requires exactly one NAS-slot row with the exact fixed target, canonical IP-form CIFS source, `cifs` filesystem, and no extra field; no executable operational script is sourced into the validation shell. The broker remains non-root and identity-only. Any failure names its exact step, returns to the interactive terminal, and invokes bounded cleanup. An unloaded-unit `reset-failed` result is nonfatal only after both exact services are confirmed disabled/inactive. Cleanup never touches `/mnt/nas/photo-organizer`, Synology backup, Docker, `local-ai`, Ollama, Open WebUI, Portainer, Development, Test, or unrelated mounts. Do not proceed to Gate D until retry evidence is separately approved.
 
 ### Gate D — protected Development GIDs and Compose render
 

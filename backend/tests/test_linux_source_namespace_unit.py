@@ -44,6 +44,7 @@ class LinuxSourceNamespaceUnitTests(unittest.TestCase):
         )
 
     def test_namespace_unit_has_no_implicit_filesystem_namespace_directive(self) -> None:
+        self.assertEqual(self.namespace.get("PrivateMounts"), ["false"])
         forbidden = {
             "BindPaths",
             "BindReadOnlyPaths",
@@ -52,11 +53,13 @@ class LinuxSourceNamespaceUnitTests(unittest.TestCase):
             "MountAPIVFS",
             "NoExecPaths",
             "PrivateDevices",
-            "PrivateMounts",
+            "PrivateIPC",
+            "PrivateNetwork",
             "PrivateTmp",
             "ProtectClock",
             "ProtectControlGroups",
             "ProtectHome",
+            "ProtectHostname",
             "ProtectKernelLogs",
             "ProtectKernelModules",
             "ProtectKernelTunables",
@@ -73,9 +76,7 @@ class LinuxSourceNamespaceUnitTests(unittest.TestCase):
         expected = {
             "UMask": ["0027"],
             "NoNewPrivileges": ["true"],
-            "PrivateNetwork": ["true"],
-            "PrivateIPC": ["true"],
-            "ProtectHostname": ["true"],
+            "PrivateMounts": ["false"],
             "RestrictAddressFamilies": ["AF_UNIX"],
             "RestrictNamespaces": ["true"],
             "RestrictRealtime": ["true"],
