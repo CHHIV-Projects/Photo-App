@@ -55,7 +55,26 @@ Do not run this section until Codex reports `STATUS: PRODUCT OWNER LIVE APPROVAL
 
 At the start and end of every gate, verify branch `feature/deployment-linux-runtime`, an empty `git status --short`, and identical full `HEAD` and `@{upstream}` SHAs. The reviewed implementation must be committed and pushed before Gate A. Ignored protected Development configuration may change only through the explicitly approved helper; validation must not change tracked source or documentation or generate a tracked file. If validation reveals an implementation defect, stop the gate and return to a separately reviewed correction step; do not edit during live validation.
 
-Live evidence status: Gate A and Gate B passed. The explicit host-mount correction is committed and synchronized at baseline `a816498e3c160bf71b6d6f29ed7fbd491d2edb8b`; its tracked and installed unit match, and effective `PrivateMounts`, `PrivateNetwork`, `PrivateIPC`, and `ProtectHostname` are all `no`. Gate C still fails at post-bind NAS-slot validation. Focused reconnaissance refuted a whole-share `SOURCE[/]` mismatch for installed util-linux 2.39.3: `FSROOT=/` uses the undecorated canonical source. The exact post-bind trigger remains hidden because prior slot queries suppressed findmnt status; shared propagation/cardinality is plausible but unproven, and the former tests used an unrealistic three-field slot fixture. The pending diagnostic correction adds fixed-prefix six-field evidence, explicit query-status distinctions, and invocation-owned failure rollback without changing the existing authority or slot acceptance rules. Both Source services currently remain disabled/inactive; no Source mount or broker socket remains; protected configuration and the Access Node ID are preserved; Gate C is unpassed and Gate D is unstarted. Synology Active Backup for Business, Ollama, Open WebUI, `local-ai`, Docker, Portainer, Development, Test, and authoritative NAS configuration remain unchanged.
+Live evidence status: Gate A and Gate B passed. Diagnostic commit
+`ef7e3f555cc387d18a6c31721c8b2f2c86568456` is committed and synchronized.
+Its decisive Gate C run returned `SOURCE_SLOT_DIAGNOSTIC_RC=0` and exactly two
+identical rows at `/mnt/photo-organizer-sources/nas/photo-organizer`; both rows
+were canonical `//192.168.1.171/PhotoOrganizer` `cifs`, `FSROOT=/`,
+`MAJ:MIN=0:48`, and `shared`. The exact trigger was therefore a duplicate
+stacked NAS-slot mount created when the nested bind occurred below an already
+shared Source namespace. Findmnt failure, a missing row, malformed identity,
+`SOURCE[/]`, and systemd isolation are no longer candidate causes.
+Script-owned rollback passed, emergency containment was not used, and the host
+returned to its contained state. The final correction creates the NAS bind
+while the exact Source namespace is recursively private, validates one slot,
+then makes the complete validated tree recursively shared and validates one
+slot again. Canonical NAS authority and identity remain unchanged. Both Source
+services currently remain disabled/inactive; no Source mount or broker socket
+remains; protected configuration and the Access Node ID are preserved. Gate C
+remains unpassed pending final correction validation, and Gate D remains
+unstarted. Synology Active Backup for Business, Ollama, Open WebUI, `local-ai`,
+Docker, Portainer, Development, Test, and authoritative NAS configuration
+remain unchanged.
 
 ### Gate A — read-only preflight
 
@@ -124,20 +143,20 @@ git rev-parse '@{upstream}'
 
 Expected: the fixed empty Source namespace root and Local slot are created under `/mnt/photo-organizer-sources`; protected config is root-owned, group-readable only by `photo-organizer-source-access`, and mode 0640; the service-owned stable ID is mode 0600; programs/units are root-owned and not service-writable; both units remain disabled/inactive. The helper captures the Local UUID and fixed slot root identity into protected config without printing either. Stop if paths are symlinks, identities are ambiguous, config contents appear in evidence, the data group differs, or an install would overwrite an unsafe target. No service is enabled or started in this gate.
 
-### Gate C — decisive NAS bind-slot diagnostic only
+### Gate C — final NAS bind-slot topology correction validation
 
-Gate C remains unpassed. The next live operation is not a general Gate C retry
-and must not start the broker or Gate D. It has two separately reviewed phases.
-The diagnostic correction must first be committed and pushed only after
-explicit Product Owner authorization.
+Gate C remains unpassed. Diagnostic commit `ef7e3f5` conclusively proved that
+the old shared-before-bind order produced two identical stacked slot mounts.
+The final correction must be committed and pushed only after explicit Product
+Owner authorization. Validation then has two separately reviewed phases.
 
-#### Phase 1 — commit separately, then install only the corrected script
+#### Phase 1 — install only the corrected namespace script
 
 Prerequisites: branch `feature/deployment-linux-runtime`; clean synchronized
-Git at the separately approved diagnostic commit; both Source services
-disabled/inactive; no Source mount or broker socket; protected state preserved.
-Do not reinstall either unit, regenerate configuration, regenerate the Access
-Node ID, or invoke the full installer.
+Git at the separately approved final-correction commit; both Source services
+disabled/inactive; no Source namespace root, NAS slot, or broker socket; and
+protected state preserved. Do not reinstall either unit, invoke the full
+installer, regenerate configuration, or regenerate the Access Node ID.
 
 ```bash
 if bash <<'SCRIPT_ONLY_INSTALL'
@@ -157,16 +176,28 @@ services_disabled_inactive() {
     test "$(systemctl is-active "$BROKER_SERVICE" || true)" = inactive
 }
 
+exact_mount_absent() {
+  local target="$1"
+  local output
+  local query_rc
+
+  if output="$(sudo findmnt -rn -M "$target" -o TARGET 2>&1)"; then
+    query_rc=0
+  else
+    query_rc=$?
+  fi
+  test "$query_rc" -eq 1 && test -z "$output"
+}
+
 test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
 test -z "$(git status --short)"
-HEAD_SHA="$(git rev-parse --verify HEAD)"
-UPSTREAM_SHA="$(git rev-parse --verify '@{upstream}')"
-test "$HEAD_SHA" = "$UPSTREAM_SHA"
+test "$(git rev-parse --verify HEAD)" = \
+  "$(git rev-parse --verify '@{upstream}')"
 services_disabled_inactive
 
 sudo -v
-test -z "$(sudo findmnt -rn -M "$SOURCE_NAMESPACE" -o TARGET || true)"
-test -z "$(sudo findmnt -rn -M "$NAS_SLOT" -o TARGET || true)"
+exact_mount_absent "$SOURCE_NAMESPACE"
+exact_mount_absent "$NAS_SLOT"
 test ! -S "$BROKER_SOCKET"
 
 CONFIG_SHA_BEFORE="$(
@@ -187,7 +218,8 @@ sudo cmp --silent -- \
   scripts/operator/linux/photo-organizer-source-namespace.service \
   /etc/systemd/system/photo-organizer-source-namespace.service
 test "$(sudo stat -c '%U|%G|%a' \
-  /usr/local/lib/photo-organizer/prepare-source-namespace.sh)" = 'root|root|755'
+  /usr/local/lib/photo-organizer/prepare-source-namespace.sh)" = \
+  'root|root|755'
 
 CONFIG_SHA_AFTER="$(
   sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}'
@@ -199,8 +231,8 @@ ACCESS_NODE_SHA_AFTER="$(
 test "$CONFIG_SHA_BEFORE" = "$CONFIG_SHA_AFTER"
 test "$ACCESS_NODE_SHA_BEFORE" = "$ACCESS_NODE_SHA_AFTER"
 services_disabled_inactive
-test -z "$(sudo findmnt -rn -M "$SOURCE_NAMESPACE" -o TARGET || true)"
-test -z "$(sudo findmnt -rn -M "$NAS_SLOT" -o TARGET || true)"
+exact_mount_absent "$SOURCE_NAMESPACE"
+exact_mount_absent "$NAS_SLOT"
 test ! -S "$BROKER_SOCKET"
 
 test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
@@ -210,7 +242,7 @@ test "$(git rev-parse --verify HEAD)" = \
 exit 0
 SCRIPT_ONLY_INSTALL
 then
-  printf 'PASS: corrected namespace script alone is installed; protected and contained state is unchanged.\n'
+  printf 'PASS: final corrected namespace script alone is installed; protected and contained state is unchanged.\n'
 else
   install_rc=$?
   printf 'FAIL: script-only installation returned %s; stop for review.\n' \
@@ -220,17 +252,16 @@ fi
 
 Pause for Product Owner evidence review. Do not start either service in Phase 1.
 
-#### Phase 2 — one decisive namespace-service diagnostic run
+#### Phase 2 — one final Gate C retry
 
-Run only after separate approval. This starts the namespace service without
-enabling it, never intentionally starts the broker, selects only approved
-fixed-prefix evidence after a reliable pre-start journal cursor, verifies
-script-owned rollback on the expected failure path, and stops before Gate D.
-Exact bounded emergency containment is fallback-only after a start attempt; it
-does not convert an unexpected service success or harness failure into a pass.
+Run only after separate approval. The namespace service is started without
+enabling it. Exactly one full-evidence root row and one full-evidence NAS-slot
+row must survive completion. Only after those checks pass may the disabled
+non-root broker be started and validated. Any failure after namespace start
+uses exact bounded containment and returns the interactive terminal.
 
 ```bash
-if bash <<'DECISIVE_SLOT_DIAGNOSTIC'
+if bash <<'FINAL_GATE_C_RETRY'
 set -Eeuo pipefail
 cd /home/chuck/projects/photo-organizer-dev
 
@@ -238,11 +269,12 @@ NAMESPACE_SERVICE='photo-organizer-source-namespace.service'
 BROKER_SERVICE='photo-organizer-source-identity-broker.service'
 SOURCE_NAMESPACE='/mnt/photo-organizer-sources'
 NAS_SLOT='/mnt/photo-organizer-sources/nas/photo-organizer'
+NAS_AUTHORITY='/mnt/nas/photo-organizer'
+NAS_SOURCE='//192.168.1.171/PhotoOrganizer'
 BROKER_SOCKET='/run/photo-organizer-source-access/broker.sock'
-FAILED_STEP='initialize decisive diagnostic'
+FAILED_STEP='initialize final Gate C retry'
 NAMESPACE_START_ATTEMPTED=0
-EMERGENCY_CONTAINMENT_USED=0
-readonly MAX_EMERGENCY_UNMOUNT_ATTEMPTS=16
+readonly MAX_CLEANUP_ATTEMPTS=16
 
 services_disabled_inactive() {
   test "$(systemctl is-enabled "$NAMESPACE_SERVICE" || true)" = disabled &&
@@ -256,29 +288,20 @@ exact_mount_present() {
   local output
   local query_rc
   local row
-  local row_count=0
 
-  if output="$(
-    sudo findmnt -rn -M "$target" -o TARGET 2>&1
-  )"; then
+  if output="$(sudo findmnt -rn -M "$target" -o TARGET 2>&1)"; then
     query_rc=0
   else
     query_rc=$?
   fi
-
   if test "$query_rc" -eq 1 && test -z "$output"; then
     return 1
   fi
-  if test "$query_rc" -ne 0 || test -z "$output"; then
-    return 2
-  fi
-
+  test "$query_rc" -eq 0
+  test -n "$output"
   while IFS= read -r row; do
-    test "$row" = "$target" || return 2
-    row_count=$((row_count + 1))
+    test "$row" = "$target"
   done <<<"$output"
-  test "$row_count" -gt 0 || return 2
-  return 0
 }
 
 exact_mount_absent() {
@@ -297,9 +320,7 @@ unmount_all_exact_instances() {
   local attempt
   local query_rc
 
-  for ((attempt = 1;
-        attempt <= MAX_EMERGENCY_UNMOUNT_ATTEMPTS;
-        attempt += 1)); do
+  for ((attempt = 1; attempt <= MAX_CLEANUP_ATTEMPTS; attempt += 1)); do
     if exact_mount_present "$target"; then
       sudo umount -- "$target" || return 1
     else
@@ -308,21 +329,14 @@ unmount_all_exact_instances() {
       return 1
     fi
   done
-
-  if exact_mount_present "$target"; then
-    return 1
-  else
-    query_rc=$?
-  fi
-  test "$query_rc" -eq 1
+  exact_mount_absent "$target"
 }
 
 emergency_containment() {
   local original_status="$1"
   local containment_failed=0
 
-  EMERGENCY_CONTAINMENT_USED=1
-  printf 'WARNING: emergency diagnostic containment was required\n' >&2
+  printf 'WARNING: exact bounded Gate C containment was required.\n' >&2
 
   if systemctl is-active --quiet "$BROKER_SERVICE"; then
     sudo systemctl stop "$BROKER_SERVICE" || containment_failed=1
@@ -330,7 +344,6 @@ emergency_containment() {
   if systemctl is-active --quiet "$NAMESPACE_SERVICE"; then
     sudo systemctl stop "$NAMESPACE_SERVICE" || containment_failed=1
   fi
-
   unmount_all_exact_instances "$NAS_SLOT" || containment_failed=1
   unmount_all_exact_instances "$SOURCE_NAMESPACE" || containment_failed=1
 
@@ -358,15 +371,14 @@ emergency_containment() {
 
   if test "$containment_failed" -ne 0; then
     printf '%s\n' \
-      "FAIL: HIGH PRIORITY: emergency diagnostic containment is incomplete; original diagnostic status was $original_status" \
+      "FAIL: HIGH PRIORITY: final Gate C containment is incomplete; original status was $original_status" \
       >&2
     return 1
   fi
-
   return 0
 }
 
-on_diagnostic_error() {
+on_retry_error() {
   local original_rc=$?
   local original_step="$FAILED_STEP"
   local containment_rc=0
@@ -374,7 +386,6 @@ on_diagnostic_error() {
   if test "$BASH_SUBSHELL" -gt 0; then
     return "$original_rc"
   fi
-
   trap - ERR
   if test "$NAMESPACE_START_ATTEMPTED" -eq 1; then
     if emergency_containment "$original_rc"; then
@@ -383,16 +394,16 @@ on_diagnostic_error() {
       containment_rc=$?
     fi
   fi
-  printf 'FAIL: decisive diagnostic step failed (status %s): %s\n' \
+  printf 'FAIL: final Gate C step failed (status %s): %s\n' \
     "$original_rc" "$original_step" >&2
   if test "$containment_rc" -ne 0; then
     printf '%s\n' \
-      "FAIL: HIGH PRIORITY: containment also failed with status $containment_rc; original diagnostic status remains $original_rc" \
+      "FAIL: HIGH PRIORITY: containment also failed with status $containment_rc; original status remains $original_rc" \
       >&2
   fi
   exit "$original_rc"
 }
-trap on_diagnostic_error ERR
+trap on_retry_error ERR
 
 FAILED_STEP='verify clean synchronized repository'
 test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
@@ -400,14 +411,14 @@ test -z "$(git status --short)"
 test "$(git rev-parse --verify HEAD)" = \
   "$(git rev-parse --verify '@{upstream}')"
 
-FAILED_STEP='verify contained Source service and mount state'
+FAILED_STEP='verify clean contained service and mount state'
 services_disabled_inactive
 sudo -v
 exact_mount_absent "$SOURCE_NAMESPACE"
 exact_mount_absent "$NAS_SLOT"
 test ! -S "$BROKER_SOCKET"
 
-FAILED_STEP='verify installed diagnostic script and unchanged unit'
+FAILED_STEP='verify installed script, unchanged unit, and effective properties'
 sudo cmp --silent -- \
   scripts/operator/linux/prepare_source_namespace.sh \
   /usr/local/lib/photo-organizer/prepare-source-namespace.sh
@@ -432,92 +443,145 @@ ACCESS_NODE_SHA_BEFORE="$(
     awk '{print $1}'
 )"
 
-FAILED_STEP='capture reliable pre-start journal cursor'
-sudo journalctl --sync
-JOURNAL_CURSOR="$(
-  sudo journalctl --lines=0 --show-cursor --no-pager |
-    awk '
-      /^-- cursor: / {
-        cursor = substr($0, 12)
-        count += 1
-      }
-      END {
-        if (count != 1 || cursor == "") {
-          exit 1
-        }
-        print cursor
-      }
-    '
-)"
-test -n "$JOURNAL_CURSOR"
-
-FAILED_STEP='start namespace service once without enabling it'
+FAILED_STEP='start final corrected namespace service once'
 NAMESPACE_START_ATTEMPTED=1
 if sudo systemctl start "$NAMESPACE_SERVICE"; then
-  NAMESPACE_START_RC=0
+  :
 else
-  NAMESPACE_START_RC=$?
+  namespace_start_rc=$?
+  printf 'FAIL: namespace service returned %s.\n' "$namespace_start_rc" >&2
+  false
 fi
-
-FAILED_STEP='capture only current-invocation sanitized diagnostic evidence'
-sudo journalctl --sync
-SANITIZED_EVIDENCE="$(
-  sudo journalctl \
-    --unit "$NAMESPACE_SERVICE" \
-    --after-cursor "$JOURNAL_CURSOR" \
-    --no-pager \
-    --output=cat |
-    awk '
-      /^SOURCE_SLOT_DIAGNOSTIC_(RC|ROW_COUNT|ROW)=/ ||
-      /^CLEANUP: invocation-created / ||
-      /^FAIL: (NAS slot|Cleanup |Invocation-owned Source mount cleanup)/ {
-        print
-      }
-    '
-)"
-test -n "$SANITIZED_EVIDENCE"
-grep -q '^SOURCE_SLOT_DIAGNOSTIC_RC=' <<<"$SANITIZED_EVIDENCE"
-grep -q '^SOURCE_SLOT_DIAGNOSTIC_ROW_COUNT=' <<<"$SANITIZED_EVIDENCE"
-printf '%s\n' "$SANITIZED_EVIDENCE"
-
-if test "$NAMESPACE_START_RC" -eq 0; then
-  printf '%s\n' \
-    'FAIL: namespace service unexpectedly succeeded during the diagnostic; containing exact diagnostic state and stopping for review.' \
-    >&2
-  if emergency_containment 1; then
-    unexpected_containment_rc=0
-  else
-    unexpected_containment_rc=$?
-  fi
-  trap - ERR
-  if test "$unexpected_containment_rc" -ne 0; then
-    printf '%s\n' \
-      "FAIL: HIGH PRIORITY: unexpected-success containment failed with status $unexpected_containment_rc; original diagnostic status remains 1" \
-      >&2
-  fi
-  exit 1
-fi
-
-FAILED_STEP='verify script-owned exact rollback before resetting failed state'
-test "$EMERGENCY_CONTAINMENT_USED" -eq 0
 test "$(systemctl is-enabled "$NAMESPACE_SERVICE" || true)" = disabled
-systemctl is-failed --quiet "$NAMESPACE_SERVICE"
-test "$(systemctl is-enabled "$BROKER_SERVICE" || true)" = disabled
+systemctl is-active --quiet "$NAMESPACE_SERVICE"
 test "$(systemctl is-active "$BROKER_SERVICE" || true)" = inactive
-exact_mount_absent "$NAS_SLOT"
-exact_mount_absent "$SOURCE_NAMESPACE"
-test ! -S "$BROKER_SOCKET"
-printf 'PASS: script-owned rollback confirmed\n'
 
-FAILED_STEP='reset only namespace failure state and verify final containment'
-sudo systemctl reset-failed "$NAMESPACE_SERVICE"
-services_disabled_inactive
-exact_mount_absent "$NAS_SLOT"
-exact_mount_absent "$SOURCE_NAMESPACE"
-test ! -S "$BROKER_SOCKET"
-test "$EMERGENCY_CONTAINMENT_USED" -eq 0
+FAILED_STEP='capture and validate authoritative active CIFS device identity'
+AUTHORITY_EVIDENCE="$(
+  sudo findmnt \
+    --kernel \
+    --raw \
+    --noheadings \
+    --nofsroot \
+    --mountpoint "$NAS_AUTHORITY" \
+    --output TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION
+)"
+AUTHORITY_MAJOR_MINOR=''
+authority_active_count=0
+authority_autofs_count=0
+while IFS= read -r authority_row; do
+  read -r \
+    authority_target \
+    authority_source \
+    authority_fstype \
+    authority_fsroot \
+    authority_major_minor \
+    authority_propagation \
+    authority_extra \
+    <<<"$authority_row"
+  test "$authority_target" = "$NAS_AUTHORITY"
+  test "$authority_fsroot" = /
+  [[ "$authority_major_minor" =~ ^[0-9]+:[0-9]+$ ]]
+  test -n "$authority_propagation"
+  test -z "${authority_extra-}"
+  if test "$authority_fstype" = autofs; then
+    test "$authority_source" = systemd-1
+    authority_autofs_count=$((authority_autofs_count + 1))
+    test "$authority_autofs_count" -eq 1
+  else
+    test "$authority_fstype" = cifs
+    test "$authority_source" = "$NAS_SOURCE"
+    authority_active_count=$((authority_active_count + 1))
+    test "$authority_active_count" -eq 1
+    AUTHORITY_MAJOR_MINOR="$authority_major_minor"
+  fi
+done <<<"$AUTHORITY_EVIDENCE"
+test "$authority_active_count" -eq 1
+test -n "$AUTHORITY_MAJOR_MINOR"
 
-FAILED_STEP='verify protected state and repository remained unchanged'
+FAILED_STEP='capture and validate one full Source namespace root row'
+SOURCE_NAMESPACE_EVIDENCE="$(
+  sudo findmnt \
+    --kernel \
+    --raw \
+    --noheadings \
+    --nofsroot \
+    --mountpoint "$SOURCE_NAMESPACE" \
+    --output TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION
+)"
+mapfile -t source_namespace_rows <<<"$SOURCE_NAMESPACE_EVIDENCE"
+test "${#source_namespace_rows[@]}" -eq 1
+read -r \
+  root_target \
+  root_source \
+  root_fstype \
+  root_fsroot \
+  root_major_minor \
+  root_propagation \
+  root_extra \
+  <<<"${source_namespace_rows[0]}"
+test "$root_target" = "$SOURCE_NAMESPACE"
+test -n "$root_source"
+test -n "$root_fstype"
+test -n "$root_fsroot"
+[[ "$root_major_minor" =~ ^[0-9]+:[0-9]+$ ]]
+test "$root_propagation" = shared
+test -z "${root_extra-}"
+printf 'SOURCE_NAMESPACE_EVIDENCE=%s\n' "${source_namespace_rows[0]}"
+
+FAILED_STEP='capture and validate one full canonical NAS slot row'
+NAS_SLOT_EVIDENCE="$(
+  sudo findmnt \
+    --kernel \
+    --raw \
+    --noheadings \
+    --nofsroot \
+    --mountpoint "$NAS_SLOT" \
+    --output TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION
+)"
+mapfile -t nas_slot_rows <<<"$NAS_SLOT_EVIDENCE"
+test "${#nas_slot_rows[@]}" -eq 1
+read -r \
+  slot_target \
+  slot_source \
+  slot_fstype \
+  slot_fsroot \
+  slot_major_minor \
+  slot_propagation \
+  slot_extra \
+  <<<"${nas_slot_rows[0]}"
+test "$slot_target" = "$NAS_SLOT"
+test "$slot_source" = "$NAS_SOURCE"
+test "$slot_fstype" = cifs
+test "$slot_fsroot" = /
+[[ "$slot_major_minor" =~ ^[0-9]+:[0-9]+$ ]]
+test "$slot_major_minor" = "$AUTHORITY_MAJOR_MINOR"
+test "$slot_propagation" = shared
+test -z "${slot_extra-}"
+printf 'NAS_SLOT_EVIDENCE=%s\n' "${nas_slot_rows[0]}"
+
+FAILED_STEP='start and validate disabled non-root identity broker'
+sudo systemctl start "$BROKER_SERVICE"
+test "$(systemctl is-enabled "$BROKER_SERVICE" || true)" = disabled
+systemctl is-active --quiet "$BROKER_SERVICE"
+SOCKET_STATE="$(sudo stat -c '%U|%G|%a|%F' "$BROKER_SOCKET")"
+test "$SOCKET_STATE" = \
+  'photo-organizer-source-broker|photo-organizer-source-access|660|socket'
+
+FAILED_STEP='prove direct Product Owner socket denial'
+if python3 scripts/operator/linux/check_source_identity_broker.py \
+  >/dev/null 2>&1; then
+  printf 'FAIL: direct Product Owner broker access was unexpectedly allowed.\n' \
+    >&2
+  false
+else
+  printf 'PASS: direct Product Owner broker socket access is denied.\n'
+fi
+
+FAILED_STEP='prove intended sudo broker protocol access'
+sudo python3 scripts/operator/linux/check_source_identity_broker.py
+
+FAILED_STEP='verify protected state, service state, and repository unchanged'
 CONFIG_SHA_AFTER="$(
   sudo sha256sum /etc/photo-organizer/source-access.json | awk '{print $1}'
 )"
@@ -527,6 +591,28 @@ ACCESS_NODE_SHA_AFTER="$(
 )"
 test "$CONFIG_SHA_BEFORE" = "$CONFIG_SHA_AFTER"
 test "$ACCESS_NODE_SHA_BEFORE" = "$ACCESS_NODE_SHA_AFTER"
+test "$(systemctl is-enabled "$NAMESPACE_SERVICE" || true)" = disabled
+systemctl is-active --quiet "$NAMESPACE_SERVICE"
+test "$(systemctl is-enabled "$BROKER_SERVICE" || true)" = disabled
+systemctl is-active --quiet "$BROKER_SERVICE"
+test "$(
+  sudo findmnt \
+    --kernel \
+    --raw \
+    --noheadings \
+    --nofsroot \
+    --mountpoint "$SOURCE_NAMESPACE" \
+    --output TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION
+)" = "$SOURCE_NAMESPACE_EVIDENCE"
+test "$(
+  sudo findmnt \
+    --kernel \
+    --raw \
+    --noheadings \
+    --nofsroot \
+    --mountpoint "$NAS_SLOT" \
+    --output TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION
+)" = "$NAS_SLOT_EVIDENCE"
 test "$(git branch --show-current)" = 'feature/deployment-linux-runtime'
 test -z "$(git status --short)"
 test "$(git rev-parse --verify HEAD)" = \
@@ -534,42 +620,33 @@ test "$(git rev-parse --verify HEAD)" = \
 
 trap - ERR
 exit 0
-DECISIVE_SLOT_DIAGNOSTIC
+FINAL_GATE_C_RETRY
 then
-  printf 'PASS: decisive sanitized evidence captured; script-owned cleanup confirmed. Stop before Gate D.\n'
+  printf 'PASS: final Gate C topology and broker validation completed. Stop before Gate D.\n'
 else
-  diagnostic_rc=$?
-  printf 'FAIL: decisive diagnostic returned %s; interactive terminal remains available. Stop and report.\n' \
-    "$diagnostic_rc" >&2
+  gate_c_rc=$?
+  printf 'FAIL: final Gate C retry returned %s; interactive terminal remains available. Stop and report.\n' \
+    "$gate_c_rc" >&2
 fi
 ```
 
-Expected: a reliable cursor is captured immediately before the start, which
-returns nonzero after the legacy validator rejects the slot. Only approved
-fixed-prefix entries after that cursor are emitted. They record the findmnt
-return code, exact row count, every safe six-field row, and sanitized cleanup
-or failure messages. The normal passing path prints
-`PASS: script-owned rollback confirmed` only after independently proving that
-the script removed invocation-created slot instances followed by its
-invocation-created namespace root; emergency containment must remain unused.
+Expected: the namespace service completes while remaining disabled but active;
+there is exactly one root mount with shared propagation and exactly one slot
+mount with the canonical IP-form CIFS source, `FSROOT=/`, the authoritative
+active CIFS `MAJ:MIN`, and shared propagation. The two full six-field evidence
+lines are printed without mount options or protected values. The broker is
+started only after those checks pass, remains non-root and disabled, denies
+direct Product Owner socket access, and passes the intended sudo protocol
+check. Protected hashes and Git remain unchanged.
 
-Any harness failure after the start attempt invokes fallback-only containment:
-stop the broker if unexpectedly active, stop the namespace service if active,
-unmount every exact slot instance and then every exact namespace-root instance
-with separate 16-attempt `findmnt -M` loops, remove only the exact socket after
-the broker is inactive, reset only applicable exact failed states, and verify
-disabled/inactive services with no exact mounts or socket. It prints
-`WARNING: emergency diagnostic containment was required`. Incomplete
-containment prints a high-priority failure while separately retaining the
-original diagnostic status.
-
-Unexpected namespace-service success follows that containment path and still
-returns nonzero; it is not a Gate C pass. A missing or unreliable pre-start
-cursor stops before service start. A diagnostic query failure, zero or multiple
-rows, malformed evidence, cleanup failure, remaining mount, broker activity,
-dirty/diverged Git, or changed protected hash is also a hard stop. Gate C
-remains unpassed and Gate D remains unstarted. Do not perform generic cleanup,
-start the broker, or begin Gate D without a new reviewed instruction.
+Any query failure, missing or duplicate row, malformed evidence, wrong source,
+target, filesystem, `FSROOT`, device identity, or propagation; service failure;
+socket-authority failure; changed protected hash; or dirty/diverged Git is a
+hard stop. After namespace start, failure invokes bounded cleanup in exact
+broker, namespace, slot, root, socket, failed-state, and final-verification
+order. Cleanup never touches `/mnt/nas/photo-organizer` or unrelated workloads.
+Gate C remains unpassed until this final retry is separately reviewed. Gate D
+remains unstarted.
 
 ### Gate D — protected Development GIDs and Compose render
 
