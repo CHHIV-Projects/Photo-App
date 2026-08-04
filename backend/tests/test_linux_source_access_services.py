@@ -220,7 +220,7 @@ class LinuxSourceAccessServiceTests(unittest.TestCase):
                     return_value=SimpleNamespace(blocked=False),
                 ), patch(
                     "app.services.admin.run_ingestion_dispatch_service.start_source_intake",
-                    return_value=SimpleNamespace(run_id="run-1", status="running"),
+                    return_value=SimpleNamespace(run_id=1, status="running"),
                 ) as start:
                     result = service.dispatch(
                         RunIngestionDispatchRequest(
