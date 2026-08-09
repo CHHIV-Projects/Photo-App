@@ -27,11 +27,17 @@ from app.services.source_identity.identity_fingerprint import (
     stable_hash,
 )
 from app.services.source_identity.probe_schema import SourceIdentityProbeRequest, SourceIdentityProbeResponse
+from app.services.source_identity.posix_source_paths import PosixSourcePathError, require_exact_mapping
 from app.services.source_identity.probe_service import (
     LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
     SourceIdentityProbeService,
 )
 from app.services.source_identity.providers.linux_development_fixture import CONTROLLED_SOURCE_LABEL
+from app.services.source_identity.stored_linux_location import (
+    StoredLinuxLocation,
+    StoredLinuxLocationError,
+    load_stored_linux_location,
+)
 from app.services.source_identity.source_selection_schema import (
     SelectedSourceContext,
     SourceSelectionRequest,
@@ -148,6 +154,23 @@ class SourceSelectionService:
         endpoint: SourceEndpoint,
         friendly_type: str,
     ) -> SourceSelectionResponse:
+        try:
+            linux_location = load_stored_linux_location(
+                self._db,
+                endpoint.id,
+                expected_observed_path=source.source_root_path or "",
+                expected_relative_root=source.endpoint_relative_root or "",
+            )
+        except StoredLinuxLocationError as exc:
+            return self._not_selected(
+                availability="needs_attention",
+                message=str(exc),
+                retry_guidance="Review the persisted Linux Source location before selecting it.",
+                advanced_details=_base_advanced_details(source, endpoint, friendly_type),
+            )
+        if linux_location is not None:
+            return self._select_linux_modern(source, endpoint, friendly_type, linux_location)
+
         probe_source_type = _probe_source_type_for_endpoint(endpoint.source_type, friendly_type)
         if probe_source_type is None:
             return self._not_selected(
@@ -283,6 +306,89 @@ class SourceSelectionService:
             advanced_details={
                 **_base_advanced_details(source, endpoint, friendly_type),
                 "attempted_paths": _dedupe(attempted_paths),
+            },
+        )
+
+    def _select_linux_modern(
+        self,
+        source: IngestionSource,
+        endpoint: SourceEndpoint,
+        friendly_type: str,
+        location: StoredLinuxLocation,
+    ) -> SourceSelectionResponse:
+        if endpoint.source_type not in {"local", "nas"}:
+            return self._not_selected(
+                availability="needs_attention",
+                message="Persisted Linux stable-mount evidence is valid only for Local and NAS endpoints.",
+                retry_guidance="Review the Source endpoint and location evidence.",
+                advanced_details=_base_advanced_details(source, endpoint, friendly_type),
+            )
+        probe = self._probe_service.probe(
+            location.probe_request(
+                source_type=endpoint.source_type,
+                relative_root=source.endpoint_relative_root or "",
+            )
+        )
+        try:
+            location.verify_probe(probe)
+            mapping = require_exact_mapping(
+                host_slot=probe.host_slot or "",
+                runtime_slot=probe.runtime_slot or "",
+                relative_root=source.endpoint_relative_root or "",
+                host_observed_path=probe.observed_path,
+                runtime_root=probe.runtime_root,
+            )
+        except (StoredLinuxLocationError, PosixSourcePathError) as exc:
+            return self._not_selected(
+                availability="needs_attention",
+                message=str(exc),
+                retry_guidance="Restore the approved Linux Source mapping, then select the Source again.",
+                advanced_details={
+                    **_base_advanced_details(source, endpoint, friendly_type),
+                    "probe": _probe_details(probe),
+                },
+            )
+        if not _probe_is_usable(probe) or _identity_match_status(endpoint, probe) != "matched":
+            return self._not_selected(
+                availability="unavailable" if _probe_path_unavailable(probe) else "needs_attention",
+                message="The Linux Source is unavailable or no longer matches its enrolled identity.",
+                retry_guidance="Restore the approved Local filesystem or NAS share, then select the Source again.",
+                advanced_details={
+                    **_base_advanced_details(source, endpoint, friendly_type),
+                    "probe": _probe_details(probe),
+                },
+            )
+        durable_identity = summarize_durable_identity(probe=probe, source_type=source.source_type)
+        context = self._context(
+            source=source,
+            endpoint=endpoint,
+            friendly_type=friendly_type,
+            device_label=endpoint.alias,
+            resolved_source_root=mapping.runtime_root,
+            resolved_endpoint_path=mapping.host_slot,
+            durable_identity_status=durable_identity.status,
+            identity_match_status="matched",
+            workflow_kind="filesystem_source_intake",
+            provider_context={
+                "provider_name": probe.provider_name,
+                "provider_version": probe.provider_version,
+                "location_id": location.location_id,
+                "mapping_verified": True,
+            },
+        )
+        return SourceSelectionResponse(
+            result="selected",
+            availability="available",
+            workflow_kind="filesystem_source_intake",
+            selected_source_context=context,
+            message=f"{source.source_label} is available through the verified Linux Source mapping.",
+            retry_guidance=None,
+            advanced_details={
+                **_base_advanced_details(source, endpoint, friendly_type),
+                "probe": _probe_details(probe),
+                "host_observed_path": mapping.host_observed_path,
+                "container_runtime_root": mapping.runtime_root,
+                "durable_identity_reason": durable_identity.reason,
             },
         )
 

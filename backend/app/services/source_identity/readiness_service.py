@@ -20,11 +20,16 @@ from app.services.source_identity.probe_schema import (
     SourceIdentityProbeResponse,
     SourceIdentitySourceType,
 )
+from app.services.source_identity.posix_source_paths import PosixSourcePathError, require_exact_mapping
 from app.services.source_identity.probe_service import (
     LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
     SourceIdentityProbeService,
 )
 from app.services.source_identity.providers.linux_development_fixture import CONTROLLED_SOURCE_LABEL
+from app.services.source_identity.stored_linux_location import (
+    StoredLinuxLocationError,
+    load_stored_linux_location,
+)
 from app.services.source_identity.readiness_schema import (
     IdentityMatchStatus,
     ReadinessStatus,
@@ -125,8 +130,34 @@ class SourceProfileReadinessService:
                 recommended_next_action="Use Run Ingestion with the explicit legacy/review acknowledgment.",
             )
 
-        probe = self._probe_service.probe(
-            SourceIdentityProbeRequest(
+        endpoint = self._load_endpoint(source)
+        try:
+            linux_location = (
+                load_stored_linux_location(
+                    self._db,
+                    endpoint.id,
+                    expected_observed_path=source.source_root_path or "",
+                    expected_relative_root=source.endpoint_relative_root or "",
+                )
+                if endpoint is not None
+                else None
+            )
+        except StoredLinuxLocationError as exc:
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="mismatch",
+                code="linux_location_evidence_invalid",
+                message=str(exc),
+                recommended_next_action="Review the persisted Linux Source location before running intake.",
+            )
+
+        probe_request = (
+            linux_location.probe_request(
+                source_type=endpoint.source_type,
+                relative_root=source.endpoint_relative_root or "",
+            )
+            if linux_location is not None and endpoint is not None
+            else SourceIdentityProbeRequest(
                 source_type=mapped_type,
                 observed_path=effective_path,
                 probe_mode="readiness_probe",
@@ -139,8 +170,32 @@ class SourceProfileReadinessService:
                 provider_name=LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME if is_controlled_fixture else None,
             )
         )
+        probe = self._probe_service.probe(probe_request)
+        if linux_location is not None:
+            try:
+                linux_location.verify_probe(probe)
+                require_exact_mapping(
+                    host_slot=probe.host_slot or "",
+                    runtime_slot=probe.runtime_slot or "",
+                    relative_root=source.endpoint_relative_root or "",
+                    host_observed_path=probe.observed_path,
+                    runtime_root=probe.runtime_root,
+                )
+            except (StoredLinuxLocationError, PosixSourcePathError) as exc:
+                return self._response(
+                    source,
+                    endpoint=endpoint,
+                    probe=probe,
+                    readiness_status="blocked",
+                    identity_match_status="mismatch",
+                    can_run_source_intake=False,
+                    requires_operator_acknowledgment=False,
+                    hard_block=True,
+                    operator_message=str(exc),
+                    recommended_next_action="Restore the approved Linux Source mapping before running intake.",
+                    blockers=[_message("linux_mapping_mismatch", str(exc))],
+                )
         probe_block = _probe_blocker(probe)
-        endpoint = self._load_endpoint(source)
 
         if probe_block is not None:
             status, identity_status, blocker = probe_block

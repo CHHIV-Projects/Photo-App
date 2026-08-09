@@ -248,6 +248,12 @@ return exit code 0; FAILURE returns nonzero. A NAS outage normally produces a
 WARNING while `STORAGE_MODE=local`. A failure of the configured local storage
 authority, project identity, or approved publication fails closed. Follow the
 [Development Restart and Recovery Guide](Photo_Organizer_Development_Restart_and_Recovery_Guide.md)
+
+Mounted Source access is diagnosed separately with the server-side,
+read-only `source-access-status` command. A Mounted Source or identity broker
+failure is not a Development application/storage recovery failure and does not
+trigger Docker, service, mount, or configuration repair. See the
+[Mounted Source Access Guide](Photo_Organizer_Mounted_Source_Access_Guide.md).
 for the safe next action.
 
 ### Start Tunnel and Open Photo Organizer

@@ -37,6 +37,7 @@ import type {
   SourceProfileSummary,
   SourceIdentityProbeRequest,
   SourceIdentityProbeResponse,
+  LinuxSourceLocationsResponse,
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
   SourceIntakeSourcesResponse,
@@ -1037,6 +1038,10 @@ export function createSourceProfile(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function getLinuxSourceLocations(): Promise<LinuxSourceLocationsResponse> {
+  return apiRequest<LinuxSourceLocationsResponse>("/api/admin/source-identity/locations");
 }
 
 export function probeSourceIdentity(

@@ -38,9 +38,15 @@ from app.services.source_identity import SourceIdentityProbeService, SourceSelec
 from app.services.source_identity.identity_fingerprint import (
     CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION,
     OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    fingerprint_from_probe,
     parse_unc_server_share,
 )
+from app.services.source_identity.posix_source_paths import PosixSourcePathError, require_exact_mapping
 from app.services.source_identity.readiness_service import SourceProfileReadinessService
+from app.services.source_identity.stored_linux_location import (
+    StoredLinuxLocationError,
+    load_stored_linux_location,
+)
 from app.services.source_identity.source_selection_schema import SourceSelectionResponse
 
 
@@ -183,7 +189,10 @@ class RunIngestionDispatchService:
                 workflow_payload={"selection": _safe_payload(selection)},
             )
 
-        if context.friendly_source_type == "NAS":
+        linux_blocked, is_linux_source = self._validate_linux_runtime_root(request, selection)
+        if linux_blocked is not None:
+            return linux_blocked
+        if context.friendly_source_type == "NAS" and not is_linux_source:
             nas_blocked = self._validate_nas_runtime_root(request, selection)
             if nas_blocked is not None:
                 return nas_blocked
@@ -287,6 +296,94 @@ class RunIngestionDispatchService:
             underlying_run_id=snapshot.run_id,
             status=snapshot.status,
             workflow_payload={"current": _safe_payload(snapshot), "selection": _safe_payload(selection)},
+        )
+
+    def _validate_linux_runtime_root(
+        self,
+        request: RunIngestionDispatchRequest,
+        selection: SourceSelectionResponse,
+    ) -> tuple[RunIngestionDispatchResponse | None, bool]:
+        context = selection.selected_source_context
+        assert context is not None
+        source = self._db.get(IngestionSource, request.source_profile_id)
+        if source is None or source.endpoint_id is None:
+            return None, False
+        try:
+            location = load_stored_linux_location(
+                self._db,
+                source.endpoint_id,
+                expected_observed_path=source.source_root_path or "",
+                expected_relative_root=source.endpoint_relative_root or "",
+            )
+        except StoredLinuxLocationError as exc:
+            return self._linux_blocked(request, selection, str(exc), "linux_location_evidence_invalid"), True
+        if location is None:
+            return None, False
+        endpoint = self._db.get(SourceEndpoint, source.endpoint_id)
+        if endpoint is None or endpoint.source_type not in {"local", "nas"}:
+            return self._linux_blocked(
+                request,
+                selection,
+                "The linked Linux Source Endpoint is missing or has an unsupported type.",
+                "linux_endpoint_invalid",
+            ), True
+        probe_service = self._probe_service or SourceIdentityProbeService()
+        probe = probe_service.probe(
+            location.probe_request(
+                source_type=endpoint.source_type,
+                relative_root=source.endpoint_relative_root or "",
+            )
+        )
+        try:
+            location.verify_probe(probe)
+            mapping = require_exact_mapping(
+                host_slot=probe.host_slot or "",
+                runtime_slot=probe.runtime_slot or "",
+                relative_root=source.endpoint_relative_root or "",
+                host_observed_path=probe.observed_path,
+                runtime_root=probe.runtime_root,
+            )
+        except (StoredLinuxLocationError, PosixSourcePathError) as exc:
+            return self._linux_blocked(request, selection, str(exc), "linux_mapping_mismatch"), True
+        fingerprint = fingerprint_from_probe(probe)
+        if (
+            probe.probe_status not in {"completed", "completed_with_warnings"}
+            or probe.safe_to_run is not True
+            or not endpoint.identity_fingerprint_hash
+            or fingerprint.hash_value != endpoint.identity_fingerprint_hash
+            or fingerprint.strength != "strong"
+        ):
+            return self._linux_blocked(
+                request,
+                selection,
+                "The Linux Source is unavailable or its strong enrolled identity changed.",
+                "linux_identity_not_matched",
+            ), True
+        if context.resolved_source_root != mapping.runtime_root or context.resolved_endpoint_path != mapping.host_slot:
+            return self._linux_blocked(
+                request,
+                selection,
+                "The selected Linux Runtime Root changed before dispatch.",
+                "linux_runtime_root_mismatch",
+            ), True
+        return None, True
+
+    def _linux_blocked(
+        self,
+        request: RunIngestionDispatchRequest,
+        selection: SourceSelectionResponse,
+        message: str,
+        status: str,
+    ) -> RunIngestionDispatchResponse:
+        return RunIngestionDispatchResponse(
+            result="blocked",
+            workflow_kind="filesystem_source_intake",
+            action="none",
+            message=message,
+            next_action="Restore the approved Linux Source mapping and select the Source again.",
+            source_profile_id=request.source_profile_id,
+            status=status,
+            workflow_payload={"selection": _safe_payload(selection)},
         )
 
     def _validate_nas_runtime_root(

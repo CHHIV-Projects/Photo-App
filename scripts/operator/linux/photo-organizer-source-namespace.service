@@ -1,0 +1,23 @@
+[Unit]
+Description=Photo Organizer fixed Source namespace preparation
+After=local-fs.target remote-fs.target
+Wants=remote-fs.target
+Before=photo-organizer-source-identity-broker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/photo-organizer/prepare-source-namespace.sh
+RemainAfterExit=yes
+UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+PrivateMounts=false
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

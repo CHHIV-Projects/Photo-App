@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.source_identity.durable_identity import DurableIdentityStatus
 
@@ -90,8 +90,12 @@ class SourceCreationSourceMatch(BaseModel):
 class SourceCreationPlanRequest(BaseModel):
     """Read-only request to derive and validate a filesystem Source."""
 
+    model_config = ConfigDict(extra="forbid")
+
     source_type: SourceCreationType
-    observed_path: str
+    observed_path: str | None = None
+    location_id: str | None = None
+    relative_root: str | None = None
     source_name: str | None = None
     device_name: str | None = None
     naming_action: SourceCreationNameAction | None = None

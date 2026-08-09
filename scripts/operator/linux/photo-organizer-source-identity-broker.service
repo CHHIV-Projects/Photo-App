@@ -1,0 +1,40 @@
+[Unit]
+Description=Photo Organizer non-root Source identity broker
+Requires=photo-organizer-source-namespace.service
+After=local-fs.target photo-organizer-source-namespace.service
+
+[Service]
+Type=simple
+User=photo-organizer-source-broker
+Group=photo-organizer-source-access
+ExecStart=/usr/local/lib/photo-organizer/source-identity-broker.py --config /etc/photo-organizer/source-access.json --socket /run/photo-organizer-source-access/broker.sock
+Restart=on-failure
+RestartSec=3s
+RuntimeDirectory=photo-organizer-source-access
+RuntimeDirectoryMode=0750
+StateDirectory=photo-organizer-source-access
+StateDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateNetwork=true
+PrivateIPC=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+ReadOnlyPaths=/etc/photo-organizer/source-access.json /mnt/photo-organizer-sources -/mnt/nas/photo-organizer
+ReadWritePaths=/run/photo-organizer-source-access /var/lib/photo-organizer-source-access
+
+[Install]
+WantedBy=multi-user.target

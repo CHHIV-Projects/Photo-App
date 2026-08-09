@@ -104,6 +104,19 @@ def _summarize_volume_identity(probe: SourceIdentityProbeResponse) -> DurableIde
             ],
         )
 
+    linux_uuid = _first_present_linux_filesystem_uuid(probe.evidence_items)
+    if linux_uuid is not None:
+        return DurableIdentitySummary(
+            status="verified",
+            reason="A readable Linux Source root and strong filesystem UUID identity were confirmed.",
+            identifier_type="Linux filesystem UUID",
+            identifier=linux_uuid.masked_value,
+            evidence=[
+                "Source root path is readable.",
+                "Strong Linux filesystem UUID evidence is present and masked.",
+            ],
+        )
+
     return DurableIdentitySummary(
         status="not_verified",
         reason="The source root is readable, but no strong durable volume identifier was confirmed.",
@@ -116,6 +129,28 @@ def _summarize_nas_identity(probe: SourceIdentityProbeResponse) -> DurableIdenti
     server_share = parse_unc_server_share(
         probe.source_root_candidate.path or probe.normalized_observed_path or probe.observed_path
     )
+    linux_share = next(
+        (
+            item
+            for item in probe.evidence_items
+            if item.code == "linux_nas_canonical_share_present"
+            and item.status == "present"
+            and item.durability == "durable"
+            and item.fingerprint_hash
+        ),
+        None,
+    )
+    if linux_share is not None and boundary in _NAS_SHARE_BOUNDARIES and _has_readable_source_root(probe):
+        return DurableIdentitySummary(
+            status="verified",
+            reason="A readable Linux NAS Source and exact active CIFS server/share identity were confirmed.",
+            identifier_type="NAS server/share",
+            identifier=linux_share.display_value or linux_share.masked_value,
+            evidence=[
+                "Linux NAS Source root is readable.",
+                "Exact active CIFS server/share identity is verified.",
+            ],
+        )
     if boundary == "nas_server_only":
         return DurableIdentitySummary(
             status="not_verified",
@@ -211,6 +246,21 @@ def _first_present_volume_guid(
             and item.code == "volume_guid_present"
             and item.status == "present"
             and item.durability == "durable"
+        ):
+            return item
+    return None
+
+
+def _first_present_linux_filesystem_uuid(
+    evidence_items: list[SourceIdentityEvidenceItem],
+) -> SourceIdentityEvidenceItem | None:
+    for item in evidence_items:
+        if (
+            item.category == "volume_evidence"
+            and item.code == "linux_filesystem_uuid_present"
+            and item.status == "present"
+            and item.durability == "durable"
+            and item.fingerprint_hash
         ):
             return item
     return None

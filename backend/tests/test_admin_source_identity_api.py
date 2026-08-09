@@ -11,6 +11,10 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.api.admin import router as admin_router
+from app.services.source_identity.linux_source_access import (
+    LinuxSourceLocationSummary,
+    LinuxSourceLocationsResponse,
+)
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
     SourceIdentityCapabilitiesResponse,
@@ -22,6 +26,9 @@ from app.services.source_identity.probe_schema import (
 
 
 class _FakeSourceIdentityProbeService:
+    def __init__(self, *, os_family: str = "windows") -> None:
+        self.os_family = os_family
+
     def probe(self, request: SourceIdentityProbeRequest) -> SourceIdentityProbeResponse:
         return SourceIdentityProbeResponse(
             probe_status="completed",
@@ -42,7 +49,32 @@ class _FakeSourceIdentityProbeService:
             safe_to_run="not_applicable",
         )
 
+    def locations(self) -> LinuxSourceLocationsResponse:
+        return LinuxSourceLocationsResponse(
+            locations=[
+                LinuxSourceLocationSummary(
+                    location_id="linux-local-server-photos",
+                    source_type="local",
+                    display_name="Server Photos",
+                    availability="available",
+                    status_message="Available",
+                )
+            ]
+        )
+
     def capabilities(self) -> SourceIdentityCapabilitiesResponse:
+        if self.os_family == "linux":
+            return SourceIdentityCapabilitiesResponse(
+                os_family="linux",
+                supported_providers=["linux_stable_mount_v1"],
+                default_provider="linux_stable_mount_v1",
+                capabilities={
+                    "linux_stable_mount_v1": SourceIdentityProviderCapabilities(
+                        path_exists_check=True,
+                        volume_identity=True,
+                    )
+                },
+            )
         return SourceIdentityCapabilitiesResponse(
             os_family="windows",
             supported_providers=["windows_non_admin_probe_v1"],
@@ -73,6 +105,27 @@ class AdminSourceIdentityApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["provider_name"], "windows_non_admin_probe_v1")
         self.assertEqual(payload["source_root_candidate"]["filesystem_boundary_type"], "local_folder")
+
+    def test_locations_endpoint_returns_only_browser_safe_location_fields(self) -> None:
+        with patch(
+            "app.api.admin.get_source_identity_probe_service",
+            return_value=_FakeSourceIdentityProbeService(os_family="linux"),
+        ):
+            response = self.client.get("/api/admin/source-identity/locations")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["locations"][0]["location_id"], "linux-local-server-photos")
+        serialized = str(payload)
+        self.assertNotIn("/mnt/", serialized)
+        self.assertNotIn("/app/sources", serialized)
+        self.assertNotIn("fingerprint", serialized.casefold())
+
+    def test_locations_endpoint_preserves_windows_form_fallback(self) -> None:
+        with patch("app.api.admin.get_source_identity_probe_service", return_value=_FakeSourceIdentityProbeService()):
+            response = self.client.get("/api/admin/source-identity/locations")
+
+        self.assertEqual(response.status_code, 404)
 
     def test_capabilities_endpoint_returns_provider_summary(self) -> None:
         with patch("app.api.admin.get_source_identity_probe_service", return_value=_FakeSourceIdentityProbeService()):

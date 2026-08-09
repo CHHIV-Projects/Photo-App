@@ -15,6 +15,7 @@ from app.services.source_identity.probe_schema import (
 
 FINGERPRINT_VERSION = "source_endpoint_identity_v1"
 VOLUME_GUID_FINGERPRINT_VERSION = "source_endpoint_volume_guid_v2"
+LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION = "linux_filesystem_uuid_v1"
 OPTICAL_MEDIA_FINGERPRINT_VERSION = "optical_media_fingerprint_v1"
 OPTICAL_MEDIA_FINGERPRINT_V2_VERSION = "optical_media_fingerprint_v2"
 CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION = OPTICAL_MEDIA_FINGERPRINT_V2_VERSION
@@ -53,6 +54,30 @@ def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintRes
                     version=item.fingerprint_version,
                 )
 
+    for item in probe.evidence_items:
+        if (
+            item.status == "present"
+            and item.durability == "durable"
+            and item.fingerprint_hash
+            and (
+                (
+                    probe.source_type == "local"
+                    and item.code == "linux_filesystem_uuid_present"
+                    and item.fingerprint_version == LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION
+                )
+                or (
+                    probe.source_type == "nas"
+                    and item.code == "linux_nas_canonical_share_present"
+                    and item.fingerprint_version == FINGERPRINT_VERSION
+                )
+            )
+        ):
+            return FingerprintResult(
+                hash_value=item.fingerprint_hash,
+                strength="strong",
+                version=item.fingerprint_version,
+            )
+
     if probe.source_type == "nas":
         server_share = parse_unc_server_share(
             probe.source_root_candidate.path or probe.normalized_observed_path or probe.observed_path
@@ -60,7 +85,7 @@ def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintRes
         if server_share is not None:
             server, share = server_share
             return FingerprintResult(
-                hash_value=_versioned_hash(["nas", server.casefold(), share.casefold()]),
+                hash_value=nas_server_share_fingerprint(server, share)[0],
                 strength="strong",
                 version=FINGERPRINT_VERSION,
             )
@@ -91,6 +116,23 @@ def volume_guid_fingerprint(volume_guid: str) -> tuple[str, str]:
     return (
         _versioned_hash_for(VOLUME_GUID_FINGERPRINT_VERSION, ["volume_guid", normalized]),
         VOLUME_GUID_FINGERPRINT_VERSION,
+    )
+
+
+def nas_server_share_fingerprint(server: str, share: str) -> tuple[str, str]:
+    """Hash an exact canonical NAS server/share identity."""
+    return (
+        _versioned_hash(["nas", server.strip().casefold(), share.strip().casefold()]),
+        FINGERPRINT_VERSION,
+    )
+
+
+def linux_filesystem_uuid_fingerprint(filesystem_uuid: str) -> tuple[str, str]:
+    """Hash a complete Linux filesystem UUID without returning the raw identifier."""
+    normalized = filesystem_uuid.strip().casefold()
+    return (
+        _versioned_hash_for(LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION, ["filesystem_uuid", normalized]),
+        LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION,
     )
 
 

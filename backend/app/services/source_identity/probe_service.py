@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 
+from app.services.source_identity.linux_source_access import LinuxSourceLocationsResponse
 from app.services.source_identity.probe_schema import (
     AccessNodeSummary,
     SourceIdentityCapabilitiesResponse,
@@ -16,6 +17,10 @@ from app.services.source_identity.probe_schema import (
 from app.services.source_identity.providers.linux_development_fixture import (
     LinuxDevelopmentFixtureProbeProvider,
     PROVIDER_NAME as LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME,
+)
+from app.services.source_identity.providers.linux_stable_mount import (
+    LinuxStableMountProbeProvider,
+    PROVIDER_NAME as LINUX_STABLE_MOUNT_PROVIDER_NAME,
 )
 from app.services.source_identity.providers.windows_non_admin import WindowsSourceIdentityProbeProvider
 
@@ -44,21 +49,36 @@ class SourceIdentityProbeService:
         *,
         windows_provider: WindowsSourceIdentityProbeProvider | None = None,
         linux_development_fixture_provider: LinuxDevelopmentFixtureProbeProvider | None = None,
+        linux_stable_mount_provider: LinuxStableMountProbeProvider | None = None,
     ) -> None:
         self._windows_provider = windows_provider or WindowsSourceIdentityProbeProvider()
         self._linux_development_fixture_provider = (
             linux_development_fixture_provider or LinuxDevelopmentFixtureProbeProvider()
         )
+        self._linux_stable_mount_provider = linux_stable_mount_provider or LinuxStableMountProbeProvider()
 
     def probe(self, request: SourceIdentityProbeRequest) -> SourceIdentityProbeResponse:
         """Run a read-only source identity probe."""
         os_family = request.os_family if request.os_family != "unknown" else infer_os_family()
-        provider_name = request.provider_name or (WINDOWS_PROVIDER_NAME if os_family == "windows" else None)
+        provider_name = request.provider_name or (
+            WINDOWS_PROVIDER_NAME
+            if os_family == "windows"
+            else LINUX_STABLE_MOUNT_PROVIDER_NAME
+            if os_family == "linux"
+            else None
+        )
 
         if provider_name == LINUX_DEVELOPMENT_FIXTURE_PROVIDER_NAME:
             if os_family != "linux":
                 return self._unsupported_response(request, os_family=os_family, provider_name=provider_name)
             return self._linux_development_fixture_provider.probe(
+                request.model_copy(update={"os_family": "linux", "provider_name": provider_name})
+            )
+
+        if provider_name == LINUX_STABLE_MOUNT_PROVIDER_NAME:
+            if os_family != "linux":
+                return self._unsupported_response(request, os_family=os_family, provider_name=provider_name)
+            return self._linux_stable_mount_provider.probe(
                 request.model_copy(update={"os_family": "linux", "provider_name": provider_name})
             )
 
@@ -77,18 +97,35 @@ class SourceIdentityProbeService:
     def capabilities(self) -> SourceIdentityCapabilitiesResponse:
         """Return runtime provider capability summary."""
         os_family = infer_os_family()
-        supported_providers = [WINDOWS_PROVIDER_NAME] if os_family == "windows" else []
+        supported_providers = (
+            [WINDOWS_PROVIDER_NAME]
+            if os_family == "windows"
+            else [LINUX_STABLE_MOUNT_PROVIDER_NAME]
+            if os_family == "linux"
+            else []
+        )
         capabilities = {WINDOWS_PROVIDER_NAME: self._windows_provider.capabilities()}
+        capabilities[LINUX_STABLE_MOUNT_PROVIDER_NAME] = self._linux_stable_mount_provider.capabilities()
         limitations: list[str] = []
-        if os_family != "windows":
-            limitations.append("Only windows_non_admin_probe_v1 is implemented in this milestone.")
+        if os_family == "linux":
+            limitations.append("Linux support is limited to configured stable-mount Local and NAS locations.")
         return SourceIdentityCapabilitiesResponse(
             os_family=os_family,  # type: ignore[arg-type]
             supported_providers=supported_providers,
-            default_provider=WINDOWS_PROVIDER_NAME if os_family == "windows" else None,
+            default_provider=(
+                WINDOWS_PROVIDER_NAME
+                if os_family == "windows"
+                else LINUX_STABLE_MOUNT_PROVIDER_NAME
+                if os_family == "linux"
+                else None
+            ),
             capabilities=capabilities,
             limitations=limitations,
         )
+
+    def locations(self) -> LinuxSourceLocationsResponse:
+        """Return browser-safe Linux stable-mount locations."""
+        return self._linux_stable_mount_provider.locations()
 
     def _unsupported_response(
         self,

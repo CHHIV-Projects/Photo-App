@@ -78,6 +78,14 @@ The accepted active NAS identities are filesystem type `cifs` with source
 `findmnt`; the separate `systemd-1` automount row is not treated as the mounted
 filesystem identity.
 
+Mounted Source readiness is intentionally outside this recovery result. Use
+`photo_organizer_dev_operator.sh source-access-status` for a separate,
+read-only provider diagnosis. A failed Mounted Source check must not be treated
+as evidence that PostgreSQL, Redis, local application storage, or the general
+Development runtime requires recovery. The command performs no automatic
+restart, remount, repair, configuration edit, or container replacement. See the
+[Mounted Source Access Guide](Photo_Organizer_Mounted_Source_Access_Guide.md).
+
 ## 4. Normal Healthy Baseline
 
 A healthy baseline has:

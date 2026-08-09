@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -200,6 +200,7 @@ from app.services.source_profile_deferred_asset_service import (
     list_deferred_assets,
 )
 from app.services.source_identity import (
+    LinuxSourceLocationsResponse,
     SourceCreationConfirmRequest,
     SourceCreationConfirmResponse,
     SourceCreationPlanRequest,
@@ -1788,6 +1789,14 @@ def post_source_identity_probe(
 def get_source_identity_capabilities() -> SourceIdentityCapabilitiesResponse:
     """Return read-only source identity probe provider capabilities."""
     return get_source_identity_probe_service().capabilities()
+
+@router.get("/source-identity/locations", response_model=LinuxSourceLocationsResponse)
+def get_linux_source_identity_locations() -> LinuxSourceLocationsResponse:
+    """Return browser-safe server-discovered Linux Local and NAS locations."""
+    service = get_source_identity_probe_service()
+    if service.capabilities().os_family != "linux":
+        raise HTTPException(status_code=404, detail="Linux Source locations are not active on this runtime.")
+    return service.locations()
 
 
 @router.post("/source-endpoints/enrollment/plan", response_model=SourceEndpointEnrollmentPlanResponse)
