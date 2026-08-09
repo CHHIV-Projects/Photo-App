@@ -170,7 +170,28 @@ print("|".join(values))
     fail "Approved Source data-read group does not exist."
   install -d -o root -g root -m 0755     "${SOURCE_NAMESPACE}" "${SOURCE_NAMESPACE}/local" "${SOURCE_NAMESPACE}/nas"
   install -d -o root -g "${data_read_group}" -m 0750 "${LOCAL_SLOT}"
-  install -d -o root -g root -m 0755 "${NAS_SLOT}"
+}
+
+prepare_absent_nas_slot() {
+  local rows=""
+  local status
+
+  if query_mountpoint "${NAS_SLOT}" "TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION" rows; then
+    fail "NAS slot appeared before local mountpoint preparation."
+  else
+    status=$?
+    ((status == 1)) || fail "NAS slot pre-preparation evidence is unavailable."
+  fi
+  [[ ! -L "${NAS_SLOT}" ]] ||
+    fail "Unmounted NAS slot path must not be a symbolic link."
+  install -d -o root -g root -m 0755 "${NAS_SLOT}" ||
+    fail "Unmounted NAS slot mountpoint could not be prepared."
+  if query_mountpoint "${NAS_SLOT}" "TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION" rows; then
+    fail "NAS slot appeared during local mountpoint preparation."
+  else
+    status=$?
+    ((status == 1)) || fail "NAS slot post-preparation evidence is unavailable."
+  fi
 }
 
 require_namespace() {
@@ -288,6 +309,8 @@ prepare_mount_topology() {
     return 0
   fi
 
+  prepare_absent_nas_slot
+
   if ((namespace_present == 0)); then
     mount --bind "${SOURCE_NAMESPACE}" "${SOURCE_NAMESPACE}" ||
       fail "Source namespace self-bind could not be created."
@@ -326,7 +349,7 @@ main() {
     fail "Source namespace preparation requires the approved root systemd unit."
   [[ -f "${CONFIG}" && ! -L "${CONFIG}" ]] ||
     fail "Protected Source-access configuration is missing or unsafe."
-  for fixed_path in     "${SOURCE_NAMESPACE}" "${SOURCE_NAMESPACE}/local" "${SOURCE_NAMESPACE}/nas"     "${LOCAL_SLOT}" "${NAS_SLOT}" "${NAS_AUTHORITY}"; do
+  for fixed_path in     "${SOURCE_NAMESPACE}" "${SOURCE_NAMESPACE}/local" "${SOURCE_NAMESPACE}/nas"     "${LOCAL_SLOT}"; do
     [[ ! -L "${fixed_path}" ]] ||
       fail "Fixed Mounted Source path must not be a symbolic link: ${fixed_path}"
   done

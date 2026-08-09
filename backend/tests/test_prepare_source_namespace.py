@@ -105,6 +105,101 @@ class NamespaceTopologyContractTests(unittest.TestCase):
         )
         self.assertIn('fail "Pre-existing NAS slot is not one exact shared mount."', self.topology)
 
+    def test_existing_exact_slot_is_not_prepared_or_rebound(self) -> None:
+        result = run_bash(
+            """
+            query_mountpoint() {
+              local target="$1"
+              local -n result_ref="$3"
+              if [[ "$target" == "$SOURCE_NAMESPACE" ]]; then
+                result_ref="$SOURCE_NAMESPACE UUID-1 ext4 shared"
+              else
+                result_ref="$NAS_SLOT $NAS_SOURCE cifs / 0:52 shared"
+              fi
+            }
+            install() { printf 'unexpected-install:%s\\n' "$*"; return 97; }
+            chmod() { printf 'unexpected-chmod:%s\\n' "$*"; return 96; }
+            chown() { printf 'unexpected-chown:%s\\n' "$*"; return 95; }
+            mount() { printf 'unexpected-mount:%s\\n' "$*"; return 98; }
+            expected_namespace_uuid=UUID-1
+            expected_namespace_fstype=ext4
+            authority_major_minor=0:52
+            prepare_mount_topology
+            """
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_absent_slot_is_prepared_before_bind(self) -> None:
+        result = run_bash(
+            """
+            query_mountpoint() {
+              local target="$1"
+              local -n result_ref="$3"
+              if [[ "$target" == "$SOURCE_NAMESPACE" ]]; then
+                result_ref="$SOURCE_NAMESPACE UUID-1 ext4 shared"
+                return 0
+              fi
+              result_ref=""
+              return 1
+            }
+            install() { printf 'install:%s\\n' "$*"; }
+            mount() { printf 'mount:%s\\n' "$*"; }
+            require_namespace() { :; }
+            require_nas_slot() { :; }
+            expected_namespace_uuid=UUID-1
+            expected_namespace_fstype=ext4
+            authority_major_minor=0:52
+            prepare_mount_topology
+            """
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertIn(
+            "install:-d -o root -g root -m 0755 /mnt/photo-organizer-sources/nas/photo-organizer",
+            lines,
+        )
+        self.assertIn(
+            "mount:--bind /mnt/nas/photo-organizer /mnt/photo-organizer-sources/nas/photo-organizer",
+            lines,
+        )
+        self.assertLess(
+            next(i for i, line in enumerate(lines) if line.startswith("install:")),
+            next(i for i, line in enumerate(lines) if line.startswith("mount:--bind")),
+        )
+
+    def test_existing_wrong_or_duplicate_slot_fails_without_mutation(self) -> None:
+        exact = (
+            "/mnt/photo-organizer-sources/nas/photo-organizer "
+            "//192.168.1.171/PhotoOrganizer cifs / 0:52 shared"
+        )
+        for slot_rows in (exact.replace("0:52", "0:53"), exact + "\\n" + exact):
+            with self.subTest(slot_rows=slot_rows):
+                result = run_bash(
+                    f"""
+                    query_mountpoint() {{
+                      local target="$1"
+                      local -n result_ref="$3"
+                      if [[ "$target" == "$SOURCE_NAMESPACE" ]]; then
+                        result_ref="$SOURCE_NAMESPACE UUID-1 ext4 shared"
+                      else
+                        result_ref=$'{slot_rows}'
+                      fi
+                    }}
+                    install() {{ printf 'unexpected-install:%s\\n' "$*"; return 97; }}
+                    chmod() {{ printf 'unexpected-chmod:%s\\n' "$*"; return 96; }}
+                    chown() {{ printf 'unexpected-chown:%s\\n' "$*"; return 95; }}
+                    mount() {{ printf 'unexpected-mount:%s\\n' "$*"; return 98; }}
+                    expected_namespace_uuid=UUID-1
+                    expected_namespace_fstype=ext4
+                    authority_major_minor=0:52
+                    prepare_mount_topology
+                    """
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("Pre-existing NAS slot is not one exact shared mount", result.stderr)
+
     def test_rollback_is_invocation_owned_and_reverse_ordered(self) -> None:
         result = run_bash(
             """
@@ -144,6 +239,15 @@ class NamespaceTopologyContractTests(unittest.TestCase):
             ['umount -- "${NAS_SLOT}" || return 1', 'umount -- "${SOURCE_NAMESPACE}" || return 1'],
         )
         self.assertNotIn('umount -- "${NAS_AUTHORITY}"', self.script)
+
+    def test_authoritative_nas_path_is_never_a_metadata_or_unmount_target(self) -> None:
+        forbidden_commands = ("install ", "chmod ", "chown ", "umount ")
+        authority_command_lines = [
+            line.strip()
+            for line in self.script.splitlines()
+            if "${NAS_AUTHORITY}" in line and line.lstrip().startswith(forbidden_commands)
+        ]
+        self.assertEqual(authority_command_lines, [])
 
 
 if __name__ == "__main__":

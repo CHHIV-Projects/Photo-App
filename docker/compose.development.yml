@@ -68,7 +68,7 @@ services:
       REQUIRE_GPU: "false"
     group_add:
       - "${SOURCE_ACCESS_SOCKET_GID:?Set SOURCE_ACCESS_SOCKET_GID to the photo-organizer-source-access group GID}"
-      - "${SOURCE_ACCESS_DATA_GID:?Set SOURCE_ACCESS_DATA_GID to the photo-organizer-source-data group GID}"
+      - "${SOURCE_ACCESS_DATA_GID:?Set SOURCE_ACCESS_DATA_GID to the approved Source/NAS data-read group GID}"
     volumes:
       - application_storage:/app/storage
       - type: bind
