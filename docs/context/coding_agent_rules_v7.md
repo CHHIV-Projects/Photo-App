@@ -141,7 +141,7 @@ Current roles:
 - Windows Development Operator host;
 - SSH tunnel origin;
 - WinSCP and administration/recovery access;
-- only implemented general filesystem Source-identity access node.
+- access node for Windows-connected filesystem Sources.
 
 ### Linux mini-server
 
@@ -156,7 +156,8 @@ Current roles:
 - application storage;
 - GPU compute;
 - Cockpit and Portainer administration;
-- NAS mount access.
+- NAS mount access;
+- accepted Mounted Source Provider for approved directly accessible Local/NAS roots.
 
 ### Synology NAS
 
@@ -175,6 +176,28 @@ Current NAS role is not:
 - live Development/Test Redis storage.
 
 Do not treat these machine roles as interchangeable.
+
+### Provider authority boundary
+
+Keep these provider scopes distinct:
+
+```text
+Mounted Source Provider
+- Linux server has direct, approved filesystem access
+- accepted architecture supports Mounted Local/NAS
+- Mounted NAS is live-validated
+- Mounted Local live validation remains deferred
+
+Windows Source Helper Provider
+- future 12.66 work
+- owns Windows-connected Local/External/Removable/Optical access
+- Windows paths are not translated into artificial Linux paths
+
+Cloud Provider
+- independent provider-specific acquisition such as iCloud
+```
+
+Do not move Source authority across these boundaries as an implementation convenience.
 
 ---
 
@@ -1611,9 +1634,14 @@ The backend must recompute or verify them.
 
 Local represents storage internal to the current Source-access host.
 
-The general provider is currently Windows-only.
+Windows-local identity uses Windows volume/device evidence. Linux Mounted Local
+uses the accepted Mounted Source Provider for approved directly accessible
+roots.
 
 Do not assume Windows volume evidence works unchanged on Linux or macOS.
+
+Mounted Local implementation exists, but its live Profile/readiness/selection
+proof remains deferred.
 
 The controlled Linux Development fixture is:
 
@@ -1621,7 +1649,7 @@ The controlled Linux Development fixture is:
 - explicitly acknowledged;
 - limited to one exact controlled root;
 - not durable identity;
-- not a general Linux Local provider.
+- separate from the Mounted Local provider.
 
 Do not broaden it casually.
 
@@ -1637,7 +1665,7 @@ Rules:
 - reconnecting under another letter may still be the same endpoint;
 - alias is not identity;
 - one endpoint may support multiple intentional Source roots;
-- general Linux durable External identity is not implemented.
+- Windows-connected External access belongs to the future Windows Helper, not Mounted Linux access.
 
 ---
 
@@ -1649,7 +1677,7 @@ It uses the same endpoint-linked model but remains a separate Source Type.
 
 Do not collapse modern Removable Media into a legacy generic type.
 
-General Linux durable Removable identity is not implemented.
+Windows-connected Removable access belongs to the future Windows Helper, not Mounted Linux access.
 
 ---
 
@@ -1685,11 +1713,14 @@ Current validated share source:
 //192.168.1.171/PhotoOrganizer
 ```
 
-The working CIFS mount does not itself establish generic Linux NAS Source identity.
+The accepted Mounted Source Provider maps canonical NAS authority through the
+protected namespace and non-root broker. Mounted NAS durable Endpoint/Profile
+identity, readiness, Source Selection, Runtime Root mapping, and bounded real
+ingestion are live-validated.
 
-No current Linux provider maps the POSIX mount path to the canonical NAS server/share contract.
-
-Do not confuse infrastructure mount access with supported Linux NAS Source Selection or dispatch.
+Do not treat a POSIX path alone as identity, bypass the broker, grant the
+application mount authority, or extend Mounted Linux access to Windows-connected
+Sources. Mounted Local live Profile/readiness/selection proof remains deferred.
 
 ---
 
@@ -2505,19 +2536,21 @@ When changing runtime or operator scripts:
 
 ## 27.5 Linux Source Provider Boundary
 
-The application runtime is on Linux.
+The application runtime is on Linux and has an accepted Mounted Source Provider
+for approved directly accessible Local/NAS roots.
 
-That does not mean general Linux filesystem Source identity exists.
+Current accepted evidence includes:
 
-Current general Linux gaps include:
+- Mounted Local provider implementation, with live validation deferred;
+- live-validated Mounted NAS canonical identity, readiness, Source Selection,
+  Runtime Root mapping, and bounded real ingestion.
 
-- Local durable identity;
-- External durable identity;
-- Removable durable identity;
-- mounted NAS path to canonical share identity;
-- Optical discovery and fingerprinting.
+Windows-connected Local, External, Removable, and Optical access belongs to the
+future Windows Helper. Do not translate Windows paths into artificial Linux
+paths. iCloud remains an independent provider-specific Cloud workflow.
 
-Do not weaken fail-closed behavior to make Linux appear supported.
+Do not extend Mounted access beyond approved Linux-accessible locations merely
+to make another provider appear supported.
 
 Do not replace durable identity with arbitrary path trust.
 

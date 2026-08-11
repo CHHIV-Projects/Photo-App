@@ -89,13 +89,13 @@ The current runtime topology is:
 ```text
 Windows workstation
 → browser, VS Code client, Remote SSH, operator controls, SSH tunnels,
-  administration/recovery access, and the only general filesystem
-  Source-identity access node
+  administration/recovery access, and the access node for Windows-connected
+  filesystem Sources
 
 Ubuntu mini-server
 → authoritative editable repository, Development runtime, Test runtime,
   Docker execution, PostgreSQL, Redis, local application storage,
-  and GPU compute
+  GPU compute, and Mounted Source access for approved Local/NAS roots
 
 Synology NAS
 → mounted durable-storage and backup infrastructure,
@@ -104,7 +104,9 @@ Synology NAS
 
 The iCloud Intake path is considered good enough for the current v1.0 scope.
 
-Unified Source identity and selected-source ingestion are complete for their implemented provider scope. General Linux durable Source identity remains an explicit platform gap.
+Unified Source identity and selected-source ingestion are complete for their
+implemented provider scope, including accepted Linux Mounted Local/NAS
+architecture and live Mounted NAS validation.
 
 The isolated Test environment is operational, but Dev-to-Test candidate replacement, rollback, and Production promotion remain deferred.
 
@@ -154,7 +156,7 @@ The isolated Test environment is operational, but Dev-to-Test candidate replacem
 - Windows Development Operator controls
 - WinSCP for approved file-management tasks
 - administrative/recovery Git clone only, not the authoritative editable repository
-- the implemented general filesystem Source-identity provider
+- the provider access node for Windows-connected filesystem Sources
 
 #### Ubuntu mini-server
 
@@ -168,6 +170,7 @@ The isolated Test environment is operational, but Dev-to-Test candidate replacem
 - PostgreSQL and Redis on server-local Docker named volumes
 - application storage on server-local Docker named volumes
 - SSH, Cockpit, and Portainer for controlled administration
+- accepted Mounted Source Provider for approved directly accessible Local/NAS roots
 
 #### Synology NAS
 
@@ -257,7 +260,7 @@ The NAS mount is not currently substituted for either environment’s applicatio
 │ - Windows Development Operator                              │
 │ - SSH tunnels                                               │
 │ - WinSCP / administration / recovery access                 │
-│ - general filesystem Source identity access node            │
+│ - Windows-connected filesystem Source access node           │
 └─────────────────────────────┬───────────────────────────────┘
                               │ SSH / home LAN
                               ▼
@@ -269,6 +272,7 @@ The NAS mount is not currently substituted for either environment’s applicatio
 │                                                             │
 │ Development: photo-organizer-dev                             │
 │ Test:        photo-organizer-test                            │
+│ - Mounted Local/NAS Source access                            │
 │ PostgreSQL, Redis, application storage, GPU compute          │
 │                                                             │
 │ Application ports bind only to server loopback              │
@@ -500,11 +504,14 @@ Source Intake remains authoritative.
 
 Current provider qualification:
 
-- Windows is the only implemented general filesystem Source-identity access node.
-- General Linux durable identity is not implemented for Local, External, Removable Media, NAS, or Optical Sources.
-- The exact controlled Linux Development fixture is a narrow path-only exception.
-- The fixture creates no durable Linux identity and cannot authorize arbitrary Linux paths.
-- A Linux-mounted NAS path is infrastructure access, not currently a generic Linux NAS Source identity provider.
+- Linux has an accepted Mounted Source Provider for approved directly mounted Local/NAS Sources.
+- Mounted NAS durable Endpoint/Profile identity, readiness, Source Selection,
+  Runtime Root mapping, and bounded real ingestion are live-validated.
+- Mounted Local implementation exists, while live Profile/readiness/selection proof remains deferred.
+- Windows-connected Local, External, Removable Media, and Optical Sources remain
+  Windows-provider concepts for the future Windows Helper; Windows paths are not translated into Linux paths.
+- The controlled Linux Development fixture remains a separate narrow path-only exception.
+- iCloud remains an independent Cloud provider with provider-specific acquisition.
 
 ### iCloud Source Path
 
@@ -951,15 +958,20 @@ Key characteristics:
 
 Local represents storage inside the current Source-access host.
 
-The general provider is currently Windows-only and uses durable volume/device evidence rather than treating a drive letter as identity.
+Windows-local identity uses durable Windows volume/device evidence rather than
+treating a drive letter as identity. Linux Mounted Local uses approved
+filesystem identity and a stable Access Node through the Mounted Source Provider.
 
-Linux has one narrow controlled Development fixture path:
+The Mounted Local implementation exists, but live Profile creation, readiness,
+and Source Selection proof remains deferred until an approved suitable root is available.
+
+Linux also has one narrow controlled Development fixture path:
 
 - path-only;
 - acknowledged;
 - no durable identifier;
 - no authority for arbitrary Linux paths;
-- not a general Local provider.
+- separate from the Mounted Local provider.
 
 ### External
 
@@ -969,7 +981,8 @@ Durable identity is based on Windows volume/device evidence where available.
 
 A changed drive letter should resolve to the same endpoint when the underlying identity matches.
 
-General Linux External Source identity is not implemented.
+Windows-connected External Sources remain assigned to the future Windows
+Helper and are not claimed through Linux Mounted access.
 
 ### Removable Media
 
@@ -977,11 +990,12 @@ Removable Media represents writable or rewritable removable storage such as USB 
 
 It uses the endpoint-linked Source model and remains distinct from External for operator clarity and future policy differences.
 
-General Linux Removable Media Source identity is not implemented.
+Windows-connected Removable Media remains assigned to the future Windows
+Helper and is not claimed through Linux Mounted access.
 
 ### NAS
 
-NAS identity is anchored to canonical Windows UNC server/share authority.
+NAS identity is anchored to canonical server/share authority.
 
 Example:
 
@@ -999,15 +1013,24 @@ Rules:
 - Source Intake uses the existing filesystem pipeline;
 - no NAS-specific ingestion engine exists.
 
-The server’s mounted CIFS path:
+The accepted Linux Mounted provider maps:
 
 ```text
-/mnt/nas/photo-organizer
+//192.168.1.171/PhotoOrganizer
+-> /mnt/nas/photo-organizer
+-> /mnt/photo-organizer-sources/nas/photo-organizer
+-> /app/sources/nas/photo-organizer
 ```
 
-is established infrastructure access.
+The protected namespace and non-root broker verify canonical share identity,
+CIFS type, major/minor identity, uniqueness, propagation, Access Node identity,
+and containment. Modern Endpoint `1` / Profile `2` readiness, Source Selection,
+and Runtime Root mapping were validated live.
 
-It is not currently mapped by a generic Linux provider to the canonical NAS Source Endpoint contract.
+A bounded real intake produced 16 Assets, canonical Vault objects, and
+Profile-bound provenance. The authorized same-Source repeat classified all 16
+as known without duplicate Asset, Vault, or provenance state. Source media
+remained unchanged.
 
 ### Optical
 
@@ -1658,7 +1681,7 @@ Primary deployment conclusions:
 
 ```text
 The Linux server is the authoritative Development host.
-Windows is the client/operator and general filesystem Source access node.
+Windows is the client/operator and access node for Windows-connected filesystem Sources.
 Development and Test are operational and isolated.
 Development is workspace-built without runtime source binds.
 Test is immutable and release-like.
@@ -1669,6 +1692,7 @@ Dev-to-Test candidate replacement and rollback remain deferred.
 
 ---
 
+Linux Mounted Source access is accepted for approved Local/NAS roots; NAS is live-validated.
 ## 15. Known Limitations and Risks
 
 ### iCloud Performance
@@ -1716,18 +1740,21 @@ Dev-to-Test candidate replacement and rollback remain deferred.
 
 ### Operating-System Coverage
 
-- Windows is the validated general filesystem Source Endpoint identity host;
-- general Linux Local, External, Removable Media, NAS, and Optical providers are not implemented;
+- Linux Mounted Local/NAS provider implementation is accepted for approved directly accessible roots;
+- Mounted NAS is live-validated through identity, readiness, selection, Runtime Root mapping, and ingestion;
+- Mounted Local live Profile/readiness/selection proof remains deferred;
+- Windows-connected Local, External, Removable Media, and Optical Sources remain assigned to the future Windows Helper;
 - macOS providers are not implemented;
 - the controlled Linux fixture is not durable identity and must not be broadened casually;
 - cross-platform identity contracts must preserve the same architectural model even when provider evidence differs.
 
-### Linux NAS Source Identity
+### Linux Mounted NAS Source Identity
 
-- the Linux server has a working CIFS mount;
-- no current provider maps the POSIX mount path to canonical NAS server/share identity;
-- Linux NAS Source Creation, Selection, readiness, and dispatch remain unsupported through the generic provider;
-- infrastructure mount availability must not be confused with durable Source identity support.
+- the accepted Mounted provider maps the canonical CIFS authority through protected host and container slots;
+- modern durable Endpoint `1` / Profile `2` identity, readiness, Source Selection, and Runtime Root resolution are live-validated;
+- bounded real ingestion and a duplicate-free same-Source repeat are live-validated through common Source Intake;
+- the application has no mount authority and a POSIX path alone never establishes durable identity;
+- this Source-access validation does not make the NAS live Development/Test application or database storage.
 
 ### Development Change Activation
 
@@ -2235,8 +2262,9 @@ The Linux server is the authoritative Development host.
 
 Development and Test are operational and isolated.
 
-General Linux filesystem Source identity, controlled Test promotion,
-rollback, backup/restore, and Production remain future work.
+Mounted Local live validation, the Windows Helper for Windows-connected
+Sources, controlled Test promotion, rollback, backup/restore, and Production
+remain future work.
 
 The immediate priority is continued application development plus completion
 of aligned v7 project documentation.

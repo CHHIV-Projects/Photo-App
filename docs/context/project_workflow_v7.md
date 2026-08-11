@@ -5,7 +5,7 @@
 **Version:** v7
 **Project phase:** v1.0 stabilization with Linux-server Development and isolated Test foundations operational
 **Current architecture:** Windows client/operator + Linux authoritative repository/runtime + Synology NAS durable-storage/backup infrastructure
-**Current deployment branch:** `feature/deployment-linux-runtime`
+**Current deployment branch:** `integration/linux-runtime-clean`
 **Current workflow emphasis:** milestone discipline, reconnaissance as implementation roadmap, evidence-based validation, provenance protection, clean branch lifecycle, cost-aware coding-agent use, environment-aware operations, and reliable continuation between chats and tools.
 
 ### Update Scope
@@ -1246,6 +1246,36 @@ Recommended decision:
 The Coder should stop at the escalation point.
 
 The Coder should not improvise through material architecture or safety conflicts.
+
+### Controlled Reset / Escape From Iterative Repair Loop
+
+Use a controlled reset when repeated patch/retry cycles or an uncertain
+architecture are increasing uncertainty instead of reducing it. This is not a
+routine response to one failing test; it is a bounded recovery technique for an
+overgrown implementation path whose next incremental repair can no longer be
+justified confidently.
+
+The reusable workflow is:
+
+1. recognize the repeated repair loop or unresolved architectural assumption;
+2. stop live mutation before another speculative change;
+3. freeze the current branch and relevant host state as historical evidence;
+4. identify and verify the last trusted baseline;
+5. preserve closeouts, logs, and evidence from the overgrown path;
+6. classify the bounded delta as `KEEP`, `REVISE`, `RESTORE`, or `DISCARD`;
+7. reconstruct only accepted behavior on a clean integration branch;
+8. revalidate through bounded, ordered gates instead of resuming the old patch
+   loop;
+9. preserve safety contracts, durable data, and historical evidence rather
+   than “cleaning up” inconvenient evidence;
+10. merge only after an independent stabilization acceptance milestone.
+
+The historical branch remains reference material, not current architecture
+authority. A controlled reset does not authorize broad deletion, silent data
+repair, or bypassing the normal Product Owner decision and merge gates. M012's
+mount-topology loop motivated this workflow, but the technique applies to any
+milestone where incremental fixes obscure rather than clarify the trusted
+system boundary.
 
 ---
 

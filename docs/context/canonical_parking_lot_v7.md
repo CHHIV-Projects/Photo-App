@@ -5,8 +5,8 @@
 **Version:** v7
 **Project phase:** v1.0 stabilization with Linux-server Development and isolated Test foundations operational
 **Current architecture:** Windows client/operator + Linux authoritative repository/runtime + Synology NAS durable-storage/backup infrastructure
-**Current deployment branch:** `feature/deployment-linux-runtime`
-**Current near-term emphasis:** continued application development, controlled release promotion and rollback, NAS-backed durable storage design, coordinated backup and restore, Linux Source-provider gaps, and final v1.0 production readiness.
+**Current deployment branch:** `integration/linux-runtime-clean`
+**Current near-term emphasis:** clean stabilization acceptance and merge preparation, future Windows Helper design, deferred Mounted Local live validation, controlled release promotion and rollback, coordinated backup and restore, and final v1.0 production readiness.
 
 ### Documentation Boundary
 
@@ -242,17 +242,22 @@ Future Linux and macOS providers remain separate platform work.
 
 ## ~~SRC-ID-003 — Local Folder Identity~~
 
-**Status:** Completed for the current Windows provider.
+**Status:** Completed for the current Windows provider and implemented for the Linux Mounted provider.
 
-The exact controlled Linux Development fixture remains path-only and is not a general Linux provider.
+Linux Mounted Local live Profile/readiness/selection proof remains deferred until
+an approved suitable root is available. The controlled Linux Development fixture
+remains path-only and is not the Mounted provider.
 
 ---
 
 ## ~~SRC-ID-004 — NAS / Network Share Source Identity~~
 
-**Status:** Completed for the current Windows UNC provider.
+**Status:** Completed for the current Windows UNC provider and the Linux Mounted NAS provider.
 
-Current Linux CIFS mount access does not yet provide generic Linux NAS Source identity.
+The accepted Linux provider verifies canonical CIFS share authority through the
+protected host namespace and non-root broker. Modern Endpoint `1` / Profile `2`
+passed live readiness, selection, bounded intake of 16 candidates, and a
+duplicate-free same-Source repeat.
 
 ---
 
@@ -1124,23 +1129,26 @@ Final v1 release gate.
 
 ## DEPLOY-003 — Linux Source Endpoint Providers
 
+### Status
+
+Partially completed and narrowed by Milestones 12.65.0–12.65.6.
+
 ### Summary
 
-Implement or validate durable Source identity behavior on Ubuntu/Linux.
+Complete the remaining platform-specific Source-access work without reopening
+the accepted Linux Mounted Local/NAS provider architecture.
 
 ### Required Areas
 
-- Local volume identity;
-- External drive identity;
-- Removable Media identity;
-- Optical discovery and probing;
-- NAS mount-to-share identity mapping;
+- live Mounted Local Profile/readiness/selection validation against an approved suitable root;
+- Windows Helper access for Windows-connected Local, External, Removable Media, NAS, and Optical Sources;
+- Linux Optical discovery and probing only if direct Linux Optical access is separately required;
 - Observed Path recording;
 - Runtime Root resolution;
 - mount-point behavior;
 - permissions;
 - containment checks;
-- media removal and reattachment;
+- provider-specific removal and reattachment where applicable;
 - fail-closed mismatch behavior.
 
 ### Principle
@@ -1154,54 +1162,55 @@ Source Endpoint
 + backend Runtime Root
 ```
 
-Windows evidence must not be assumed to work unchanged on Linux.
+Windows evidence must remain Windows-native and must not be translated into
+invented Linux paths. The future Windows Helper must preserve it for the
+server-authoritative backend.
 
 Arbitrary path trust must not replace durable identity.
 
 ### Importance
 
-High before Linux becomes the general filesystem Source-access host.
+High for the Windows Helper arc; bounded Mounted Local live proof remains separately deferred.
 
 ---
 
-## LINUX-NAS-ID-001 — Mounted NAS Path to Canonical Share Identity
+## ~~LINUX-NAS-ID-001 — Mounted NAS Path to Canonical Share Identity~~
 
 ### Summary
 
 Map a Linux-mounted NAS path to durable canonical NAS server/share identity.
 
-### Current Gap
+### Status
 
-The server can access:
+Completed through Milestone 12.65.
 
-```text
-/mnt/nas/photo-organizer
-```
+### Accepted State
 
-The current generic Source provider does not establish that this path represents:
+The canonical mapping is:
 
 ```text
 //192.168.1.171/PhotoOrganizer
+-> /mnt/nas/photo-organizer
+-> /mnt/photo-organizer-sources/nas/photo-organizer
+-> /app/sources/nas/photo-organizer
 ```
 
-for Source identity, readiness, selection, and dispatch.
+The namespace and non-root broker validate canonical source, CIFS filesystem
+type, major/minor identity, uniqueness, propagation, Access Node identity, and
+containment. Endpoint `1` / Profile `2` passed readiness and selection. A bounded
+live intake created 16 Assets with canonical Vault objects and Profile-bound
+provenance; the same-Source repeat classified all 16 as known without duplicate
+state or Source mutation.
 
-### Required Coverage
+### Remaining Operational Limits
 
-- canonical share authority;
-- mount-source verification;
-- mount-target verification;
-- containment;
-- remount behavior;
-- hostname versus IP equivalence;
-- credential and permission failures;
-- server/share mismatch;
-- offline NAS behavior;
-- runtime-root resolution.
+- full host-reboot persistence is not claimed by 12.65.6;
+- Mounted Local live Profile/readiness/selection proof remains deferred;
+- NAS-backed application/Vault storage remains separate from Source access.
 
 ### Importance
 
-High within Linux Source-provider work.
+Completed reference; preserve the accepted boundary.
 
 ---
 
@@ -1225,7 +1234,7 @@ Implement or validate Linux Optical-media identity without weakening `optical_me
 
 ### Importance
 
-High within Linux Source-provider work.
+Conditional, only if direct Linux Optical access is required independently of the future Windows Helper.
 
 ---
 
@@ -2493,8 +2502,10 @@ Current recommended priority stack:
 14. PROD-002
     Final v1 release validation.
 
-15. DEPLOY-003 and related Linux provider items
-    according to Source-access priorities.
+15. Remaining Source-provider work
+    - Windows Helper for Windows-connected Sources
+    - Mounted Local live validation against an approved suitable root
+    - Linux Optical only if independently required
 
 16. Remaining high-value application refinements
     - BMP preview
