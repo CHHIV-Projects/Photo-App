@@ -21,6 +21,7 @@ from app.api.provenance_review import router as provenance_review_router
 from app.api.search import router as search_router
 from app.api.timeline import router as timeline_router
 from app.api.visual_enrichment import router as visual_enrichment_router
+from app.api.windows_helper_admin import router as windows_helper_admin_router
 from app.core.config import settings
 from app.core.runtime_paths import prepare_runtime_directories
 from app.db.session import SessionLocal
@@ -52,6 +53,7 @@ from app.services.duplicates.processing_service import _reset_stale_duplicate_ru
 from app.services.location.place_geocoding_service import _reset_stale_runs as _reset_stale_place_geocoding_runs
 from app.services.location.place_geocoding_schema import ensure_place_geocoding_schema
 from app.services.previews.heic_preview_processing_service import _reset_stale_runs as _reset_stale_heic_preview_runs
+from app.services.windows_helper.schema import ensure_windows_helper_schema
 
 
 def create_app() -> FastAPI:
@@ -91,6 +93,7 @@ def create_app() -> FastAPI:
 	app.include_router(search_router)
 	app.include_router(timeline_router)
 	app.include_router(visual_enrichment_router)
+	app.include_router(windows_helper_admin_router)
 
 	@app.on_event("startup")
 	def _sync_face_incremental_schema() -> None:
@@ -117,6 +120,7 @@ def create_app() -> FastAPI:
 			ensure_icloud_intake_import_schema(db_session)
 			ensure_icloud_staging_cleanup_schema(db_session)
 			ensure_place_geocoding_schema(db_session.connection())
+			ensure_windows_helper_schema(db_session)
 			_reset_stale_runs(db_session)
 			_reset_stale_icloud_acquisition_runs(db_session)
 			reset_stale_cleanup_runs(db_session)

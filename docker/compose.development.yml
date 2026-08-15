@@ -33,6 +33,7 @@ services:
     restart: unless-stopped
 
   backend:
+    image: ${BACKEND_IMAGE_NAME:-photo-organizer-dev-backend}:${BACKEND_IMAGE_TAG:-development}
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -93,6 +94,32 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  helper-ingress:
+    image: ${BACKEND_IMAGE_NAME:-photo-organizer-dev-backend}:${BACKEND_IMAGE_TAG:-development}
+    command: ["python", "-m", "uvicorn", "app.helper_main:app", "--host", "0.0.0.0", "--port", "8011"]
+    environment:
+      APP_RUNTIME_PROFILE: development
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-photo_organizer_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-photo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env.development}
+    ports:
+      - "127.0.0.1:18011:8011"
+    networks:
+      - application_internal
+      - helper_loopback
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/api/helper/v1/health', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+
   frontend:
     build:
       context: ../frontend
@@ -112,6 +139,7 @@ services:
 networks:
   application_internal:
     internal: true
+  helper_loopback:
   browser_edge:
 
 volumes:
