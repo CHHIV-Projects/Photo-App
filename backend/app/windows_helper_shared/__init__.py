@@ -1,0 +1,5 @@
+"""Dependency-light contracts shared by the backend and Windows Helper."""
+
+from .protocol import PROTOCOL_VERSION
+
+__all__ = ["PROTOCOL_VERSION"]

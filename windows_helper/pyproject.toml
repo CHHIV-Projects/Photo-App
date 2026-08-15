@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "photo-organizer-windows-helper"
+version = "0.1.0"
+description = "Photo Organizer Windows Helper protocol and identity foundation"
+requires-python = ">=3.11,<3.13"
+dependencies = ["pydantic==2.12.5"]
+
+[tool.setuptools]
+package-dir = {"" = "../backend/app"}
+packages = ["windows_helper_shared", "windows_helper_shared.identity"]

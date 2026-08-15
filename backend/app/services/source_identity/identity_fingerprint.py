@@ -11,15 +11,22 @@ from app.services.source_identity.probe_schema import (
     SourceIdentityEvidenceItem,
     SourceIdentityProbeResponse,
 )
+from app.windows_helper_shared.identity.fingerprints import (
+    CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    FINGERPRINT_HASH_PREFIX,
+    FINGERPRINT_VERSION,
+    OPTICAL_MEDIA_FINGERPRINT_VERSION,
+    OPTICAL_MEDIA_FINGERPRINT_V2_VERSION,
+    VOLUME_GUID_FINGERPRINT_VERSION,
+    nas_server_share_fingerprint,
+    optical_media_fingerprint,
+    optical_media_fingerprint_v2,
+    stable_hash,
+    volume_guid_fingerprint,
+)
 
 
-FINGERPRINT_VERSION = "source_endpoint_identity_v1"
-VOLUME_GUID_FINGERPRINT_VERSION = "source_endpoint_volume_guid_v2"
 LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION = "linux_filesystem_uuid_v1"
-OPTICAL_MEDIA_FINGERPRINT_VERSION = "optical_media_fingerprint_v1"
-OPTICAL_MEDIA_FINGERPRINT_V2_VERSION = "optical_media_fingerprint_v2"
-CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION = OPTICAL_MEDIA_FINGERPRINT_V2_VERSION
-FINGERPRINT_HASH_PREFIX = "sha256:"
 STRONG_FINGERPRINT_STRENGTHS = {"strong"}
 
 
@@ -110,45 +117,12 @@ def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintRes
     return _legacy_fingerprint_from_probe(probe)
 
 
-def volume_guid_fingerprint(volume_guid: str) -> tuple[str, str]:
-    """Hash a complete Volume GUID without returning or storing the raw identifier."""
-    normalized = volume_guid.strip().strip("{}\\").casefold()
-    return (
-        _versioned_hash_for(VOLUME_GUID_FINGERPRINT_VERSION, ["volume_guid", normalized]),
-        VOLUME_GUID_FINGERPRINT_VERSION,
-    )
-
-
-def nas_server_share_fingerprint(server: str, share: str) -> tuple[str, str]:
-    """Hash an exact canonical NAS server/share identity."""
-    return (
-        _versioned_hash(["nas", server.strip().casefold(), share.strip().casefold()]),
-        FINGERPRINT_VERSION,
-    )
-
-
 def linux_filesystem_uuid_fingerprint(filesystem_uuid: str) -> tuple[str, str]:
     """Hash a complete Linux filesystem UUID without returning the raw identifier."""
     normalized = filesystem_uuid.strip().casefold()
     return (
         _versioned_hash_for(LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION, ["filesystem_uuid", normalized]),
         LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION,
-    )
-
-
-def optical_media_fingerprint(payload: dict[str, Any]) -> tuple[str, str]:
-    """Hash a complete v1 metadata-only optical media identity payload."""
-    return (
-        _versioned_hash_for(OPTICAL_MEDIA_FINGERPRINT_VERSION, [stable_hash(payload)]),
-        OPTICAL_MEDIA_FINGERPRINT_VERSION,
-    )
-
-
-def optical_media_fingerprint_v2(payload: dict[str, Any]) -> tuple[str, str]:
-    """Hash a stable v2 metadata-only optical media identity payload."""
-    return (
-        _versioned_hash_for(OPTICAL_MEDIA_FINGERPRINT_V2_VERSION, [stable_hash(payload)]),
-        OPTICAL_MEDIA_FINGERPRINT_V2_VERSION,
     )
 
 
@@ -212,11 +186,6 @@ def parse_unc_server_share(path: str | None) -> tuple[str, str] | None:
     if len(parts) < 2:
         return None
     return parts[0], parts[1]
-
-
-def stable_hash(payload: dict[str, Any]) -> str:
-    """Stable sha256 hash helper used for non-secret planning fingerprints."""
-    return FINGERPRINT_HASH_PREFIX + hashlib.sha256(_safe_json(payload).encode("utf-8")).hexdigest()
 
 
 def _is_fingerprint_evidence(item: SourceIdentityEvidenceItem) -> bool:
