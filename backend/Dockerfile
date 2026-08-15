@@ -30,7 +30,7 @@ COPY scripts ./scripts
 RUN python scripts/provision_yunet_model.py \
     && groupadd --system photo-organizer \
     && useradd --system --gid photo-organizer --home-dir /app photo-organizer \
-    && mkdir -p /app/storage \
+    && mkdir -p /app/storage/acquisition/windows \
     && chown -R photo-organizer:photo-organizer /app
 USER photo-organizer
 EXPOSE 8001
@@ -44,7 +44,7 @@ COPY scripts ./scripts
 RUN python scripts/provision_yunet_model.py \
     && groupadd --system photo-organizer \
     && useradd --system --gid photo-organizer --home-dir /app photo-organizer \
-    && mkdir -p /app/storage \
+    && mkdir -p /app/storage/acquisition/windows \
     && chown -R photo-organizer:photo-organizer /app
 USER photo-organizer
 EXPOSE 8001

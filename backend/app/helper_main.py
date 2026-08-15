@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from app.api.windows_helper import router as windows_helper_router
 from app.db.session import SessionLocal
 from app.services.windows_helper.schema import ensure_windows_helper_schema
+from app.services.source_acquisition.schema import ensure_source_acquisition_schema
 
 
 def create_helper_app() -> FastAPI:
@@ -37,6 +38,7 @@ def create_helper_app() -> FastAPI:
         db = SessionLocal()
         try:
             ensure_windows_helper_schema(db)
+            ensure_source_acquisition_schema(db)
         finally:
             db.close()
 

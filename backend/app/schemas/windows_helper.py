@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.windows_helper_shared.protocol import (
     DEFAULT_INVENTORY_PAGE_SIZE,
+    HelperAcquireItemResponse,
     HelperInventoryPageResponse,
     HelperProbeResponse,
     ProbeMode,
@@ -79,7 +80,7 @@ class CreateWindowsHelperInventoryOperationRequest(_StrictModel):
 
 class WindowsHelperOperationCreatedResponse(_StrictModel):
     operation_id: UUID
-    operation_type: Literal["probe_source", "inventory_page"]
+    operation_type: Literal["probe_source", "inventory_page", "acquire_item"]
     state: Literal["pending"]
     request_digest: str
     expires_at: datetime
@@ -101,7 +102,7 @@ class WindowsInventoryCandidate(_StrictModel):
 
 class WindowsHelperOperationStatusResponse(_StrictModel):
     operation_id: UUID
-    operation_type: Literal["probe_source", "inventory_page"]
+    operation_type: Literal["probe_source", "inventory_page", "acquire_item"]
     state: Literal["pending", "claimed", "completed", "failed", "expired"]
     request_digest: str
     result_digest: str | None = None
@@ -116,6 +117,7 @@ class WindowsHelperOperationStatusResponse(_StrictModel):
     probe_result: HelperProbeResponse | None = None
     inventory_result: HelperInventoryPageResponse | None = None
     inventory_candidates: list[WindowsInventoryCandidate] = Field(default_factory=list)
+    acquire_result: HelperAcquireItemResponse | None = None
 
 
 class WindowsHelperAdminStatusListResponse(_StrictModel):

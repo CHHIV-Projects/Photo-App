@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
+from app.models.source_acquisition import SourceAcquisitionItem, SourceAcquisitionRun
 from app.models.windows_helper import WindowsHelperCredential, WindowsHelperOperation
 from app.schemas.windows_helper import (
     CreateWindowsHelperInventoryOperationRequest,
@@ -23,11 +24,13 @@ from app.schemas.windows_helper import (
     WindowsHelperOperationStatusResponse,
     WindowsInventoryCandidate,
 )
+from app.schemas.source_acquisition import SourceAcquisitionOperationResponse
 from app.services.windows_helper.service import (
     HELPER_PROVIDER_NAME,
     WindowsHelperServiceError,
 )
 from app.windows_helper_shared.channel import (
+    ClaimedAcquireOperation,
     ClaimedInventoryOperation,
     ClaimedProbeOperation,
     HelperOperationClaimResponse,
@@ -36,6 +39,9 @@ from app.windows_helper_shared.channel import (
     HelperOperationFailureResponse,
 )
 from app.windows_helper_shared.protocol import (
+    HelperAcquireItemRequest,
+    HelperAcquireItemResponse,
+    HelperCapabilityIdentity,
     ErrorCode,
     HelperInventoryPageRequest,
     HelperInventoryPageResponse,
@@ -45,6 +51,7 @@ from app.windows_helper_shared.protocol import (
     MAX_INVENTORY_RESULT_BYTES,
     ProviderNativePath,
     canonical_protocol_digest,
+    require_capability,
 )
 
 
@@ -183,7 +190,7 @@ def _create_operation(
     operation_id: UUID,
     access_node: AccessNode,
     operation_type: str,
-    request: HelperProbeRequest | HelperInventoryPageRequest,
+    request: HelperProbeRequest | HelperInventoryPageRequest | HelperAcquireItemRequest,
     source_endpoint_id: int | None = None,
     source_profile_id: int | None = None,
 ) -> WindowsHelperOperationCreatedResponse:
@@ -344,6 +351,107 @@ def create_inventory_operation(
     )
 
 
+def create_acquire_operation(
+    db: Session,
+    acquisition_item_id: UUID,
+) -> SourceAcquisitionOperationResponse:
+    _expire_stale(db)
+    item = db.scalar(
+        select(SourceAcquisitionItem)
+        .where(SourceAcquisitionItem.item_uuid == str(acquisition_item_id))
+        .with_for_update()
+    )
+    if item is None:
+        raise WindowsHelperServiceError("acquisition_item_not_found", "The acquisition item was not found.", http_status=404)
+    run = db.get(SourceAcquisitionRun, item.run_id)
+    if run is None or run.state != "active" or item.state not in {"pending", "transferring"}:
+        raise WindowsHelperServiceError("acquisition_state_invalid", "The acquisition item is not transferable.", http_status=409)
+    node = db.get(AccessNode, run.access_node_id)
+    endpoint = db.get(SourceEndpoint, run.source_endpoint_id)
+    source = db.get(IngestionSource, run.source_profile_id)
+    if node is None or endpoint is None or source is None:
+        raise WindowsHelperServiceError("acquisition_binding_missing", "The acquisition Source binding is unavailable.", http_status=409)
+    _load_access_node(db, UUID(node.access_node_uuid))
+    if (
+        endpoint.identity_fingerprint_hash != run.source_fingerprint
+        or item.source_fingerprint != run.source_fingerprint
+        or ntpath.normcase(source.source_root_path or "") != ntpath.normcase(run.provider_native_root)
+        or ntpath.normcase(item.provider_native_root) != ntpath.normcase(run.provider_native_root)
+    ):
+        raise WindowsHelperServiceError(
+            "acquisition_binding_changed",
+            "The acquisition Source binding changed after planning.",
+            http_status=409,
+        )
+    if not helper_is_online(node):
+        raise WindowsHelperServiceError("helper_offline", "The Windows Helper is not currently online.", http_status=409)
+    try:
+        capabilities = HelperCapabilityIdentity.model_validate_json(node.capabilities_json or "")
+        require_capability(capabilities.capabilities, "durable_acquisition", "1")
+        require_capability(capabilities.capabilities, "verified_receiving", "1")
+    except (TypeError, ValueError) as exc:
+        raise WindowsHelperServiceError(
+            "acquisition_capability_unavailable",
+            "The online Windows Helper has not advertised the required acquisition capability.",
+            http_status=409,
+        ) from exc
+    active_operations = list(
+        db.scalars(
+            select(WindowsHelperOperation).where(
+                WindowsHelperOperation.operation_type == "acquire_item",
+                WindowsHelperOperation.state.in_(("pending", "claimed")),
+                WindowsHelperOperation.access_node_id == node.id,
+                WindowsHelperOperation.source_profile_id == source.id,
+            )
+        )
+    )
+    for existing in active_operations:
+        request = HelperAcquireItemRequest.model_validate_json(existing.request_json)
+        if request.acquisition_item_id == acquisition_item_id:
+            raise WindowsHelperServiceError("acquisition_operation_active", "An acquire operation is already active for this item.", http_status=409)
+    operation_id = uuid4()
+    request = HelperAcquireItemRequest(
+        request_id=operation_id,
+        intended_access_node_id=UUID(node.access_node_uuid),
+        acquisition_run_id=UUID(run.run_uuid),
+        acquisition_item_id=acquisition_item_id,
+        source_endpoint_id=endpoint.id,
+        source_profile_id=source.id,
+        source_type=endpoint.source_type,
+        provider_native_path=ProviderNativePath(
+            provider_native_root=item.provider_native_root,
+            provider_native_relative_path=item.provider_native_relative_path,
+            provider_native_full_path=item.provider_native_full_path,
+        ),
+        inventory_generation=UUID(item.inventory_generation),
+        candidate_reference=item.candidate_reference,
+        expected_identity_fingerprint=item.source_fingerprint,
+        expected_size_bytes=item.expected_size_bytes,
+        expected_modified_time_ns=item.expected_modified_time_ns,
+        expected_file_id_digest=item.expected_file_id_digest,
+        expected_windows_file_attributes=item.windows_file_attributes,
+        expected_local_residency="resident",
+    )
+    operation = WindowsHelperOperation(
+        operation_uuid=str(operation_id), access_node_id=node.id,
+        source_endpoint_id=endpoint.id, source_profile_id=source.id,
+        operation_type="acquire_item", request_json=_json(request),
+        request_digest=canonical_protocol_digest(request), state="pending",
+        expires_at=_now() + UNCLAIMED_OPERATION_TTL,
+    )
+    item.state = "transferring"
+    item.started_at = item.started_at or _now()
+    db.add(operation)
+    db.add(item)
+    db.commit()
+    db.refresh(operation)
+    return SourceAcquisitionOperationResponse(
+        operation_id=operation_id, request_digest=operation.request_digest,
+        expires_at=operation.expires_at, acquisition_run_id=UUID(run.run_uuid),
+        acquisition_item_id=acquisition_item_id,
+    )
+
+
 def _expire_stale(db: Session) -> None:
     now = _now()
     changed = False
@@ -399,7 +507,7 @@ def claim_operation(
     db.commit()
 
     operation_id = UUID(operation.operation_uuid)
-    if operation.operation_type not in {"probe_source", "inventory_page"}:
+    if operation.operation_type not in {"probe_source", "inventory_page", "acquire_item"}:
         operation.state = "failed"
         operation.error_code = "operation_unsupported"
         db.add(operation)
@@ -418,9 +526,16 @@ def claim_operation(
                 lease_expires_at=operation.lease_expires_at,
                 request=request,
             )
-        else:
+        elif operation.operation_type == "inventory_page":
             request = HelperInventoryPageRequest.model_validate_json(operation.request_json)
             claimed = ClaimedInventoryOperation(
+                operation_id=operation_id,
+                lease_expires_at=operation.lease_expires_at,
+                request=request,
+            )
+        else:
+            request = HelperAcquireItemRequest.model_validate_json(operation.request_json)
+            claimed = ClaimedAcquireOperation(
                 operation_id=operation_id,
                 lease_expires_at=operation.lease_expires_at,
                 request=request,
@@ -592,10 +707,40 @@ def complete_inventory_operation(
     return _complete(db, operation, result)
 
 
+def complete_acquire_operation(
+    db: Session,
+    credential: WindowsHelperCredential,
+    operation_id: UUID,
+    result: HelperAcquireItemResponse,
+) -> HelperOperationCompletionResponse:
+    operation = _load_owned_operation(db, credential, operation_id)
+    if operation.operation_type != "acquire_item":
+        raise WindowsHelperServiceError("operation_type_mismatch", "Operation type mismatch.", http_status=409)
+    request = HelperAcquireItemRequest.model_validate_json(operation.request_json)
+    if (
+        result.request_id != operation_id
+        or request.request_id != operation_id
+        or result.acquisition_run_id != request.acquisition_run_id
+        or result.acquisition_item_id != request.acquisition_item_id
+        or result.source_endpoint_id != request.source_endpoint_id
+        or result.source_profile_id != request.source_profile_id
+        or result.source_type != request.source_type
+        or result.provider_native_path != request.provider_native_path
+    ):
+        raise WindowsHelperServiceError(
+            "operation_result_mismatch", "The Helper acquisition result does not match the authorized operation.", http_status=409
+        )
+    from app.services.source_acquisition.receiving import finalize_item
+
+    _validate_completion_state(operation, canonical_protocol_digest(result))
+    finalize_item(db, credential, operation_id, result)
+    return _complete(db, operation, result)
+
+
 def _complete(
     db: Session,
     operation: WindowsHelperOperation,
-    result: HelperProbeResponse | HelperInventoryPageResponse,
+    result: HelperProbeResponse | HelperInventoryPageResponse | HelperAcquireItemResponse,
 ) -> HelperOperationCompletionResponse:
     result_digest = canonical_protocol_digest(result)
     replay = _validate_completion_state(operation, result_digest)
@@ -760,6 +905,7 @@ def get_operation_status(
         )
     probe_result = None
     inventory_result = None
+    acquire_result = None
     candidates: list[WindowsInventoryCandidate] = []
     if operation.state == "completed" and operation.result_json:
         if operation.operation_type == "probe_source":
@@ -767,6 +913,8 @@ def get_operation_status(
         elif operation.operation_type == "inventory_page":
             inventory_result = HelperInventoryPageResponse.model_validate_json(operation.result_json)
             candidates = [_classify_inventory_item(item) for item in inventory_result.items]
+        elif operation.operation_type == "acquire_item":
+            acquire_result = HelperAcquireItemResponse.model_validate_json(operation.result_json)
     return WindowsHelperOperationStatusResponse(
         operation_id=UUID(operation.operation_uuid),
         operation_type=operation.operation_type,  # type: ignore[arg-type]
@@ -784,6 +932,7 @@ def get_operation_status(
         probe_result=probe_result,
         inventory_result=inventory_result,
         inventory_candidates=candidates,
+        acquire_result=acquire_result,
     )
 
 

@@ -105,6 +105,14 @@ class Settings:
 		(os.getenv("MODEL_CACHE_PATH") or os.getenv("DEEPFACE_HOME") or "").strip()
 		or _join_config_path(_STORAGE_ROOT, "models")
 	)
+	acquisition_receiving_path: str = _configured_path(
+		"ACQUISITION_RECEIVING_PATH",
+		_STORAGE_ROOT,
+		"acquisition/windows",
+	)
+	acquisition_disk_reserve_bytes: int = int(
+		os.getenv("ACQUISITION_DISK_RESERVE_BYTES", str(1024 * 1024 * 1024))
+	)
 	nas_mount_path: str = (os.getenv("NAS_MOUNT_PATH") or "").strip()
 	nas_environment_marker: str = (
 		os.getenv("NAS_ENVIRONMENT_MARKER") or ".photo-organizer-environment"

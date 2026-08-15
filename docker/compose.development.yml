@@ -52,6 +52,7 @@ services:
       FRONTEND_ALLOWED_ORIGINS: ${FRONTEND_ALLOWED_ORIGINS:-http://127.0.0.1:13000,http://localhost:13000}
       STORAGE_MODE: local
       STORAGE_ROOT: /app/storage
+      ACQUISITION_RECEIVING_PATH: /app/storage/acquisition/windows
       DROP_ZONE_PATH: /app/storage/drop_zone
       VAULT_PATH: /app/storage/vault
       QUARANTINE_PATH: /app/storage/quarantine
@@ -72,6 +73,7 @@ services:
       - "${SOURCE_ACCESS_DATA_GID:?Set SOURCE_ACCESS_DATA_GID to the approved Source/NAS data-read group GID}"
     volumes:
       - application_storage:/app/storage
+      - windows_acquisition_receiving:/app/storage/acquisition/windows
       - type: bind
         source: /mnt/photo-organizer-sources
         target: /app/sources
@@ -104,6 +106,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-photo_organizer_dev}
       POSTGRES_USER: ${POSTGRES_USER:-photo_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env.development}
+      ACQUISITION_RECEIVING_PATH: /app/storage/acquisition/windows
+    volumes:
+      - windows_acquisition_receiving:/app/storage/acquisition/windows
+
     ports:
       - "127.0.0.1:18011:8011"
     networks:
@@ -146,3 +152,4 @@ volumes:
   postgres_data:
   redis_data:
   application_storage:
+  windows_acquisition_receiving:

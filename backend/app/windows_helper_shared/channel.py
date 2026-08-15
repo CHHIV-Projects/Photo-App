@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .protocol import (
+    HelperAcquireItemRequest,
     HelperCapabilityIdentity,
     HelperInventoryPageRequest,
     HelperProbeRequest,
@@ -87,8 +88,15 @@ class ClaimedInventoryOperation(_StrictChannelModel):
     request: HelperInventoryPageRequest
 
 
+class ClaimedAcquireOperation(_StrictChannelModel):
+    operation_type: Literal["acquire_item"] = "acquire_item"
+    operation_id: UUID
+    lease_expires_at: datetime
+    request: HelperAcquireItemRequest
+
+
 ClaimedHelperOperation = Annotated[
-    ClaimedProbeOperation | ClaimedInventoryOperation,
+    ClaimedProbeOperation | ClaimedInventoryOperation | ClaimedAcquireOperation,
     Field(discriminator="operation_type"),
 ]
 
@@ -100,7 +108,7 @@ class HelperOperationClaimResponse(_StrictChannelModel):
 
 class HelperOperationCompletionResponse(_StrictChannelModel):
     operation_id: UUID
-    operation_type: Literal["probe_source", "inventory_page"]
+    operation_type: Literal["probe_source", "inventory_page", "acquire_item"]
     state: Literal["completed"] = "completed"
     result_digest: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
     idempotent_replay: bool = False
@@ -113,6 +121,9 @@ class HelperOperationFailureRequest(_StrictChannelModel):
         "identity_changed",
         "invalid_cursor",
         "operation_failed",
+        "source_changed",
+        "placeholder_unavailable",
+        "transfer_failed",
     ]
 
 
@@ -120,3 +131,21 @@ class HelperOperationFailureResponse(_StrictChannelModel):
     operation_id: UUID
     state: Literal["failed"] = "failed"
     error_code: str = Field(min_length=1, max_length=64)
+
+
+class HelperAcquisitionStatusResponse(_StrictChannelModel):
+    acquisition_run_id: UUID
+    acquisition_item_id: UUID
+    state: Literal["pending", "transferring", "verifying", "ready", "failed"]
+    committed_offset: int = Field(ge=0)
+    expected_size_bytes: int = Field(ge=1)
+    maximum_chunk_bytes: int = Field(ge=1)
+
+
+class HelperChunkCommitResponse(_StrictChannelModel):
+    acquisition_run_id: UUID
+    acquisition_item_id: UUID
+    accepted_offset: int = Field(ge=0)
+    committed_offset: int = Field(ge=0)
+    bytes_committed: int = Field(ge=0)
+    idempotent_replay: bool = False

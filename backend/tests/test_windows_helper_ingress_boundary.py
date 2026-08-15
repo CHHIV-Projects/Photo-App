@@ -16,9 +16,16 @@ class WindowsHelperIngressBoundaryTests(unittest.TestCase):
         self.assertIn("- application_internal", helper_block)
         self.assertIn("- helper_loopback", helper_block)
         self.assertNotIn("browser_edge", helper_block)
-        self.assertNotIn("volumes:", helper_block)
+        self.assertEqual(helper_block.count("volumes:"), 1)
+        self.assertEqual(
+            helper_block.count("windows_acquisition_receiving:/app/storage/acquisition/windows"),
+            1,
+        )
         self.assertNotIn("group_add:", helper_block)
         self.assertNotIn("/app/sources", helper_block)
+        self.assertNotIn("/app/storage/vault", helper_block)
+        self.assertNotIn("/var/run/docker.sock", helper_block)
+        self.assertNotIn("application_storage", helper_block)
         self.assertNotIn("photo-organizer-source-access", helper_block)
         self.assertNotIn("REDIS_", helper_block)
 

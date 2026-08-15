@@ -11,6 +11,7 @@ from typing import Sequence
 from uuid import UUID
 
 from windows_helper_shared.channel import (
+    ClaimedAcquireOperation,
     ClaimedInventoryOperation,
     ClaimedProbeOperation,
     HelperHeartbeatRequest,
@@ -21,6 +22,7 @@ from windows_helper_shared.protocol import (
     HelperProbeResponse,
 )
 
+from .acquisition import execute_acquisition
 from .capabilities import capability_identity
 from .client import HelperApiClient, HelperClientError
 from .credential_store import DpapiCredentialStore, StoredCredential
@@ -66,6 +68,10 @@ def _serve(
             operation = claim.operation
             if operation is not None:
                 try:
+                    if isinstance(operation, ClaimedAcquireOperation):
+                        result = execute_acquisition(operation, client, credential)
+                        client.complete_acquire(credential, operation.operation_id, result)
+                        continue
                     result = executor.execute(operation)
                     if (
                         isinstance(operation, ClaimedProbeOperation)
@@ -84,11 +90,14 @@ def _serve(
                             "operation_unsupported",
                         )
                 except (OSError, RuntimeError, ValueError):
-                    client.fail_operation(
-                        credential,
-                        operation.operation_id,
-                        "operation_failed",
-                    )
+                    try:
+                        client.fail_operation(
+                            credential,
+                            operation.operation_id,
+                            "operation_failed",
+                        )
+                    except HelperClientError:
+                        pass
             time.sleep(claim.poll_after_seconds)
     except KeyboardInterrupt:
         _safe_output(command="serve", status="stopped")

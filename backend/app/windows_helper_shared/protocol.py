@@ -22,6 +22,8 @@ from .paths import validate_provider_native_path
 
 PROTOCOL_VERSION = 1
 CANONICAL_DIGEST_DOMAIN = "photo-organizer-windows-helper-protocol-v1"
+NORMAL_ACQUISITION_CHUNK_BYTES = 1024 * 1024
+MAX_ACQUISITION_CHUNK_BYTES = 4 * 1024 * 1024
 MAX_PATH_LENGTH = 4096
 MAX_EVIDENCE_ITEMS = 256
 DEFAULT_INVENTORY_PAGE_SIZE = 50
@@ -215,6 +217,11 @@ class HelperInventoryItem(_StrictProtocolModel):
         max_length=71,
         pattern=r"^sha256:[0-9a-f]{64}$",
     )
+    windows_file_attributes: int | None = Field(default=None, ge=0)
+    local_residency: Literal[
+        "resident", "offline", "recall_required", "unsupported_placeholder", "unknown"
+    ] = "unknown"
+
 
     @model_validator(mode="after")
     def _validate_inventory_item(self) -> "HelperInventoryItem":
@@ -280,6 +287,89 @@ class HelperInventoryPageResponse(_StrictProtocolModel):
             raise ValueError("successful inventory requires successful identity evidence")
         if self.result_status != InventoryResultStatus.SUCCESS and (self.items or self.next_cursor):
             raise ValueError("failed inventory responses must not contain items or a cursor")
+        return self
+
+
+
+class SourceFileEvidence(_StrictProtocolModel):
+    size_bytes: int = Field(ge=0)
+    modified_time_ns: int = Field(ge=0)
+    stable_file_id_digest: str | None = Field(
+        default=None, min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    windows_file_attributes: int | None = Field(default=None, ge=0)
+    local_residency: Literal[
+        "resident", "offline", "recall_required", "unsupported_placeholder", "unknown"
+    ]
+
+
+class AcquireResultStatus(StrEnum):
+    SUCCESS = "success"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    SOURCE_CHANGED = "source_changed"
+    PLACEHOLDER_UNAVAILABLE = "placeholder_unavailable"
+    TRANSFER_FAILED = "transfer_failed"
+
+
+class HelperAcquireItemRequest(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    acquisition_run_id: UUID
+    acquisition_item_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    inventory_generation: UUID
+    candidate_reference: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
+    expected_size_bytes: int = Field(ge=1)
+    expected_modified_time_ns: int = Field(ge=0)
+    expected_file_id_digest: str | None = Field(
+        default=None, min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    expected_windows_file_attributes: int | None = Field(default=None, ge=0)
+    expected_local_residency: Literal["resident"] = "resident"
+    normal_chunk_bytes: int = Field(default=NORMAL_ACQUISITION_CHUNK_BYTES, ge=1, le=MAX_ACQUISITION_CHUNK_BYTES)
+    maximum_chunk_bytes: int = Field(default=MAX_ACQUISITION_CHUNK_BYTES, ge=1, le=MAX_ACQUISITION_CHUNK_BYTES)
+
+    @model_validator(mode="after")
+    def _validate_acquire_request(self) -> "HelperAcquireItemRequest":
+        require_protocol_version(self.protocol_version)
+        if self.normal_chunk_bytes > self.maximum_chunk_bytes:
+            raise ValueError("normal chunk size exceeds maximum chunk size")
+        if not self.provider_native_path.provider_native_relative_path:
+            raise ValueError("acquisition item must be beneath the authorized root")
+        return self
+
+
+class HelperAcquireItemResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    result_status: AcquireResultStatus
+    acquisition_run_id: UUID
+    acquisition_item_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    pre_read_evidence: SourceFileEvidence | None = None
+    post_read_evidence: SourceFileEvidence | None = None
+    bytes_read: int = Field(default=0, ge=0)
+    helper_source_sha256: str | None = Field(
+        default=None, min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    error_code: str | None = Field(default=None, max_length=64, pattern=r"^[a-z0-9_]+$")
+
+    @model_validator(mode="after")
+    def _validate_acquire_response(self) -> "HelperAcquireItemResponse":
+        require_protocol_version(self.protocol_version)
+        if self.result_status == AcquireResultStatus.SUCCESS:
+            if self.pre_read_evidence is None or self.post_read_evidence is None or self.helper_source_sha256 is None:
+                raise ValueError("successful acquisition requires complete Source evidence and SHA-256")
+        elif not self.error_code:
+            raise ValueError("failed acquisition requires an error code")
         return self
 
 

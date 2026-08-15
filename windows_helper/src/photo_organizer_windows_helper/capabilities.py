@@ -34,5 +34,7 @@ def capability_identity(access_node_id: str) -> HelperCapabilityIdentity:
             CapabilityVersion(name="authenticated_channel", version="1"),
             CapabilityVersion(name="remote_operations", version="1"),
             CapabilityVersion(name="bounded_inventory", version="1"),
+            CapabilityVersion(name="durable_acquisition", version="1"),
+            CapabilityVersion(name="verified_receiving", version="1"),
         ],
     )

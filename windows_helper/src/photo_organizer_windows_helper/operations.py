@@ -32,6 +32,23 @@ from windows_helper_shared.protocol import (
 
 
 _REPARSE_ATTRIBUTE = 0x400
+_OFFLINE_ATTRIBUTE = 0x1000
+_RECALL_ON_OPEN_ATTRIBUTE = 0x00040000
+_RECALL_ON_DATA_ACCESS_ATTRIBUTE = 0x00400000
+
+
+def local_residency(metadata: os.stat_result | None) -> str:
+    if metadata is None:
+        return "unknown"
+    attributes = getattr(metadata, "st_file_attributes", None)
+    if attributes is None:
+        return "unknown" if os.name == "nt" else "resident"
+    if attributes & _OFFLINE_ATTRIBUTE:
+        return "offline"
+    if attributes & (_RECALL_ON_OPEN_ATTRIBUTE | _RECALL_ON_DATA_ACCESS_ATTRIBUTE):
+        return "recall_required"
+    return "resident"
+
 
 
 @dataclass
@@ -317,6 +334,8 @@ def _item(
         modified_time_ns=metadata.st_mtime_ns if metadata is not None else None,
         entry_kind=entry_kind,
         stable_file_id_digest=stable_id,
+        windows_file_attributes=getattr(metadata, "st_file_attributes", None) if metadata is not None else None,
+        local_residency=local_residency(metadata),
     )
 
 
