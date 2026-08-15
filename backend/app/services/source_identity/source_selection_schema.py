@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,7 +13,11 @@ from app.services.source_identity.durable_identity import DurableIdentityStatus
 
 SourceSelectionResult = Literal["selected", "not_selected"]
 SourceSelectionAvailability = Literal["available", "unavailable", "needs_attention"]
-SourceSelectionWorkflowKind = Literal["filesystem_source_intake", "icloud_intake"]
+SourceSelectionWorkflowKind = Literal[
+    "filesystem_source_intake",
+    "icloud_intake",
+    "windows_helper_intake",
+]
 
 
 class SourceSelectionRequest(BaseModel):
@@ -21,6 +26,7 @@ class SourceSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_profile_id: int
+    helper_probe_operation_id: UUID | None = None
 
 
 class SelectedSourceContext(BaseModel):

@@ -24,6 +24,9 @@ PROTOCOL_VERSION = 1
 CANONICAL_DIGEST_DOMAIN = "photo-organizer-windows-helper-protocol-v1"
 MAX_PATH_LENGTH = 4096
 MAX_EVIDENCE_ITEMS = 256
+DEFAULT_INVENTORY_PAGE_SIZE = 50
+MAX_INVENTORY_PAGE_SIZE = 100
+MAX_INVENTORY_RESULT_BYTES = 1024 * 1024
 
 
 class ProtocolCompatibilityError(ValueError):
@@ -175,6 +178,108 @@ class HelperProbeResponse(_StrictProtocolModel):
             raise ValueError("successful probe response must not contain blockers")
         if self.result_status != ProbeResultStatus.SUCCESS and not self.blockers:
             raise ValueError("non-success probe response requires a machine-readable blocker")
+        return self
+
+
+class InventoryEntryKind(StrEnum):
+    REGULAR_FILE = "regular_file"
+    REPARSE_POINT = "reparse_point"
+    SPECIAL = "special"
+    INACCESSIBLE = "inaccessible"
+
+
+class InventoryResultStatus(StrEnum):
+    SUCCESS = "success"
+    INVALID_CURSOR = "invalid_cursor"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    IDENTITY_CHANGED = "identity_changed"
+    INVENTORY_FAILED = "inventory_failed"
+
+
+class HelperInventoryItem(_StrictProtocolModel):
+    """Metadata-only observation for one entry beneath the authorized root."""
+
+    candidate_reference: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    provider_native_path: ProviderNativePath
+    filename: str = Field(min_length=1, max_length=255)
+    size_bytes: int | None = Field(default=None, ge=0)
+    modified_time_ns: int | None = Field(default=None, ge=0)
+    entry_kind: InventoryEntryKind
+    stable_file_id_digest: str | None = Field(
+        default=None,
+        min_length=71,
+        max_length=71,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def _validate_inventory_item(self) -> "HelperInventoryItem":
+        relative = self.provider_native_path.provider_native_relative_path
+        if not relative:
+            raise ValueError("inventory items must be beneath the authorized root")
+        if self.filename != ntpath.basename(self.provider_native_path.provider_native_full_path):
+            raise ValueError("inventory filename must match the provider-native full path")
+        if self.entry_kind == InventoryEntryKind.REGULAR_FILE and (
+            self.size_bytes is None or self.modified_time_ns is None
+        ):
+            raise ValueError("regular inventory files require size and modified-time evidence")
+        return self
+
+
+class HelperInventoryPageRequest(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
+    inventory_generation: UUID | None = None
+    cursor: str | None = Field(default=None, min_length=1, max_length=256)
+    page_size: int = Field(default=DEFAULT_INVENTORY_PAGE_SIZE, ge=1, le=MAX_INVENTORY_PAGE_SIZE)
+
+    @model_validator(mode="after")
+    def _validate_inventory_request(self) -> "HelperInventoryPageRequest":
+        require_protocol_version(self.protocol_version)
+        if (self.inventory_generation is None) != (self.cursor is None):
+            raise ValueError("inventory generation and cursor must be supplied together")
+        return self
+
+
+class HelperInventoryPageResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    result_status: InventoryResultStatus
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    inventory_generation: UUID
+    identity_probe: HelperProbeResponse
+    items: list[HelperInventoryItem] = Field(default_factory=list, max_length=MAX_INVENTORY_PAGE_SIZE)
+    next_cursor: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def _validate_inventory_response(self) -> "HelperInventoryPageResponse":
+        require_protocol_version(self.protocol_version)
+        if self.identity_probe.request_id != self.request_id:
+            raise ValueError("inventory identity evidence must match the request")
+        if self.identity_probe.provider_native_path != self.provider_native_path:
+            raise ValueError("inventory identity evidence must target the authorized root")
+        if self.identity_probe.source_type != self.source_type:
+            raise ValueError("inventory identity evidence must match the Source type")
+        if (
+            self.result_status == InventoryResultStatus.SUCCESS
+            and self.identity_probe.result_status != ProbeResultStatus.SUCCESS
+        ):
+            raise ValueError("successful inventory requires successful identity evidence")
+        if self.result_status != InventoryResultStatus.SUCCESS and (self.items or self.next_cursor):
+            raise ValueError("failed inventory responses must not contain items or a cursor")
         return self
 
 
@@ -356,13 +461,21 @@ def _require_unique(values: list[Any], label: str) -> None:
 
 __all__ = [
     "CANONICAL_DIGEST_DOMAIN",
+    "DEFAULT_INVENTORY_PAGE_SIZE",
+    "MAX_INVENTORY_PAGE_SIZE",
+    "MAX_INVENTORY_RESULT_BYTES",
     "PROTOCOL_VERSION",
     "CapabilityVersion",
     "CollectorCapability",
     "ErrorCode",
     "HelperCapabilityIdentity",
+    "HelperInventoryItem",
+    "HelperInventoryPageRequest",
+    "HelperInventoryPageResponse",
     "HelperProbeRequest",
     "HelperProbeResponse",
+    "InventoryEntryKind",
+    "InventoryResultStatus",
     "MachineIssue",
     "ProbeMode",
     "ProbeResultStatus",

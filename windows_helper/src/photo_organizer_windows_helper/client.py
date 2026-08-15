@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+from uuid import UUID
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from windows_helper_shared.channel import (
     HelperHeartbeatRequest,
     HelperHeartbeatResponse,
+    HelperOperationClaimResponse,
+    HelperOperationCompletionResponse,
+    HelperOperationFailureRequest,
+    HelperOperationFailureResponse,
     HelperSessionResponse,
     PairingCompleteRequest,
     PairingCompleteResponse,
+)
+from windows_helper_shared.protocol import (
+    HelperInventoryPageResponse,
+    HelperProbeResponse,
 )
 
 from .credential_store import StoredCredential
@@ -53,6 +63,56 @@ class HelperApiClient:
         )
         return HelperHeartbeatResponse.model_validate(payload)
 
+    def claim_operation(
+        self,
+        credential: StoredCredential,
+    ) -> HelperOperationClaimResponse:
+        payload = self._request("POST", "/operations/claim", {}, credential=credential)
+        return HelperOperationClaimResponse.model_validate(payload)
+
+    def complete_probe(
+        self,
+        credential: StoredCredential,
+        operation_id: UUID,
+        result: HelperProbeResponse,
+    ) -> HelperOperationCompletionResponse:
+        payload = self._request(
+            "POST",
+            f"/operations/{operation_id}/complete-probe",
+            result.model_dump(mode="json"),
+            credential=credential,
+        )
+        return HelperOperationCompletionResponse.model_validate(payload)
+
+    def complete_inventory(
+        self,
+        credential: StoredCredential,
+        operation_id: UUID,
+        result: HelperInventoryPageResponse,
+    ) -> HelperOperationCompletionResponse:
+        payload = self._request(
+            "POST",
+            f"/operations/{operation_id}/complete-inventory",
+            result.model_dump(mode="json"),
+            credential=credential,
+        )
+        return HelperOperationCompletionResponse.model_validate(payload)
+
+    def fail_operation(
+        self,
+        credential: StoredCredential,
+        operation_id: UUID,
+        error_code: str,
+    ) -> HelperOperationFailureResponse:
+        request = HelperOperationFailureRequest(error_code=error_code)
+        payload = self._request(
+            "POST",
+            f"/operations/{operation_id}/fail",
+            request.model_dump(mode="json"),
+            credential=credential,
+        )
+        return HelperOperationFailureResponse.model_validate(payload)
+
     def _request(
         self,
         method: str,
@@ -61,7 +121,12 @@ class HelperApiClient:
         *,
         credential: StoredCredential | None = None,
     ) -> dict[str, Any]:
-        if path not in {"/pair", "/session", "/heartbeat"}:
+        static_paths = {"/pair", "/session", "/heartbeat", "/operations/claim"}
+        operation_path = re.fullmatch(
+            r"/operations/[0-9a-fA-F-]{36}/(complete-probe|complete-inventory|fail)",
+            path,
+        )
+        if path not in static_paths and operation_path is None:
             raise ValueError("Unsupported Helper API path.")
         headers = {"Accept": "application/json"}
         data = None

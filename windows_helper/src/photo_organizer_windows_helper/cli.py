@@ -6,14 +6,25 @@ import argparse
 import getpass
 import json
 import sys
+import time
 from typing import Sequence
 from uuid import UUID
 
-from windows_helper_shared.channel import HelperHeartbeatRequest, PairingCompleteRequest
+from windows_helper_shared.channel import (
+    ClaimedInventoryOperation,
+    ClaimedProbeOperation,
+    HelperHeartbeatRequest,
+    PairingCompleteRequest,
+)
+from windows_helper_shared.protocol import (
+    HelperInventoryPageResponse,
+    HelperProbeResponse,
+)
 
 from .capabilities import capability_identity
 from .client import HelperApiClient, HelperClientError
 from .credential_store import DpapiCredentialStore, StoredCredential
+from .operations import HelperOperationExecutor
 from .tunnel import TunnelError, TunnelManager
 
 
@@ -24,12 +35,64 @@ def _parser() -> argparse.ArgumentParser:
     pair.add_argument("--access-node-id", required=True, type=UUID)
     subcommands.add_parser("status", help="Check the authenticated Helper session.")
     subcommands.add_parser("heartbeat", help="Send one bounded presence heartbeat.")
+    subcommands.add_parser("serve", help="Run the foreground bounded operation loop.")
     subcommands.add_parser("forget", help="Remove only the local protected credential/state.")
     return parser
 
 
 def _safe_output(**values: object) -> None:
     print(json.dumps(values, sort_keys=True, separators=(",", ":")))
+
+
+def _serve(
+    client: HelperApiClient,
+    credential: StoredCredential,
+) -> int:
+    executor = HelperOperationExecutor()
+    last_heartbeat = 0.0
+    try:
+        while True:
+            now = time.monotonic()
+            if now - last_heartbeat >= 30.0:
+                client.heartbeat(
+                    credential,
+                    HelperHeartbeatRequest(
+                        access_node_id=UUID(credential.access_node_id),
+                        capability_identity=capability_identity(credential.access_node_id),
+                    ),
+                )
+                last_heartbeat = now
+            claim = client.claim_operation(credential)
+            operation = claim.operation
+            if operation is not None:
+                try:
+                    result = executor.execute(operation)
+                    if (
+                        isinstance(operation, ClaimedProbeOperation)
+                        and isinstance(result, HelperProbeResponse)
+                    ):
+                        client.complete_probe(credential, operation.operation_id, result)
+                    elif (
+                        isinstance(operation, ClaimedInventoryOperation)
+                        and isinstance(result, HelperInventoryPageResponse)
+                    ):
+                        client.complete_inventory(credential, operation.operation_id, result)
+                    else:
+                        client.fail_operation(
+                            credential,
+                            operation.operation_id,
+                            "operation_unsupported",
+                        )
+                except (OSError, RuntimeError, ValueError):
+                    client.fail_operation(
+                        credential,
+                        operation.operation_id,
+                        "operation_failed",
+                    )
+            time.sleep(claim.poll_after_seconds)
+    except KeyboardInterrupt:
+        _safe_output(command="serve", status="stopped")
+        return 0
 
 
 def run(argv: Sequence[str] | None = None) -> int:
@@ -73,6 +136,8 @@ def run(argv: Sequence[str] | None = None) -> int:
         if credential is None:
             raise RuntimeError("No protected Helper credential is stored.")
         with TunnelManager():
+            if arguments.command == "serve":
+                return _serve(client, credential)
             if arguments.command == "status":
                 response = client.session(credential)
                 _safe_output(

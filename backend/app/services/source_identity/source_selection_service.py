@@ -8,6 +8,7 @@ import platform
 import re
 import subprocess
 from collections.abc import Callable
+from uuid import UUID
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -43,6 +44,9 @@ from app.services.source_identity.source_selection_schema import (
     SourceSelectionRequest,
     SourceSelectionResponse,
 )
+from app.services.source_identity.readiness_service import SourceProfileReadinessService
+from app.services.windows_helper.operations import is_windows_helper_profile
+from app.services.windows_helper.service import HELPER_PROVIDER_NAME
 
 
 _ACTIVE_PROFILE_STATUS = "active"
@@ -146,7 +150,84 @@ class SourceSelectionService:
                 },
             )
 
+        if is_windows_helper_profile(self._db, source, endpoint):
+            return self._select_windows_helper(
+                source,
+                endpoint,
+                friendly_type,
+                request.helper_probe_operation_id,
+            )
+
         return self._select_modern_filesystem(source, endpoint, friendly_type)
+
+    def _select_windows_helper(
+        self,
+        source: IngestionSource,
+        endpoint: SourceEndpoint,
+        friendly_type: str,
+        operation_id: UUID | None,
+    ) -> SourceSelectionResponse:
+        readiness = SourceProfileReadinessService(self._db).check_readiness(
+            source.id,
+            operation_id,  # type: ignore[arg-type]
+        )
+        advanced_details = {
+            **_base_advanced_details(source, endpoint, friendly_type),
+            "windows_helper_readiness": readiness.model_dump(mode="json"),
+        }
+        if (
+            readiness.readiness_status != "ready"
+            or readiness.identity_match_status != "matched"
+            or not readiness.provider_operation_ready
+            or readiness.can_run_source_intake
+        ):
+            return self._not_selected(
+                availability=(
+                    "unavailable"
+                    if readiness.identity_match_status == "unavailable"
+                    else "needs_attention"
+                ),
+                message=readiness.operator_message,
+                retry_guidance=readiness.recommended_next_action,
+                advanced_details=advanced_details,
+            )
+
+        provider_root = readiness.observed_path_summary.get("observed_path")
+        if not isinstance(provider_root, str) or not provider_root:
+            return self._not_selected(
+                availability="needs_attention",
+                message="The Windows Helper did not return an exact provider-native root.",
+                retry_guidance="Issue a new exact-root readiness probe.",
+                advanced_details=advanced_details,
+            )
+        context = self._context(
+            source=source,
+            endpoint=endpoint,
+            friendly_type=friendly_type,
+            device_label=endpoint.alias,
+            resolved_source_root=None,
+            resolved_endpoint_path=None,
+            durable_identity_status=readiness.durable_identity_status,
+            identity_match_status="matched",
+            workflow_kind="windows_helper_intake",
+            configured_source_root_override=provider_root,
+            provider_context={
+                "provider_name": HELPER_PROVIDER_NAME,
+                "provider_operation_ready": True,
+                "can_run_source_intake": False,
+                "access_node": readiness.access_node_summary,
+            },
+            root_display=provider_root,
+        )
+        return SourceSelectionResponse(
+            result="selected",
+            availability="available",
+            workflow_kind="windows_helper_intake",
+            selected_source_context=context,
+            message=f"{source.source_label} is available through the Windows Helper.",
+            retry_guidance=None,
+            advanced_details=advanced_details,
+        )
 
     def _select_modern_filesystem(
         self,
@@ -725,6 +806,7 @@ class SourceSelectionService:
         workflow_kind: str,
         provider_context: dict[str, Any] | None = None,
         root_display: str | None = None,
+        configured_source_root_override: str | None = None,
     ) -> SelectedSourceContext:
         selected_at = datetime.now(timezone.utc)
         safe_fingerprint_payload = {
@@ -746,7 +828,11 @@ class SourceSelectionService:
             profile_status=source.profile_status,
             endpoint_status=endpoint.status if endpoint is not None else None,
             endpoint_relative_root=source.endpoint_relative_root,
-            configured_source_root=source.source_root_path,
+            configured_source_root=(
+                configured_source_root_override
+                if configured_source_root_override is not None
+                else source.source_root_path
+            ),
             resolved_source_root=resolved_source_root,
             resolved_endpoint_path=resolved_endpoint_path,
             root_display=root_display or resolved_source_root or source.source_root_path or "Provider managed",

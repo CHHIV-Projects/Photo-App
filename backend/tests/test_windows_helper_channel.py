@@ -88,7 +88,12 @@ class WindowsHelperChannelTests(unittest.TestCase):
         tables = set(inspect(self.engine).get_table_names())
         self.assertEqual(
             tables,
-            {"access_nodes", "windows_helper_credentials", "windows_helper_pairing_authorizations"},
+            {
+                "access_nodes",
+                "windows_helper_credentials",
+                "windows_helper_pairing_authorizations",
+                "windows_helper_operations",
+            },
         )
 
     def test_pairing_creates_only_access_node_and_rotates_single_credential(self) -> None:
@@ -290,7 +295,30 @@ class WindowsHelperApiIsolationTests(unittest.TestCase):
             ).status_code,
             200,
         )
+        operation = self.admin_client.post(
+            "/api/admin/windows-helper/operations/probe-source",
+            json={
+                "access_node_id": str(node_id),
+                "source_type": "local",
+                "provider_native_root": "C:\\Controlled",
+            },
+        )
+        self.assertEqual(operation.status_code, 200)
+        claimed = self.helper_client.post(
+            "/api/helper/v1/operations/claim",
+            headers=header,
+        )
+        self.assertEqual(claimed.status_code, 200)
+        self.assertEqual(
+            claimed.json()["operation"]["operation_id"],
+            operation.json()["operation_id"],
+        )
+
         self.assertEqual(self.helper_client.get("/api/helper/v1/session").status_code, 401)
+        self.assertEqual(
+            self.helper_client.post("/api/helper/v1/operations/claim").status_code,
+            401,
+        )
 
         malformed = self.helper_client.post(
             "/api/helper/v1/pair",
@@ -305,6 +333,13 @@ class WindowsHelperApiIsolationTests(unittest.TestCase):
         )
         self.assertEqual(revoked.status_code, 200)
         self.assertEqual(self.helper_client.get("/api/helper/v1/session", headers=header).status_code, 401)
+        self.assertEqual(
+            self.helper_client.post(
+                "/api/helper/v1/operations/claim",
+                headers=header,
+            ).status_code,
+            401,
+        )
 
 
 if __name__ == "__main__":

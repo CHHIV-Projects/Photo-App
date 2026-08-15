@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .protocol import HelperCapabilityIdentity, PROTOCOL_VERSION, require_protocol_version
+from .protocol import (
+    HelperCapabilityIdentity,
+    HelperInventoryPageRequest,
+    HelperProbeRequest,
+    PROTOCOL_VERSION,
+    require_protocol_version,
+)
 
 
 class _StrictChannelModel(BaseModel):
@@ -65,3 +71,52 @@ class HelperSessionResponse(_StrictChannelModel):
 
 class HelperHeartbeatResponse(HelperSessionResponse):
     heartbeat_status: Literal["accepted"] = "accepted"
+
+
+class ClaimedProbeOperation(_StrictChannelModel):
+    operation_type: Literal["probe_source"] = "probe_source"
+    operation_id: UUID
+    lease_expires_at: datetime
+    request: HelperProbeRequest
+
+
+class ClaimedInventoryOperation(_StrictChannelModel):
+    operation_type: Literal["inventory_page"] = "inventory_page"
+    operation_id: UUID
+    lease_expires_at: datetime
+    request: HelperInventoryPageRequest
+
+
+ClaimedHelperOperation = Annotated[
+    ClaimedProbeOperation | ClaimedInventoryOperation,
+    Field(discriminator="operation_type"),
+]
+
+
+class HelperOperationClaimResponse(_StrictChannelModel):
+    operation: ClaimedHelperOperation | None = None
+    poll_after_seconds: int = Field(default=2, ge=1, le=30)
+
+
+class HelperOperationCompletionResponse(_StrictChannelModel):
+    operation_id: UUID
+    operation_type: Literal["probe_source", "inventory_page"]
+    state: Literal["completed"] = "completed"
+    result_digest: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
+    idempotent_replay: bool = False
+
+
+class HelperOperationFailureRequest(_StrictChannelModel):
+    error_code: Literal[
+        "operation_unsupported",
+        "source_unavailable",
+        "identity_changed",
+        "invalid_cursor",
+        "operation_failed",
+    ]
+
+
+class HelperOperationFailureResponse(_StrictChannelModel):
+    operation_id: UUID
+    state: Literal["failed"] = "failed"
+    error_code: str = Field(min_length=1, max_length=64)

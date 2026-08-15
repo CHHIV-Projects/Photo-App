@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.windows_helper import (
     WindowsHelperCredential,
+    WindowsHelperOperation,
     WindowsHelperPairingAuthorization,
 )
 
@@ -30,6 +31,7 @@ def ensure_windows_helper_schema(db_session: Session) -> WindowsHelperSchemaSumm
     for table in (
         WindowsHelperCredential.__table__,
         WindowsHelperPairingAuthorization.__table__,
+        WindowsHelperOperation.__table__,
     ):
         if table.name not in existing_tables:
             table.create(bind=connection, checkfirst=True)

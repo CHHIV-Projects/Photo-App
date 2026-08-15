@@ -2,16 +2,27 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.schemas.windows_helper import (
+    CreateWindowsHelperInventoryOperationRequest,
     CreateWindowsHelperPairingRequest,
+    CreateWindowsHelperProbeOperationRequest,
     WindowsHelperAdminStatusListResponse,
+    WindowsHelperOperationCreatedResponse,
+    WindowsHelperOperationStatusResponse,
     WindowsHelperPairingAuthorizationResponse,
     WindowsHelperRevokeRequest,
     WindowsHelperRevokeResponse,
+)
+from app.services.windows_helper.operations import (
+    create_inventory_operation,
+    create_probe_operation,
+    get_operation_status,
 )
 from app.services.windows_helper.service import (
     WindowsHelperServiceError,
@@ -47,6 +58,47 @@ def create_pairing(
 def helper_status(db: Session = Depends(get_db_session)) -> WindowsHelperAdminStatusListResponse:
     return WindowsHelperAdminStatusListResponse(helpers=list_helper_status(db))
 
+
+@router.post(
+    "/operations/probe-source",
+    response_model=WindowsHelperOperationCreatedResponse,
+)
+def create_probe(
+    body: CreateWindowsHelperProbeOperationRequest,
+    db: Session = Depends(get_db_session),
+) -> WindowsHelperOperationCreatedResponse:
+    try:
+        return create_probe_operation(db, body)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/operations/inventory-page",
+    response_model=WindowsHelperOperationCreatedResponse,
+)
+def create_inventory(
+    body: CreateWindowsHelperInventoryOperationRequest,
+    db: Session = Depends(get_db_session),
+) -> WindowsHelperOperationCreatedResponse:
+    try:
+        return create_inventory_operation(db, body)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.get(
+    "/operations/{operation_id}",
+    response_model=WindowsHelperOperationStatusResponse,
+)
+def operation_status(
+    operation_id: UUID,
+    db: Session = Depends(get_db_session),
+) -> WindowsHelperOperationStatusResponse:
+    try:
+        return get_operation_status(db, operation_id)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
 
 @router.post("/revoke", response_model=WindowsHelperRevokeResponse)
 def revoke_helper(

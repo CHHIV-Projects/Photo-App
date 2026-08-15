@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -221,6 +221,7 @@ from app.services.source_identity import (
     SourceSelectionResponse,
     SourceSelectionService,
 )
+from app.services.windows_helper.service import WindowsHelperServiceError
 from app.services.admin.ingestion_operation_guardrail_service import (
     IngestionOperationGuardrailSnapshot,
     get_ingestion_operation_guardrail_snapshot,
@@ -1823,7 +1824,13 @@ def post_source_creation_plan(
     db: Session = Depends(get_db_session),
 ) -> SourceCreationPlanResponse:
     """Build a read-only drive-agnostic filesystem Source creation plan."""
-    return get_source_creation_service(db).plan(body)
+    try:
+        return get_source_creation_service(db).plan(body)
+    except WindowsHelperServiceError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
 
 
 @router.post("/source-creation/confirm", response_model=SourceCreationConfirmResponse)
@@ -1832,7 +1839,13 @@ def post_source_creation_confirm(
     db: Session = Depends(get_db_session),
 ) -> SourceCreationConfirmResponse:
     """Confirm and atomically persist a drive-agnostic filesystem Source."""
-    return get_source_creation_service(db).confirm(body)
+    try:
+        return get_source_creation_service(db).confirm(body)
+    except WindowsHelperServiceError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
 
 
 @router.post("/source-selection/select", response_model=SourceSelectionResponse)
@@ -2049,11 +2062,15 @@ def post_source_profile_verify_path(
 @router.post("/source-profiles/{source_id}/check-readiness", response_model=SourceProfileReadinessResponse)
 def post_source_profile_check_readiness(
     source_id: int,
+    helper_probe_operation_id: UUID | None = Query(default=None),
     db: Session = Depends(get_db_session),
 ) -> SourceProfileReadinessResponse | JSONResponse:
     """Run a read-only Source Profile readiness check."""
     try:
-        return get_source_profile_readiness_service(db).check_readiness(source_id)
+        return get_source_profile_readiness_service(db).check_readiness(
+            source_id,
+            helper_probe_operation_id,
+        )
     except LookupError:
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,

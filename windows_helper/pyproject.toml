@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "photo-organizer-windows-helper"
-version = "0.2.0"
-description = "Photo Organizer Windows Helper authenticated channel"
+version = "0.3.0"
+description = "Photo Organizer Windows Helper authenticated Source operations"
 requires-python = ">=3.11,<3.13"
 dependencies = ["pydantic==2.12.5"]
 

@@ -30,5 +30,9 @@ def capability_identity(access_node_id: str) -> HelperCapabilityIdentity:
                 supported_source_types=source_types,
             )
         ],
-        capabilities=[CapabilityVersion(name="authenticated_channel", version="1")],
+        capabilities=[
+            CapabilityVersion(name="authenticated_channel", version="1"),
+            CapabilityVersion(name="remote_operations", version="1"),
+            CapabilityVersion(name="bounded_inventory", version="1"),
+        ],
     )
