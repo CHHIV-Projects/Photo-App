@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -565,6 +566,13 @@ class RunIngestionIcloudOptions(BaseModel):
     target_logical_items: int | None = Field(default=None, ge=1, le=1000)
 
 
+class RunIngestionWindowsHelperOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    helper_probe_operation_id: UUID
+    inventory_page_size: int = Field(default=25, ge=1, le=100)
+
+
 class RunIngestionDispatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -572,17 +580,21 @@ class RunIngestionDispatchRequest(BaseModel):
     selection_fingerprint: str | None = None
     filesystem_options: RunIngestionFilesystemOptions | None = None
     icloud_options: RunIngestionIcloudOptions | None = None
+    windows_helper_options: RunIngestionWindowsHelperOptions | None = None
 
 
 class RunIngestionDispatchResponse(BaseModel):
     result: Literal["started", "action_completed", "blocked", "stale_selection", "no_action_available"]
-    workflow_kind: Literal["filesystem_source_intake", "icloud_intake"] | None = None
+    workflow_kind: Literal[
+        "filesystem_source_intake", "icloud_intake", "windows_helper_intake"
+    ] | None = None
     action: Literal[
         "source_intake_started",
         "icloud_prepare_started",
         "icloud_import_started",
         "icloud_import_resumed",
         "icloud_import_advanced",
+        "windows_helper_inventory_started",
         "none",
     ]
     message: str

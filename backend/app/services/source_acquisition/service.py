@@ -559,6 +559,139 @@ def _sha256_hex(value: str) -> str:
     return value.removeprefix("sha256:")
 
 
+def _provider_native_root_key(provider: str, value: str) -> str:
+    """Normalize a provider-native root without translating provider namespaces."""
+    if provider == PROVIDER:
+        return ntpath.normcase(ntpath.normpath(value))
+    return value
+
+
+def _same_provider_lineage(
+    current_run: SourceAcquisitionRun,
+    current_item: SourceAcquisitionItem,
+    prior_run: SourceAcquisitionRun,
+    prior_item: SourceAcquisitionItem,
+) -> bool:
+    return (
+        prior_run.provider == current_run.provider
+        and prior_run.source_profile_id == current_run.source_profile_id
+        and _provider_native_root_key(prior_run.provider, prior_run.provider_native_root)
+        == _provider_native_root_key(current_run.provider, current_run.provider_native_root)
+        and _provider_native_root_key(prior_run.provider, prior_item.provider_native_root)
+        == _provider_native_root_key(current_run.provider, current_item.provider_native_root)
+        and prior_item.provider_native_relative_path_normalized
+        == current_item.provider_native_relative_path_normalized
+        and prior_item.provider_native_relative_path_normalized_digest
+        == current_item.provider_native_relative_path_normalized_digest
+        and prior_item.linux_verified_sha256 == current_item.linux_verified_sha256
+    )
+
+
+def _provenance_has_valid_acquisition_anchor(
+    db: Session,
+    current_run: SourceAcquisitionRun,
+    current_item: SourceAcquisitionItem,
+    provenance: Provenance,
+) -> bool:
+    anchors = db.execute(
+        select(SourceAcquisitionItem, SourceAcquisitionRun)
+        .join(SourceAcquisitionRun, SourceAcquisitionRun.id == SourceAcquisitionItem.run_id)
+        .where(
+            SourceAcquisitionItem.bridged_provenance_id == provenance.id,
+            SourceAcquisitionRun.bridge_state == "completed",
+            SourceAcquisitionRun.state == "completed",
+        )
+    ).all()
+    for anchor_item, anchor_run in anchors:
+        if not _same_provider_lineage(current_run, current_item, anchor_run, anchor_item):
+            continue
+        if anchor_run.bridge_ingestion_run_id != provenance.ingestion_run_id:
+            continue
+        ingestion = db.get(IngestionRun, provenance.ingestion_run_id)
+        ready_root = (Path(anchor_run.receiving_root) / "ready").resolve()
+        expected_path = str((ready_root / Path(anchor_item.ready_relative_path).name).resolve())
+        if (
+            ingestion is not None
+            and ingestion.ingestion_source_id == current_run.source_profile_id
+            and Path(ingestion.from_path or "").resolve() == ready_root
+            and provenance.ingestion_source_id == current_run.source_profile_id
+            and provenance.source_path == expected_path
+            and Path(provenance.source_root_path or "").resolve() == ready_root
+            and provenance.source_relative_path == Path(anchor_item.ready_relative_path).name
+        ):
+            return True
+    return False
+
+
+def _find_prior_observation_reuse(
+    db: Session,
+    run: SourceAcquisitionRun,
+    item: SourceAcquisitionItem,
+    record: FileScanRecord,
+) -> tuple[SourceAcquisitionItem, Asset, Provenance] | None:
+    candidates = db.execute(
+        select(SourceAcquisitionItem, SourceAcquisitionRun)
+        .join(SourceAcquisitionRun, SourceAcquisitionRun.id == SourceAcquisitionItem.run_id)
+        .where(
+            SourceAcquisitionRun.id < run.id,
+            SourceAcquisitionRun.provider == run.provider,
+            SourceAcquisitionRun.source_profile_id == run.source_profile_id,
+            SourceAcquisitionRun.state == "completed",
+            SourceAcquisitionRun.bridge_state == "completed",
+            SourceAcquisitionItem.state == "ready",
+            SourceAcquisitionItem.provider_native_relative_path_normalized_digest
+            == item.provider_native_relative_path_normalized_digest,
+            SourceAcquisitionItem.linux_verified_sha256 == item.linux_verified_sha256,
+            SourceAcquisitionItem.bridged_asset_sha256.is_not(None),
+            SourceAcquisitionItem.bridged_provenance_id.is_not(None),
+        )
+        .order_by(SourceAcquisitionRun.id, SourceAcquisitionItem.ordinal)
+    ).all()
+    valid: dict[tuple[str, int], tuple[SourceAcquisitionItem, Asset, Provenance]] = {}
+    for prior_item, prior_run in candidates:
+        if not _same_provider_lineage(run, item, prior_run, prior_item):
+            continue
+        asset = db.get(Asset, prior_item.bridged_asset_sha256)
+        provenance = db.get(Provenance, prior_item.bridged_provenance_id)
+        if (
+            asset is None
+            or provenance is None
+            or provenance.asset_sha256 != asset.sha256
+            or asset.sha256 != _sha256_hex(item.linux_verified_sha256 or "")
+            or not _provenance_has_valid_acquisition_anchor(db, run, item, provenance)
+        ):
+            continue
+        _, conflict = _verify_existing_asset_vault_file(
+            HashedFile(record=record, sha256=asset.sha256),
+            ExistingAssetVaultState(
+                sha256=asset.sha256,
+                vault_path=asset.vault_path,
+                size_bytes=asset.size_bytes,
+            ),
+        )
+        if conflict is None:
+            valid[(asset.sha256, provenance.id)] = (prior_item, asset, provenance)
+    if len(valid) > 1:
+        raise WindowsHelperServiceError(
+            "bridge_prior_observation_ambiguous",
+            "Prior Source-observation linkage is ambiguous.",
+            http_status=409,
+        )
+    return next(iter(valid.values()), None)
+
+
+def _bridge_observation_reuse(
+    db: Session,
+    run: SourceAcquisitionRun,
+    items: list[SourceAcquisitionItem],
+    records: list[FileScanRecord],
+) -> list[tuple[SourceAcquisitionItem, Asset, Provenance] | None]:
+    return [
+        _find_prior_observation_reuse(db, run, item, record)
+        for item, record in zip(items, records, strict=True)
+    ]
+
+
 def _bridge_counts(db: Session) -> SourceAcquisitionBridgeCounts:
     vault_root = resolve_runtime_path(settings.vault_path)
     vault_files = sum(1 for path in vault_root.rglob("*") if path.is_file())
@@ -574,25 +707,38 @@ def _bridge_counts(db: Session) -> SourceAcquisitionBridgeCounts:
 def _validate_completed_bridge(
     db: Session, run: SourceAcquisitionRun, items: list[SourceAcquisitionItem], ready_root: Path
 ) -> None:
-    if run.bridge_source_intake_run_id is None or run.bridge_ingestion_run_id is None:
+    if (run.bridge_source_intake_run_id is None) != (run.bridge_ingestion_run_id is None):
         raise WindowsHelperServiceError(
             "bridge_linkage_incomplete", "Completed bridge run linkage is incomplete.", http_status=409
         )
-    intake = db.get(SourceIntakeRun, run.bridge_source_intake_run_id)
-    ingestion = db.get(IngestionRun, run.bridge_ingestion_run_id)
-    if (
-        intake is None
-        or ingestion is None
-        or intake.status != STATUS_COMPLETED
-        or intake.ingestion_source_id != run.source_profile_id
-        or intake.ingestion_run_id != ingestion.id
-        or ingestion.ingestion_source_id != run.source_profile_id
-        or Path(ingestion.from_path or "").resolve() != ready_root
-    ):
-        raise WindowsHelperServiceError(
-            "bridge_linkage_inconsistent", "Completed bridge run linkage is inconsistent.", http_status=409
-        )
-    for item in items:
+    intake = (
+        db.get(SourceIntakeRun, run.bridge_source_intake_run_id)
+        if run.bridge_source_intake_run_id is not None
+        else None
+    )
+    ingestion = (
+        db.get(IngestionRun, run.bridge_ingestion_run_id)
+        if run.bridge_ingestion_run_id is not None
+        else None
+    )
+    if intake is not None or ingestion is not None:
+        if (
+            intake is None
+            or ingestion is None
+            or intake.status != STATUS_COMPLETED
+            or intake.ingestion_source_id != run.source_profile_id
+            or intake.ingestion_run_id != ingestion.id
+            or ingestion.ingestion_source_id != run.source_profile_id
+            or Path(ingestion.from_path or "").resolve() != ready_root
+        ):
+            raise WindowsHelperServiceError(
+                "bridge_linkage_inconsistent", "Completed bridge run linkage is inconsistent.", http_status=409
+            )
+
+    _, records = _bridge_records(run, items)
+    reused = _bridge_observation_reuse(db, run, items, records)
+    common_intake_links = 0
+    for item, reuse in zip(items, reused, strict=True):
         if not item.bridged_asset_sha256 or item.bridged_provenance_id is None:
             raise WindowsHelperServiceError(
                 "bridge_item_linkage_incomplete",
@@ -601,21 +747,37 @@ def _validate_completed_bridge(
             )
         asset = db.get(Asset, item.bridged_asset_sha256)
         provenance = db.get(Provenance, item.bridged_provenance_id)
+        if reuse is not None:
+            _, reused_asset, reused_provenance = reuse
+            if (
+                item.bridged_asset_sha256 == reused_asset.sha256
+                and item.bridged_provenance_id == reused_provenance.id
+            ):
+                continue
         expected_path = str((ready_root / Path(item.ready_relative_path).name).resolve())
         if (
-            asset is None
+            ingestion is None
+            or asset is None
             or provenance is None
             or provenance.asset_sha256 != asset.sha256
             or provenance.ingestion_source_id != run.source_profile_id
             or provenance.ingestion_run_id != ingestion.id
             or provenance.source_path != expected_path
             or Path(provenance.source_root_path or "").resolve() != ready_root
+            or provenance.source_relative_path != Path(item.ready_relative_path).name
         ):
             raise WindowsHelperServiceError(
                 "bridge_item_linkage_inconsistent",
                 "Completed acquisition item linkage is inconsistent.",
                 http_status=409,
             )
+        common_intake_links += 1
+    if (ingestion is None and common_intake_links != 0) or (
+        ingestion is not None and common_intake_links == 0
+    ):
+        raise WindowsHelperServiceError(
+            "bridge_linkage_inconsistent", "Completed bridge run mode is inconsistent.", http_status=409
+        )
 
 
 def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridgePlanResponse:
@@ -671,6 +833,7 @@ def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridg
             )
         )
 
+    reuses = _bridge_observation_reuse(db, run, items, records)
     if bridge_state == "not_started":
         for item, record in zip(items, records, strict=True):
             sha256 = _sha256_hex(item.linux_verified_sha256 or "")
@@ -688,12 +851,22 @@ def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridg
                     http_status=409,
                 )
 
-    new_count = sum(item.classification == "new_content" for item in classifications)
+    classification_by_hash = {item.sha256: item.classification for item in classifications}
+    unmatched_hashes = {
+        item.linux_verified_sha256 or ""
+        for item, reuse in zip(items, reuses, strict=True)
+        if reuse is None
+    }
+    new_count = sum(
+        classification_by_hash[digest] == "new_content" for digest in unmatched_hashes
+    )
     expected_asset_delta = new_count if bridge_state == "not_started" else 0
-    expected_provenance_delta = len(items) if bridge_state == "not_started" else 0
+    expected_provenance_delta = (
+        sum(reuse is None for reuse in reuses) if bridge_state == "not_started" else 0
+    )
     plan_digest = _digest(
         {
-            "domain": "photo-organizer-source-acquisition-bridge-plan-v1",
+            "domain": "photo-organizer-source-acquisition-bridge-plan-v2",
             "acquisition_run_id": run.run_uuid,
             "source_endpoint_id": run.source_endpoint_id,
             "source_profile_id": run.source_profile_id,
@@ -706,8 +879,16 @@ def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridg
                     "provider_native_full_path": item.provider_native_full_path,
                     "size": item.expected_size_bytes,
                     "sha256": item.linux_verified_sha256,
+                    "observation_classification": (
+                        "reuse_prior_observation" if reuse is not None else "common_intake"
+                    ),
+                    "reused_from_acquisition_item_id": (
+                        reuse[0].item_uuid if reuse is not None else None
+                    ),
+                    "reused_asset_sha256": reuse[1].sha256 if reuse is not None else None,
+                    "reused_provenance_id": reuse[2].id if reuse is not None else None,
                 }
-                for item, record in zip(items, records, strict=True)
+                for item, record, reuse in zip(items, records, reuses, strict=True)
             ],
             "classifications": [item.model_dump() for item in classifications],
         }
@@ -736,10 +917,22 @@ def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridg
                 provider_native_relative_path=item.provider_native_relative_path,
                 runtime_relative_path=Path(item.ready_relative_path).name,
                 linux_verified_sha256=item.linux_verified_sha256 or "",
-                asset_sha256=item.bridged_asset_sha256,
-                provenance_id=item.bridged_provenance_id,
+                observation_classification=(
+                    "reuse_prior_observation" if reuse is not None else "common_intake"
+                ),
+                reused_from_acquisition_item_id=(
+                    UUID(reuse[0].item_uuid) if reuse is not None else None
+                ),
+                asset_sha256=(
+                    item.bridged_asset_sha256
+                    or (reuse[1].sha256 if reuse is not None else None)
+                ),
+                provenance_id=(
+                    item.bridged_provenance_id
+                    or (reuse[2].id if reuse is not None else None)
+                ),
             )
-            for item in items
+            for item, reuse in zip(items, reuses, strict=True)
         ],
     )
 
@@ -759,13 +952,26 @@ def _finalize_bridge(run_id: UUID, source_intake_run_id: int) -> None:
         if run.bridge_state != "running" or run.bridge_source_intake_run_id != source_intake_run_id:
             return
         intake = db.get(SourceIntakeRun, source_intake_run_id)
+        unlinked_items = [
+            item
+            for item in items
+            if item.bridged_asset_sha256 is None and item.bridged_provenance_id is None
+        ]
+        if any(
+            (item.bridged_asset_sha256 is None) != (item.bridged_provenance_id is None)
+            for item in items
+        ):
+            run.bridge_state = "failed"
+            run.bridge_failure_code = "reused_item_linkage_incomplete"
+            db.commit()
+            return
         if (
             intake is None
             or intake.status != STATUS_COMPLETED
             or intake.ingestion_run_id is None
             or intake.failed_or_rejected != 0
-            or intake.files_scanned != len(items)
-            or intake.selected != len(items)
+            or intake.files_scanned != len(unlinked_items)
+            or intake.selected != len(unlinked_items)
         ):
             run.bridge_state = "failed"
             run.bridge_failure_code = "source_intake_incomplete"
@@ -784,7 +990,7 @@ def _finalize_bridge(run_id: UUID, source_intake_run_id: int) -> None:
             db.commit()
             return
         links: list[tuple[SourceAcquisitionItem, str, int]] = []
-        for item in items:
+        for item in unlinked_items:
             sha256 = _sha256_hex(item.linux_verified_sha256 or "")
             ready_path = str((ready_root / Path(item.ready_relative_path).name).resolve())
             rows = list(
@@ -858,17 +1064,37 @@ def execute_acquisition_bridge(
         raise WindowsHelperServiceError(
             "bridge_state_conflict", "The acquisition bridge state changed.", http_status=409
         )
-    run.bridge_state = "running"
-    run.bridge_started_at = _now()
+    reuses = _bridge_observation_reuse(db, run, items, records)
+    reused_items: list[SourceAcquisitionItem] = []
+    unmatched_records: list[FileScanRecord] = []
+    for item, record, reuse in zip(items, records, reuses, strict=True):
+        if reuse is None:
+            unmatched_records.append(record)
+            continue
+        _, asset, provenance = reuse
+        item.bridged_asset_sha256 = asset.sha256
+        item.bridged_provenance_id = provenance.id
+        reused_items.append(item)
+
+    now = _now()
+    run.bridge_started_at = now
     run.bridge_failure_code = None
+    if not unmatched_records:
+        run.bridge_state = "completed"
+        run.bridge_completed_at = now
+        db.commit()
+        db.expire_all()
+        return plan_acquisition_bridge(db, run_id)
+
+    run.bridge_state = "running"
     db.commit()
     try:
         start_explicit_source_intake(
             db,
             ingestion_source_id=run.source_profile_id,
             runtime_source_root_path=str(ready_root),
-            explicit_source_records=records,
-            ingest_batch_size=len(records),
+            explicit_source_records=unmatched_records,
+            ingest_batch_size=len(unmatched_records),
             created_by="source_acquisition_bridge",
             on_created=lambda intake_id: _bind_bridge_intake(run_id, intake_id),
             on_finished=lambda intake_id: _finalize_bridge_safely(run_id, intake_id),
@@ -877,6 +1103,9 @@ def execute_acquisition_bridge(
         db.refresh(run)
         run.bridge_state = "not_started"
         run.bridge_started_at = None
+        for item in reused_items:
+            item.bridged_asset_sha256 = None
+            item.bridged_provenance_id = None
         db.commit()
         raise WindowsHelperServiceError(
             "source_intake_already_running",
@@ -887,6 +1116,9 @@ def execute_acquisition_bridge(
         db.refresh(run)
         run.bridge_state = "failed"
         run.bridge_failure_code = "bridge_launch_failed"
+        for item in reused_items:
+            item.bridged_asset_sha256 = None
+            item.bridged_provenance_id = None
         db.commit()
         raise
     db.expire_all()

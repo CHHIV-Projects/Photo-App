@@ -893,7 +893,7 @@ class SourceAcquisitionTests(unittest.TestCase):
             source_profile_id=self.profile.id,
             inventory_generation=str(uuid4()),
             inventory_chain_digest="sha256:" + "1" * 64,
-            proposal_digest="sha256:" + "2" * 64,
+            proposal_digest=_digest(str(run_uuid).encode()),
             source_fingerprint=FINGERPRINT,
             provider_native_root=ROOT,
             receiving_root=str(run_root),
@@ -949,6 +949,78 @@ class SourceAcquisitionTests(unittest.TestCase):
             items.append(item)
         self.db.commit()
         return run, items, contents
+
+    def _establish_completed_bridge_links(
+        self,
+        run: SourceAcquisitionRun,
+        items: list[SourceAcquisitionItem],
+    ) -> None:
+        ready_root = (Path(run.receiving_root) / "ready").resolve()
+        ingestion = IngestionRun(
+            ingestion_source_id=run.source_profile_id,
+            from_path=str(ready_root),
+        )
+        self.db.add(ingestion)
+        self.db.flush()
+        intake = SourceIntakeRun(
+            status="completed",
+            ingestion_source_id=run.source_profile_id,
+            ingestion_run_id=ingestion.id,
+            source_label=self.profile.source_label,
+            source_type=self.profile.source_type,
+            source_root_path=str(ready_root),
+            intake_mode="acquisition_bridge",
+            source_intake_limit=len(items),
+            ingest_batch_size=len(items),
+            files_scanned=len(items),
+            selected=len(items),
+            staged=len(items),
+            failed_or_rejected=0,
+            started_at=datetime.now(timezone.utc),
+            finished_at=datetime.now(timezone.utc),
+            created_by="source_acquisition_bridge",
+        )
+        self.db.add(intake)
+        self.db.flush()
+        for item in items:
+            ready_path = (ready_root / Path(item.ready_relative_path).name).resolve()
+            sha256 = item.linux_verified_sha256.removeprefix("sha256:")
+            asset = self.db.get(Asset, sha256)
+            if asset is None:
+                vault = Path(self.test_settings.vault_path) / sha256[:2] / f"{sha256}.jpg"
+                vault.parent.mkdir(parents=True, exist_ok=True)
+                vault.write_bytes(ready_path.read_bytes())
+                asset = Asset(
+                    sha256=sha256,
+                    vault_path=str(vault),
+                    original_filename=item.filename,
+                    original_source_path=item.provider_native_full_path,
+                    extension=item.safe_extension,
+                    size_bytes=item.expected_size_bytes,
+                    modified_timestamp_utc=datetime.now(timezone.utc),
+                )
+                self.db.add(asset)
+                self.db.flush()
+            provenance = Provenance(
+                asset_sha256=sha256,
+                source_path=str(ready_path),
+                ingestion_source_id=run.source_profile_id,
+                ingestion_run_id=ingestion.id,
+                source_label=self.profile.source_label,
+                source_type=self.profile.source_type,
+                source_root_path=str(ready_root),
+                source_relative_path=ready_path.name,
+            )
+            self.db.add(provenance)
+            self.db.flush()
+            item.bridged_asset_sha256 = sha256
+            item.bridged_provenance_id = provenance.id
+        run.bridge_state = "completed"
+        run.bridge_source_intake_run_id = intake.id
+        run.bridge_ingestion_run_id = ingestion.id
+        run.bridge_started_at = datetime.now(timezone.utc)
+        run.bridge_completed_at = datetime.now(timezone.utc)
+        self.db.commit()
 
     def test_bridge_plan_reverifies_exact_ready_set_and_predicts_three_content_results(self) -> None:
         run, items, _ = self._completed_bridge_run()
@@ -1123,6 +1195,219 @@ class SourceAcquisitionTests(unittest.TestCase):
         self.assertEqual(len({item.bridged_provenance_id for item in linked_items}), 5)
         self.assertEqual(linked_items[1].bridged_asset_sha256, linked_items[2].bridged_asset_sha256)
         self.assertEqual(linked_items[3].bridged_asset_sha256, linked_items[4].bridged_asset_sha256)
+
+
+    def test_cross_acquisition_unchanged_observations_reuse_without_common_intake(self) -> None:
+        prior_run, prior_items, _ = self._completed_bridge_run()
+        self._establish_completed_bridge_links(prior_run, prior_items)
+        repeat_run, repeat_items, _ = self._completed_bridge_run()
+
+        plan = plan_acquisition_bridge(self.db, UUID(repeat_run.run_uuid))
+        self.assertEqual(plan.expected_asset_delta, 0)
+        self.assertEqual(plan.expected_vault_delta, 0)
+        self.assertEqual(plan.expected_provenance_delta, 0)
+        self.assertTrue(
+            all(item.observation_classification == "reuse_prior_observation" for item in plan.items)
+        )
+        before = (
+            self.db.scalar(select(func.count(SourceIntakeRun.id))),
+            self.db.scalar(select(func.count(IngestionRun.id))),
+            self.db.scalar(select(func.count(Asset.sha256))),
+            self.db.scalar(select(func.count(Provenance.id))),
+        )
+        with patch(
+            "app.services.source_acquisition.service.start_explicit_source_intake",
+            side_effect=AssertionError("Fully reused bridge must not start common intake."),
+        ) as start:
+            completed = execute_acquisition_bridge(
+                self.db, UUID(repeat_run.run_uuid), plan.bridge_plan_digest
+            )
+        after = (
+            self.db.scalar(select(func.count(SourceIntakeRun.id))),
+            self.db.scalar(select(func.count(IngestionRun.id))),
+            self.db.scalar(select(func.count(Asset.sha256))),
+            self.db.scalar(select(func.count(Provenance.id))),
+        )
+        self.assertEqual(completed.bridge_state, "completed")
+        self.assertEqual(before, after)
+        start.assert_not_called()
+        self.db.expire_all()
+        refreshed_run = self.db.get(SourceAcquisitionRun, repeat_run.id)
+        refreshed_items = list(
+            self.db.scalars(
+                select(SourceAcquisitionItem)
+                .where(SourceAcquisitionItem.run_id == repeat_run.id)
+                .order_by(SourceAcquisitionItem.ordinal)
+            )
+        )
+        self.assertIsNone(refreshed_run.bridge_source_intake_run_id)
+        self.assertIsNone(refreshed_run.bridge_ingestion_run_id)
+        self.assertEqual(
+            [(item.bridged_asset_sha256, item.bridged_provenance_id) for item in refreshed_items],
+            [(item.bridged_asset_sha256, item.bridged_provenance_id) for item in prior_items],
+        )
+
+    def test_cross_acquisition_same_hash_different_path_requires_new_provenance(self) -> None:
+        prior_run, prior_items, _ = self._completed_bridge_run()
+        self._establish_completed_bridge_links(prior_run, prior_items)
+        repeat_run, repeat_items, _ = self._completed_bridge_run()
+        changed = repeat_items[0]
+        changed.provider_native_relative_path = "different\\IMG_1.JPG"
+        changed.provider_native_relative_path_normalized = "different\\img_1.jpg"
+        changed.provider_native_relative_path_normalized_digest = _digest(
+            changed.provider_native_relative_path_normalized.encode()
+        )
+        changed.provider_native_full_path = ROOT + "\\different\\IMG_1.JPG"
+        self.db.commit()
+
+        plan = plan_acquisition_bridge(self.db, UUID(repeat_run.run_uuid))
+        self.assertEqual(plan.expected_asset_delta, 0)
+        self.assertEqual(plan.expected_provenance_delta, 1)
+        self.assertEqual(plan.items[0].observation_classification, "common_intake")
+        self.assertTrue(
+            all(
+                item.observation_classification == "reuse_prior_observation"
+                for item in plan.items[1:]
+            )
+        )
+
+    def test_cross_acquisition_mixed_run_sends_only_unmatched_item_to_common_intake(self) -> None:
+        prior_run, prior_items, _ = self._completed_bridge_run()
+        self._establish_completed_bridge_links(prior_run, prior_items)
+        repeat_run, repeat_items, _ = self._completed_bridge_run()
+        changed = repeat_items[0]
+        changed.provider_native_relative_path = "different\\IMG_1.JPG"
+        changed.provider_native_relative_path_normalized = "different\\img_1.jpg"
+        changed.provider_native_relative_path_normalized_digest = _digest(
+            changed.provider_native_relative_path_normalized.encode()
+        )
+        changed.provider_native_full_path = ROOT + "\\different\\IMG_1.JPG"
+        self.db.commit()
+        plan = plan_acquisition_bridge(self.db, UUID(repeat_run.run_uuid))
+        before = (
+            self.db.scalar(select(func.count(SourceIntakeRun.id))),
+            self.db.scalar(select(func.count(IngestionRun.id))),
+            self.db.scalar(select(func.count(Asset.sha256))),
+            self.db.scalar(select(func.count(Provenance.id))),
+        )
+
+        def fake_start(db_session, **kwargs):
+            records = kwargs["explicit_source_records"]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].explicit_order, 1)
+            root = Path(kwargs["runtime_source_root_path"]).resolve()
+            ingestion = IngestionRun(
+                ingestion_source_id=kwargs["ingestion_source_id"], from_path=str(root)
+            )
+            db_session.add(ingestion)
+            db_session.flush()
+            intake = SourceIntakeRun(
+                status="running",
+                ingestion_source_id=kwargs["ingestion_source_id"],
+                source_label=self.profile.source_label,
+                source_type=self.profile.source_type,
+                source_root_path=str(root),
+                intake_mode="acquisition_bridge",
+                source_intake_limit=1,
+                ingest_batch_size=1,
+                started_at=datetime.now(timezone.utc),
+                created_by="source_acquisition_bridge",
+            )
+            db_session.add(intake)
+            db_session.commit()
+            kwargs["on_created"](intake.id)
+            record = records[0]
+            sha256 = hashlib.sha256(Path(record.full_path).read_bytes()).hexdigest()
+            provenance = Provenance(
+                asset_sha256=sha256,
+                source_path=record.original_source_path,
+                ingestion_source_id=kwargs["ingestion_source_id"],
+                ingestion_run_id=ingestion.id,
+                source_label=self.profile.source_label,
+                source_type=self.profile.source_type,
+                source_root_path=str(root),
+                source_relative_path=Path(record.original_source_path).name,
+            )
+            db_session.add(provenance)
+            intake.status = "completed"
+            intake.ingestion_run_id = ingestion.id
+            intake.files_scanned = 1
+            intake.selected = 1
+            intake.staged = 1
+            intake.failed_or_rejected = 0
+            intake.finished_at = datetime.now(timezone.utc)
+            db_session.commit()
+            kwargs["on_finished"](intake.id)
+
+        with (
+            patch("app.services.source_acquisition.service.SessionLocal", self.session_factory),
+            patch(
+                "app.services.source_acquisition.service.start_explicit_source_intake",
+                side_effect=fake_start,
+            ) as start,
+        ):
+            completed = execute_acquisition_bridge(
+                self.db, UUID(repeat_run.run_uuid), plan.bridge_plan_digest
+            )
+        after = (
+            self.db.scalar(select(func.count(SourceIntakeRun.id))),
+            self.db.scalar(select(func.count(IngestionRun.id))),
+            self.db.scalar(select(func.count(Asset.sha256))),
+            self.db.scalar(select(func.count(Provenance.id))),
+        )
+        self.assertEqual(completed.bridge_state, "completed")
+        self.assertEqual(start.call_count, 1)
+        self.assertEqual(
+            tuple(after_value - before_value for before_value, after_value in zip(before, after)),
+            (1, 1, 0, 1),
+        )
+        self.db.expire_all()
+        linked = list(
+            self.db.scalars(
+                select(SourceAcquisitionItem)
+                .where(SourceAcquisitionItem.run_id == repeat_run.id)
+                .order_by(SourceAcquisitionItem.ordinal)
+            )
+        )
+        self.assertNotEqual(linked[0].bridged_provenance_id, prior_items[0].bridged_provenance_id)
+        self.assertEqual(
+            [item.bridged_provenance_id for item in linked[1:]],
+            [item.bridged_provenance_id for item in prior_items[1:]],
+        )
+
+    def test_cross_acquisition_ambiguous_prior_observation_fails_closed(self) -> None:
+        first_run, first_items, _ = self._completed_bridge_run()
+        self._establish_completed_bridge_links(first_run, first_items)
+        second_run, second_items, _ = self._completed_bridge_run()
+        self._establish_completed_bridge_links(second_run, second_items)
+        repeat_run, _, _ = self._completed_bridge_run()
+
+        with self.assertRaises(WindowsHelperServiceError) as raised:
+            plan_acquisition_bridge(self.db, UUID(repeat_run.run_uuid))
+        self.assertEqual(raised.exception.code, "bridge_prior_observation_ambiguous")
+
+    def test_cross_acquisition_same_path_changed_content_common_intake(self) -> None:
+        prior_run, prior_items, _ = self._completed_bridge_run()
+        self._establish_completed_bridge_links(prior_run, prior_items)
+        repeat_run, repeat_items, _ = self._completed_bridge_run()
+        changed = repeat_items[0]
+        changed_content = b"changed!"
+        ready_path = Path(repeat_run.receiving_root) / changed.ready_relative_path
+        ready_path.write_bytes(changed_content)
+        changed.expected_size_bytes = len(changed_content)
+        changed.verified_byte_count = len(changed_content)
+        changed.committed_offset = len(changed_content)
+        changed.helper_source_sha256 = _digest(changed_content)
+        changed.linux_verified_sha256 = _digest(changed_content)
+        repeat_run.expected_byte_count = sum(item.expected_size_bytes for item in repeat_items)
+        repeat_run.committed_byte_count = repeat_run.expected_byte_count
+        self.db.commit()
+
+        plan = plan_acquisition_bridge(self.db, UUID(repeat_run.run_uuid))
+        self.assertEqual(plan.expected_asset_delta, 1)
+        self.assertEqual(plan.expected_provenance_delta, 1)
+        self.assertEqual(plan.items[0].observation_classification, "common_intake")
+
 
 
 if __name__ == "__main__":

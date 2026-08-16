@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session
@@ -19,6 +20,7 @@ from app.schemas.admin import (
     RunIngestionDispatchRequest,
     RunIngestionFilesystemOptions,
     RunIngestionIcloudOptions,
+    RunIngestionWindowsHelperOptions,
 )
 from app.services.admin.run_ingestion_dispatch_service import RunIngestionDispatchError, RunIngestionDispatchService
 from app.services.source_identity.probe_service import SourceIdentityProbeService
@@ -36,10 +38,12 @@ class _FakeSelectionService:
         self.response = response
         self.calls: list[int] = []
         self.acknowledgment_calls: list[bool] = []
+        self.requests = []
 
     def select_source(self, request, *, operator_acknowledged: bool = False):  # noqa: ANN001
         self.calls.append(request.source_profile_id)
         self.acknowledgment_calls.append(operator_acknowledged)
+        self.requests.append(request)
         return self.response
 
 
@@ -678,6 +682,108 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         self.assertEqual(result.result, "blocked")
         self.assertEqual(result.status, "operation_conflict")
         mocked_start.assert_not_called()
+
+    def test_windows_helper_dispatch_revalidates_probe_and_starts_inventory(self) -> None:
+        probe_operation_id = uuid4()
+        selection = SourceSelectionResponse(
+            result="selected",
+            availability="available",
+            workflow_kind="windows_helper_intake",
+            selected_source_context=SelectedSourceContext(
+                source_profile_id=3,
+                source_endpoint_id=2,
+                source_type="local",
+                friendly_source_type="Local",
+                device_label="Chuck_Notebook",
+                source_name="Controlled Windows Local",
+                profile_status="active",
+                endpoint_status="active",
+                endpoint_relative_root=None,
+                configured_source_root=r"C:\Controlled",
+                resolved_source_root=None,
+                resolved_endpoint_path=None,
+                root_display=r"C:\Controlled",
+                durable_identity_status="verified",
+                identity_match_status="matched",
+                availability="available",
+                workflow_kind="windows_helper_intake",
+                provider_context={"can_run_source_intake": False},
+                selection_fingerprint="windows-fingerprint",
+            ),
+            message="Controlled Windows Local is available through the Helper.",
+        )
+        fake_selection = _FakeSelectionService(selection)
+        service = RunIngestionDispatchService(
+            self.db, source_selection_service=fake_selection
+        )
+        operation = SimpleNamespace(
+            operation_id=uuid4(),
+            operation_type="inventory_page",
+            state="pending",
+            request_digest="sha256:" + "a" * 64,
+            expires_at=SimpleNamespace(isoformat=lambda: "2026-08-16T00:00:00+00:00"),
+        )
+
+        with patch(
+            "app.services.admin.run_ingestion_dispatch_service.create_inventory_operation",
+            return_value=operation,
+        ) as create_inventory:
+            result = service.dispatch(
+                RunIngestionDispatchRequest(
+                    source_profile_id=3,
+                    selection_fingerprint="windows-fingerprint",
+                    windows_helper_options=RunIngestionWindowsHelperOptions(
+                        helper_probe_operation_id=probe_operation_id,
+                        inventory_page_size=25,
+                    ),
+                )
+            )
+
+        self.assertEqual(result.result, "started")
+        self.assertEqual(result.workflow_kind, "windows_helper_intake")
+        self.assertEqual(result.action, "windows_helper_inventory_started")
+        self.assertEqual(result.status, "awaiting_helper_inventory")
+        self.assertEqual(
+            fake_selection.requests[0].helper_probe_operation_id, probe_operation_id
+        )
+        body = create_inventory.call_args.args[1]
+        self.assertEqual(body.source_profile_id, 3)
+        self.assertEqual(body.probe_operation_id, probe_operation_id)
+        self.assertEqual(body.page_size, 25)
+        self.assertIsNone(selection.selected_source_context.resolved_source_root)
+
+    def test_windows_helper_dispatch_requires_probe_options(self) -> None:
+        selection = SourceSelectionResponse(
+            result="selected",
+            availability="available",
+            workflow_kind="windows_helper_intake",
+            selected_source_context=SelectedSourceContext(
+                source_profile_id=3,
+                source_endpoint_id=2,
+                source_type="local",
+                friendly_source_type="Local",
+                device_label="Chuck_Notebook",
+                source_name="Controlled Windows Local",
+                profile_status="active",
+                endpoint_status="active",
+                configured_source_root=r"C:\Controlled",
+                resolved_source_root=None,
+                resolved_endpoint_path=None,
+                root_display=r"C:\Controlled",
+                durable_identity_status="verified",
+                identity_match_status="matched",
+                availability="available",
+                workflow_kind="windows_helper_intake",
+                selection_fingerprint="windows-fingerprint",
+            ),
+            message="Controlled Windows Local is available through the Helper.",
+        )
+        service = RunIngestionDispatchService(
+            self.db, source_selection_service=_FakeSelectionService(selection)
+        )
+        with self.assertRaises(RunIngestionDispatchError) as raised:
+            service.dispatch(RunIngestionDispatchRequest(source_profile_id=3))
+        self.assertEqual(raised.exception.code, "WINDOWS_HELPER_OPTIONS_REQUIRED")
 
     def test_icloud_options_are_rejected_for_filesystem_workflow(self) -> None:
         service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(self._selection()))

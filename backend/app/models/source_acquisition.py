@@ -69,8 +69,9 @@ class SourceAcquisitionItem(Base):
         UniqueConstraint("run_id", "candidate_reference", name="uq_source_acquisition_item_candidate"),
         UniqueConstraint("run_id", "provider_native_relative_path_normalized_digest", name="uq_source_acquisition_item_path"),
         UniqueConstraint(
+            "run_id",
             "bridged_provenance_id",
-            name="uq_source_acquisition_items_bridged_provenance_id",
+            name="uq_source_acquisition_items_run_bridged_provenance_id",
         ),
     )
 

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db_session
 from app.schemas.source_acquisition import (
     ActivateSourceAcquisitionRequest,
+    AdvanceSourceAcquisitionWorkflowRequest,
     CreateAcquireItemOperationRequest,
     CreateSourceAcquisitionPlanRequest,
     ExecuteSourceAcquisitionBridgeRequest,
@@ -17,8 +18,10 @@ from app.schemas.source_acquisition import (
     SourceAcquisitionCleanupResponse,
     SourceAcquisitionOperationResponse,
     SourceAcquisitionRunResponse,
+    SourceAcquisitionWorkflowResponse,
 )
 from app.services.source_acquisition.receiving import cleanup_failed_partials
+from app.services.source_acquisition.workflow import advance_source_acquisition_workflow
 from app.services.source_acquisition.service import (
     activate_run,
     create_planned_run,
@@ -101,6 +104,20 @@ def execute_bridge(
 ) -> SourceAcquisitionBridgePlanResponse:
     try:
         return execute_acquisition_bridge(db, run_id, body.bridge_plan_digest)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{run_id}/advance", response_model=SourceAcquisitionWorkflowResponse)
+def advance_workflow(
+    run_id: UUID,
+    body: AdvanceSourceAcquisitionWorkflowRequest,
+    db: Session = Depends(get_db_session),
+) -> SourceAcquisitionWorkflowResponse:
+    try:
+        return advance_source_acquisition_workflow(
+            db, run_id, proposal_digest=body.proposal_digest
+        )
     except WindowsHelperServiceError as exc:
         _raise_http(exc)
 

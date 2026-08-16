@@ -1,7 +1,7 @@
 """Selected-source Run Ingestion dispatch service.
 
 This is the thin Step 3 integration seam. It revalidates Source Selection,
-then routes to the existing filesystem Source Intake or iCloud Intake
+then routes to the existing filesystem, iCloud, or Windows Helper Intake
 authorities without creating new selected-source persistence.
 """
 
@@ -47,7 +47,10 @@ from app.services.source_identity.stored_linux_location import (
     StoredLinuxLocationError,
     load_stored_linux_location,
 )
+from app.schemas.windows_helper import CreateWindowsHelperInventoryOperationRequest
 from app.services.source_identity.source_selection_schema import SourceSelectionResponse
+from app.services.windows_helper.operations import create_inventory_operation
+from app.services.windows_helper.service import WindowsHelperServiceError
 
 
 DEFAULT_FILESYSTEM_BATCH_SIZE = 500
@@ -87,7 +90,14 @@ class RunIngestionDispatchService:
             filesystem_options.acknowledge_legacy_or_review
         ) if filesystem_options is not None else False
         selection = self._source_selection_service.select_source(
-            SourceSelectionRequest(source_profile_id=request.source_profile_id),
+            SourceSelectionRequest(
+                source_profile_id=request.source_profile_id,
+                helper_probe_operation_id=(
+                    request.windows_helper_options.helper_probe_operation_id
+                    if request.windows_helper_options is not None
+                    else None
+                ),
+            ),
             operator_acknowledged=acknowledged,
         )
         blocked = self._blocked_for_unselected(request.source_profile_id, selection)
@@ -120,6 +130,11 @@ class RunIngestionDispatchService:
             )
 
         if selection.workflow_kind == "filesystem_source_intake":
+            if request.windows_helper_options is not None:
+                raise RunIngestionDispatchError(
+                    "Windows Helper options are not valid for filesystem Source Intake.",
+                    code="WINDOWS_OPTIONS_FOR_FILESYSTEM_WORKFLOW",
+                )
             if request.icloud_options is not None:
                 raise RunIngestionDispatchError(
                     "iCloud options are not valid for filesystem Source Intake.",
@@ -128,12 +143,58 @@ class RunIngestionDispatchService:
             return self._dispatch_filesystem(request, selection)
 
         if selection.workflow_kind == "icloud_intake":
+            if request.windows_helper_options is not None:
+                raise RunIngestionDispatchError(
+                    "Windows Helper options are not valid for iCloud Intake.",
+                    code="WINDOWS_OPTIONS_FOR_ICLOUD_WORKFLOW",
+                )
             if request.filesystem_options is not None:
                 raise RunIngestionDispatchError(
                     "Filesystem options are not valid for iCloud Intake.",
                     code="FILESYSTEM_OPTIONS_FOR_ICLOUD_WORKFLOW",
                 )
             return self._dispatch_icloud(request, selection)
+
+        if selection.workflow_kind == "windows_helper_intake":
+            if request.filesystem_options is not None or request.icloud_options is not None:
+                raise RunIngestionDispatchError(
+                    "Filesystem and iCloud options are not valid for Windows Helper Intake.",
+                    code="OTHER_OPTIONS_FOR_WINDOWS_WORKFLOW",
+                )
+            options = request.windows_helper_options
+            if options is None:
+                raise RunIngestionDispatchError(
+                    "A completed Helper readiness probe is required for Windows Helper Intake.",
+                    code="WINDOWS_HELPER_OPTIONS_REQUIRED",
+                )
+            try:
+                operation = create_inventory_operation(
+                    self._db,
+                    CreateWindowsHelperInventoryOperationRequest(
+                        source_profile_id=request.source_profile_id,
+                        probe_operation_id=options.helper_probe_operation_id,
+                        page_size=options.inventory_page_size,
+                    ),
+                )
+            except WindowsHelperServiceError as exc:
+                raise RunIngestionDispatchError(exc.message, code=exc.code.upper()) from exc
+            return RunIngestionDispatchResponse(
+                result="started",
+                workflow_kind="windows_helper_intake",
+                action="windows_helper_inventory_started",
+                message="Windows Helper inventory was authorized for the selected Source.",
+                next_action="Wait for the Helper operation, then review the bounded candidate set.",
+                source_profile_id=request.source_profile_id,
+                status="awaiting_helper_inventory",
+                workflow_payload={
+                    "selection": _safe_payload(selection),
+                    "operation_id": str(operation.operation_id),
+                    "operation_type": operation.operation_type,
+                    "operation_state": operation.state,
+                    "request_digest": operation.request_digest,
+                    "expires_at": operation.expires_at.isoformat(),
+                },
+            )
 
         return RunIngestionDispatchResponse(
             result="blocked",

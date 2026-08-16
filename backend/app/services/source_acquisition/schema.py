@@ -39,8 +39,10 @@ INDEX_DDLS = {
 
 CONSTRAINT_DDLS = {
     "uq_source_acquisition_runs_bridge_source_intake_run_id": "ALTER TABLE source_acquisition_runs ADD CONSTRAINT uq_source_acquisition_runs_bridge_source_intake_run_id UNIQUE (bridge_source_intake_run_id)",
-    "uq_source_acquisition_items_bridged_provenance_id": "ALTER TABLE source_acquisition_items ADD CONSTRAINT uq_source_acquisition_items_bridged_provenance_id UNIQUE (bridged_provenance_id)",
+    "uq_source_acquisition_items_run_bridged_provenance_id": "ALTER TABLE source_acquisition_items ADD CONSTRAINT uq_source_acquisition_items_run_bridged_provenance_id UNIQUE (run_id, bridged_provenance_id)",
 }
+
+LEGACY_GLOBAL_PROVENANCE_CONSTRAINT = "uq_source_acquisition_items_bridged_provenance_id"
 
 
 def ensure_source_acquisition_schema(db_session: Session) -> SourceAcquisitionSchemaSummary:
@@ -96,6 +98,14 @@ def ensure_source_acquisition_schema(db_session: Session) -> SourceAcquisitionSc
             )
             if constraint.get("name")
         }
+        if LEGACY_GLOBAL_PROVENANCE_CONSTRAINT in constraint_names:
+            db_session.execute(
+                text(
+                    "ALTER TABLE source_acquisition_items DROP CONSTRAINT IF EXISTS "
+                    + LEGACY_GLOBAL_PROVENANCE_CONSTRAINT
+                )
+            )
+            constraint_names.remove(LEGACY_GLOBAL_PROVENANCE_CONSTRAINT)
         for constraint_name, ddl in CONSTRAINT_DDLS.items():
             if constraint_name not in constraint_names:
                 db_session.execute(text(ddl))

@@ -102,6 +102,8 @@ class SourceAcquisitionBridgeItemResult(_StrictModel):
     provider_native_relative_path: str
     runtime_relative_path: str
     linux_verified_sha256: str
+    observation_classification: Literal["common_intake", "reuse_prior_observation"]
+    reused_from_acquisition_item_id: UUID | None = None
     asset_sha256: str | None = None
     provenance_id: int | None = None
 
@@ -128,6 +130,28 @@ class SourceAcquisitionBridgePlanResponse(_StrictModel):
 
 class ExecuteSourceAcquisitionBridgeRequest(_StrictModel):
     bridge_plan_digest: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class AdvanceSourceAcquisitionWorkflowRequest(_StrictModel):
+    proposal_digest: str | None = Field(
+        default=None, min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+
+
+class SourceAcquisitionWorkflowResponse(_StrictModel):
+    acquisition_run_id: UUID
+    stage: Literal[
+        "awaiting_approval",
+        "awaiting_helper",
+        "bridge_running",
+        "completed",
+        "failed",
+    ]
+    acquisition: SourceAcquisitionRunResponse
+    helper_operation_id: UUID | None = None
+    helper_operation_state: Literal["pending", "claimed"] | None = None
+    bridge: SourceAcquisitionBridgePlanResponse | None = None
+    message: str
 
 
 class SourceAcquisitionCleanupResponse(_StrictModel):
