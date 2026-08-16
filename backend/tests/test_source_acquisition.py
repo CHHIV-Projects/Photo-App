@@ -11,13 +11,17 @@ import unittest
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings as application_settings
+from app.models.asset import Asset
+from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
+from app.models.provenance import Provenance
 from app.models.source_acquisition import SourceAcquisitionItem, SourceAcquisitionRun
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
+from app.models.source_intake_run import SourceIntakeRun
 from app.models.windows_helper import WindowsHelperCredential, WindowsHelperOperation
 from app.schemas.source_acquisition import CreateSourceAcquisitionPlanRequest
 from app.services.source_acquisition.receiving import (
@@ -26,7 +30,12 @@ from app.services.source_acquisition.receiving import (
     commit_chunk,
 )
 from app.services.source_acquisition.schema import ensure_source_acquisition_schema
-from app.services.source_acquisition.service import activate_run, create_planned_run
+from app.services.source_acquisition.service import (
+    activate_run,
+    create_planned_run,
+    execute_acquisition_bridge,
+    plan_acquisition_bridge,
+)
 from app.services.windows_helper.operations import (
     complete_acquire_operation,
     create_acquire_operation,
@@ -115,6 +124,10 @@ class SourceAcquisitionTests(unittest.TestCase):
             application_settings,
             acquisition_receiving_path=str(self.receiving_base),
             acquisition_disk_reserve_bytes=0,
+            drop_zone_path=str(Path(self.temporary.name) / "drop-zone"),
+            vault_path=str(Path(self.temporary.name) / "vault"),
+            quarantine_path=str(Path(self.temporary.name) / "quarantine"),
+            ingest_failures_path=str(Path(self.temporary.name) / "ingest-failures"),
         )
         self.settings_patches = [
             patch("app.services.source_acquisition.service.settings", self.test_settings),
@@ -127,8 +140,20 @@ class SourceAcquisitionTests(unittest.TestCase):
         AccessNode.__table__.create(self.engine)
         SourceEndpoint.__table__.create(self.engine)
         IngestionSource.__table__.create(self.engine)
+        IngestionRun.__table__.create(self.engine)
+        SourceIntakeRun.__table__.create(self.engine)
+        Asset.__table__.create(self.engine)
+        Provenance.__table__.create(self.engine)
         SourceEndpointObservedPath.__table__.create(self.engine)
-        self.db = Session(self.engine, expire_on_commit=False)
+        self.session_factory = sessionmaker(bind=self.engine, expire_on_commit=False)
+        self.db = self.session_factory()
+        for runtime_path in (
+            self.test_settings.drop_zone_path,
+            self.test_settings.vault_path,
+            self.test_settings.quarantine_path,
+            self.test_settings.ingest_failures_path,
+        ):
+            Path(runtime_path).mkdir(parents=True, exist_ok=True)
         ensure_windows_helper_schema(self.db)
         ensure_source_acquisition_schema(self.db)
 
@@ -849,6 +874,255 @@ class SourceAcquisitionTests(unittest.TestCase):
         self.assertEqual((removed, preserved), (1, 1))
         self.assertFalse(failed_partial.exists())
         self.assertEqual(ready.read_bytes(), content)
+
+
+    def _completed_bridge_run(self) -> tuple[SourceAcquisitionRun, list[SourceAcquisitionItem], list[bytes]]:
+        self.receiving_base.mkdir(parents=True, mode=0o700, exist_ok=True)
+        run_uuid = uuid4()
+        run_root = self.receiving_base / str(run_uuid)
+        (run_root / "partial").mkdir(parents=True, mode=0o700)
+        (run_root / "ready").mkdir(mode=0o700)
+        contents = [b"unique-a", b"duplicate-b", b"duplicate-b", b"duplicate-c", b"duplicate-c"]
+        names = ["IMG_1.JPG", "IMG_2 (1).JPG", "IMG_2.JPG", "IMG_3 (1).JPG", "IMG_3.JPG"]
+        run = SourceAcquisitionRun(
+            run_uuid=str(run_uuid),
+            idempotency_key=str(uuid4()),
+            provider="windows_helper",
+            access_node_id=self.node.id,
+            source_endpoint_id=self.endpoint.id,
+            source_profile_id=self.profile.id,
+            inventory_generation=str(uuid4()),
+            inventory_chain_digest="sha256:" + "1" * 64,
+            proposal_digest="sha256:" + "2" * 64,
+            source_fingerprint=FINGERPRINT,
+            provider_native_root=ROOT,
+            receiving_root=str(run_root),
+            state="completed",
+            selected_item_count=5,
+            expected_byte_count=sum(len(content) for content in contents),
+            committed_byte_count=sum(len(content) for content in contents),
+            ready_item_count=5,
+            failed_item_count=0,
+            disk_free_bytes_at_plan=10**12,
+            disk_reserve_bytes=0,
+            completed_at=datetime.now(timezone.utc),
+        )
+        self.db.add(run)
+        self.db.flush()
+        items: list[SourceAcquisitionItem] = []
+        for ordinal, (content, name) in enumerate(zip(contents, names, strict=True), start=1):
+            item_uuid = uuid4()
+            digest = _digest(content)
+            item = SourceAcquisitionItem(
+                item_uuid=str(item_uuid),
+                run_id=run.id,
+                ordinal=ordinal,
+                candidate_reference=f"candidate_{ordinal}",
+                inventory_generation=run.inventory_generation,
+                provider_native_root=ROOT,
+                provider_native_relative_path=name,
+                provider_native_relative_path_normalized=name.casefold(),
+                provider_native_relative_path_normalized_digest=_digest(name.casefold().encode()),
+                provider_native_full_path=ROOT + "\\" + name,
+                filename=name,
+                safe_extension=".jpg",
+                expected_size_bytes=len(content),
+                expected_modified_time_ns=ordinal,
+                expected_file_id_digest=None,
+                source_fingerprint=FINGERPRINT,
+                windows_file_attributes=0,
+                local_residency="resident",
+                eligibility_reason="current_linux_media_policy",
+                state="ready",
+                committed_offset=len(content),
+                verified_byte_count=len(content),
+                helper_source_sha256=digest,
+                linux_verified_sha256=digest,
+                partial_relative_path=f"partial/{item_uuid}.part",
+                ready_relative_path=f"ready/{item_uuid}.jpg",
+                completed_at=datetime.now(timezone.utc),
+            )
+            ready = run_root / item.ready_relative_path
+            ready.write_bytes(content)
+            ready.chmod(0o600)
+            self.db.add(item)
+            items.append(item)
+        self.db.commit()
+        return run, items, contents
+
+    def test_bridge_plan_reverifies_exact_ready_set_and_predicts_three_content_results(self) -> None:
+        run, items, _ = self._completed_bridge_run()
+        plan = plan_acquisition_bridge(self.db, UUID(run.run_uuid))
+        self.assertEqual(plan.bridge_state, "not_started")
+        self.assertEqual(plan.item_count, 5)
+        self.assertEqual(plan.unique_content_count, 3)
+        self.assertEqual(plan.expected_asset_delta, 3)
+        self.assertEqual(plan.expected_vault_delta, 3)
+        self.assertEqual(plan.expected_provenance_delta, 5)
+        self.assertEqual([item.ordinal for item in plan.items], [1, 2, 3, 4, 5])
+        self.assertEqual({item.classification for item in plan.classifications}, {"new_content"})
+        self.assertTrue(all(item.runtime_relative_path.endswith(".jpg") for item in plan.items))
+
+        known_content = Path(run.receiving_root, items[0].ready_relative_path).read_bytes()
+        known_sha256 = hashlib.sha256(known_content).hexdigest()
+        known_vault = (
+            Path(self.test_settings.vault_path) / known_sha256[:2] / f"{known_sha256}.jpg"
+        )
+        known_vault.parent.mkdir(parents=True, exist_ok=True)
+        known_vault.write_bytes(known_content)
+        self.db.add(
+            Asset(
+                sha256=known_sha256,
+                vault_path=str(known_vault),
+                original_filename="existing.jpg",
+                original_source_path="existing/original.jpg",
+                extension=".jpg",
+                size_bytes=len(known_content),
+                modified_timestamp_utc=datetime.now(timezone.utc),
+            )
+        )
+        self.db.commit()
+        exact_known_plan = plan_acquisition_bridge(self.db, UUID(run.run_uuid))
+        self.assertEqual(exact_known_plan.expected_asset_delta, 2)
+        self.assertEqual(exact_known_plan.expected_vault_delta, 2)
+        self.assertEqual(
+            [item.classification for item in exact_known_plan.classifications].count(
+                "exact_known"
+            ),
+            1,
+        )
+
+        ready = Path(run.receiving_root) / items[0].ready_relative_path
+        original = ready.read_bytes()
+        ready.unlink()
+        ready.symlink_to(Path(run.receiving_root) / items[1].ready_relative_path)
+        with self.assertRaises(WindowsHelperServiceError):
+            plan_acquisition_bridge(self.db, UUID(run.run_uuid))
+        ready.unlink()
+        ready.write_bytes(original)
+        ready.chmod(0o600)
+
+        ready.write_bytes(b"changed!")
+        with self.assertRaises(WindowsHelperServiceError):
+            plan_acquisition_bridge(self.db, UUID(run.run_uuid))
+
+    def test_bridge_execute_links_five_items_and_repeat_is_zero_delta(self) -> None:
+        run, items, _ = self._completed_bridge_run()
+        plan = plan_acquisition_bridge(self.db, UUID(run.run_uuid))
+
+        def fake_start(db_session, **kwargs):
+            root = Path(kwargs["runtime_source_root_path"]).resolve()
+            self.assertEqual(
+                [record.explicit_order for record in kwargs["explicit_source_records"]],
+                [1, 2, 3, 4, 5],
+            )
+            ingestion = IngestionRun(
+                ingestion_source_id=kwargs["ingestion_source_id"], from_path=str(root)
+            )
+            db_session.add(ingestion)
+            db_session.flush()
+            intake = SourceIntakeRun(
+                status="running",
+                ingestion_source_id=kwargs["ingestion_source_id"],
+                ingestion_run_id=None,
+                source_label=self.profile.source_label,
+                source_type=self.profile.source_type,
+                source_root_path=str(root),
+                intake_mode="acquisition_bridge",
+                source_intake_limit=5,
+                ingest_batch_size=5,
+                started_at=datetime.now(timezone.utc),
+                created_by="source_acquisition_bridge",
+            )
+            db_session.add(intake)
+            db_session.commit()
+            kwargs["on_created"](intake.id)
+
+            first_by_hash: dict[str, str] = {}
+            for record in kwargs["explicit_source_records"]:
+                digest = hashlib.sha256(Path(record.full_path).read_bytes()).hexdigest()
+                asset = db_session.get(Asset, digest)
+                if asset is None:
+                    first_by_hash[digest] = record.asset_original_source_path or ""
+                    vault = Path(self.test_settings.vault_path) / digest[:2] / f"{digest}.jpg"
+                    vault.parent.mkdir(parents=True, exist_ok=True)
+                    vault.write_bytes(Path(record.full_path).read_bytes())
+                    asset = Asset(
+                        sha256=digest,
+                        vault_path=str(vault),
+                        original_filename=record.original_filename,
+                        original_source_path=first_by_hash[digest],
+                        extension=record.extension,
+                        size_bytes=record.size_bytes,
+                        modified_timestamp_utc=datetime.now(timezone.utc),
+                    )
+                    db_session.add(asset)
+                    db_session.flush()
+                db_session.add(
+                    Provenance(
+                        asset_sha256=digest,
+                        source_path=record.original_source_path,
+                        ingestion_source_id=kwargs["ingestion_source_id"],
+                        ingestion_run_id=ingestion.id,
+                        source_label=self.profile.source_label,
+                        source_type=self.profile.source_type,
+                        source_root_path=str(root),
+                        source_relative_path=Path(record.original_source_path).name,
+                    )
+                )
+            db_session.flush()
+            intake.status = "completed"
+            intake.ingestion_run_id = ingestion.id
+            intake.files_scanned = 5
+            intake.selected = 5
+            intake.staged = 5
+            intake.finished_at = datetime.now(timezone.utc)
+            db_session.commit()
+            kwargs["on_finished"](intake.id)
+
+        with (
+            patch("app.services.source_acquisition.service.SessionLocal", self.session_factory),
+            patch(
+                "app.services.source_acquisition.service.start_explicit_source_intake",
+                side_effect=fake_start,
+            ) as start,
+        ):
+            completed = execute_acquisition_bridge(
+                self.db, UUID(run.run_uuid), plan.bridge_plan_digest
+            )
+            self.assertEqual(completed.bridge_state, "completed")
+            self.assertEqual(start.call_count, 1)
+            before = (
+                self.db.scalar(select(func.count(SourceIntakeRun.id))),
+                self.db.scalar(select(func.count(IngestionRun.id))),
+                self.db.scalar(select(func.count(Asset.sha256))),
+                self.db.scalar(select(func.count(Provenance.id))),
+            )
+            repeated = execute_acquisition_bridge(
+                self.db, UUID(run.run_uuid), plan.bridge_plan_digest
+            )
+            after = (
+                self.db.scalar(select(func.count(SourceIntakeRun.id))),
+                self.db.scalar(select(func.count(IngestionRun.id))),
+                self.db.scalar(select(func.count(Asset.sha256))),
+                self.db.scalar(select(func.count(Provenance.id))),
+            )
+        self.assertEqual(repeated.bridge_state, "completed")
+        self.assertEqual(start.call_count, 1)
+        self.assertEqual(before, after)
+        self.assertEqual(before, (1, 1, 3, 5))
+        self.db.expire_all()
+        linked_items = list(
+            self.db.scalars(
+                select(SourceAcquisitionItem)
+                .where(SourceAcquisitionItem.run_id == run.id)
+                .order_by(SourceAcquisitionItem.ordinal)
+            )
+        )
+        self.assertTrue(all(item.bridged_asset_sha256 for item in linked_items))
+        self.assertEqual(len({item.bridged_provenance_id for item in linked_items}), 5)
+        self.assertEqual(linked_items[1].bridged_asset_sha256, linked_items[2].bridged_asset_sha256)
+        self.assertEqual(linked_items[3].bridged_asset_sha256, linked_items[4].bridged_asset_sha256)
 
 
 if __name__ == "__main__":

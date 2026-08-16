@@ -15,6 +15,12 @@ class SourceAcquisitionRun(Base):
     """One immutable selected-candidate proposal and its transfer lifecycle."""
 
     __tablename__ = "source_acquisition_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "bridge_source_intake_run_id",
+            name="uq_source_acquisition_runs_bridge_source_intake_run_id",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     run_uuid: Mapped[str] = mapped_column(String(36), nullable=False, unique=True, index=True, default=lambda: str(uuid4()))
@@ -43,6 +49,12 @@ class SourceAcquisitionRun(Base):
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bridge_state: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started", index=True)
+    bridge_source_intake_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bridge_ingestion_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bridge_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bridge_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bridge_failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     items: Mapped[list["SourceAcquisitionItem"]] = relationship(
         back_populates="run", cascade="all, delete-orphan", order_by="SourceAcquisitionItem.ordinal"
@@ -56,6 +68,10 @@ class SourceAcquisitionItem(Base):
     __table_args__ = (
         UniqueConstraint("run_id", "candidate_reference", name="uq_source_acquisition_item_candidate"),
         UniqueConstraint("run_id", "provider_native_relative_path_normalized_digest", name="uq_source_acquisition_item_path"),
+        UniqueConstraint(
+            "bridged_provenance_id",
+            name="uq_source_acquisition_items_bridged_provenance_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -93,5 +109,7 @@ class SourceAcquisitionItem(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bridged_asset_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    bridged_provenance_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     run: Mapped[SourceAcquisitionRun] = relationship(back_populates="items")

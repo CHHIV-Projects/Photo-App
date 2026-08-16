@@ -23,6 +23,7 @@ from app.models.source_endpoint import AccessNode, SourceEndpoint
 from app.services.ingestion import pipeline_orchestrator as pipeline
 from app.services.ingestion import storage_manager
 from app.services.ingestion.pipeline_orchestrator import PipelineContext, RuntimeArgs
+from app.services.ingestion.scanner import FileScanRecord
 
 
 def _content(seed: bytes) -> bytes:
@@ -293,6 +294,93 @@ class SourceIntakeProvenanceVaultHardeningTests(unittest.TestCase):
             return self.root / normalized.removeprefix("../")
         return self.root / normalized.replace("../", "")
 
+    def test_explicit_windows_records_preserve_runtime_provenance_and_first_asset_origin(self) -> None:
+        ready_root = self._source_root("windows-ready")
+        source = self._add_modern_source("Windows Profile", ready_root, endpoint_type="local")
+        source.source_root_path = r"C:\Users\operator\Pictures\Controlled"
+        source.source_root_path_normalized = source.source_root_path.casefold()
+        self.db.commit()
+
+        contents = [
+            _content(b"known-content"),
+            _content(b"duplicate-a"),
+            _content(b"duplicate-a"),
+            _content(b"duplicate-b"),
+            _content(b"duplicate-b"),
+        ]
+        windows_names = [
+            "IMG_3310.JPG",
+            "IMG_3410 (1).JPG",
+            "IMG_3410.JPG",
+            "IMG_3423 (1).JPG",
+            "IMG_3423.JPG",
+        ]
+        opaque_names = [
+            "opaque-z.jpg",
+            "opaque-y.jpg",
+            "opaque-a.jpg",
+            "opaque-x.jpg",
+            "opaque-b.jpg",
+        ]
+        ready_files = [
+            self._write_source_file(ready_root, opaque_name, content)
+            for opaque_name, content in zip(opaque_names, contents, strict=True)
+        ]
+        known_sha256 = hashlib.sha256(contents[0]).hexdigest()
+        known_vault = self.vault / known_sha256[:2] / f"{known_sha256}.jpg"
+        known_vault.parent.mkdir(parents=True)
+        known_vault.write_bytes(contents[0])
+        self._seed_existing_asset(known_sha256, known_vault, len(contents[0]))
+
+        records = []
+        for explicit_order, (ready_file, windows_name) in enumerate(
+            zip(ready_files, windows_names, strict=True), start=1
+        ):
+            metadata = ready_file.stat()
+            records.append(
+                FileScanRecord(
+                    full_path=str(ready_file.resolve()),
+                    file_name=ready_file.name,
+                    extension=".jpg",
+                    size_bytes=metadata.st_size,
+                    modified_timestamp_utc=datetime.fromtimestamp(
+                        metadata.st_mtime, tz=UTC
+                    ).isoformat(),
+                    original_source_path=str(ready_file.resolve()),
+                    original_filename=windows_name,
+                    asset_original_source_path=(
+                        r"C:\Users\operator\Pictures\Controlled" + "\\" + windows_name
+                    ),
+                    explicit_order=explicit_order,
+                )
+            )
+
+        ctx = self._run_pipeline(source, ready_root, records)
+
+        self.assertEqual(ctx.source_files_scanned_total, 5)
+        self.assertEqual(self._count(Asset.sha256), 3)
+        self.assertEqual(self._count(Provenance.id), 5)
+        self.assertEqual(self.db.get(Asset, known_sha256).original_source_path, "first/source/existing.jpg")
+        for content, first_index in ((contents[1], 1), (contents[3], 3)):
+            asset = self.db.get(Asset, hashlib.sha256(content).hexdigest())
+            self.assertEqual(asset.original_source_path, records[first_index].asset_original_source_path)
+            self.assertEqual(asset.original_filename, records[first_index].original_filename)
+        provenance_rows = list(self.db.scalars(select(Provenance).order_by(Provenance.id)))
+        self.assertEqual({row.ingestion_source_id for row in provenance_rows}, {source.id})
+        self.assertEqual({row.source_root_path for row in provenance_rows}, {str(ready_root.resolve())})
+        self.assertEqual(
+            {row.source_path for row in provenance_rows},
+            {str(path.resolve()) for path in ready_files},
+        )
+        self.assertFalse(
+            any(r"C:\Users\operator" in row.source_path for row in provenance_rows)
+        )
+        self.db.expire_all()
+        self.assertEqual(
+            self.db.get(IngestionSource, source.id).source_root_path,
+            r"C:\Users\operator\Pictures\Controlled",
+        )
+
     def _noop_stage(self, _ctx) -> dict[str, str]:
         return {"scope": "test", "status": "skipped"}
 
@@ -304,7 +392,12 @@ class SourceIntakeProvenanceVaultHardeningTests(unittest.TestCase):
             "assets_canonical_processed": 0,
         }
 
-    def _run_pipeline(self, source: IngestionSource, source_root: Path) -> PipelineContext:
+    def _run_pipeline(
+        self,
+        source: IngestionSource,
+        source_root: Path,
+        explicit_records: list[FileScanRecord] | None = None,
+    ) -> PipelineContext:
         ctx = PipelineContext(
             from_path=source_root.resolve(),
             drop_zone_path=self.drop_zone,
@@ -316,6 +409,7 @@ class SourceIntakeProvenanceVaultHardeningTests(unittest.TestCase):
             source_label=source.source_label,
             source_type=source.source_type,
             ingestion_source_id=source.id,
+            explicit_source_records=list(explicit_records or []),
         )
         args = RuntimeArgs(
             from_path=ctx.from_path,

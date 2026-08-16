@@ -11,19 +11,42 @@ from pathlib import Path, PureWindowsPath
 import shutil
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.db.session import SessionLocal
+from app.models.asset import Asset
+from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
 from app.models.source_acquisition import SourceAcquisitionItem, SourceAcquisitionRun
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
+from app.models.source_intake_run import SourceIntakeRun
+from app.models.provenance import Provenance
 from app.models.windows_helper import WindowsHelperOperation
 from app.schemas.source_acquisition import (
     CreateSourceAcquisitionPlanRequest,
+    SourceAcquisitionBridgeCounts,
+    SourceAcquisitionBridgeHashClassification,
+    SourceAcquisitionBridgeItemResult,
+    SourceAcquisitionBridgePlanResponse,
     SourceAcquisitionItemSummary,
     SourceAcquisitionRunResponse,
 )
+from app.services.admin.source_intake_execution_service import (
+    STATUS_COMPLETED,
+    SourceIntakeAlreadyRunningError,
+    start_explicit_source_intake,
+)
+from app.services.ingestion.hasher import HashedFile
+from app.services.ingestion.pipeline_orchestrator import resolve_runtime_path
+from app.services.ingestion.scanner import FileScanRecord
+from app.services.ingestion.storage_manager import (
+    ExistingAssetVaultState,
+    _build_hash_based_vault_path,
+    _verify_existing_asset_vault_file,
+)
+from app.services.source_acquisition.receiving import verified_ready_path
 from app.services.windows_helper.service import WindowsHelperServiceError
 from app.windows_helper_shared.protocol import (
     HelperInventoryPageRequest,
@@ -428,3 +451,463 @@ def acquisition_response(db: Session, run: SourceAcquisitionRun) -> SourceAcquis
         created_at=run.created_at, activated_at=run.activated_at,
         completed_at=run.completed_at, failure_code=run.failure_code,
     )
+
+
+def _load_bridge_run(
+    db: Session, run_id: UUID, *, lock: bool = False
+) -> tuple[SourceAcquisitionRun, list[SourceAcquisitionItem]]:
+    statement = select(SourceAcquisitionRun).where(SourceAcquisitionRun.run_uuid == str(run_id))
+    if lock:
+        statement = statement.with_for_update()
+    run = db.scalar(statement)
+    if run is None:
+        raise WindowsHelperServiceError(
+            "acquisition_run_not_found", "The acquisition run was not found.", http_status=404
+        )
+    items = list(
+        db.scalars(
+            select(SourceAcquisitionItem)
+            .where(SourceAcquisitionItem.run_id == run.id)
+            .order_by(SourceAcquisitionItem.ordinal)
+        )
+    )
+    return run, items
+
+
+def _bridge_records(
+    run: SourceAcquisitionRun, items: list[SourceAcquisitionItem]
+) -> tuple[Path, list[FileScanRecord]]:
+    if run.state != "completed":
+        raise WindowsHelperServiceError(
+            "acquisition_not_completed",
+            "Only a completed acquisition run can enter Source Intake.",
+            http_status=409,
+        )
+    if (
+        len(items) != run.selected_item_count
+        or run.ready_item_count != run.selected_item_count
+        or run.failed_item_count != 0
+        or sum(item.expected_size_bytes for item in items) != run.expected_byte_count
+        or sum(item.verified_byte_count for item in items) != run.expected_byte_count
+    ):
+        raise WindowsHelperServiceError(
+            "acquisition_ready_set_inconsistent",
+            "The completed acquisition ready set is inconsistent.",
+            http_status=409,
+        )
+
+    ready_root = (Path(run.receiving_root) / "ready").resolve(strict=True)
+    records: list[FileScanRecord] = []
+    seen_paths: set[Path] = set()
+    for item in items:
+        if (
+            not item.provider_native_root
+            or not item.provider_native_relative_path
+            or not item.provider_native_full_path
+            or item.provider_native_root != run.provider_native_root
+            or not item.linux_verified_sha256
+            or item.linux_verified_sha256 != item.helper_source_sha256
+        ):
+            raise WindowsHelperServiceError(
+                "acquisition_lineage_inconsistent",
+                "An acquisition item lacks exact verified lineage.",
+                http_status=409,
+            )
+        ready_path = verified_ready_path(run, item)
+        try:
+            runtime_relative_path = ready_path.relative_to(ready_root)
+        except ValueError as exc:
+            raise WindowsHelperServiceError(
+                "receiving_path_escape",
+                "A ready object escaped the exact ready root.",
+                http_status=409,
+            ) from exc
+        if (
+            ready_path in seen_paths
+            or runtime_relative_path != Path(item.ready_relative_path).relative_to("ready")
+        ):
+            raise WindowsHelperServiceError(
+                "acquisition_ready_set_ambiguous",
+                "Ready-object paths must be exact and unique.",
+                http_status=409,
+            )
+        seen_paths.add(ready_path)
+        records.append(
+            FileScanRecord(
+                full_path=str(ready_path),
+                file_name=ready_path.name,
+                extension=item.safe_extension,
+                size_bytes=item.expected_size_bytes,
+                modified_timestamp_utc=datetime.fromtimestamp(
+                    item.expected_modified_time_ns / 1_000_000_000,
+                    tz=timezone.utc,
+                ).isoformat(),
+                original_source_path=str(ready_path),
+                original_filename=item.filename,
+                asset_original_source_path=item.provider_native_full_path,
+                explicit_order=item.ordinal,
+            )
+        )
+    return ready_root, records
+
+
+def _sha256_hex(value: str) -> str:
+    if not value.startswith("sha256:") or len(value) != 71:
+        raise WindowsHelperServiceError(
+            "acquisition_hash_invalid", "Verified acquisition hash evidence is invalid.", http_status=409
+        )
+    return value.removeprefix("sha256:")
+
+
+def _bridge_counts(db: Session) -> SourceAcquisitionBridgeCounts:
+    vault_root = resolve_runtime_path(settings.vault_path)
+    vault_files = sum(1 for path in vault_root.rglob("*") if path.is_file())
+    return SourceAcquisitionBridgeCounts(
+        source_intake_runs=int(db.scalar(select(func.count(SourceIntakeRun.id))) or 0),
+        ingestion_runs=int(db.scalar(select(func.count(IngestionRun.id))) or 0),
+        assets=int(db.scalar(select(func.count(Asset.sha256))) or 0),
+        provenance=int(db.scalar(select(func.count(Provenance.id))) or 0),
+        canonical_vault_files=vault_files,
+    )
+
+
+def _validate_completed_bridge(
+    db: Session, run: SourceAcquisitionRun, items: list[SourceAcquisitionItem], ready_root: Path
+) -> None:
+    if run.bridge_source_intake_run_id is None or run.bridge_ingestion_run_id is None:
+        raise WindowsHelperServiceError(
+            "bridge_linkage_incomplete", "Completed bridge run linkage is incomplete.", http_status=409
+        )
+    intake = db.get(SourceIntakeRun, run.bridge_source_intake_run_id)
+    ingestion = db.get(IngestionRun, run.bridge_ingestion_run_id)
+    if (
+        intake is None
+        or ingestion is None
+        or intake.status != STATUS_COMPLETED
+        or intake.ingestion_source_id != run.source_profile_id
+        or intake.ingestion_run_id != ingestion.id
+        or ingestion.ingestion_source_id != run.source_profile_id
+        or Path(ingestion.from_path or "").resolve() != ready_root
+    ):
+        raise WindowsHelperServiceError(
+            "bridge_linkage_inconsistent", "Completed bridge run linkage is inconsistent.", http_status=409
+        )
+    for item in items:
+        if not item.bridged_asset_sha256 or item.bridged_provenance_id is None:
+            raise WindowsHelperServiceError(
+                "bridge_item_linkage_incomplete",
+                "Completed acquisition item linkage is incomplete.",
+                http_status=409,
+            )
+        asset = db.get(Asset, item.bridged_asset_sha256)
+        provenance = db.get(Provenance, item.bridged_provenance_id)
+        expected_path = str((ready_root / Path(item.ready_relative_path).name).resolve())
+        if (
+            asset is None
+            or provenance is None
+            or provenance.asset_sha256 != asset.sha256
+            or provenance.ingestion_source_id != run.source_profile_id
+            or provenance.ingestion_run_id != ingestion.id
+            or provenance.source_path != expected_path
+            or Path(provenance.source_root_path or "").resolve() != ready_root
+        ):
+            raise WindowsHelperServiceError(
+                "bridge_item_linkage_inconsistent",
+                "Completed acquisition item linkage is inconsistent.",
+                http_status=409,
+            )
+
+
+def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridgePlanResponse:
+    run, items = _load_bridge_run(db, run_id)
+    ready_root, records = _bridge_records(run, items)
+    bridge_state = run.bridge_state or "not_started"
+    if bridge_state not in {"not_started", "running", "completed", "failed"}:
+        raise WindowsHelperServiceError(
+            "bridge_state_invalid", "The bridge state is invalid.", http_status=409
+        )
+    if bridge_state == "completed":
+        _validate_completed_bridge(db, run, items, ready_root)
+
+    classifications: list[SourceAcquisitionBridgeHashClassification] = []
+    by_hash: dict[str, FileScanRecord] = {}
+    for item, record in zip(items, records, strict=True):
+        by_hash.setdefault(item.linux_verified_sha256 or "", record)
+    for digest, record in by_hash.items():
+        sha256 = _sha256_hex(digest)
+        asset = db.get(Asset, sha256)
+        if asset is None:
+            destination = _build_hash_based_vault_path(
+                resolve_runtime_path(settings.vault_path), sha256, record.extension
+            )
+            if destination.exists() and bridge_state == "not_started":
+                raise WindowsHelperServiceError(
+                    "untracked_vault_path_conflict",
+                    "A predicted new canonical Vault path is already occupied.",
+                    http_status=409,
+                )
+            classifications.append(
+                SourceAcquisitionBridgeHashClassification(
+                    sha256=digest, classification="new_content", canonical_vault_verified=False
+                )
+            )
+            continue
+        hashed = HashedFile(record=record, sha256=sha256)
+        _, conflict = _verify_existing_asset_vault_file(
+            hashed,
+            ExistingAssetVaultState(
+                sha256=asset.sha256, vault_path=asset.vault_path, size_bytes=asset.size_bytes
+            ),
+        )
+        if conflict is not None:
+            raise WindowsHelperServiceError(
+                "existing_asset_vault_conflict",
+                "An exact-known canonical Vault object failed verification.",
+                http_status=409,
+            )
+        classifications.append(
+            SourceAcquisitionBridgeHashClassification(
+                sha256=digest, classification="exact_known", canonical_vault_verified=True
+            )
+        )
+
+    if bridge_state == "not_started":
+        for item, record in zip(items, records, strict=True):
+            sha256 = _sha256_hex(item.linux_verified_sha256 or "")
+            prior = db.scalar(
+                select(Provenance.id).where(
+                    Provenance.asset_sha256 == sha256,
+                    Provenance.ingestion_source_id == run.source_profile_id,
+                    Provenance.source_path == record.original_source_path,
+                )
+            )
+            if prior is not None:
+                raise WindowsHelperServiceError(
+                    "bridge_prior_provenance_conflict",
+                    "Equivalent runtime provenance exists without durable acquisition linkage.",
+                    http_status=409,
+                )
+
+    new_count = sum(item.classification == "new_content" for item in classifications)
+    expected_asset_delta = new_count if bridge_state == "not_started" else 0
+    expected_provenance_delta = len(items) if bridge_state == "not_started" else 0
+    plan_digest = _digest(
+        {
+            "domain": "photo-organizer-source-acquisition-bridge-plan-v1",
+            "acquisition_run_id": run.run_uuid,
+            "source_endpoint_id": run.source_endpoint_id,
+            "source_profile_id": run.source_profile_id,
+            "ready_root": str(ready_root),
+            "items": [
+                {
+                    "item_id": item.item_uuid,
+                    "ordinal": item.ordinal,
+                    "runtime_path": record.original_source_path,
+                    "provider_native_full_path": item.provider_native_full_path,
+                    "size": item.expected_size_bytes,
+                    "sha256": item.linux_verified_sha256,
+                }
+                for item, record in zip(items, records, strict=True)
+            ],
+            "classifications": [item.model_dump() for item in classifications],
+        }
+    )
+    return SourceAcquisitionBridgePlanResponse(
+        acquisition_run_id=run_id,
+        bridge_state=bridge_state,
+        source_profile_id=run.source_profile_id,
+        source_endpoint_id=run.source_endpoint_id,
+        ready_root=str(ready_root),
+        item_count=len(items),
+        verified_byte_count=sum(item.verified_byte_count for item in items),
+        unique_content_count=len(classifications),
+        bridge_plan_digest=plan_digest,
+        current_counts=_bridge_counts(db),
+        classifications=classifications,
+        expected_asset_delta=expected_asset_delta,
+        expected_vault_delta=expected_asset_delta,
+        expected_provenance_delta=expected_provenance_delta,
+        source_intake_run_id=run.bridge_source_intake_run_id,
+        ingestion_run_id=run.bridge_ingestion_run_id,
+        items=[
+            SourceAcquisitionBridgeItemResult(
+                acquisition_item_id=UUID(item.item_uuid),
+                ordinal=item.ordinal,
+                provider_native_relative_path=item.provider_native_relative_path,
+                runtime_relative_path=Path(item.ready_relative_path).name,
+                linux_verified_sha256=item.linux_verified_sha256 or "",
+                asset_sha256=item.bridged_asset_sha256,
+                provenance_id=item.bridged_provenance_id,
+            )
+            for item in items
+        ],
+    )
+
+
+def _bind_bridge_intake(run_id: UUID, source_intake_run_id: int) -> None:
+    with SessionLocal() as db:
+        run, _ = _load_bridge_run(db, run_id, lock=True)
+        if run.bridge_state != "running" or run.bridge_source_intake_run_id is not None:
+            raise RuntimeError("Acquisition bridge launch binding is inconsistent.")
+        run.bridge_source_intake_run_id = source_intake_run_id
+        db.commit()
+
+
+def _finalize_bridge(run_id: UUID, source_intake_run_id: int) -> None:
+    with SessionLocal() as db:
+        run, items = _load_bridge_run(db, run_id, lock=True)
+        if run.bridge_state != "running" or run.bridge_source_intake_run_id != source_intake_run_id:
+            return
+        intake = db.get(SourceIntakeRun, source_intake_run_id)
+        if (
+            intake is None
+            or intake.status != STATUS_COMPLETED
+            or intake.ingestion_run_id is None
+            or intake.failed_or_rejected != 0
+            or intake.files_scanned != len(items)
+            or intake.selected != len(items)
+        ):
+            run.bridge_state = "failed"
+            run.bridge_failure_code = "source_intake_incomplete"
+            db.commit()
+            return
+        ready_root = (Path(run.receiving_root) / "ready").resolve(strict=True)
+        ingestion = db.get(IngestionRun, intake.ingestion_run_id)
+        if (
+            ingestion is None
+            or intake.ingestion_source_id != run.source_profile_id
+            or ingestion.ingestion_source_id != run.source_profile_id
+            or Path(ingestion.from_path or "").resolve() != ready_root
+        ):
+            run.bridge_state = "failed"
+            run.bridge_failure_code = "ingestion_context_mismatch"
+            db.commit()
+            return
+        links: list[tuple[SourceAcquisitionItem, str, int]] = []
+        for item in items:
+            sha256 = _sha256_hex(item.linux_verified_sha256 or "")
+            ready_path = str((ready_root / Path(item.ready_relative_path).name).resolve())
+            rows = list(
+                db.scalars(
+                    select(Provenance).where(
+                        Provenance.asset_sha256 == sha256,
+                        Provenance.ingestion_source_id == run.source_profile_id,
+                        Provenance.ingestion_run_id == ingestion.id,
+                        Provenance.source_path == ready_path,
+                    )
+                )
+            )
+            if (
+                len(rows) != 1
+                or db.get(Asset, sha256) is None
+                or Path(rows[0].source_root_path or "").resolve() != ready_root
+                or rows[0].source_relative_path != Path(item.ready_relative_path).name
+            ):
+                run.bridge_state = "failed"
+                run.bridge_failure_code = "item_result_linkage_mismatch"
+                db.commit()
+                return
+            links.append((item, sha256, rows[0].id))
+        for item, sha256, provenance_id in links:
+            item.bridged_asset_sha256 = sha256
+            item.bridged_provenance_id = provenance_id
+        run.bridge_ingestion_run_id = ingestion.id
+        run.bridge_state = "completed"
+        run.bridge_failure_code = None
+        run.bridge_completed_at = _now()
+        db.commit()
+
+
+def _finalize_bridge_safely(run_id: UUID, source_intake_run_id: int) -> None:
+    try:
+        _finalize_bridge(run_id, source_intake_run_id)
+    except Exception:
+        with SessionLocal() as db:
+            run, _ = _load_bridge_run(db, run_id, lock=True)
+            if run.bridge_state == "running":
+                run.bridge_state = "failed"
+                run.bridge_failure_code = "bridge_finalization_failed"
+                db.commit()
+
+
+def execute_acquisition_bridge(
+    db: Session, run_id: UUID, bridge_plan_digest: str
+) -> SourceAcquisitionBridgePlanResponse:
+    plan = plan_acquisition_bridge(db, run_id)
+    if plan.bridge_state in {"completed", "running"}:
+        return plan
+    if plan.bridge_plan_digest != bridge_plan_digest:
+        raise WindowsHelperServiceError(
+            "bridge_plan_digest_mismatch",
+            "Bridge execution does not match the verified plan.",
+            http_status=409,
+        )
+    if plan.bridge_state == "failed":
+        raise WindowsHelperServiceError(
+            "bridge_previously_failed",
+            "The acquisition bridge previously failed and requires review.",
+            http_status=409,
+        )
+
+    run, items = _load_bridge_run(db, run_id, lock=True)
+    ready_root, records = _bridge_records(run, items)
+    if run.bridge_state != "not_started" or any(
+        item.bridged_asset_sha256 is not None or item.bridged_provenance_id is not None
+        for item in items
+    ):
+        raise WindowsHelperServiceError(
+            "bridge_state_conflict", "The acquisition bridge state changed.", http_status=409
+        )
+    run.bridge_state = "running"
+    run.bridge_started_at = _now()
+    run.bridge_failure_code = None
+    db.commit()
+    try:
+        start_explicit_source_intake(
+            db,
+            ingestion_source_id=run.source_profile_id,
+            runtime_source_root_path=str(ready_root),
+            explicit_source_records=records,
+            ingest_batch_size=len(records),
+            created_by="source_acquisition_bridge",
+            on_created=lambda intake_id: _bind_bridge_intake(run_id, intake_id),
+            on_finished=lambda intake_id: _finalize_bridge_safely(run_id, intake_id),
+        )
+    except SourceIntakeAlreadyRunningError as exc:
+        db.refresh(run)
+        run.bridge_state = "not_started"
+        run.bridge_started_at = None
+        db.commit()
+        raise WindowsHelperServiceError(
+            "source_intake_already_running",
+            "Another Source Intake run is active.",
+            http_status=409,
+        ) from exc
+    except Exception:
+        db.refresh(run)
+        run.bridge_state = "failed"
+        run.bridge_failure_code = "bridge_launch_failed"
+        db.commit()
+        raise
+    db.expire_all()
+    return plan_acquisition_bridge(db, run_id)
+
+
+def reset_stale_acquisition_bridges(db: Session) -> None:
+    """Fail closed any bridge whose in-process Source Intake runner was lost."""
+    stale = list(
+        db.scalars(
+            select(SourceAcquisitionRun).where(SourceAcquisitionRun.bridge_state == "running")
+        )
+    )
+    for run in stale:
+        intake = (
+            db.get(SourceIntakeRun, run.bridge_source_intake_run_id)
+            if run.bridge_source_intake_run_id is not None
+            else None
+        )
+        if intake is None or intake.status not in {"running", "stop_requested"}:
+            run.bridge_state = "failed"
+            run.bridge_failure_code = "bridge_runner_interrupted"
+    if stale:
+        db.commit()

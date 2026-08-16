@@ -82,6 +82,54 @@ class SourceAcquisitionOperationResponse(_StrictModel):
     acquisition_item_id: UUID
 
 
+class SourceAcquisitionBridgeCounts(_StrictModel):
+    source_intake_runs: int
+    ingestion_runs: int
+    assets: int
+    provenance: int
+    canonical_vault_files: int
+
+
+class SourceAcquisitionBridgeHashClassification(_StrictModel):
+    sha256: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
+    classification: Literal["new_content", "exact_known"]
+    canonical_vault_verified: bool
+
+
+class SourceAcquisitionBridgeItemResult(_StrictModel):
+    acquisition_item_id: UUID
+    ordinal: int
+    provider_native_relative_path: str
+    runtime_relative_path: str
+    linux_verified_sha256: str
+    asset_sha256: str | None = None
+    provenance_id: int | None = None
+
+
+class SourceAcquisitionBridgePlanResponse(_StrictModel):
+    acquisition_run_id: UUID
+    bridge_state: Literal["not_started", "running", "completed", "failed"]
+    source_profile_id: int
+    source_endpoint_id: int
+    ready_root: str
+    item_count: int
+    verified_byte_count: int
+    unique_content_count: int
+    bridge_plan_digest: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
+    current_counts: SourceAcquisitionBridgeCounts
+    classifications: list[SourceAcquisitionBridgeHashClassification]
+    expected_asset_delta: int
+    expected_vault_delta: int
+    expected_provenance_delta: int
+    source_intake_run_id: int | None = None
+    ingestion_run_id: int | None = None
+    items: list[SourceAcquisitionBridgeItemResult]
+
+
+class ExecuteSourceAcquisitionBridgeRequest(_StrictModel):
+    bridge_plan_digest: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
+
+
 class SourceAcquisitionCleanupResponse(_StrictModel):
     acquisition_run_id: UUID
     removed_partial_count: int

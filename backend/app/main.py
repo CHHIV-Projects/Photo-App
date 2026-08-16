@@ -56,6 +56,7 @@ from app.services.location.place_geocoding_schema import ensure_place_geocoding_
 from app.services.previews.heic_preview_processing_service import _reset_stale_runs as _reset_stale_heic_preview_runs
 from app.services.windows_helper.schema import ensure_windows_helper_schema
 from app.services.source_acquisition.schema import ensure_source_acquisition_schema
+from app.services.source_acquisition.service import reset_stale_acquisition_bridges
 
 
 def create_app() -> FastAPI:
@@ -126,6 +127,7 @@ def create_app() -> FastAPI:
 			ensure_windows_helper_schema(db_session)
 			ensure_source_acquisition_schema(db_session)
 			_reset_stale_runs(db_session)
+			reset_stale_acquisition_bridges(db_session)
 			_reset_stale_icloud_acquisition_runs(db_session)
 			reset_stale_cleanup_runs(db_session)
 			_reset_stale_face_processing_runs(db_session)

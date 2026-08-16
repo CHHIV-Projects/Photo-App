@@ -162,6 +162,30 @@ def _verified_file_digest(path: Path, expected_size: int) -> str:
         os.close(fd)
 
 
+def verified_ready_path(run: SourceAcquisitionRun, item: SourceAcquisitionItem) -> Path:
+    """Return one exact ready object after revalidating retained acquisition evidence."""
+    if run.state != "completed" or item.state != "ready":
+        raise WindowsHelperServiceError(
+            "acquisition_not_ready",
+            "The acquisition run and item must be completed and ready.",
+            http_status=409,
+        )
+    _, ready_path = _paths(run, item)
+    ready_digest = _verified_file_digest(ready_path, item.expected_size_bytes)
+    if (
+        item.verified_byte_count != item.expected_size_bytes
+        or item.committed_offset != item.expected_size_bytes
+        or not item.linux_verified_sha256
+        or item.linux_verified_sha256 != ready_digest
+    ):
+        raise WindowsHelperServiceError(
+            "ready_object_inconsistent",
+            "The durable ready object evidence is inconsistent.",
+            http_status=409,
+        )
+    return ready_path.resolve(strict=True)
+
+
 def acquisition_status(
     db: Session,
     credential: WindowsHelperCredential,
