@@ -281,6 +281,7 @@ class SourceProfileSummary(BaseModel):
     source_id: int
     source_label: str
     source_type: str
+    provider_kind: Literal["mounted", "windows_helper", "icloud", "cloud", "legacy"] = "legacy"
     source_root_path: str | None = None
     endpoint_relative_root: str | None = None
     endpoint_id: int | None = None

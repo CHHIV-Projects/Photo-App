@@ -1254,6 +1254,7 @@ export interface SourceProfileSummary {
   source_id: number;
   source_label: string;
   source_type: SourceProfileType;
+  provider_kind: "mounted" | "windows_helper" | "icloud" | "cloud" | "legacy";
   source_root_path: string | null;
   endpoint_relative_root: string | null;
   endpoint_id: number | null;
@@ -1418,10 +1419,77 @@ export interface SourceProfileReadinessResponse {
 
 export type SourceSelectionResult = "selected" | "not_selected";
 export type SourceSelectionAvailability = "available" | "unavailable" | "needs_attention";
-export type SourceSelectionWorkflowKind = "filesystem_source_intake" | "icloud_intake";
+export type SourceSelectionWorkflowKind = "filesystem_source_intake" | "icloud_intake" | "windows_helper_intake";
 
 export interface SourceSelectionRequest {
   source_profile_id: number;
+  helper_probe_operation_id?: string | null;
+}
+
+export interface WindowsSourceUiProfileStatus {
+  provider_kind: "windows_helper";
+  source_profile_id: number;
+  profile_name: string;
+  device_alias: string;
+  windows_root: string;
+  windows_access: "ready" | "not_available" | "setup_required";
+  paired: boolean;
+  online: boolean;
+  helper_version: string | null;
+  source_readiness: "ready" | "not_ready";
+}
+
+export interface WindowsSourceUiOperation {
+  operation_token: string;
+  stage: "checking_source" | "preparing_files" | "ready" | "failed";
+  source_ready: boolean;
+  safe_message: string;
+}
+
+export interface WindowsSourceUiCandidateReview {
+  workflow_token: string;
+  stage: "awaiting_confirmation";
+  files_to_process: number;
+  total_bytes: number;
+  profile_name: string;
+  windows_root: string;
+  safe_message: string;
+}
+
+export interface WindowsSourceUiWorkflowStatus {
+  workflow_token: string;
+  stage: "awaiting_confirmation" | "transferring_files" | "processing_library" | "complete" | "failed";
+  files_total: number;
+  files_completed: number;
+  expected_bytes: number;
+  transferred_bytes: number;
+  new_library_items: number;
+  already_represented: number;
+  failed_items: number;
+  safe_message: string;
+}
+
+export interface WindowsSourceUiCreateFields {
+  device_alias: string;
+  windows_root: string;
+  profile_name: string;
+}
+
+export interface WindowsSourceUiCreatePlan extends WindowsSourceUiCreateFields {
+  plan_status: "ready" | "source_exists" | "needs_review" | "blocked";
+  device_action: string;
+  profile_action: string;
+  blockers: string[];
+  warnings: string[];
+}
+
+export interface WindowsSourceUiCreateResult {
+  status: "completed" | "blocked";
+  source_profile_id: number | null;
+  source_endpoint_id: number | null;
+  created_profile: boolean;
+  reused_profile: boolean;
+  safe_message: string;
 }
 
 export interface SelectedSourceContext {

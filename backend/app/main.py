@@ -22,6 +22,7 @@ from app.api.search import router as search_router
 from app.api.timeline import router as timeline_router
 from app.api.visual_enrichment import router as visual_enrichment_router
 from app.api.windows_helper_admin import router as windows_helper_admin_router
+from app.api.windows_source_ui import router as windows_source_ui_router
 from app.api.source_acquisition_admin import router as source_acquisition_admin_router
 from app.core.config import settings
 from app.core.runtime_paths import prepare_runtime_directories
@@ -97,6 +98,7 @@ def create_app() -> FastAPI:
 	app.include_router(timeline_router)
 	app.include_router(visual_enrichment_router)
 	app.include_router(windows_helper_admin_router)
+	app.include_router(windows_source_ui_router)
 	app.include_router(source_acquisition_admin_router)
 
 	@app.on_event("startup")

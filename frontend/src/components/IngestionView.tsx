@@ -68,8 +68,11 @@ import type {
   IcloudStagingCleanupRunStatus,
   IcloudStagingCleanupReadinessResponse,
 } from "@/types/ui-api";
+import { normalSelectorSourceTypes, sourceWorkbenchKind } from "@/lib/source-provider-ui";
 
 import IcloudRunWorkflowPanel from "./IcloudRunWorkflowPanel";
+import WindowsSourceCreation from "./WindowsSourceCreation";
+import WindowsSourceWorkbench from "./WindowsSourceWorkbench";
 import styles from "./ingestion-view.module.css";
 
 type StatusFilter = SourceProfileStatus | "all";
@@ -1347,6 +1350,7 @@ export default function IngestionView() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
   const [workbenchSourceType, setWorkbenchSourceType] = useState<OperatorSourceType>("local");
+  const [localAccessMethod, setLocalAccessMethod] = useState<"mounted" | "windows">("mounted");
   const [selectedWorkbenchDeviceKey, setSelectedWorkbenchDeviceKey] = useState<string | null>(null);
   const [selectedWorkbenchSourceId, setSelectedWorkbenchSourceId] = useState<number | null>(null);
   const [sourceSelectionResult, setSourceSelectionResult] = useState<SourceSelectionResponse | null>(null);
@@ -1969,8 +1973,14 @@ export default function IngestionView() {
         represented.add(operatorSourceType);
       }
     }
-    return SOURCE_SELECTOR_TYPE_OPTIONS.filter((option) => represented.has(option.value));
+    const allowed = new Set(normalSelectorSourceTypes(Array.from(represented)));
+    return SOURCE_SELECTOR_TYPE_OPTIONS.filter((option) => allowed.has(option.value));
   }, [profiles]);
+
+  const windowsDeviceAliases = useMemo(
+    () => Array.from(new Set(profiles.filter((profile) => profile.provider_kind === "windows_helper" && profile.endpoint_alias).map((profile) => profile.endpoint_alias as string))).sort(),
+    [profiles],
+  );
 
   const workbenchDevices = useMemo<WorkbenchDeviceOption[]>(() => {
     const deviceMap = new Map<string, WorkbenchDeviceOption>();
@@ -4311,6 +4321,22 @@ export default function IngestionView() {
             </div>
 
             <div className={styles.createSourceControls}>
+              {createSourceForm.operatorSourceType === "local" && (
+                <div className={styles.workbenchControlGroup}>
+                  <span className={styles.detailLabel}>Access location</span>
+                  <div className={styles.segmentedControl} role="group" aria-label="Local Source access location">
+                    <button type="button" className={`${styles.segmentButton} ${localAccessMethod === "mounted" ? styles.segmentButtonActive : ""}`} aria-pressed={localAccessMethod === "mounted"} onClick={() => setLocalAccessMethod("mounted")}>This server</button>
+                    <button type="button" className={`${styles.segmentButton} ${localAccessMethod === "windows" ? styles.segmentButtonActive : ""}`} aria-pressed={localAccessMethod === "windows"} onClick={() => setLocalAccessMethod("windows")}>Windows device</button>
+                  </div>
+                </div>
+              )}
+
+              {createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows" && (
+                <WindowsSourceCreation
+                  deviceAliases={windowsDeviceAliases}
+                  onComplete={() => void loadProfiles({ refreshOnly: true, resetBanner: false })}
+                />
+              )}
               {createSourceForm.operatorSourceType === "icloud" && (
                 <label className={styles.formLabel}>
                   Device Name
@@ -4351,6 +4377,7 @@ export default function IngestionView() {
               )}
 
               {mountedSourceRuntime === "available" && linuxSourceLocations !== null
+                && !(createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows")
                 && (createSourceForm.operatorSourceType === "local" || createSourceForm.operatorSourceType === "nas") ? (
                 <>
                   <label className={styles.formLabel}>
@@ -4395,7 +4422,8 @@ export default function IngestionView() {
                     <p className={styles.helperText} key={blocker.code}>{blocker.message}</p>
                   ))}
                 </>
-              ) : createSourceForm.operatorSourceType !== "icloud" && (
+              ) : createSourceForm.operatorSourceType !== "icloud"
+                && !(createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows") && (
                 <label className={styles.formLabel}>
                   {createSourceForm.operatorSourceType === "optical" ? "Current Optical Path" : "Root Path or Mount Point"}
                   <input
@@ -4469,7 +4497,7 @@ export default function IngestionView() {
                 </>
               )}
 
-              <div className={styles.createSourceAction}>
+              {!(createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows") && <div className={styles.createSourceAction}>
                 <button
                   type="button"
                   className={styles.updateButton}
@@ -4494,7 +4522,7 @@ export default function IngestionView() {
                           ? "Use This Disc"
                           : "Identify Location"}
                 </button>
-              </div>
+              </div>}
             </div>
 
             {sourceCreationError && <p className={styles.bannerError}>{sourceCreationError}</p>}
@@ -4996,7 +5024,7 @@ export default function IngestionView() {
                 <button type="button" className={styles.updateButton} onClick={() => openEditDrawer(selectedWorkbenchProfile)}>
                   Manage
                 </button>
-                <button
+                {sourceWorkbenchKind(selectedWorkbenchProfile) !== "windows_helper" && <button
                   type="button"
                   className={styles.button}
                   onClick={() => void handleSelectWorkbenchSource()}
@@ -5005,7 +5033,7 @@ export default function IngestionView() {
                   {isSelectingSource
                     ? workbenchSourceType === "optical" ? "Checking optical disc..." : "Selecting..."
                     : "Select Source"}
-                </button>
+                </button>}
               </div>
             </div>
 
@@ -5032,10 +5060,10 @@ export default function IngestionView() {
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Selection</span>
                 <span className={getSourceSelectionBadgeClassName(sourceSelectionResult)}>
-                  {getSourceSelectionStatusLabel(sourceSelectionResult)}
+                  {sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? "Configured" : getSourceSelectionStatusLabel(sourceSelectionResult)}
                 </span>
                 <span className={styles.detailMeta}>
-                  {sourceSelectionError ?? sourceSelectionResult?.message ?? "Select Source to verify availability and durable identity."}
+                  {sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? "Select Run Ingestion to start Windows access and verify readiness." : sourceSelectionError ?? sourceSelectionResult?.message ?? "Select Source to verify availability and durable identity."}
                 </span>
                 {sourceSelectionResult?.retry_guidance && (
                   <span className={styles.detailMeta}>{sourceSelectionResult.retry_guidance}</span>
@@ -5043,7 +5071,7 @@ export default function IngestionView() {
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Workflow</span>
-                <span>{sourceSelectionResult?.workflow_kind === "icloud_intake" ? "iCloud Intake" : getSourceWorkflowDisplay(selectedWorkbenchProfile)}</span>
+                <span>{sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? "Windows Local Intake" : sourceSelectionResult?.workflow_kind === "icloud_intake" ? "iCloud Intake" : getSourceWorkflowDisplay(selectedWorkbenchProfile)}</span>
                 <span className={styles.detailMeta}>{getSourceWorkflowPlaceholder(selectedWorkbenchProfile)}</span>
               </div>
             </div>
@@ -5056,7 +5084,12 @@ export default function IngestionView() {
                 }, null, 2)}</pre>
               </details>
             )}
-            {sourceSelectionResult?.result === "selected"
+            {sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? (
+              <WindowsSourceWorkbench
+                profile={selectedWorkbenchProfile}
+                onComplete={() => void loadProfiles({ refreshOnly: true, resetBanner: false })}
+              />
+            ) : sourceSelectionResult?.result === "selected"
               && sourceSelectionResult.availability === "available"
               && sourceSelectionResult.workflow_kind
               && sourceSelectionResult.selected_source_context ? (

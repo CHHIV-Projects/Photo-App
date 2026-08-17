@@ -16,6 +16,7 @@ from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
 from app.models.provenance import Provenance
 from app.models.source_intake_run import SourceIntakeRun
+from app.models.source_endpoint import AccessNode, SourceEndpointObservedPath
 from app.schemas.admin import (
     SourceProfileDetail,
     SourceProfileCreateRequest,
@@ -182,6 +183,7 @@ def _build_profile_reference_maps(
 def _to_source_profile_summary(
     source: IngestionSource,
     *,
+    provider_kind: str,
     include_username: bool,
     last_run_at: datetime | None,
     provenance_count: int | None,
@@ -193,6 +195,7 @@ def _to_source_profile_summary(
         source_id=source.id,
         source_label=source.source_label,
         source_type=source.source_type,
+        provider_kind=provider_kind,
         source_root_path=source.source_root_path,
         endpoint_relative_root=source.endpoint_relative_root,
         endpoint_id=source.endpoint_id,
@@ -231,6 +234,7 @@ def _build_single_source_profile_summary(
 
     return _to_source_profile_summary(
         source,
+        provider_kind=_source_provider_kind(db_session, source),
         include_username=include_username,
         last_run_at=latest_run_at,
         provenance_count=provenance_counts.get(source.id, 0),
@@ -238,6 +242,25 @@ def _build_single_source_profile_summary(
         source_intake_runs_count=source_intake_runs_counts.get(source.id, 0),
         icloud_acquisition_runs_count=icloud_runs_counts.get(source.id, 0),
     )
+
+
+def _source_provider_kind(db_session: Session, source: IngestionSource) -> str:
+    """Derive browser routing from durable bindings, never labels or path text."""
+    if source.source_type == "cloud_export":
+        return "icloud" if source.cloud_provider == "icloud" else "cloud"
+    if source.endpoint_id is None:
+        return "legacy"
+    helper_observation = db_session.scalar(
+        select(SourceEndpointObservedPath.id)
+        .join(AccessNode, SourceEndpointObservedPath.access_node_id == AccessNode.id)
+        .where(
+            SourceEndpointObservedPath.source_endpoint_id == source.endpoint_id,
+            AccessNode.provider_name == "windows_helper_v1",
+            AccessNode.os_family == "windows",
+        )
+        .limit(1)
+    )
+    return "windows_helper" if helper_observation is not None else "mounted"
 
 
 def _is_referenced_summary(summary: SourceProfileSummary) -> bool:
@@ -594,6 +617,7 @@ def list_source_profiles(
         results.append(
             _to_source_profile_summary(
                 source,
+                provider_kind=_source_provider_kind(db_session, source),
                 include_username=include_username,
                 last_run_at=latest_run_by_source.get(source.id),
                 provenance_count=provenance_counts.get(source.id, 0),

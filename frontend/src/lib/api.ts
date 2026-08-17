@@ -86,6 +86,13 @@ import type {
   IcloudAcquisitionRunRequest,
   IcloudAcquisitionRunResponse,
   IcloudAcquisitionStopResponse,
+  WindowsSourceUiCandidateReview,
+  WindowsSourceUiCreateFields,
+  WindowsSourceUiCreatePlan,
+  WindowsSourceUiCreateResult,
+  WindowsSourceUiOperation,
+  WindowsSourceUiProfileStatus,
+  WindowsSourceUiWorkflowStatus,
   AlbumDetail,
   AlbumMembershipSummary,
   AlbumSummary,
@@ -245,6 +252,58 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+export function getWindowsSourceUiProfile(sourceProfileId: number): Promise<WindowsSourceUiProfileStatus> {
+  return apiRequest<WindowsSourceUiProfileStatus>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}`);
+}
+
+export function startWindowsSourceUiProbe(sourceProfileId: number): Promise<WindowsSourceUiOperation> {
+  return apiRequest<WindowsSourceUiOperation>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/probe`, { method: "POST" });
+}
+
+export function getWindowsSourceUiOperation(operationToken: string): Promise<WindowsSourceUiOperation> {
+  return apiRequest<WindowsSourceUiOperation>(`/api/admin/windows-source-ui/operations/${operationToken}`);
+}
+
+export function prepareWindowsSourceUiInventory(sourceProfileId: number, probeOperationToken: string): Promise<WindowsSourceUiOperation> {
+  return apiRequest<WindowsSourceUiOperation>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/prepare`, {
+    method: "POST",
+    body: JSON.stringify({ probe_operation_token: probeOperationToken }),
+  });
+}
+
+export function reviewWindowsSourceUiCandidates(sourceProfileId: number, inventoryOperationToken: string): Promise<WindowsSourceUiCandidateReview> {
+  return apiRequest<WindowsSourceUiCandidateReview>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/inventory/${inventoryOperationToken}/review`, { method: "POST" });
+}
+
+export function confirmWindowsSourceUiRun(workflowToken: string): Promise<WindowsSourceUiWorkflowStatus> {
+  return apiRequest<WindowsSourceUiWorkflowStatus>(`/api/admin/windows-source-ui/runs/${workflowToken}/confirm`, { method: "POST" });
+}
+
+export function advanceWindowsSourceUiRun(workflowToken: string): Promise<WindowsSourceUiWorkflowStatus> {
+  return apiRequest<WindowsSourceUiWorkflowStatus>(`/api/admin/windows-source-ui/runs/${workflowToken}/advance`, { method: "POST" });
+}
+
+export function startWindowsSourceUiCreationProbe(fields: WindowsSourceUiCreateFields): Promise<WindowsSourceUiOperation> {
+  return apiRequest<WindowsSourceUiOperation>("/api/admin/windows-source-ui/creation/probe", {
+    method: "POST",
+    body: JSON.stringify(fields),
+  });
+}
+
+export function planWindowsSourceUiCreation(fields: WindowsSourceUiCreateFields, probeOperationToken: string): Promise<WindowsSourceUiCreatePlan> {
+  return apiRequest<WindowsSourceUiCreatePlan>("/api/admin/windows-source-ui/creation/plan", {
+    method: "POST",
+    body: JSON.stringify({ ...fields, probe_operation_token: probeOperationToken }),
+  });
+}
+
+export function confirmWindowsSourceUiCreation(fields: WindowsSourceUiCreateFields, probeOperationToken: string): Promise<WindowsSourceUiCreateResult> {
+  return apiRequest<WindowsSourceUiCreateResult>("/api/admin/windows-source-ui/creation/confirm", {
+    method: "POST",
+    body: JSON.stringify({ ...fields, probe_operation_token: probeOperationToken, operator_confirmed: true }),
+  });
 }
 
 export function getClusters(options: ClusterQueryOptions = {}): Promise<ClusterListResponse> {

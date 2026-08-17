@@ -107,9 +107,11 @@ class TunnelTests(unittest.TestCase):
         with patch(
             "photo_organizer_windows_helper.tunnel.subprocess.run",
             side_effect=subprocess.TimeoutExpired(["powershell.exe"], 20),
-        ):
+        ) as run:
             with self.assertRaisesRegex(TunnelError, "failed safely"):
                 inspector.listener_evidence(LOCAL_PORT)
+        _, keywords = run.call_args
+        self.assertEqual(keywords["creationflags"], 0)
 
     def test_exact_owned_tunnel_can_be_reused(self) -> None:
         executable = r"C:\Windows\System32\OpenSSH\ssh.exe"
@@ -180,6 +182,7 @@ class TunnelTests(unittest.TestCase):
         args, kwargs = popen.call_args
         self.assertEqual(tuple(args[0][1:]), tunnel_arguments())
         self.assertFalse(kwargs["shell"])
+        self.assertEqual(kwargs["creationflags"], 0)
         process.terminate.assert_called_once()
 
 

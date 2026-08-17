@@ -26,12 +26,15 @@ from .acquisition import execute_acquisition
 from .capabilities import capability_identity
 from .client import HelperApiClient, HelperClientError
 from .credential_store import DpapiCredentialStore, StoredCredential
+from .lifecycle import DEFAULT_IDLE_SECONDS, IdleDeadline, SingleInstance, mutex_name, parse_start_uri
+from .logging_config import configure_file_logging
 from .operations import HelperOperationExecutor
 from .tunnel import TunnelError, TunnelManager
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-organizer-windows-helper")
+    parser.add_argument("--version", action="version", version="0.5.0")
     subcommands = parser.add_subparsers(dest="command", required=True)
     pair = subcommands.add_parser("pair", help="Pair this Helper through the approved channel.")
     pair.add_argument("--access-node-id", required=True, type=UUID)
@@ -49,9 +52,12 @@ def _safe_output(**values: object) -> None:
 def _serve(
     client: HelperApiClient,
     credential: StoredCredential,
+    *,
+    idle_timeout_seconds: float | None = None,
 ) -> int:
     executor = HelperOperationExecutor()
     last_heartbeat = 0.0
+    idle = IdleDeadline(idle_timeout_seconds) if idle_timeout_seconds is not None else None
     try:
         while True:
             now = time.monotonic()
@@ -67,10 +73,15 @@ def _serve(
             claim = client.claim_operation(credential)
             operation = claim.operation
             if operation is not None:
+                report_pending = False
+                if idle is not None:
+                    idle.set_busy(True)
                 try:
                     if isinstance(operation, ClaimedAcquireOperation):
                         result = execute_acquisition(operation, client, credential)
                         client.complete_acquire(credential, operation.operation_id, result)
+                        if idle is not None:
+                            idle.set_busy(False)
                         continue
                     result = executor.execute(operation)
                     if (
@@ -97,7 +108,12 @@ def _serve(
                             "operation_failed",
                         )
                     except HelperClientError:
-                        pass
+                        report_pending = True
+                finally:
+                    if idle is not None:
+                        idle.set_busy(report_pending)
+            if idle is not None and idle.should_exit():
+                return 0
             time.sleep(claim.poll_after_seconds)
     except KeyboardInterrupt:
         _safe_output(command="serve", status="stopped")
@@ -105,7 +121,10 @@ def _serve(
 
 
 def run(argv: Sequence[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
+    raw_arguments = list(argv) if argv is not None else sys.argv[1:]
+    if len(raw_arguments) == 1 and raw_arguments[0].startswith("photoorganizer-helper:"):
+        return _run_packaged_uri(raw_arguments[0])
+    arguments = _parser().parse_args(raw_arguments)
     store = DpapiCredentialStore()
     if arguments.command == "forget":
         _safe_output(command="forget", local_state_removed=store.forget(), server_revoked=False)
@@ -178,6 +197,35 @@ def run(argv: Sequence[str] | None = None) -> int:
         return 0
     except (HelperClientError, TunnelError, RuntimeError, ValueError):
         print("Windows Helper operation failed safely.", file=sys.stderr)
+        return 1
+
+
+def _run_packaged_uri(uri: str) -> int:
+    """Start the retained identity on demand through the exact allowlisted URI."""
+    logger = None
+    try:
+        parse_start_uri(uri)
+        store = DpapiCredentialStore()
+        logger = configure_file_logging(store.state_directory)
+        credential = store.load()
+        if credential is None:
+            raise RuntimeError("No protected Helper credential is stored.")
+        with SingleInstance(mutex_name(credential.access_node_id)) as instance:
+            if not instance.acquire():
+                logger.info("event=duplicate_start_reused")
+                return 0
+            logger.info("event=packaged_start version=0.5.0")
+            with TunnelManager():
+                result = _serve(
+                    HelperApiClient(),
+                    credential,
+                    idle_timeout_seconds=DEFAULT_IDLE_SECONDS,
+                )
+            logger.info("event=idle_or_requested_exit")
+            return result
+    except (HelperClientError, TunnelError, RuntimeError, ValueError, OSError):
+        if logger is not None:
+            logger.error("event=packaged_start_failed")
         return 1
 
 

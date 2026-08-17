@@ -29,6 +29,7 @@ class SshPolicyTests(unittest.TestCase):
         self.assertIn("-G", arguments[0])
         self.assertNotIn("-L", arguments[0])
         self.assertFalse(keywords["shell"])
+        self.assertEqual(keywords["creationflags"], 0)
 
     def test_config_injected_forward_or_weakened_host_key_policy_is_rejected(self) -> None:
         for extra in (

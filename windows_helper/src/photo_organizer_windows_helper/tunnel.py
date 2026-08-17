@@ -14,6 +14,7 @@ import time
 from typing import Callable, Protocol
 
 from .ssh_policy import verify_ssh_configuration
+from .windows_process import no_window_creation_flags
 
 
 SSH_HOST_ALIAS = "henderson-server1"
@@ -150,6 +151,7 @@ foreach ($row in $rows) {
                 text=True,
                 timeout=20,
                 shell=False,
+                creationflags=no_window_creation_flags(),
             )
             raw = completed.stdout.strip()
             if not raw:
@@ -224,6 +226,7 @@ class TunnelManager:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             shell=False,
+            creationflags=no_window_creation_flags(),
         )
         deadline = time.monotonic() + self.startup_timeout_seconds
         while time.monotonic() < deadline:

@@ -7,6 +7,7 @@ import os
 import platform
 import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,6 +103,13 @@ class _OpticalManifestError(Exception):
         self.directory_count = directory_count
 
 
+def _no_window_creation_flags() -> int:
+    """Suppress read-only probe command windows only on Windows."""
+    if sys.platform != "win32":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 class WindowsCommandRunner:
     """Bounded shell-free command runner for read-only Windows commands."""
 
@@ -114,6 +122,7 @@ class WindowsCommandRunner:
                 timeout=timeout_seconds,
                 shell=False,
                 check=False,
+                creationflags=_no_window_creation_flags(),
             )
         except FileNotFoundError as exc:
             return CommandResult(args=tuple(args), returncode=None, command_not_found=True, error=str(exc))

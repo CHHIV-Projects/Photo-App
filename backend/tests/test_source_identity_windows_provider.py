@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,10 +18,31 @@ from app.services.source_identity.providers.windows_non_admin import (
     _OpticalManifestResult,
     _optical_metadata_command,
     PathProbeStatus,
+    WindowsCommandRunner,
     WindowsSourceIdentityProbeProvider,
     mask_guid,
     mask_identifier,
 )
+from app.windows_helper_shared.identity import windows as shared_windows
+
+
+class WindowsCommandRunnerTests(unittest.TestCase):
+    def test_windows_probe_commands_suppress_visible_child_windows(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, stdout="safe", stderr="")
+        with patch.object(shared_windows.sys, "platform", "win32"), patch.object(
+            shared_windows.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True
+        ), patch.object(
+            shared_windows.subprocess, "run", return_value=completed
+        ) as run:
+            result = WindowsCommandRunner().run(["powershell", "-NoProfile"], timeout_seconds=1)
+        self.assertEqual(result.returncode, 0)
+        _, keywords = run.call_args
+        self.assertEqual(keywords["creationflags"], 0x08000000)
+        self.assertFalse(keywords["shell"])
+
+    def test_non_windows_probe_commands_preserve_default_behavior(self) -> None:
+        with patch.object(shared_windows.sys, "platform", "linux"):
+            self.assertEqual(shared_windows._no_window_creation_flags(), 0)
 
 
 class _FakeCommandRunner:
