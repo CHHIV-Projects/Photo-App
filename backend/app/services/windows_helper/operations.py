@@ -7,7 +7,7 @@ import json
 import ntpath
 from pathlib import PureWindowsPath
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +25,9 @@ from app.schemas.windows_helper import (
     WindowsInventoryCandidate,
 )
 from app.schemas.source_acquisition import SourceAcquisitionOperationResponse
+from app.services.windows_helper.mounted_volume_resolution import (
+    resolve_mounted_volume_runtime_root,
+)
 from app.services.windows_helper.service import (
     HELPER_PROVIDER_NAME,
     WindowsHelperServiceError,
@@ -32,6 +35,7 @@ from app.services.windows_helper.service import (
 from app.windows_helper_shared.channel import (
     ClaimedAcquireOperation,
     ClaimedInventoryOperation,
+    ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
     HelperOperationClaimResponse,
     HelperOperationCompletionResponse,
@@ -45,6 +49,8 @@ from app.windows_helper_shared.protocol import (
     ErrorCode,
     HelperInventoryPageRequest,
     HelperInventoryPageResponse,
+    HelperObserveVolumesRequest,
+    HelperObserveVolumesResponse,
     HelperProbeRequest,
     HelperProbeResponse,
     InventoryResultStatus,
@@ -53,6 +59,7 @@ from app.windows_helper_shared.protocol import (
     canonical_protocol_digest,
     require_capability,
 )
+from app.windows_helper_shared.identity.windows import MountedVolumeCandidate
 
 
 UNCLAIMED_OPERATION_TTL = timedelta(minutes=10)
@@ -275,6 +282,164 @@ def create_probe_operation(
     )
 
 
+def create_volume_observation_operation(
+    db: Session,
+    source_profile_id: int,
+) -> WindowsHelperOperationCreatedResponse:
+    """Ask the bound Helper for safe mounted-volume metadata only."""
+
+    source, endpoint, node = _profile_binding(db, source_profile_id)
+    if endpoint.source_type not in {"external_device", "removable_media"}:
+        raise WindowsHelperServiceError(
+            "volume_observation_not_required",
+            "This Source type does not use mounted-volume resolution.",
+            http_status=409,
+        )
+    if not helper_is_online(node):
+        raise WindowsHelperServiceError(
+            "helper_offline",
+            "The Windows Helper is not currently online.",
+            http_status=409,
+        )
+    try:
+        capabilities = HelperCapabilityIdentity.model_validate_json(node.capabilities_json or "")
+        require_capability(capabilities.capabilities, "mounted_volume_observation", "1")
+    except (TypeError, ValueError) as exc:
+        raise WindowsHelperServiceError(
+            "volume_observation_capability_unavailable",
+            "The online Windows Helper cannot observe mounted volumes safely.",
+            http_status=409,
+        ) from exc
+
+    operation_id = uuid4()
+    request = HelperObserveVolumesRequest(
+        request_id=operation_id,
+        intended_access_node_id=UUID(node.access_node_uuid),
+        expected_collector_name=EXPECTED_COLLECTOR_NAME,
+        expected_collector_version=EXPECTED_COLLECTOR_VERSION,
+    )
+    return _create_operation(
+        db,
+        operation_id=operation_id,
+        access_node=node,
+        operation_type="observe_volumes",
+        request=request,
+        source_endpoint_id=endpoint.id,
+        source_profile_id=source.id,
+    )
+
+
+def create_resolved_profile_probe_operation(
+    db: Session,
+    observation_operation_id: UUID,
+) -> UUID:
+    """Match one observed volume server-side and queue the existing exact probe."""
+
+    observation, result = completed_volume_observation(
+        db,
+        observation_operation_id,
+        require_fresh=True,
+    )
+    if observation.source_profile_id is None:
+        raise WindowsHelperServiceError(
+            "volume_observation_profile_missing",
+            "The mounted-volume observation is not bound to a Source Profile.",
+            http_status=409,
+        )
+    source, endpoint, node = _profile_binding(db, observation.source_profile_id)
+    if (
+        observation.access_node_id != node.id
+        or observation.source_endpoint_id != endpoint.id
+    ):
+        raise WindowsHelperServiceError(
+            "volume_observation_binding_mismatch",
+            "The mounted-volume observation does not match the enrolled Source.",
+            http_status=409,
+        )
+
+    resolution = resolve_mounted_volume_runtime_root(
+        expected_fingerprint_hash=endpoint.identity_fingerprint_hash,
+        expected_fingerprint_version=endpoint.identity_fingerprint_version,
+        endpoint_relative_root=source.endpoint_relative_root or "",
+        configured_source_root=source.source_root_path,
+        candidates=[
+            MountedVolumeCandidate(
+                root_path=item.provider_native_root,
+                identity_fingerprint_hash=item.identity_fingerprint_hash,
+                identity_fingerprint_version=item.identity_fingerprint_version,
+                drive_type=item.drive_type,
+                identity_identifier_masked=item.identity_identifier_masked,
+            )
+            for item in result.volumes
+        ],
+    )
+    if resolution.status == "ambiguous":
+        raise WindowsHelperServiceError(
+            "mounted_volume_identity_ambiguous",
+            "More than one mounted Windows volume matched the enrolled Source identity.",
+            http_status=409,
+        )
+    if resolution.status == "mismatch":
+        raise WindowsHelperServiceError(
+            "mounted_volume_identity_mismatch",
+            "A different Windows volume is using the Source's configured drive letter.",
+            http_status=409,
+        )
+    if resolution.status != "matched" or not resolution.runtime_root:
+        raise WindowsHelperServiceError(
+            "mounted_volume_not_connected",
+            "The enrolled Windows device is not connected.",
+            http_status=409,
+        )
+
+    operation_id = uuid5(observation_operation_id, "resolved-profile-probe-v1")
+    path = ProviderNativePath(
+        provider_native_root=resolution.runtime_root,
+        provider_native_relative_path="",
+        provider_native_full_path=resolution.runtime_root,
+    )
+    request = HelperProbeRequest(
+        request_id=operation_id,
+        intended_access_node_id=UUID(node.access_node_uuid),
+        source_type=endpoint.source_type,
+        probe_mode="readiness_probe",
+        provider_native_path=path,
+        expected_collector_name=EXPECTED_COLLECTOR_NAME,
+        expected_collector_version=EXPECTED_COLLECTOR_VERSION,
+    )
+    existing = db.scalar(
+        select(WindowsHelperOperation).where(
+            WindowsHelperOperation.operation_uuid == str(operation_id)
+        )
+    )
+    if existing is not None:
+        if (
+            existing.operation_type != "probe_source"
+            or existing.access_node_id != node.id
+            or existing.source_endpoint_id != endpoint.id
+            or existing.source_profile_id != source.id
+            or existing.request_digest != canonical_protocol_digest(request)
+            or HelperProbeRequest.model_validate_json(existing.request_json) != request
+        ):
+            raise WindowsHelperServiceError(
+                "resolved_probe_binding_mismatch",
+                "The resolved probe binding is invalid.",
+                http_status=409,
+            )
+        return operation_id
+
+    _create_operation(
+        db,
+        operation_id=operation_id,
+        access_node=node,
+        operation_type="probe_source",
+        request=request,
+        source_endpoint_id=endpoint.id,
+        source_profile_id=source.id,
+    )
+    return operation_id
+
+
 def create_inventory_operation(
     db: Session,
     body: CreateWindowsHelperInventoryOperationRequest,
@@ -373,9 +538,9 @@ def create_acquire_operation(
         raise WindowsHelperServiceError("acquisition_binding_missing", "The acquisition Source binding is unavailable.", http_status=409)
     _load_access_node(db, UUID(node.access_node_uuid))
     if (
-        endpoint.identity_fingerprint_hash != run.source_fingerprint
+        source.endpoint_id != endpoint.id
+        or endpoint.identity_fingerprint_hash != run.source_fingerprint
         or item.source_fingerprint != run.source_fingerprint
-        or ntpath.normcase(source.source_root_path or "") != ntpath.normcase(run.provider_native_root)
         or ntpath.normcase(item.provider_native_root) != ntpath.normcase(run.provider_native_root)
     ):
         raise WindowsHelperServiceError(
@@ -507,7 +672,12 @@ def claim_operation(
     db.commit()
 
     operation_id = UUID(operation.operation_uuid)
-    if operation.operation_type not in {"probe_source", "inventory_page", "acquire_item"}:
+    if operation.operation_type not in {
+        "probe_source",
+        "observe_volumes",
+        "inventory_page",
+        "acquire_item",
+    }:
         operation.state = "failed"
         operation.error_code = "operation_unsupported"
         db.add(operation)
@@ -522,6 +692,13 @@ def claim_operation(
         if operation.operation_type == "probe_source":
             request = HelperProbeRequest.model_validate_json(operation.request_json)
             claimed = ClaimedProbeOperation(
+                operation_id=operation_id,
+                lease_expires_at=operation.lease_expires_at,
+                request=request,
+            )
+        elif operation.operation_type == "observe_volumes":
+            request = HelperObserveVolumesRequest.model_validate_json(operation.request_json)
+            claimed = ClaimedObserveVolumesOperation(
                 operation_id=operation_id,
                 lease_expires_at=operation.lease_expires_at,
                 request=request,
@@ -617,6 +794,35 @@ def complete_probe_operation(
         != operation.access_node.access_node_uuid
         or result.source_type != request.source_type
         or result.provider_native_path != request.provider_native_path
+        or result.collector_name != request.expected_collector_name
+        or result.collector_version != request.expected_collector_version
+    ):
+        raise WindowsHelperServiceError(
+            "operation_result_mismatch",
+            "The Helper result does not match the authorized operation.",
+            http_status=409,
+        )
+    return _complete(db, operation, result)
+
+
+def complete_volume_observation_operation(
+    db: Session,
+    credential: WindowsHelperCredential,
+    operation_id: UUID,
+    result: HelperObserveVolumesResponse,
+) -> HelperOperationCompletionResponse:
+    operation = _load_owned_operation(db, credential, operation_id)
+    if operation.operation_type != "observe_volumes":
+        raise WindowsHelperServiceError(
+            "operation_type_mismatch",
+            "Operation type mismatch.",
+            http_status=409,
+        )
+    request = HelperObserveVolumesRequest.model_validate_json(operation.request_json)
+    if (
+        result.request_id != operation_id
+        or request.request_id != operation_id
+        or str(request.intended_access_node_id) != operation.access_node.access_node_uuid
         or result.collector_name != request.expected_collector_name
         or result.collector_version != request.expected_collector_version
     ):
@@ -740,7 +946,12 @@ def complete_acquire_operation(
 def _complete(
     db: Session,
     operation: WindowsHelperOperation,
-    result: HelperProbeResponse | HelperInventoryPageResponse | HelperAcquireItemResponse,
+    result: (
+        HelperProbeResponse
+        | HelperObserveVolumesResponse
+        | HelperInventoryPageResponse
+        | HelperAcquireItemResponse
+    ),
 ) -> HelperOperationCompletionResponse:
     result_digest = canonical_protocol_digest(result)
     replay = _validate_completion_state(operation, result_digest)
@@ -798,6 +1009,47 @@ def fail_operation(
         operation_id=operation_id,
         error_code=failure.error_code,
     )
+
+
+def completed_volume_observation(
+    db: Session,
+    operation_id: UUID,
+    *,
+    require_fresh: bool,
+) -> tuple[WindowsHelperOperation, HelperObserveVolumesResponse]:
+    _expire_stale(db)
+    operation = db.scalar(
+        select(WindowsHelperOperation).where(
+            WindowsHelperOperation.operation_uuid == str(operation_id)
+        )
+    )
+    if (
+        operation is None
+        or operation.operation_type != "observe_volumes"
+        or operation.state != "completed"
+        or not operation.result_json
+        or not operation.result_digest
+        or operation.completed_at is None
+    ):
+        raise WindowsHelperServiceError(
+            "volume_observation_not_completed",
+            "The mounted-volume observation is not completed.",
+            http_status=409,
+        )
+    if require_fresh and _aware(operation.completed_at) + COMPLETED_PROBE_FRESHNESS <= _now():
+        raise WindowsHelperServiceError(
+            "volume_observation_stale",
+            "The mounted-volume observation is stale.",
+            http_status=409,
+        )
+    result = HelperObserveVolumesResponse.model_validate_json(operation.result_json)
+    if canonical_protocol_digest(result) != operation.result_digest:
+        raise WindowsHelperServiceError(
+            "volume_observation_integrity_error",
+            "The mounted-volume observation failed integrity validation.",
+            http_status=409,
+        )
+    return operation, result
 
 
 def completed_probe(
@@ -904,12 +1156,17 @@ def get_operation_status(
             http_status=404,
         )
     probe_result = None
+    volume_observation_result = None
     inventory_result = None
     acquire_result = None
     candidates: list[WindowsInventoryCandidate] = []
     if operation.state == "completed" and operation.result_json:
         if operation.operation_type == "probe_source":
             probe_result = HelperProbeResponse.model_validate_json(operation.result_json)
+        elif operation.operation_type == "observe_volumes":
+            volume_observation_result = HelperObserveVolumesResponse.model_validate_json(
+                operation.result_json
+            )
         elif operation.operation_type == "inventory_page":
             inventory_result = HelperInventoryPageResponse.model_validate_json(operation.result_json)
             candidates = [_classify_inventory_item(item) for item in inventory_result.items]
@@ -930,6 +1187,7 @@ def get_operation_status(
         source_endpoint_id=operation.source_endpoint_id,
         source_profile_id=operation.source_profile_id,
         probe_result=probe_result,
+        volume_observation_result=volume_observation_result,
         inventory_result=inventory_result,
         inventory_candidates=candidates,
         acquire_result=acquire_result,
@@ -1073,4 +1331,3 @@ def adapt_probe_result(
             limitations=["Remote observation through the authenticated Windows Helper."],
         ),
     )
-

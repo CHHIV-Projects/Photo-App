@@ -89,8 +89,10 @@ export default function WindowsSourceWorkbench({
 
   const pollOperation = useCallback(async (token: string) => {
     const deadline = Date.now() + operationTimeoutMs;
+    let currentToken = token;
     while (Date.now() < deadline) {
-      const current = await getWindowsSourceUiOperation(token);
+      const current = await getWindowsSourceUiOperation(currentToken);
+      currentToken = current.operation_token;
       if (current.stage === "ready") return current;
       if (current.stage === "failed") throw new Error(current.safe_message);
       await wait(1000);
@@ -102,10 +104,13 @@ export default function WindowsSourceWorkbench({
     setPhase("checking");
     setMessage("Checking source");
     const probe = await startWindowsSourceUiProbe(profile.source_id);
-    await pollOperation(probe.operation_token);
+    const readyProbe = await pollOperation(probe.operation_token);
     setPhase("preparing");
     setMessage("Preparing files");
-    const inventory = await prepareWindowsSourceUiInventory(profile.source_id, probe.operation_token);
+    const inventory = await prepareWindowsSourceUiInventory(
+      profile.source_id,
+      readyProbe.operation_token,
+    );
     await pollOperation(inventory.operation_token);
     const candidateReview = await reviewWindowsSourceUiCandidates(profile.source_id, inventory.operation_token);
     setReview(candidateReview);
@@ -174,7 +179,7 @@ export default function WindowsSourceWorkbench({
         <div className={styles.detailCard}><span className={styles.detailLabel}>Windows access</span><span>{accessLabel}</span></div>
         <div className={styles.detailCard}><span className={styles.detailLabel}>Source</span><span>{phase === "checking" || phase === "preparing" || phase === "review" || phase === "running" || phase === "complete" ? "Ready" : "Not ready"}</span></div>
         <div className={styles.detailCard}><span className={styles.detailLabel}>Profile</span><span>{profile.source_label}</span><span className={styles.detailMeta}>{profile.endpoint_alias}</span></div>
-        <div className={styles.detailCard}><span className={styles.detailLabel}>Folder</span><span>{profile.source_root_path}</span><span className={styles.detailMeta}>Windows-native path; no Linux root is fabricated.</span></div>
+        <div className={styles.detailCard}><span className={styles.detailLabel}>Folder</span><span>{review?.windows_root ?? profile.source_root_path}</span><span className={styles.detailMeta}>Windows-native path; no Linux root is fabricated.</span></div>
       </div>
       {review && phase === "review" && (
         <section className={styles.creationReview} aria-label="Windows ingestion candidate review">

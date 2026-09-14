@@ -36,5 +36,6 @@ def capability_identity(access_node_id: str) -> HelperCapabilityIdentity:
             CapabilityVersion(name="bounded_inventory", version="1"),
             CapabilityVersion(name="durable_acquisition", version="1"),
             CapabilityVersion(name="verified_receiving", version="1"),
+            CapabilityVersion(name="mounted_volume_observation", version="1"),
         ],
     )

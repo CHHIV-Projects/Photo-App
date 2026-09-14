@@ -37,6 +37,8 @@ from app.services.source_identity.creation_schema import (
 from app.services.source_identity.creation_service import SourceCreationService
 from app.services.windows_helper.operations import (
     create_probe_operation,
+    create_resolved_profile_probe_operation,
+    create_volume_observation_operation,
     get_operation_status,
     helper_is_online,
     windows_helper_profile_binding,
@@ -110,15 +112,19 @@ def create_profile_probe(db: Session, source_profile_id: int) -> WindowsSourceUi
         raise WindowsHelperServiceError(
             "helper_offline", "Windows access is not currently available.", http_status=409
         )
-    operation = create_probe_operation(
-        db,
-        CreateWindowsHelperProbeOperationRequest(
-            access_node_id=UUID(node.access_node_uuid),
-            source_type=SourceType(endpoint.source_type),
-            provider_native_root=source.source_root_path or "",
-            probe_mode=ProbeMode.READINESS,
-            source_profile_id=source.id,
-        ),
+    operation = (
+        create_volume_observation_operation(db, source.id)
+        if endpoint.source_type in {"external_device", "removable_media"}
+        else create_probe_operation(
+            db,
+            CreateWindowsHelperProbeOperationRequest(
+                access_node_id=UUID(node.access_node_uuid),
+                source_type=SourceType(endpoint.source_type),
+                provider_native_root=source.source_root_path or "",
+                probe_mode=ProbeMode.READINESS,
+                source_profile_id=source.id,
+            ),
+        )
     )
     return WindowsSourceUiOperation(
         operation_token=operation.operation_id,
@@ -138,12 +144,35 @@ def operation_status(db: Session, operation_id: UUID) -> WindowsSourceUiOperatio
     if status.state != "completed":
         return WindowsSourceUiOperation(
             operation_token=operation_id,
-            stage="checking_source" if status.operation_type == "probe_source" else "preparing_files",
+            stage=(
+                "checking_source"
+                if status.operation_type in {"probe_source", "observe_volumes"}
+                else "preparing_files"
+            ),
             safe_message=(
                 "Checking the selected Windows Source."
-                if status.operation_type == "probe_source"
+                if status.operation_type in {"probe_source", "observe_volumes"}
                 else "Preparing the bounded file list."
             ),
+        )
+    if status.operation_type == "observe_volumes":
+        try:
+            probe_operation_id = create_resolved_profile_probe_operation(db, operation_id)
+        except WindowsHelperServiceError as exc:
+            safe_message = {
+                "mounted_volume_not_connected": "Device not connected.",
+                "mounted_volume_identity_mismatch": "A different device is using this Source's prior drive letter.",
+                "mounted_volume_identity_ambiguous": "Windows reported more than one matching device.",
+            }.get(exc.code, "The selected Source is not ready.")
+            return WindowsSourceUiOperation(
+                operation_token=operation_id,
+                stage="failed",
+                safe_message=safe_message,
+            )
+        return WindowsSourceUiOperation(
+            operation_token=probe_operation_id,
+            stage="checking_source",
+            safe_message="Verifying the selected Windows Source root.",
         )
     if status.operation_type == "probe_source":
         ready = bool(status.probe_result and status.probe_result.result_status.value == "success")
@@ -244,7 +273,7 @@ def candidate_review(
         files_to_process=acquisition.selected_item_count,
         total_bytes=acquisition.expected_byte_count,
         profile_name=source.source_label,
-        windows_root=source.source_root_path or "",
+        windows_root=acquisition.provider_native_root,
         safe_message="Review the exact bounded file set before starting ingestion.",
     )
 

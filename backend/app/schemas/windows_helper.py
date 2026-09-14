@@ -12,6 +12,7 @@ from app.windows_helper_shared.protocol import (
     DEFAULT_INVENTORY_PAGE_SIZE,
     HelperAcquireItemResponse,
     HelperInventoryPageResponse,
+    HelperObserveVolumesResponse,
     HelperProbeResponse,
     ProbeMode,
     SourceType,
@@ -80,7 +81,7 @@ class CreateWindowsHelperInventoryOperationRequest(_StrictModel):
 
 class WindowsHelperOperationCreatedResponse(_StrictModel):
     operation_id: UUID
-    operation_type: Literal["probe_source", "inventory_page", "acquire_item"]
+    operation_type: Literal["probe_source", "observe_volumes", "inventory_page", "acquire_item"]
     state: Literal["pending"]
     request_digest: str
     expires_at: datetime
@@ -102,7 +103,7 @@ class WindowsInventoryCandidate(_StrictModel):
 
 class WindowsHelperOperationStatusResponse(_StrictModel):
     operation_id: UUID
-    operation_type: Literal["probe_source", "inventory_page", "acquire_item"]
+    operation_type: Literal["probe_source", "observe_volumes", "inventory_page", "acquire_item"]
     state: Literal["pending", "claimed", "completed", "failed", "expired"]
     request_digest: str
     result_digest: str | None = None
@@ -115,6 +116,7 @@ class WindowsHelperOperationStatusResponse(_StrictModel):
     source_endpoint_id: int | None = None
     source_profile_id: int | None = None
     probe_result: HelperProbeResponse | None = None
+    volume_observation_result: HelperObserveVolumesResponse | None = None
     inventory_result: HelperInventoryPageResponse | None = None
     inventory_candidates: list[WindowsInventoryCandidate] = Field(default_factory=list)
     acquire_result: HelperAcquireItemResponse | None = None

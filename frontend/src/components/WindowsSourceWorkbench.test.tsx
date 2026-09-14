@@ -70,6 +70,7 @@ describe("Windows Source workbench", () => {
     expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Run Ingestion" }));
     expect(await screen.findByRole("button", { name: "Start Ingestion" })).toBeInTheDocument();
+    expect(api.prepareWindowsSourceUiInventory).toHaveBeenCalledWith(profile.source_id, "operation");
     expect(screen.getByText(/Files to process:/).parentElement).toHaveTextContent("5");
     fireEvent.click(screen.getByRole("button", { name: "Start Ingestion" }));
     expect(await screen.findByText("Run complete.")).toBeInTheDocument();

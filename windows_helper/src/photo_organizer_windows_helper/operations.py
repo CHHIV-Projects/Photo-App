@@ -8,24 +8,34 @@ import json
 import ntpath
 import os
 import stat
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from uuid import UUID, uuid4
 
 from windows_helper_shared.channel import (
     ClaimedInventoryOperation,
+    ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
 )
 from windows_helper_shared.identity.models import IdentityCollectionRequest
-from windows_helper_shared.identity.windows import WindowsIdentityCollector
+from windows_helper_shared.identity.windows import (
+    MountedVolumeCandidate,
+    PROVIDER_NAME,
+    PROVIDER_VERSION,
+    WindowsIdentityCollector,
+    enumerate_windows_mounted_volume_candidates,
+)
 from windows_helper_shared.protocol import (
     HelperInventoryItem,
     HelperInventoryPageRequest,
     HelperInventoryPageResponse,
+    HelperObserveVolumesRequest,
+    HelperObserveVolumesResponse,
     HelperProbeRequest,
     HelperProbeResponse,
     InventoryEntryKind,
     InventoryResultStatus,
     MAX_INVENTORY_RESULT_BYTES,
+    MountedVolumeObservation,
     ProviderNativePath,
     probe_response_from_collection,
 )
@@ -256,21 +266,57 @@ class HelperOperationExecutor:
         self,
         identity_collector: WindowsIdentityCollector | None = None,
         inventory_collector: WindowsInventoryCollector | None = None,
+        mounted_volume_observer: Callable[[], list[MountedVolumeCandidate]] | None = None,
     ) -> None:
         self._identity_collector = identity_collector or WindowsIdentityCollector()
         self._inventory_collector = inventory_collector or WindowsInventoryCollector(
             self._identity_collector
         )
+        self._mounted_volume_observer = (
+            mounted_volume_observer or enumerate_windows_mounted_volume_candidates
+        )
 
     def execute(
         self,
-        operation: ClaimedProbeOperation | ClaimedInventoryOperation,
-    ) -> HelperProbeResponse | HelperInventoryPageResponse:
+        operation: (
+            ClaimedProbeOperation
+            | ClaimedObserveVolumesOperation
+            | ClaimedInventoryOperation
+        ),
+    ) -> HelperProbeResponse | HelperObserveVolumesResponse | HelperInventoryPageResponse:
         if isinstance(operation, ClaimedProbeOperation):
             return execute_probe(self._identity_collector, operation.request)
+        if isinstance(operation, ClaimedObserveVolumesOperation):
+            return execute_volume_observation(
+                operation.request,
+                self._mounted_volume_observer(),
+            )
         if isinstance(operation, ClaimedInventoryOperation):
             return self._inventory_collector.inventory_page(operation.request)
         raise ValueError("Unsupported Helper operation type.")
+
+
+def execute_volume_observation(
+    request: HelperObserveVolumesRequest,
+    candidates: list[MountedVolumeCandidate],
+) -> HelperObserveVolumesResponse:
+    """Return bounded identity metadata only; Endpoint matching remains server-side."""
+
+    return HelperObserveVolumesResponse(
+        request_id=request.request_id,
+        collector_name=PROVIDER_NAME,
+        collector_version=PROVIDER_VERSION,
+        volumes=[
+            MountedVolumeObservation(
+                provider_native_root=item.root_path,
+                identity_fingerprint_hash=item.identity_fingerprint_hash,
+                identity_fingerprint_version=item.identity_fingerprint_version,
+                drive_type=item.drive_type,
+                identity_identifier_masked=item.identity_identifier_masked,
+            )
+            for item in candidates
+        ],
+    )
 
 
 def execute_probe(
@@ -381,4 +427,3 @@ def _strong_fingerprint_hash(result: HelperProbeResponse) -> str | None:
 
 def _new_cursor() -> str:
     return uuid4().hex
-

@@ -74,24 +74,24 @@ def _digest(body: bytes) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
 
 
-def _native_path(relative: str = "") -> ProviderNativePath:
+def _native_path(relative: str = "", *, root: str = ROOT) -> ProviderNativePath:
     return ProviderNativePath(
-        provider_native_root=ROOT,
+        provider_native_root=root,
         provider_native_relative_path=relative,
-        provider_native_full_path=ROOT if not relative else ROOT + "\\" + relative,
+        provider_native_full_path=root if not relative else root + "\\" + relative,
     )
 
 
-def _probe(request_id: UUID) -> HelperProbeResponse:
+def _probe(request_id: UUID, *, root: str = ROOT) -> HelperProbeResponse:
     return HelperProbeResponse(
         request_id=request_id,
         result_status=ProbeResultStatus.SUCCESS,
         source_type="local",
-        provider_native_path=_native_path(),
+        provider_native_path=_native_path(root=root),
         collector_name="windows_non_admin_probe_v1",
         collector_version="1",
         source_root_evidence=ProviderNativeRootEvidence(
-            path=ROOT,
+            path=root,
             is_valid_source_root_candidate=True,
             filesystem_boundary_type="local_folder",
             root_reason="Synthetic exact root.",
@@ -243,7 +243,12 @@ class SourceAcquisitionTests(unittest.TestCase):
             active_patch.stop()
         self.temporary.cleanup()
 
-    def _inventory_operation(self, *, candidate_reference: str = "candidate_001") -> WindowsHelperOperation:
+    def _inventory_operation(
+        self,
+        *,
+        candidate_reference: str = "candidate_001",
+        runtime_root: str = ROOT,
+    ) -> WindowsHelperOperation:
         operation_id = uuid4()
         generation = uuid4()
         request = HelperInventoryPageRequest(
@@ -252,7 +257,7 @@ class SourceAcquisitionTests(unittest.TestCase):
             source_endpoint_id=self.endpoint.id,
             source_profile_id=self.profile.id,
             source_type="local",
-            provider_native_path=_native_path(),
+            provider_native_path=_native_path(root=runtime_root),
             expected_identity_fingerprint=FINGERPRINT,
             page_size=25,
         )
@@ -262,13 +267,16 @@ class SourceAcquisitionTests(unittest.TestCase):
             source_endpoint_id=self.endpoint.id,
             source_profile_id=self.profile.id,
             source_type="local",
-            provider_native_path=_native_path(),
+            provider_native_path=_native_path(root=runtime_root),
             inventory_generation=generation,
-            identity_probe=_probe(operation_id),
+            identity_probe=_probe(operation_id, root=runtime_root),
             items=[
                 HelperInventoryItem(
                     candidate_reference=candidate_reference,
-                    provider_native_path=_native_path("family\\controlled.jpg"),
+                    provider_native_path=_native_path(
+                        "family\\controlled.jpg",
+                        root=runtime_root,
+                    ),
                     filename="controlled.jpg",
                     size_bytes=60 * 1024,
                     modified_time_ns=123456789,
@@ -296,6 +304,33 @@ class SourceAcquisitionTests(unittest.TestCase):
         self.db.add(operation)
         self.db.commit()
         return operation
+
+    def test_changed_runtime_root_remains_bound_through_acquisition_without_profile_rewrite(self) -> None:
+        runtime_root = "E:\\Controlled"
+        operation = self._inventory_operation(runtime_root=runtime_root)
+        planned = create_planned_run(
+            self.db,
+            CreateSourceAcquisitionPlanRequest(
+                idempotency_key=uuid4(),
+                source_profile_id=self.profile.id,
+                inventory_operation_ids=[UUID(operation.operation_uuid)],
+                candidate_references=["candidate_001"],
+            ),
+        )
+
+        self.assertEqual(planned.provider_native_root, runtime_root)
+        self.assertEqual(self.profile.source_root_path, ROOT)
+        active = activate_run(self.db, planned.acquisition_run_id, planned.proposal_digest)
+        acquire = create_acquire_operation(self.db, active.items[0].acquisition_item_id)
+        queued = self.db.scalar(
+            select(WindowsHelperOperation).where(
+                WindowsHelperOperation.operation_uuid == str(acquire.operation_id)
+            )
+        )
+        self.assertIsNotNone(queued)
+        request = HelperAcquireItemRequest.model_validate_json(queued.request_json)
+        self.assertEqual(request.provider_native_path.provider_native_root, runtime_root)
+        self.assertEqual(self.profile.source_root_path, ROOT)
 
     def test_planned_run_copies_exact_inventory_evidence_without_creating_content_paths(self) -> None:
         operation = self._inventory_operation()
@@ -1242,6 +1277,63 @@ class SourceAcquisitionTests(unittest.TestCase):
         )
         self.assertIsNone(refreshed_run.bridge_source_intake_run_id)
         self.assertIsNone(refreshed_run.bridge_ingestion_run_id)
+        self.assertEqual(
+            [(item.bridged_asset_sha256, item.bridged_provenance_id) for item in refreshed_items],
+            [(item.bridged_asset_sha256, item.bridged_provenance_id) for item in prior_items],
+        )
+
+    def test_cross_acquisition_drive_letter_change_reuses_durable_observations(self) -> None:
+        prior_run, prior_items, _ = self._completed_bridge_run()
+        self._establish_completed_bridge_links(prior_run, prior_items)
+        repeat_run, repeat_items, _ = self._completed_bridge_run()
+        changed_root = "H:\\Controlled"
+        repeat_run.provider_native_root = changed_root
+        for item in repeat_items:
+            item.provider_native_root = changed_root
+            item.provider_native_full_path = (
+                changed_root + "\\" + item.provider_native_relative_path
+            )
+        self.db.commit()
+
+        plan = plan_acquisition_bridge(self.db, UUID(repeat_run.run_uuid))
+        self.assertEqual(plan.expected_asset_delta, 0)
+        self.assertEqual(plan.expected_vault_delta, 0)
+        self.assertEqual(plan.expected_provenance_delta, 0)
+        self.assertTrue(
+            all(item.observation_classification == "reuse_prior_observation" for item in plan.items)
+        )
+
+        before = (
+            self.db.scalar(select(func.count(SourceIntakeRun.id))),
+            self.db.scalar(select(func.count(IngestionRun.id))),
+            self.db.scalar(select(func.count(Asset.sha256))),
+            self.db.scalar(select(func.count(Provenance.id))),
+        )
+        with patch(
+            "app.services.source_acquisition.service.start_explicit_source_intake",
+            side_effect=AssertionError("Drive-letter reuse must not start common intake."),
+        ) as start:
+            completed = execute_acquisition_bridge(
+                self.db, UUID(repeat_run.run_uuid), plan.bridge_plan_digest
+            )
+        after = (
+            self.db.scalar(select(func.count(SourceIntakeRun.id))),
+            self.db.scalar(select(func.count(IngestionRun.id))),
+            self.db.scalar(select(func.count(Asset.sha256))),
+            self.db.scalar(select(func.count(Provenance.id))),
+        )
+
+        self.assertEqual(completed.bridge_state, "completed")
+        self.assertEqual(before, after)
+        start.assert_not_called()
+        self.db.expire_all()
+        refreshed_items = list(
+            self.db.scalars(
+                select(SourceAcquisitionItem)
+                .where(SourceAcquisitionItem.run_id == repeat_run.id)
+                .order_by(SourceAcquisitionItem.ordinal)
+            )
+        )
         self.assertEqual(
             [(item.bridged_asset_sha256, item.bridged_provenance_id) for item in refreshed_items],
             [(item.bridged_asset_sha256, item.bridged_provenance_id) for item in prior_items],

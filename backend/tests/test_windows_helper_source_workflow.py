@@ -31,8 +31,11 @@ from app.services.windows_helper.operations import (
     claim_operation,
     complete_inventory_operation,
     complete_probe_operation,
+    complete_volume_observation_operation,
     create_inventory_operation,
     create_probe_operation,
+    create_resolved_profile_probe_operation,
+    create_volume_observation_operation,
     get_operation_status,
 )
 from app.services.windows_helper.schema import ensure_windows_helper_schema
@@ -54,10 +57,12 @@ from app.windows_helper_shared.protocol import (
     HelperCapabilityIdentity,
     HelperInventoryItem,
     HelperInventoryPageResponse,
+    HelperObserveVolumesResponse,
     HelperProbeResponse,
     InventoryEntryKind,
     InventoryResultStatus,
     MachineIssue,
+    MountedVolumeObservation,
     ProbeResultStatus,
     ProviderNativePath,
     SourceType,
@@ -76,20 +81,21 @@ class _ForbiddenLocalProbe:
 
 def _capability(access_node_id: UUID) -> HelperCapabilityIdentity:
     return HelperCapabilityIdentity(
-        helper_version="0.3.0",
+        helper_version="0.5.1",
         intended_access_node_id=access_node_id,
-        supported_source_types=[SourceType.LOCAL],
+        supported_source_types=[SourceType.LOCAL, SourceType.EXTERNAL, SourceType.REMOVABLE],
         collectors=[
             CollectorCapability(
                 name="windows_non_admin_probe_v1",
                 version="1",
-                supported_source_types=[SourceType.LOCAL],
+                supported_source_types=[SourceType.LOCAL, SourceType.EXTERNAL, SourceType.REMOVABLE],
             )
         ],
         capabilities=[
             CapabilityVersion(name="authenticated_channel", version="1"),
             CapabilityVersion(name="remote_operations", version="1"),
             CapabilityVersion(name="bounded_inventory", version="1"),
+            CapabilityVersion(name="mounted_volume_observation", version="1"),
         ],
     )
 
@@ -108,6 +114,7 @@ def _probe(
     root: str = ROOT,
     fingerprint: str = FINGERPRINT,
     status: ProbeResultStatus = ProbeResultStatus.SUCCESS,
+    source_type: SourceType = SourceType.LOCAL,
 ) -> HelperProbeResponse:
     success = status == ProbeResultStatus.SUCCESS
     blocker = (
@@ -124,14 +131,20 @@ def _probe(
     return HelperProbeResponse(
         request_id=request_id,
         result_status=status,
-        source_type=SourceType.LOCAL,
+        source_type=source_type,
         provider_native_path=_native_path(root),
         collector_name="windows_non_admin_probe_v1",
         collector_version="1",
         source_root_evidence=ProviderNativeRootEvidence(
             path="C:\\",
             is_valid_source_root_candidate=success,
-            filesystem_boundary_type="local_folder",
+            filesystem_boundary_type=(
+                "external_folder"
+                if source_type == SourceType.EXTERNAL
+                else "removable_media_folder"
+                if source_type == SourceType.REMOVABLE
+                else "local_folder"
+            ),
             root_reason="Synthetic volume boundary.",
         ),
         evidence_items=[
@@ -141,7 +154,7 @@ def _probe(
                 status="blocked",
                 durability="volatile",
                 privacy_level="advanced_only",
-                source_types=["local"],
+                source_types=[source_type.value],
             )
         ]
         if not success
@@ -152,7 +165,7 @@ def _probe(
                 status="present",
                 durability="durable",
                 privacy_level="hash_before_storage",
-                source_types=["local"],
+                source_types=[source_type.value],
                 fingerprint_hash=fingerprint,
                 fingerprint_version=FINGERPRINT_VERSION,
             )
@@ -256,6 +269,169 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(result.creation_status, "completed")
         return setup, plan, result
+
+    def _create_external_profile(self) -> tuple[SourceEndpoint, IngestionSource]:
+        node = self.db.scalar(
+            select(AccessNode).where(AccessNode.access_node_uuid == str(self.node_id))
+        )
+        node.last_seen_at = datetime.now(timezone.utc)
+        endpoint = SourceEndpoint(
+            source_type="external_device",
+            alias="Controlled External",
+            alias_normalized="controlled external",
+            status="active",
+            identity_fingerprint_hash=FINGERPRINT,
+            identity_fingerprint_version=FINGERPRINT_VERSION,
+            identity_confidence="strong_match",
+            created_from_access_node_id=node.id,
+        )
+        self.db.add(endpoint)
+        self.db.flush()
+        source = IngestionSource(
+            source_label="Controlled External Photos",
+            source_label_normalized="controlled external photos",
+            source_type="external_drive",
+            source_root_path="F:\\Pictures",
+            source_root_path_normalized="f:\\pictures",
+            endpoint_relative_root="Pictures",
+            endpoint_id=endpoint.id,
+            profile_status="active",
+        )
+        self.db.add(source)
+        self.db.flush()
+        self.db.add(
+            SourceEndpointObservedPath(
+                source_endpoint_id=endpoint.id,
+                access_node_id=node.id,
+                observed_path="F:\\Pictures",
+                normalized_observed_path="f:\\pictures",
+                filesystem_boundary_type="external_folder",
+                source_root_candidate_path="F:\\Pictures",
+                is_valid_source_root_candidate=True,
+                probe_provider_name="windows_non_admin_probe_v1",
+                probe_provider_version="1",
+                probe_status="completed",
+                confidence_tier="strong_match",
+                match_status="matched",
+                safe_to_run="true",
+            )
+        )
+        self.db.commit()
+        return endpoint, source
+
+    def _complete_volume_observation(
+        self,
+        source_profile_id: int,
+        volumes: list[MountedVolumeObservation],
+    ):
+        created = create_volume_observation_operation(self.db, source_profile_id)
+        claim = claim_operation(self.db, self.credential)
+        self.assertEqual(claim.operation.operation_type, "observe_volumes")
+        complete_volume_observation_operation(
+            self.db,
+            self.credential,
+            created.operation_id,
+            HelperObserveVolumesResponse(
+                request_id=created.operation_id,
+                collector_name="windows_non_admin_probe_v1",
+                collector_version="1",
+                volumes=volumes,
+            ),
+        )
+        return created
+
+    def test_external_helper_resolves_changed_letter_without_profile_rewrite(self) -> None:
+        endpoint, source = self._create_external_profile()
+        counts_before = (
+            self.db.scalar(select(func.count(SourceEndpoint.id))),
+            self.db.scalar(select(func.count(IngestionSource.id))),
+            self.db.scalar(select(func.count(SourceEndpointObservedPath.id))),
+        )
+        observation = self._complete_volume_observation(
+            source.id,
+            [
+                MountedVolumeObservation(
+                    provider_native_root="E:\\",
+                    identity_fingerprint_hash=FINGERPRINT,
+                    identity_fingerprint_version=FINGERPRINT_VERSION,
+                    drive_type="fixed",
+                    identity_identifier_masked="{...1111}",
+                )
+            ],
+        )
+
+        probe_id = create_resolved_profile_probe_operation(self.db, observation.operation_id)
+        self.assertEqual(
+            probe_id,
+            create_resolved_profile_probe_operation(self.db, observation.operation_id),
+        )
+        claim = claim_operation(self.db, self.credential)
+        self.assertEqual(claim.operation.operation_type, "probe_source")
+        self.assertEqual(claim.operation.request.provider_native_path.provider_native_root, "E:\\Pictures")
+        self.assertEqual(claim.operation.request.source_type, SourceType.EXTERNAL)
+        complete_probe_operation(
+            self.db,
+            self.credential,
+            probe_id,
+            _probe(probe_id, root="E:\\Pictures", source_type=SourceType.EXTERNAL),
+        )
+
+        readiness = SourceProfileReadinessService(
+            self.db,
+            _ForbiddenLocalProbe(),
+        ).check_readiness(source.id, probe_id)
+        self.assertEqual(readiness.readiness_status, "ready")
+        self.assertEqual(readiness.observed_path_summary["observed_path"], "E:\\Pictures")
+        self.db.refresh(source)
+        self.db.refresh(endpoint)
+        self.assertEqual(source.source_root_path, "F:\\Pictures")
+        self.assertEqual(source.endpoint_relative_root, "Pictures")
+        self.assertEqual(endpoint.identity_fingerprint_hash, FINGERPRINT)
+        self.assertEqual(
+            counts_before,
+            (
+                self.db.scalar(select(func.count(SourceEndpoint.id))),
+                self.db.scalar(select(func.count(IngestionSource.id))),
+                self.db.scalar(select(func.count(SourceEndpointObservedPath.id))),
+            ),
+        )
+
+    def test_external_volume_resolution_fails_closed_for_zero_multiple_and_wrong_letter(self) -> None:
+        _endpoint, source = self._create_external_profile()
+
+        missing = self._complete_volume_observation(source.id, [])
+        with self.assertRaisesRegex(WindowsHelperServiceError, "not connected"):
+            create_resolved_profile_probe_operation(self.db, missing.operation_id)
+
+        duplicate = self._complete_volume_observation(
+            source.id,
+            [
+                MountedVolumeObservation(
+                    provider_native_root=root,
+                    identity_fingerprint_hash=FINGERPRINT,
+                    identity_fingerprint_version=FINGERPRINT_VERSION,
+                )
+                for root in ["E:\\", "G:\\"]
+            ],
+        )
+        with self.assertRaisesRegex(WindowsHelperServiceError, "More than one"):
+            create_resolved_profile_probe_operation(self.db, duplicate.operation_id)
+
+        other_fingerprint, other_version = volume_guid_fingerprint(
+            "22222222-2222-2222-2222-222222222222"
+        )
+        wrong = self._complete_volume_observation(
+            source.id,
+            [
+                MountedVolumeObservation(
+                    provider_native_root="F:\\",
+                    identity_fingerprint_hash=other_fingerprint,
+                    identity_fingerprint_version=other_version,
+                )
+            ],
+        )
+        with self.assertRaisesRegex(WindowsHelperServiceError, "different Windows volume"):
+            create_resolved_profile_probe_operation(self.db, wrong.operation_id)
 
     def test_creation_readiness_selection_and_inventory_happy_path(self) -> None:
         setup, plan, created = self._create_profile()

@@ -121,12 +121,13 @@ def _validated_inventory_chain(
     source: IngestionSource,
     endpoint: SourceEndpoint,
     node: AccessNode,
-) -> tuple[UUID, str, list[object], str]:
+) -> tuple[UUID, str, list[object], str, str]:
     if len(request.inventory_operation_ids) != len(set(request.inventory_operation_ids)):
         raise WindowsHelperServiceError("inventory_chain_ambiguous", "Inventory operation IDs must be unique.", http_status=409)
     pages: list[tuple[WindowsHelperOperation, HelperInventoryPageRequest, HelperInventoryPageResponse]] = []
     expected_cursor: str | None = None
     generation: UUID | None = None
+    runtime_root: str | None = None
     chain_parts: list[dict[str, str]] = []
     all_items: list[object] = []
     for index, operation_id in enumerate(request.inventory_operation_ids):
@@ -161,21 +162,14 @@ def _validated_inventory_chain(
             or page_request.source_profile_id != source.id
             or page_request.source_type.value != endpoint.source_type
             or page_request.provider_native_path.provider_native_relative_path
-            or ntpath.normcase(page_request.provider_native_path.provider_native_root)
-            != ntpath.normcase(source.source_root_path)
             or ntpath.normcase(page_request.provider_native_path.provider_native_full_path)
-            != ntpath.normcase(source.source_root_path)
+            != ntpath.normcase(page_request.provider_native_path.provider_native_root)
             or result.request_id != operation_id
             or result.source_endpoint_id != endpoint.id
             or result.source_profile_id != source.id
             or result.source_type != page_request.source_type
             or result.provider_native_path != page_request.provider_native_path
             or identity_hashes != {endpoint.identity_fingerprint_hash}
-            or any(
-                ntpath.normcase(item.provider_native_path.provider_native_root)
-                != ntpath.normcase(source.source_root_path)
-                for item in result.items
-            )
         ):
             raise WindowsHelperServiceError(
                 "inventory_chain_binding_mismatch",
@@ -190,21 +184,30 @@ def _validated_inventory_chain(
             if page_request.inventory_generation is not None or page_request.cursor is not None:
                 raise WindowsHelperServiceError("inventory_chain_missing_start", "Inventory chain does not begin at page one.", http_status=409)
             generation = result.inventory_generation
+            runtime_root = page_request.provider_native_path.provider_native_root
         else:
             if expected_cursor is None or page_request.inventory_generation != generation or page_request.cursor != expected_cursor:
                 raise WindowsHelperServiceError("inventory_chain_disconnected", "Inventory continuation is not exact.", http_status=409)
         if (
             result.inventory_generation != generation
             or page_request.expected_identity_fingerprint != endpoint.identity_fingerprint_hash
+            or runtime_root is None
+            or ntpath.normcase(page_request.provider_native_path.provider_native_root)
+            != ntpath.normcase(runtime_root)
             or ntpath.normcase(result.provider_native_path.provider_native_root)
-            != ntpath.normcase(source.source_root_path)
+            != ntpath.normcase(runtime_root)
+            or any(
+                ntpath.normcase(item.provider_native_path.provider_native_root)
+                != ntpath.normcase(runtime_root)
+                for item in result.items
+            )
         ):
             raise WindowsHelperServiceError("inventory_chain_binding_mismatch", "Inventory identity or root changed.", http_status=409)
         expected_cursor = result.next_cursor
         pages.append((operation, page_request, result))
         all_items.extend(result.items)
         chain_parts.append({"operation_id": operation.operation_uuid, "result_digest": operation.result_digest})
-    if not pages or expected_cursor is not None or generation is None:
+    if not pages or expected_cursor is not None or generation is None or runtime_root is None:
         raise WindowsHelperServiceError("inventory_chain_not_terminal", "Inventory chain lacks a terminal page.", http_status=409)
     normalized_paths = [ntpath.normcase(item.provider_native_path.provider_native_relative_path) for item in all_items]
     references = [item.candidate_reference for item in all_items]
@@ -218,18 +221,20 @@ def _validated_inventory_chain(
             "access_node_id": node.access_node_uuid,
             "source_endpoint_id": endpoint.id,
             "source_profile_id": source.id,
-            "provider_native_root": ntpath.normcase(source.source_root_path),
+            "provider_native_root": ntpath.normcase(runtime_root),
             "source_fingerprint": endpoint.identity_fingerprint_hash,
             "inventory_generation": str(generation),
             "pages": chain_parts,
         }
     )
-    return generation, chain_digest, all_items, endpoint.identity_fingerprint_hash
+    return generation, chain_digest, all_items, endpoint.identity_fingerprint_hash, runtime_root
 
 
 def create_planned_run(db: Session, request: CreateSourceAcquisitionPlanRequest) -> SourceAcquisitionRunResponse:
     source, endpoint, node = _load_profile(db, request.source_profile_id)
-    generation, chain_digest, inventory_items, fingerprint = _validated_inventory_chain(db, request, source, endpoint, node)
+    generation, chain_digest, inventory_items, fingerprint, runtime_root = _validated_inventory_chain(
+        db, request, source, endpoint, node
+    )
     if len(request.candidate_references) != len(set(request.candidate_references)):
         raise WindowsHelperServiceError("candidate_selection_ambiguous", "Selected candidates must be unique.", http_status=409)
     by_reference = {item.candidate_reference: item for item in inventory_items}
@@ -292,7 +297,7 @@ def create_planned_run(db: Session, request: CreateSourceAcquisitionPlanRequest)
         access_node_id=node.id, source_endpoint_id=endpoint.id, source_profile_id=source.id,
         inventory_generation=str(generation), inventory_chain_digest=chain_digest,
         proposal_digest=proposal_digest, source_fingerprint=fingerprint,
-        provider_native_root=source.source_root_path,
+        provider_native_root=runtime_root,
         receiving_root=receiving_root, state="planned",
         selected_item_count=len(selected), expected_byte_count=expected_bytes,
         disk_free_bytes_at_plan=free_bytes, disk_reserve_bytes=reserve,
@@ -369,12 +374,17 @@ def activate_run(db: Session, run_id: UUID, proposal_digest: str) -> SourceAcqui
         source.id != run.source_profile_id
         or endpoint.id != run.source_endpoint_id
         or node.id != run.access_node_id
+        or source.endpoint_id != endpoint.id
         or endpoint.identity_fingerprint_hash != run.source_fingerprint
-        or ntpath.normcase(source.source_root_path or "") != ntpath.normcase(run.provider_native_root)
         or len(items) != run.selected_item_count
         or sum(item.expected_size_bytes for item in items) != run.expected_byte_count
         or current_proposal_digest != run.proposal_digest
         or any(item.state != "pending" or item.committed_offset != 0 for item in items)
+        or any(
+            ntpath.normcase(item.provider_native_root)
+            != ntpath.normcase(run.provider_native_root)
+            for item in items
+        )
     ):
         raise WindowsHelperServiceError(
             "acquisition_proposal_stale",
@@ -559,13 +569,6 @@ def _sha256_hex(value: str) -> str:
     return value.removeprefix("sha256:")
 
 
-def _provider_native_root_key(provider: str, value: str) -> str:
-    """Normalize a provider-native root without translating provider namespaces."""
-    if provider == PROVIDER:
-        return ntpath.normcase(ntpath.normpath(value))
-    return value
-
-
 def _same_provider_lineage(
     current_run: SourceAcquisitionRun,
     current_item: SourceAcquisitionItem,
@@ -574,11 +577,10 @@ def _same_provider_lineage(
 ) -> bool:
     return (
         prior_run.provider == current_run.provider
+        and prior_run.source_endpoint_id == current_run.source_endpoint_id
         and prior_run.source_profile_id == current_run.source_profile_id
-        and _provider_native_root_key(prior_run.provider, prior_run.provider_native_root)
-        == _provider_native_root_key(current_run.provider, current_run.provider_native_root)
-        and _provider_native_root_key(prior_run.provider, prior_item.provider_native_root)
-        == _provider_native_root_key(current_run.provider, current_item.provider_native_root)
+        and prior_run.source_fingerprint == current_run.source_fingerprint
+        and prior_item.source_fingerprint == current_item.source_fingerprint
         and prior_item.provider_native_relative_path_normalized
         == current_item.provider_native_relative_path_normalized
         and prior_item.provider_native_relative_path_normalized_digest

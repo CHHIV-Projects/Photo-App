@@ -29,6 +29,7 @@ MAX_EVIDENCE_ITEMS = 256
 DEFAULT_INVENTORY_PAGE_SIZE = 50
 MAX_INVENTORY_PAGE_SIZE = 100
 MAX_INVENTORY_RESULT_BYTES = 1024 * 1024
+MAX_MOUNTED_VOLUME_OBSERVATIONS = 64
 
 
 class ProtocolCompatibilityError(ValueError):
@@ -180,6 +181,75 @@ class HelperProbeResponse(_StrictProtocolModel):
             raise ValueError("successful probe response must not contain blockers")
         if self.result_status != ProbeResultStatus.SUCCESS and not self.blockers:
             raise ValueError("non-success probe response requires a machine-readable blocker")
+        return self
+
+
+class HelperObserveVolumesRequest(_StrictProtocolModel):
+    """Authorize one metadata-only observation of currently mounted drive roots."""
+
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    expected_collector_name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    expected_collector_version: str = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def _validate_version(self) -> "HelperObserveVolumesRequest":
+        require_protocol_version(self.protocol_version)
+        return self
+
+
+class MountedVolumeObservation(_StrictProtocolModel):
+    """Safe identity metadata for one current Windows drive root."""
+
+    provider_native_root: str = Field(min_length=3, max_length=3)
+    identity_fingerprint_hash: str | None = Field(
+        default=None,
+        min_length=71,
+        max_length=71,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    identity_fingerprint_version: str | None = Field(default=None, max_length=64)
+    drive_type: str | None = Field(default=None, max_length=32)
+    identity_identifier_masked: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def _validate_observation(self) -> "MountedVolumeObservation":
+        normalized = self.provider_native_root.replace("/", "\\")
+        drive, tail = ntpath.splitdrive(normalized)
+        if (
+            len(drive) != 2
+            or drive[1] != ":"
+            or not drive[0].isalpha()
+            or tail not in {"", "\\"}
+        ):
+            raise ValueError("provider_native_root must be one Windows drive root")
+        if (self.identity_fingerprint_hash is None) != (self.identity_fingerprint_version is None):
+            raise ValueError("fingerprint hash and version must be supplied together")
+        object.__setattr__(self, "provider_native_root", f"{drive[0].upper()}:\\")
+        if self.drive_type is not None:
+            object.__setattr__(self, "drive_type", self.drive_type.strip().casefold() or None)
+        return self
+
+
+class HelperObserveVolumesResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    collector_name: str = Field(min_length=1, max_length=64)
+    collector_version: str = Field(min_length=1, max_length=32)
+    volumes: list[MountedVolumeObservation] = Field(
+        default_factory=list,
+        max_length=MAX_MOUNTED_VOLUME_OBSERVATIONS,
+    )
+
+    @model_validator(mode="after")
+    def _validate_response(self) -> "HelperObserveVolumesResponse":
+        require_protocol_version(self.protocol_version)
+        roots = [ntpath.normcase(item.provider_native_root) for item in self.volumes]
+        if len(roots) != len(set(roots)):
+            raise ValueError("mounted-volume observations must have unique roots")
+        if roots != sorted(roots):
+            raise ValueError("mounted-volume observations must be ordered by drive root")
         return self
 
 
@@ -554,6 +624,7 @@ __all__ = [
     "DEFAULT_INVENTORY_PAGE_SIZE",
     "MAX_INVENTORY_PAGE_SIZE",
     "MAX_INVENTORY_RESULT_BYTES",
+    "MAX_MOUNTED_VOLUME_OBSERVATIONS",
     "PROTOCOL_VERSION",
     "CapabilityVersion",
     "CollectorCapability",
@@ -562,11 +633,14 @@ __all__ = [
     "HelperInventoryItem",
     "HelperInventoryPageRequest",
     "HelperInventoryPageResponse",
+    "HelperObserveVolumesRequest",
+    "HelperObserveVolumesResponse",
     "HelperProbeRequest",
     "HelperProbeResponse",
     "InventoryEntryKind",
     "InventoryResultStatus",
     "MachineIssue",
+    "MountedVolumeObservation",
     "ProbeMode",
     "ProbeResultStatus",
     "ProtocolCompatibilityError",

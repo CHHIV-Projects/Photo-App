@@ -13,12 +13,14 @@ from uuid import UUID
 from windows_helper_shared.channel import (
     ClaimedAcquireOperation,
     ClaimedInventoryOperation,
+    ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
     HelperHeartbeatRequest,
     PairingCompleteRequest,
 )
 from windows_helper_shared.protocol import (
     HelperInventoryPageResponse,
+    HelperObserveVolumesResponse,
     HelperProbeResponse,
 )
 
@@ -34,7 +36,7 @@ from .tunnel import TunnelError, TunnelManager
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-organizer-windows-helper")
-    parser.add_argument("--version", action="version", version="0.5.0")
+    parser.add_argument("--version", action="version", version="0.5.1")
     subcommands = parser.add_subparsers(dest="command", required=True)
     pair = subcommands.add_parser("pair", help="Pair this Helper through the approved channel.")
     pair.add_argument("--access-node-id", required=True, type=UUID)
@@ -89,6 +91,15 @@ def _serve(
                         and isinstance(result, HelperProbeResponse)
                     ):
                         client.complete_probe(credential, operation.operation_id, result)
+                    elif (
+                        isinstance(operation, ClaimedObserveVolumesOperation)
+                        and isinstance(result, HelperObserveVolumesResponse)
+                    ):
+                        client.complete_volume_observation(
+                            credential,
+                            operation.operation_id,
+                            result,
+                        )
                     elif (
                         isinstance(operation, ClaimedInventoryOperation)
                         and isinstance(result, HelperInventoryPageResponse)
@@ -214,7 +225,7 @@ def _run_packaged_uri(uri: str) -> int:
             if not instance.acquire():
                 logger.info("event=duplicate_start_reused")
                 return 0
-            logger.info("event=packaged_start version=0.5.0")
+            logger.info("event=packaged_start version=0.5.1")
             with TunnelManager():
                 result = _serve(
                     HelperApiClient(),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import stat
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -9,18 +10,22 @@ from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
-from photo_organizer_windows_helper.operations import WindowsInventoryCollector
+from photo_organizer_windows_helper.operations import HelperOperationExecutor, WindowsInventoryCollector
+from windows_helper_shared.channel import ClaimedObserveVolumesOperation
 from windows_helper_shared.identity.fingerprints import volume_guid_fingerprint
 from windows_helper_shared.identity.models import (
     IdentityFingerprintCandidate,
     NormalizedIdentityEvidence,
     ProviderNativeRootEvidence,
 )
+from windows_helper_shared.identity.windows import MountedVolumeCandidate
 from windows_helper_shared.protocol import (
     MAX_INVENTORY_PAGE_SIZE,
     MAX_INVENTORY_RESULT_BYTES,
     HelperInventoryItem,
     HelperInventoryPageRequest,
+    HelperObserveVolumesRequest,
+    HelperObserveVolumesResponse,
     HelperProbeResponse,
     InventoryEntryKind,
     InventoryResultStatus,
@@ -137,6 +142,73 @@ class InventoryProtocolTests(unittest.TestCase):
         serialized = json.dumps(payload)
         self.assertNotIn("file_content", serialized)
         self.assertNotIn("transfer_destination", serialized)
+
+
+class MountedVolumeObservationTests(unittest.TestCase):
+    def test_observation_reuses_safe_volume_candidates_without_file_authority(self) -> None:
+        request_id = uuid4()
+        request = HelperObserveVolumesRequest(
+            request_id=request_id,
+            intended_access_node_id=NODE_ID,
+            expected_collector_name="windows_non_admin_probe_v1",
+            expected_collector_version="1",
+        )
+        executor = HelperOperationExecutor(
+            mounted_volume_observer=lambda: [
+                MountedVolumeCandidate(
+                    root_path="E:\\",
+                    identity_fingerprint_hash=FINGERPRINT,
+                    identity_fingerprint_version=FINGERPRINT_VERSION,
+                    drive_type="fixed",
+                    identity_identifier_masked="{...1111}",
+                )
+            ]
+        )
+        result = executor.execute(
+            ClaimedObserveVolumesOperation(
+                operation_id=request_id,
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+                request=request,
+            )
+        )
+
+        self.assertIsInstance(result, HelperObserveVolumesResponse)
+        self.assertEqual([item.provider_native_root for item in result.volumes], ["E:\\"])
+        payload = result.model_dump(mode="json")
+        serialized = json.dumps(payload)
+        self.assertTrue(
+            {
+                "content",
+                "filename",
+                "relative_path",
+                "endpoint_id",
+                "source_profile_id",
+                "directory_entries",
+            }.isdisjoint(type(result.volumes[0]).model_fields)
+        )
+        self.assertNotIn("11111111-1111-1111-1111-111111111111", serialized)
+
+    def test_observation_rejects_duplicate_or_unsorted_roots(self) -> None:
+        with self.assertRaises(ValidationError):
+            HelperObserveVolumesResponse(
+                request_id=uuid4(),
+                collector_name="windows_non_admin_probe_v1",
+                collector_version="1",
+                volumes=[
+                    {"provider_native_root": "E:\\"},
+                    {"provider_native_root": "e:\\"},
+                ],
+            )
+        with self.assertRaises(ValidationError):
+            HelperObserveVolumesResponse(
+                request_id=uuid4(),
+                collector_name="windows_non_admin_probe_v1",
+                collector_version="1",
+                volumes=[
+                    {"provider_native_root": "G:\\"},
+                    {"provider_native_root": "E:\\"},
+                ],
+            )
 
 
 class InventoryCollectorTests(unittest.TestCase):

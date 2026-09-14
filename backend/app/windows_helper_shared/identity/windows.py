@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import platform
 import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,6 +61,17 @@ class PathProbeStatus:
     readable: bool
     access_denied: bool = False
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class MountedVolumeCandidate:
+    """Safe mounted-volume identity metadata; never a durable path identity."""
+
+    root_path: str
+    identity_fingerprint_hash: str | None = None
+    identity_fingerprint_version: str | None = None
+    drive_type: str | None = None
+    identity_identifier_masked: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +151,90 @@ class WindowsCommandRunner:
             stdout=completed.stdout or "",
             stderr=completed.stderr or "",
         )
+
+
+def enumerate_windows_mounted_volume_candidates(
+    *,
+    command_runner: CommandRunner | None = None,
+    mounted_drive_provider: Callable[[], list[tuple[str, str | None]]] | None = None,
+    maximum_candidates: int = 64,
+) -> list[MountedVolumeCandidate]:
+    """Observe mounted Windows drive roots without directory enumeration or writes."""
+
+    if platform.system().strip().casefold() != "windows":
+        return []
+    if maximum_candidates < 1:
+        raise ValueError("maximum_candidates must be positive")
+    mounted_drives = (mounted_drive_provider or _windows_mounted_drive_roots)()
+    if len(mounted_drives) > maximum_candidates:
+        raise RuntimeError("Mounted-volume observation exceeded its bounded result count.")
+
+    runner = command_runner or WindowsCommandRunner()
+    candidates: list[MountedVolumeCandidate] = []
+    for root_path, drive_type in mounted_drives:
+        drive = _drive_root(root_path)
+        if drive is None:
+            continue
+        result = runner.run(
+            ["cmd", "/c", "mountvol", drive, "/L"],
+            timeout_seconds=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        )
+        fingerprint_hash: str | None = None
+        fingerprint_version: str | None = None
+        masked_identifier: str | None = None
+        match = _VOLUME_GUID_RE.search(result.combined_output) if result.returncode == 0 else None
+        if match:
+            fingerprint_hash, fingerprint_version = volume_guid_fingerprint(match.group(1))
+            masked_identifier = f"{{...{match.group(1)[-4:].casefold()}}}"
+        candidates.append(
+            MountedVolumeCandidate(
+                root_path=_drive_root_path(drive),
+                identity_fingerprint_hash=fingerprint_hash,
+                identity_fingerprint_version=fingerprint_version,
+                drive_type=(drive_type or "").strip().casefold() or None,
+                identity_identifier_masked=masked_identifier,
+            )
+        )
+    return sorted(candidates, key=lambda item: ntpath.normcase(item.root_path))
+
+
+def _windows_mounted_drive_roots() -> list[tuple[str, str | None]]:
+    """Use bounded native Windows metadata APIs without touching drive contents."""
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_logical_drive_strings = kernel32.GetLogicalDriveStringsW
+    get_logical_drive_strings.argtypes = [wintypes.DWORD, wintypes.LPWSTR]
+    get_logical_drive_strings.restype = wintypes.DWORD
+    get_drive_type = kernel32.GetDriveTypeW
+    get_drive_type.argtypes = [wintypes.LPCWSTR]
+    get_drive_type.restype = wintypes.UINT
+
+    required = get_logical_drive_strings(0, None)
+    if required == 0:
+        raise OSError(ctypes.get_last_error(), "GetLogicalDriveStringsW failed")
+    buffer = ctypes.create_unicode_buffer(required)
+    written = get_logical_drive_strings(required, buffer)
+    if written == 0 or written >= required:
+        raise OSError(ctypes.get_last_error(), "GetLogicalDriveStringsW failed")
+
+    drive_types = {
+        0: "unknown",
+        1: "no_root_directory",
+        2: "removable",
+        3: "fixed",
+        4: "network",
+        5: "cd-rom",
+        6: "ramdisk",
+    }
+    roots = [item for item in "".join(buffer[:written]).split("\0") if item]
+    return [
+        (_drive_root_path(root), drive_types.get(int(get_drive_type(root)), "unknown"))
+        for root in roots
+        if _drive_root(root) is not None
+    ]
 
 
 def mask_identifier(value: str | None, *, keep: int = 4) -> str | None:

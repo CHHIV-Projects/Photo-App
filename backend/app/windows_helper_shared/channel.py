@@ -12,6 +12,7 @@ from .protocol import (
     HelperAcquireItemRequest,
     HelperCapabilityIdentity,
     HelperInventoryPageRequest,
+    HelperObserveVolumesRequest,
     HelperProbeRequest,
     PROTOCOL_VERSION,
     require_protocol_version,
@@ -81,6 +82,13 @@ class ClaimedProbeOperation(_StrictChannelModel):
     request: HelperProbeRequest
 
 
+class ClaimedObserveVolumesOperation(_StrictChannelModel):
+    operation_type: Literal["observe_volumes"] = "observe_volumes"
+    operation_id: UUID
+    lease_expires_at: datetime
+    request: HelperObserveVolumesRequest
+
+
 class ClaimedInventoryOperation(_StrictChannelModel):
     operation_type: Literal["inventory_page"] = "inventory_page"
     operation_id: UUID
@@ -96,7 +104,10 @@ class ClaimedAcquireOperation(_StrictChannelModel):
 
 
 ClaimedHelperOperation = Annotated[
-    ClaimedProbeOperation | ClaimedInventoryOperation | ClaimedAcquireOperation,
+    ClaimedProbeOperation
+    | ClaimedObserveVolumesOperation
+    | ClaimedInventoryOperation
+    | ClaimedAcquireOperation,
     Field(discriminator="operation_type"),
 ]
 
@@ -108,7 +119,7 @@ class HelperOperationClaimResponse(_StrictChannelModel):
 
 class HelperOperationCompletionResponse(_StrictChannelModel):
     operation_id: UUID
-    operation_type: Literal["probe_source", "inventory_page", "acquire_item"]
+    operation_type: Literal["probe_source", "observe_volumes", "inventory_page", "acquire_item"]
     state: Literal["completed"] = "completed"
     result_digest: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
     idempotent_replay: bool = False

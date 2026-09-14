@@ -16,6 +16,7 @@ from app.services.windows_helper.operations import (
     claim_operation,
     complete_inventory_operation,
     complete_probe_operation,
+    complete_volume_observation_operation,
     fail_operation,
 )
 from app.services.windows_helper.service import (
@@ -41,6 +42,7 @@ from app.windows_helper_shared.channel import (
 from app.windows_helper_shared.protocol import (
     HelperAcquireItemResponse,
     HelperInventoryPageResponse,
+    HelperObserveVolumesResponse,
     HelperProbeResponse,
     MAX_ACQUISITION_CHUNK_BYTES,
 )
@@ -118,6 +120,22 @@ def complete_probe(
 ) -> HelperOperationCompletionResponse:
     try:
         return complete_probe_operation(db, credential, operation_id, body)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/operations/{operation_id}/complete-volume-observation",
+    response_model=HelperOperationCompletionResponse,
+)
+def complete_volume_observation(
+    operation_id: UUID,
+    body: HelperObserveVolumesResponse,
+    credential: WindowsHelperCredential = Depends(get_authenticated_helper),
+    db: Session = Depends(get_db_session),
+) -> HelperOperationCompletionResponse:
+    try:
+        return complete_volume_observation_operation(db, credential, operation_id, body)
     except WindowsHelperServiceError as exc:
         _raise_http(exc)
 
