@@ -43,6 +43,53 @@ class NamespaceIdentityValidationTests(unittest.TestCase):
                 result = run_bash(f"rows=$'{rows}'; ! validate_authority_rows \"$rows\"")
                 self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_exact_inactive_automount_row_is_recognized_but_not_active_identity(self) -> None:
+        row = "/mnt/nas/photo-organizer systemd-1 autofs / 0:41 shared"
+        result = run_bash(
+            f"rows=$'{row}'; validate_inactive_authority_rows \"$rows\"; "
+            "! validate_authority_rows \"$rows\""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_inactive_automount_is_activated_before_strict_validation(self) -> None:
+        result = run_bash(
+            """
+            query_count=0
+            activated=0
+            query_mountpoint() {
+              local -n result_ref="$3"
+              query_count=$((query_count + 1))
+              if ((query_count == 1)); then
+                result_ref="$NAS_AUTHORITY systemd-1 autofs / 0:41 shared"
+              else
+                result_ref="$NAS_AUTHORITY systemd-1 autofs / 0:41 shared
+$NAS_AUTHORITY $NAS_SOURCE cifs / 0:52 shared"
+              fi
+            }
+            timeout() { [[ "${*: -1}" == "$NAS_AUTHORITY" ]]; activated=1; }
+            require_authoritative_nas
+            [[ "$activated" == "1" ]]
+            [[ "$authority_major_minor" == "0:52" ]]
+            """
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_wrong_authority_fails_without_dereferencing_target(self) -> None:
+        result = run_bash(
+            """
+            query_mountpoint() {
+              local -n result_ref="$3"
+              result_ref="$NAS_AUTHORITY //192.168.1.171/Wrong cifs / 0:52 shared"
+            }
+            timeout() { printf 'unexpected-activation\n'; return 97; }
+            require_authoritative_nas
+            """
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("missing, duplicated, or conflicting", result.stderr)
+
     def test_one_exact_nas_slot_is_accepted(self) -> None:
         row = (
             "/mnt/photo-organizer-sources/nas/photo-organizer "
@@ -249,7 +296,12 @@ class NamespaceTopologyContractTests(unittest.TestCase):
         ]
         self.assertEqual(authority_command_lines, [])
 
+    def test_authoritative_nas_activation_is_read_only_and_bounded(self) -> None:
+        self.assertIn(
+            "timeout --foreground 30 stat --format='%F' -- \"${NAS_AUTHORITY}\"",
+            self.script,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

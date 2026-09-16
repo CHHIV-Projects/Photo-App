@@ -15,7 +15,11 @@ from app.models.source_intake_run import SourceIntakeRun
 from app.models.windows_helper import WindowsHelperCredential
 from app.schemas.admin import RunIngestionDispatchRequest, RunIngestionWindowsHelperOptions
 from app.schemas.source_acquisition import CreateSourceAcquisitionPlanRequest
-from app.schemas.windows_helper import CreateWindowsHelperProbeOperationRequest
+from app.schemas.windows_helper import (
+    CreateWindowsHelperPairingRequest,
+    CreateWindowsHelperProbeOperationRequest,
+    WindowsHelperPairingAuthorizationResponse,
+)
 from app.schemas.windows_source_ui import (
     WindowsSourceUiCandidateReview,
     WindowsSourceUiCreateConfirmRequest,
@@ -23,6 +27,8 @@ from app.schemas.windows_source_ui import (
     WindowsSourceUiCreatePlanRequest,
     WindowsSourceUiCreateProbeRequest,
     WindowsSourceUiCreateResult,
+    WindowsSourceUiComputer,
+    WindowsSourceUiComputerList,
     WindowsSourceUiOperation,
     WindowsSourceUiProfileStatus,
     WindowsSourceUiWorkflowStatus,
@@ -43,7 +49,12 @@ from app.services.windows_helper.operations import (
     helper_is_online,
     windows_helper_profile_binding,
 )
-from app.services.windows_helper.service import HELPER_PROVIDER_NAME, WindowsHelperServiceError
+from app.services.windows_helper.service import (
+    ACCESS_NODE_LABEL,
+    HELPER_PROVIDER_NAME,
+    WindowsHelperServiceError,
+    create_pairing_authorization,
+)
 from app.windows_helper_shared.protocol import HelperCapabilityIdentity, ProbeMode, SourceType
 
 
@@ -52,6 +63,79 @@ def _helper_version(node: AccessNode) -> str | None:
         return HelperCapabilityIdentity.model_validate_json(node.capabilities_json or "").helper_version
     except (TypeError, ValueError):
         return None
+
+
+def list_computers(db: Session) -> WindowsSourceUiComputerList:
+    """Project AccessNodes separately from the Source devices they can observe."""
+    nodes = list(
+        db.scalars(
+            select(AccessNode)
+            .where(
+                AccessNode.os_family == "windows",
+                AccessNode.provider_name == HELPER_PROVIDER_NAME,
+                AccessNode.status != "retired",
+            )
+            .order_by(AccessNode.id)
+        )
+    )
+    computers: list[WindowsSourceUiComputer] = []
+    for node in nodes:
+        endpoints = list(
+            db.scalars(
+                select(SourceEndpoint)
+                .join(
+                    SourceEndpointObservedPath,
+                    SourceEndpointObservedPath.source_endpoint_id == SourceEndpoint.id,
+                )
+                .where(
+                    SourceEndpointObservedPath.access_node_id == node.id,
+                    SourceEndpoint.status != "retired",
+                )
+                .distinct()
+                .order_by(SourceEndpoint.id)
+            )
+        )
+        device_aliases = sorted({endpoint.alias for endpoint in endpoints}, key=str.casefold)
+        local_aliases = [endpoint.alias for endpoint in endpoints if endpoint.source_type == "local"]
+        display_alias = (
+            local_aliases[0]
+            if node.label == ACCESS_NODE_LABEL and len(local_aliases) == 1
+            else node.label
+        )
+        credential = db.scalar(
+            select(WindowsHelperCredential).where(
+                WindowsHelperCredential.access_node_id == node.id,
+                WindowsHelperCredential.status == "active",
+                WindowsHelperCredential.revoked_at.is_(None),
+            )
+        )
+        paired = credential is not None
+        computers.append(
+            WindowsSourceUiComputer(
+                access_node_id=UUID(node.access_node_uuid),
+                computer_alias=display_alias,
+                paired=paired,
+                online=paired and helper_is_online(node),
+                helper_version=_helper_version(node),
+                source_device_aliases=device_aliases,
+            )
+        )
+    return WindowsSourceUiComputerList(computers=computers)
+
+
+def create_computer_pairing(
+    db: Session,
+    request: CreateWindowsHelperPairingRequest,
+) -> WindowsHelperPairingAuthorizationResponse:
+    alias = request.computer_alias or ""
+    for computer in list_computers(db).computers:
+        if computer.paired and computer.computer_alias.casefold() == alias.strip().casefold():
+            raise WindowsHelperServiceError(
+                "access_node_already_paired",
+                "That Windows computer is already paired. Select it instead.",
+                http_status=409,
+            )
+    return create_pairing_authorization(db, request.computer_alias)
 
 
 def profile_status(db: Session, source_profile_id: int) -> WindowsSourceUiProfileStatus:
@@ -326,37 +410,65 @@ def advance_workflow(db: Session, run_id: UUID, *, confirm: bool) -> WindowsSour
     )
 
 
-def _creation_binding(db: Session, device_alias: str) -> tuple[SourceEndpoint, AccessNode]:
-    endpoints = list(db.scalars(select(SourceEndpoint).where(SourceEndpoint.status != "retired")))
-    matches = [item for item in endpoints if item.alias.casefold() == device_alias.strip().casefold()]
-    if len(matches) != 1:
-        raise WindowsHelperServiceError(
-            "windows_device_unavailable", "Select one known Windows device.", http_status=409
+def _creation_binding(
+    db: Session,
+    access_node_id: UUID,
+    device_alias: str,
+) -> tuple[SourceEndpoint | None, AccessNode]:
+    node = db.scalar(
+        select(AccessNode).where(
+            AccessNode.access_node_uuid == str(access_node_id),
+            AccessNode.os_family == "windows",
+            AccessNode.provider_name == HELPER_PROVIDER_NAME,
+            AccessNode.status == "active",
         )
-    endpoint = matches[0]
-    nodes = list(
+    )
+    if node is None:
+        raise WindowsHelperServiceError(
+            "windows_computer_unavailable",
+            "Select one paired Windows computer.",
+            http_status=409,
+        )
+    endpoints = list(
         db.scalars(
-            select(AccessNode)
-            .join(SourceEndpointObservedPath, SourceEndpointObservedPath.access_node_id == AccessNode.id)
+            select(SourceEndpoint)
+            .join(
+                SourceEndpointObservedPath,
+                SourceEndpointObservedPath.source_endpoint_id == SourceEndpoint.id,
+            )
             .where(
-                SourceEndpointObservedPath.source_endpoint_id == endpoint.id,
-                AccessNode.provider_name == HELPER_PROVIDER_NAME,
-                AccessNode.status == "active",
+                SourceEndpointObservedPath.access_node_id == node.id,
+                SourceEndpoint.status != "retired",
             )
             .distinct()
         )
     )
-    if len(nodes) != 1:
+    matches = [
+        endpoint
+        for endpoint in endpoints
+        if endpoint.alias.casefold() == device_alias.strip().casefold()
+    ]
+    if len(matches) > 1:
         raise WindowsHelperServiceError(
-            "windows_device_unavailable", "Windows access for this device is unavailable.", http_status=409
+            "windows_device_ambiguous",
+            "More than one Source device uses that name on this computer.",
+            http_status=409,
         )
-    return endpoint, nodes[0]
+    return (matches[0] if matches else None), node
+
+
+def _helper_source_type(source_type: str) -> SourceType:
+    return {
+        "local": SourceType.LOCAL,
+        "external": SourceType.EXTERNAL,
+        "removable": SourceType.REMOVABLE,
+    }[source_type]
 
 
 def create_creation_probe(
     db: Session, request: WindowsSourceUiCreateProbeRequest
 ) -> WindowsSourceUiOperation:
-    _, node = _creation_binding(db, request.device_alias)
+    _, node = _creation_binding(db, request.access_node_id, request.device_alias)
     root = request.windows_root.strip()
     if not ntpath.isabs(root) or not ntpath.splitdrive(root)[0]:
         raise WindowsHelperServiceError(
@@ -366,7 +478,7 @@ def create_creation_probe(
         db,
         CreateWindowsHelperProbeOperationRequest(
             access_node_id=UUID(node.access_node_uuid),
-            source_type=SourceType.LOCAL,
+            source_type=_helper_source_type(request.source_type),
             provider_native_root=root,
             probe_mode=ProbeMode.SETUP,
         ),
@@ -379,14 +491,14 @@ def create_creation_probe(
 
 
 def _creation_plan(db: Session, request: WindowsSourceUiCreatePlanRequest):
-    endpoint, _ = _creation_binding(db, request.device_alias)
+    endpoint, _ = _creation_binding(db, request.access_node_id, request.device_alias)
     return SourceCreationService(db).plan(
         SourceCreationPlanRequest(
-            source_type="local",
+            source_type=request.source_type,
             observed_path=request.windows_root.strip(),
             source_name=request.profile_name.strip(),
-            device_name=endpoint.alias,
-            selected_existing_endpoint_id=endpoint.id,
+            device_name=request.device_alias.strip(),
+            selected_existing_endpoint_id=endpoint.id if endpoint is not None else None,
             helper_probe_operation_id=request.probe_operation_token,
         )
     )
@@ -409,15 +521,15 @@ def creation_plan(db: Session, request: WindowsSourceUiCreatePlanRequest) -> Win
 def confirm_creation(
     db: Session, request: WindowsSourceUiCreateConfirmRequest
 ) -> WindowsSourceUiCreateResult:
-    endpoint, _ = _creation_binding(db, request.device_alias)
+    endpoint, _ = _creation_binding(db, request.access_node_id, request.device_alias)
     plan = _creation_plan(db, request)
     result = SourceCreationService(db).confirm(
         SourceCreationConfirmRequest(
-            source_type="local",
+            source_type=request.source_type,
             observed_path=request.windows_root.strip(),
             source_name=request.profile_name.strip(),
-            device_name=endpoint.alias,
-            selected_existing_endpoint_id=endpoint.id,
+            device_name=request.device_alias.strip(),
+            selected_existing_endpoint_id=endpoint.id if endpoint is not None else None,
             helper_probe_operation_id=request.probe_operation_token,
             operator_review_acknowledged=True,
             plan_fingerprint=plan.plan_fingerprint,

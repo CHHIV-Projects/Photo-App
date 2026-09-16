@@ -44,6 +44,6 @@ describe("provider-derived Source routing", () => {
 
   it("uses concise device aliases and hides unvalidated Windows provider types", () => {
     expect(conciseSourceDeviceLabel(profile())).toBe("Chuck_Notebook");
-    expect(normalSelectorSourceTypes(["local", "nas", "external", "removable", "optical", "icloud"])).toEqual(["local", "nas", "icloud"]);
+    expect(normalSelectorSourceTypes(["local", "nas", "external", "removable", "optical", "icloud"])).toEqual(["local", "nas", "external", "removable", "icloud"]);
   });
 });

@@ -13,6 +13,6 @@ export function conciseSourceDeviceLabel(profile: SourceProfileSummary): string 
 }
 
 export function normalSelectorSourceTypes(values: string[]): string[] {
-  const unvalidated = new Set(["external", "removable", "optical"]);
+  const unvalidated = new Set(["optical"]);
   return values.filter((value) => !unvalidated.has(value));
 }

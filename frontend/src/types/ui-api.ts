@@ -1469,7 +1469,43 @@ export interface WindowsSourceUiWorkflowStatus {
   safe_message: string;
 }
 
+export interface WindowsSourceUiComputer {
+  access_node_id: string;
+  computer_alias: string;
+  paired: boolean;
+  online: boolean;
+  helper_version: string | null;
+  source_device_aliases: string[];
+}
+
+export interface WindowsSourceUiComputerList {
+  computers: WindowsSourceUiComputer[];
+}
+
+export interface WindowsHelperPairingAuthorization {
+  access_node_id: string;
+  access_node_label: string;
+  pairing_id: string;
+  pairing_code: string;
+  expires_at: string;
+  status: "pending";
+}
+
+export interface WindowsHelperStatus {
+  access_node_id: string;
+  access_node_label: string;
+  access_node_status: string;
+  credential_status: string | null;
+  last_seen_at: string | null;
+}
+
+export interface WindowsHelperStatusList {
+  helpers: WindowsHelperStatus[];
+}
+
 export interface WindowsSourceUiCreateFields {
+  access_node_id: string;
+  source_type: "local" | "external" | "removable";
   device_alias: string;
   windows_root: string;
   profile_name: string;

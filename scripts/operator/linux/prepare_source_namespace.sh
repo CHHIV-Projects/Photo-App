@@ -22,6 +22,11 @@ fail() {
   exit 1
 }
 
+transient_fail() {
+  printf 'RETRY: %s\n' "$*" >&2
+  exit 75
+}
+
 query_mountpoint() {
   local target="$1"
   local fields="$2"
@@ -128,6 +133,51 @@ validate_authority_rows() {
     fi
   done
   ((active_count == 1)) && [[ -n "${authority_major_minor}" ]]
+}
+
+validate_inactive_authority_rows() {
+  local rows_text="$1"
+  local row target source filesystem fsroot major_minor propagation extra
+  local -a rows=()
+
+  [[ -n "${rows_text}" ]] || return 1
+  mapfile -t rows <<<"${rows_text}"
+  (("${#rows[@]}" == 1)) || return 1
+  row="${rows[0]}"
+  read -r target source filesystem fsroot major_minor propagation extra <<<"${row}"
+  [[ -n "${target:-}" && -n "${source:-}" && -n "${filesystem:-}" &&
+    -n "${fsroot:-}" && -n "${major_minor:-}" &&
+    -n "${propagation:-}" && -z "${extra:-}" ]] || return 1
+  [[ "${target}" == "${NAS_AUTHORITY}" &&
+    "${source}" == "systemd-1" &&
+    "${filesystem}" == "autofs" &&
+    "${fsroot}" == "/" &&
+    "${major_minor}" =~ ^[0-9]+:[0-9]+$ ]]
+}
+
+require_authoritative_nas() {
+  local authority_rows=""
+
+  query_mountpoint "${NAS_AUTHORITY}" "TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION" authority_rows ||
+    fail "Authoritative NAS mount evidence is unavailable."
+  if validate_authority_rows "${authority_rows}"; then
+    return 0
+  fi
+  validate_inactive_authority_rows "${authority_rows}" ||
+    fail "Authoritative NAS identity is missing, duplicated, or conflicting."
+
+  timeout --foreground 30 stat --format='%F' -- "${NAS_AUTHORITY}" >/dev/null 2>&1 ||
+    transient_fail "Authoritative NAS automount did not become ready."
+
+  query_mountpoint "${NAS_AUTHORITY}" "TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION" authority_rows ||
+    transient_fail "Authoritative NAS mount evidence is temporarily unavailable."
+  if validate_authority_rows "${authority_rows}"; then
+    return 0
+  fi
+  if validate_inactive_authority_rows "${authority_rows}"; then
+    transient_fail "Authoritative NAS automount has not completed."
+  fi
+  fail "Authoritative NAS identity is missing, duplicated, or conflicting."
 }
 
 validate_local_backing() {
@@ -343,7 +393,7 @@ prepare_mount_topology() {
 }
 
 main() {
-  local fixed_path authority_rows=""
+  local fixed_path
 
   [[ "${EUID}" -eq 0 ]] ||
     fail "Source namespace preparation requires the approved root systemd unit."
@@ -357,10 +407,7 @@ main() {
   load_config_identity
   validate_local_backing ||
     fail "Local Mounted Source namespace does not match its configured filesystem identity."
-  query_mountpoint "${NAS_AUTHORITY}" "TARGET,SOURCE,FSTYPE,FSROOT,MAJ:MIN,PROPAGATION" authority_rows ||
-    fail "Authoritative NAS mount evidence is unavailable."
-  validate_authority_rows "${authority_rows}" ||
-    fail "Authoritative NAS identity is missing, duplicated, or conflicting."
+  require_authoritative_nas
 
   trap 'cleanup_on_exit "$?"' EXIT
   trap 'fail "Source namespace preparation was interrupted."' HUP INT TERM
@@ -372,4 +419,3 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
 fi
-

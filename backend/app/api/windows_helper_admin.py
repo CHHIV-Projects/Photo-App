@@ -45,11 +45,10 @@ def create_pairing(
     response: Response,
     db: Session = Depends(get_db_session),
 ) -> WindowsHelperPairingAuthorizationResponse:
-    del body
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
     try:
-        return create_pairing_authorization(db)
+        return create_pairing_authorization(db, body.computer_alias)
     except WindowsHelperServiceError as exc:
         _raise_http(exc)
 

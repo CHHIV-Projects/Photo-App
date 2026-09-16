@@ -11,7 +11,12 @@ from fastapi.testclient import TestClient
 from app.api.windows_source_ui import router
 from app.db.session import get_db_session
 from app.schemas.source_acquisition import SourceAcquisitionRunResponse
-from app.schemas.windows_source_ui import WindowsSourceUiOperation, WindowsSourceUiProfileStatus
+from app.schemas.windows_source_ui import (
+    WindowsSourceUiComputer,
+    WindowsSourceUiComputerList,
+    WindowsSourceUiOperation,
+    WindowsSourceUiProfileStatus,
+)
 from app.services.windows_helper.ui_facade import advance_workflow
 
 
@@ -63,6 +68,27 @@ class WindowsSourceUiApiTests(unittest.TestCase):
         self.assertNotIn("request_digest", payload)
         self.assertNotIn("result_digest", payload)
         self.assertNotIn("operation_payload", payload)
+
+    def test_computer_projection_keeps_access_node_separate_from_source_devices(self) -> None:
+        safe = WindowsSourceUiComputerList(
+            computers=[
+                WindowsSourceUiComputer(
+                    access_node_id=uuid4(),
+                    computer_alias="Family Laptop",
+                    paired=True,
+                    online=True,
+                    helper_version="0.5.1",
+                    source_device_aliases=["Internal Photos", "Travel Drive"],
+                )
+            ]
+        )
+        with patch("app.api.windows_source_ui.list_computers", return_value=safe):
+            response = self.client.get("/api/admin/windows-source-ui/computers")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["computers"][0]
+        self.assertEqual(payload["computer_alias"], "Family Laptop")
+        self.assertEqual(payload["source_device_aliases"], ["Internal Photos", "Travel Drive"])
+        self.assertNotIn("credential", payload)
 
 
 class WindowsSourceUiResultProjectionTests(unittest.TestCase):

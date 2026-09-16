@@ -98,6 +98,14 @@ class LinuxSourceNamespaceUnitTests(unittest.TestCase):
         for forbidden_value in ("docker.sock", "/dev/", "/mnt/", "DOCKER_HOST"):
             self.assertNotIn(forbidden_value, self.namespace_text)
 
+    def test_namespace_retries_only_transient_startup_failures(self) -> None:
+        self.assertEqual(self.namespace.get("Restart"), ["on-failure"])
+        self.assertEqual(self.namespace.get("RestartSec"), ["15s"])
+        self.assertEqual(self.namespace.get("RestartPreventExitStatus"), ["1"])
+        self.assertEqual(self.namespace.get("StartLimitIntervalSec"), ["0"])
+        self.assertIn("network-online.target", self.namespace.get("After", [""])[0])
+        self.assertIn("network-online.target", self.namespace.get("Wants", [""])[0])
+
     def test_broker_remains_non_root_identity_only_and_hardened(self) -> None:
         self.assertEqual(self.broker.get("Type"), ["simple"])
         self.assertEqual(self.broker.get("User"), ["photo-organizer-source-broker"])

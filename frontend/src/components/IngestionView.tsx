@@ -21,6 +21,7 @@ import {
   getSourceIntakeReports,
   getSourceIntakeRunStatus,
   getSourceProfiles,
+  getWindowsSourceUiComputers,
   planSourceEndpointEnrollment,
   planSourceCreation,
   probeSourceIdentity,
@@ -67,10 +68,12 @@ import type {
   SourceIntakeStatusSnapshot,
   IcloudStagingCleanupRunStatus,
   IcloudStagingCleanupReadinessResponse,
+  WindowsSourceUiComputer,
 } from "@/types/ui-api";
 import { normalSelectorSourceTypes, sourceWorkbenchKind } from "@/lib/source-provider-ui";
 
 import IcloudRunWorkflowPanel from "./IcloudRunWorkflowPanel";
+import WindowsComputerEnrollment from "./WindowsComputerEnrollment";
 import WindowsSourceCreation from "./WindowsSourceCreation";
 import WindowsSourceWorkbench from "./WindowsSourceWorkbench";
 import styles from "./ingestion-view.module.css";
@@ -1346,6 +1349,7 @@ function calculateExactDuplicateCount(
 export default function IngestionView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [profiles, setProfiles] = useState<SourceProfileSummary[]>([]);
+  const [windowsComputers, setWindowsComputers] = useState<WindowsSourceUiComputer[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
@@ -1662,9 +1666,19 @@ export default function IngestionView() {
     }
   }, []);
 
+  const loadWindowsComputers = useCallback(async () => {
+    try {
+      const response = await getWindowsSourceUiComputers();
+      setWindowsComputers(response.computers.filter((computer) => computer.paired));
+    } catch {
+      setWindowsComputers([]);
+    }
+  }, []);
+
   useEffect(() => {
     void loadProfiles({ clearRowErrors: true });
-  }, [loadProfiles]);
+    void loadWindowsComputers();
+  }, [loadProfiles, loadWindowsComputers]);
 
   useEffect(() => {
     setRunIngestionDispatchResult(null);
@@ -1976,11 +1990,6 @@ export default function IngestionView() {
     const allowed = new Set(normalSelectorSourceTypes(Array.from(represented)));
     return SOURCE_SELECTOR_TYPE_OPTIONS.filter((option) => allowed.has(option.value));
   }, [profiles]);
-
-  const windowsDeviceAliases = useMemo(
-    () => Array.from(new Set(profiles.filter((profile) => profile.provider_kind === "windows_helper" && profile.endpoint_alias).map((profile) => profile.endpoint_alias as string))).sort(),
-    [profiles],
-  );
 
   const workbenchDevices = useMemo<WorkbenchDeviceOption[]>(() => {
     const deviceMap = new Map<string, WorkbenchDeviceOption>();
@@ -4287,14 +4296,14 @@ export default function IngestionView() {
                     aria-pressed={createSourceForm.operatorSourceType === option.value}
                     disabled={
                       option.disabled
-                      || (mountedSourceRuntime !== "unavailable" && ["external", "removable", "optical"].includes(option.value))
+                      || option.value === "optical"
                       || sourceCreationPhase === "planning"
                       || sourceCreationPhase === "confirming"
                       || sourceCreationPhase === "selecting_existing"
                     }
                     title={
-                      mountedSourceRuntime !== "unavailable" && ["external", "removable", "optical"].includes(option.value)
-                        ? "Not available from this server yet"
+                      option.value === "optical"
+                        ? "Optical ingestion remains deferred"
                         : option.disabled ? "Coming later" : undefined
                     }
                     onClick={() => {
@@ -4313,9 +4322,9 @@ export default function IngestionView() {
                   </button>
                 ))}
               </div>
-              {mountedSourceRuntime === "available" && (
+              {createSourceForm.operatorSourceType === "optical" && (
                 <p className={styles.helperText}>
-                  Windows-connected External, Removable, and Optical sources are not yet available from this server.
+                  Optical ingestion remains deferred.
                 </p>
               )}
             </div>
@@ -4331,11 +4340,25 @@ export default function IngestionView() {
                 </div>
               )}
 
-              {createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows" && (
-                <WindowsSourceCreation
-                  deviceAliases={windowsDeviceAliases}
-                  onComplete={() => void loadProfiles({ refreshOnly: true, resetBanner: false })}
-                />
+              {(
+                (createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows")
+                || createSourceForm.operatorSourceType === "external"
+                || createSourceForm.operatorSourceType === "removable"
+              ) && (
+                <>
+                  <WindowsComputerEnrollment
+                    onPaired={() => void loadWindowsComputers()}
+                  />
+                  <WindowsSourceCreation
+                    key={createSourceForm.operatorSourceType}
+                    computers={windowsComputers}
+                    sourceType={createSourceForm.operatorSourceType as "local" | "external" | "removable"}
+                    onComplete={() => {
+                      void loadProfiles({ refreshOnly: true, resetBanner: false });
+                      void loadWindowsComputers();
+                    }}
+                  />
+                </>
               )}
               {createSourceForm.operatorSourceType === "icloud" && (
                 <label className={styles.formLabel}>
@@ -4423,7 +4446,11 @@ export default function IngestionView() {
                   ))}
                 </>
               ) : createSourceForm.operatorSourceType !== "icloud"
-                && !(createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows") && (
+                && !(
+                  (createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows")
+                  || createSourceForm.operatorSourceType === "external"
+                  || createSourceForm.operatorSourceType === "removable"
+                ) && (
                 <label className={styles.formLabel}>
                   {createSourceForm.operatorSourceType === "optical" ? "Current Optical Path" : "Root Path or Mount Point"}
                   <input
@@ -4497,7 +4524,9 @@ export default function IngestionView() {
                 </>
               )}
 
-              {!(createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows") && <div className={styles.createSourceAction}>
+              {!((createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows")
+                || createSourceForm.operatorSourceType === "external"
+                || createSourceForm.operatorSourceType === "removable") && <div className={styles.createSourceAction}>
                 <button
                   type="button"
                   className={styles.updateButton}
@@ -5071,7 +5100,7 @@ export default function IngestionView() {
               </div>
               <div className={styles.detailCard}>
                 <span className={styles.detailLabel}>Workflow</span>
-                <span>{sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? "Windows Local Intake" : sourceSelectionResult?.workflow_kind === "icloud_intake" ? "iCloud Intake" : getSourceWorkflowDisplay(selectedWorkbenchProfile)}</span>
+                <span>{sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? `Windows ${getOperatorSourceTypeLabel(getOperatorSourceType(selectedWorkbenchProfile))} Intake` : sourceSelectionResult?.workflow_kind === "icloud_intake" ? "iCloud Intake" : getSourceWorkflowDisplay(selectedWorkbenchProfile)}</span>
                 <span className={styles.detailMeta}>{getSourceWorkflowPlaceholder(selectedWorkbenchProfile)}</span>
               </div>
             </div>

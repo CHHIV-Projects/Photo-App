@@ -65,7 +65,22 @@ class WindowsSourceUiWorkflowStatus(_StrictModel):
     safe_message: str
 
 
+class WindowsSourceUiComputer(_StrictModel):
+    access_node_id: UUID
+    computer_alias: str
+    paired: bool
+    online: bool
+    helper_version: str | None = None
+    source_device_aliases: list[str] = Field(default_factory=list)
+
+
+class WindowsSourceUiComputerList(_StrictModel):
+    computers: list[WindowsSourceUiComputer] = Field(default_factory=list)
+
+
 class WindowsSourceUiCreateProbeRequest(_StrictModel):
+    access_node_id: UUID
+    source_type: Literal["local", "external", "removable"] = "local"
     device_alias: str = Field(min_length=1, max_length=255)
     windows_root: str = Field(min_length=3, max_length=2048)
     profile_name: str = Field(min_length=1, max_length=255)

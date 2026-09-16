@@ -126,8 +126,74 @@ def get_or_create_development_access_node(db: Session) -> tuple[AccessNode, bool
     return access_node, True
 
 
-def create_pairing_authorization(db: Session) -> WindowsHelperPairingAuthorizationResponse:
-    access_node, _ = get_or_create_development_access_node(db)
+def _get_or_create_named_access_node(db: Session, computer_alias: str) -> tuple[AccessNode, bool]:
+    alias = computer_alias.strip()
+    if not alias or any(ord(character) < 32 for character in alias):
+        raise WindowsHelperServiceError(
+            "invalid_computer_alias",
+            "Enter a valid Windows computer name.",
+        )
+    candidates = [
+        node
+        for node in db.scalars(
+            select(AccessNode).where(
+                AccessNode.os_family == "windows",
+                AccessNode.provider_name == HELPER_PROVIDER_NAME,
+            )
+        )
+        if node.label.casefold() == alias.casefold()
+    ]
+    if len(candidates) > 1:
+        raise WindowsHelperServiceError(
+            "ambiguous_access_node",
+            "More than one Windows computer uses that name.",
+            http_status=409,
+        )
+    if candidates:
+        access_node = candidates[0]
+        if access_node.status == "retired":
+            raise WindowsHelperServiceError(
+                "access_node_unavailable",
+                "That Windows computer is unavailable.",
+                http_status=409,
+            )
+        credential = db.scalar(
+            select(WindowsHelperCredential).where(
+                WindowsHelperCredential.access_node_id == access_node.id,
+                WindowsHelperCredential.status == "active",
+                WindowsHelperCredential.revoked_at.is_(None),
+            )
+        )
+        if credential is not None:
+            raise WindowsHelperServiceError(
+                "access_node_already_paired",
+                "That Windows computer is already paired. Select it instead.",
+                http_status=409,
+            )
+        return access_node, False
+
+    access_node = AccessNode(
+        access_node_uuid=str(uuid4()),
+        label=alias,
+        os_family="windows",
+        provider_name=HELPER_PROVIDER_NAME,
+        provider_version=HELPER_PROVIDER_VERSION,
+        status="inactive",
+    )
+    db.add(access_node)
+    db.flush()
+    return access_node, True
+
+
+def create_pairing_authorization(
+    db: Session,
+    computer_alias: str | None = None,
+) -> WindowsHelperPairingAuthorizationResponse:
+    access_node, _ = (
+        _get_or_create_named_access_node(db, computer_alias)
+        if computer_alias is not None
+        else get_or_create_development_access_node(db)
+    )
     now = _now()
     for pending in db.scalars(
         select(WindowsHelperPairingAuthorization).where(

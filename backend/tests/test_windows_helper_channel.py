@@ -140,8 +140,9 @@ class WindowsHelperChannelTests(unittest.TestCase):
         row = self.db.scalar(
             select(WindowsHelperPairingAuthorization).where(
                 WindowsHelperPairingAuthorization.public_id == expired.pairing_id
+                )
             )
-        )
+
         row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         self.db.commit()
         with self.assertRaisesRegex(WindowsHelperServiceError, "expired"):
@@ -174,6 +175,28 @@ class WindowsHelperChannelTests(unittest.TestCase):
                     "unexpected": True,
                 }
             )
+
+    def test_named_computer_enrollment_reuses_pending_alias_and_rejects_duplicate_pairing(self) -> None:
+        first = create_pairing_authorization(self.db, "Family Laptop")
+        second = create_pairing_authorization(self.db, "family laptop")
+        self.assertEqual(first.access_node_id, second.access_node_id)
+        node = self.db.scalar(
+            select(AccessNode).where(AccessNode.access_node_uuid == str(first.access_node_id))
+        )
+        self.assertEqual(node.label, "Family Laptop")
+        self.assertEqual(node.status, "inactive")
+
+        complete_pairing(
+            self.db,
+            PairingCompleteRequest(
+                pairing_code=second.pairing_code,
+                access_node_id=second.access_node_id,
+                capability_identity=_capability(second.access_node_id),
+            ),
+        )
+        with self.assertRaisesRegex(WindowsHelperServiceError, "already paired"):
+            create_pairing_authorization(self.db, "FAMILY LAPTOP")
+        self.assertEqual(self.db.query(AccessNode).count(), 1)
 
     def test_authentication_revocation_binding_and_idempotent_heartbeat(self) -> None:
         _, paired = self._paired()

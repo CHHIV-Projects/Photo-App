@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   confirmWindowsSourceUiCreation,
@@ -9,6 +9,7 @@ import {
   startWindowsSourceUiCreationProbe,
 } from "@/lib/api";
 import type {
+  WindowsSourceUiComputer,
   WindowsSourceUiCreateFields,
   WindowsSourceUiCreatePlan,
   WindowsSourceUiCreateResult,
@@ -43,18 +44,22 @@ function profileActionLabel(action: string): string {
 }
 
 type Props = {
-  deviceAliases: string[];
+  computers: WindowsSourceUiComputer[];
+  sourceType: "local" | "external" | "removable";
   onComplete: () => void;
   launchWindowsAccess?: () => void;
 };
 
 export default function WindowsSourceCreation({
-  deviceAliases,
+  computers,
+  sourceType,
   onComplete,
   launchWindowsAccess = invokeWindowsAccess,
 }: Props) {
   const [fields, setFields] = useState<WindowsSourceUiCreateFields>({
-    device_alias: deviceAliases[0] ?? "",
+    access_node_id: computers[0]?.access_node_id ?? "",
+    source_type: sourceType,
+    device_alias: "",
     windows_root: "",
     profile_name: "",
   });
@@ -63,6 +68,15 @@ export default function WindowsSourceCreation({
   const [result, setResult] = useState<WindowsSourceUiCreateResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFields((current) => {
+      if (computers.some((computer) => computer.access_node_id === current.access_node_id)) {
+        return current;
+      }
+      return { ...current, access_node_id: computers[0]?.access_node_id ?? "" };
+    });
+  }, [computers]);
 
   const pathError = useMemo(() => {
     const root = fields.windows_root.trim();
@@ -80,8 +94,8 @@ export default function WindowsSourceCreation({
   };
 
   const identify = useCallback(() => {
-    if (!fields.device_alias.trim() || !fields.profile_name.trim() || pathError) {
-      setError(pathError ?? "Device and Profile name are required.");
+    if (!fields.access_node_id || !fields.device_alias.trim() || !fields.profile_name.trim() || pathError) {
+      setError(pathError ?? "Windows computer, Source device, and Profile name are required.");
       return;
     }
     // Synchronous user gesture: a healthy existing instance safely reuses its OS mutex.
@@ -108,6 +122,9 @@ export default function WindowsSourceCreation({
     }).finally(() => setBusy(false));
   }, [fields, launchWindowsAccess, pathError]);
 
+  const selectedComputer = computers.find((item) => item.access_node_id === fields.access_node_id);
+  const sourceTypeLabel = sourceType === "external" ? "External" : sourceType === "removable" ? "Removable" : "Local";
+
   const confirm = useCallback(async () => {
     if (!probeToken || !plan) return;
     setBusy(true);
@@ -124,31 +141,39 @@ export default function WindowsSourceCreation({
   }, [fields, onComplete, plan, probeToken]);
 
   return (
-    <section aria-label="Create Windows Local Source">
+    <section aria-label={`Create Windows ${sourceTypeLabel} Source`}>
       <div className={styles.createSourceControls}>
         <label className={styles.formLabel}>
-          Windows device
-          <select className={styles.formInput} value={fields.device_alias} onChange={(event) => update("device_alias", event.target.value)} disabled={busy}>
-            {deviceAliases.length === 0 ? <option value="">No paired Windows devices</option> : deviceAliases.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
+          Windows computer
+          <select className={styles.formInput} value={fields.access_node_id} onChange={(event) => update("access_node_id", event.target.value)} disabled={busy}>
+            {computers.length === 0 ? <option value="">No paired Windows computers</option> : computers.map((computer) => <option key={computer.access_node_id} value={computer.access_node_id}>{computer.computer_alias}</option>)}
           </select>
         </label>
         <label className={styles.formLabel}>
-          Exact Windows Local folder
-          <input className={styles.formInput} value={fields.windows_root} onChange={(event) => update("windows_root", event.target.value)} placeholder="C:\\Users\\name\\Pictures" disabled={busy} />
+          Source device name
+          <input className={styles.formInput} list="windows-source-device-aliases" value={fields.device_alias} onChange={(event) => update("device_alias", event.target.value)} placeholder="Family external drive" disabled={busy} />
+          <datalist id="windows-source-device-aliases">
+            {(selectedComputer?.source_device_aliases ?? []).map((alias) => <option key={alias} value={alias} />)}
+          </datalist>
+        </label>
+        <label className={styles.formLabel}>
+          {`Exact Windows ${sourceTypeLabel} folder`}
+          <input className={styles.formInput} value={fields.windows_root} onChange={(event) => update("windows_root", event.target.value)} placeholder={sourceType === "local" ? "C:\\Users\\name\\Pictures" : "E:\\Family Photos"} disabled={busy} />
         </label>
         <label className={styles.formLabel}>
           Source Profile name
           <input className={styles.formInput} value={fields.profile_name} onChange={(event) => update("profile_name", event.target.value)} placeholder="Family photos" disabled={busy} />
         </label>
-        <button type="button" className={styles.updateButton} onClick={identify} disabled={busy || deviceAliases.length === 0}>{busy && !plan ? "Checking..." : "Review Source"}</button>
+        <button type="button" className={styles.updateButton} onClick={identify} disabled={busy || computers.length === 0}>{busy && !plan ? "Checking..." : "Review Source"}</button>
       </div>
       {pathError && fields.windows_root && <p className={styles.helperText}>{pathError}</p>}
       {plan && !result && (
-        <section className={styles.creationReview} aria-label="Windows Local Source review">
-          <h4 className={styles.detailHeading}>Review Windows Local Source</h4>
+        <section className={styles.creationReview} aria-label={`Windows ${sourceTypeLabel} Source review`}>
+          <h4 className={styles.detailHeading}>{`Review Windows ${sourceTypeLabel} Source`}</h4>
           <div className={styles.creationResultGrid}>
-            <div><span className={styles.detailLabel}>Device</span><span>{plan.device_alias}</span></div>
-            <div><span className={styles.detailLabel}>Source type</span><span>Local</span></div>
+            <div><span className={styles.detailLabel}>Windows computer</span><span>{selectedComputer?.computer_alias ?? "-"}</span></div>
+            <div><span className={styles.detailLabel}>Source device</span><span>{plan.device_alias}</span></div>
+            <div><span className={styles.detailLabel}>Source type</span><span>{sourceTypeLabel}</span></div>
             <div><span className={styles.detailLabel}>Folder</span><span>{plan.windows_root}</span></div>
             <div><span className={styles.detailLabel}>Profile name</span><span>{plan.profile_name}</span></div>
             <div><span className={styles.detailLabel}>Device</span><span>{plan.device_action.includes("reuse") ? "Existing device" : plan.device_action}</span></div>

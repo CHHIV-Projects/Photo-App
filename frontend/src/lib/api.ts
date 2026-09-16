@@ -87,12 +87,15 @@ import type {
   IcloudAcquisitionRunResponse,
   IcloudAcquisitionStopResponse,
   WindowsSourceUiCandidateReview,
+  WindowsSourceUiComputerList,
   WindowsSourceUiCreateFields,
   WindowsSourceUiCreatePlan,
   WindowsSourceUiCreateResult,
   WindowsSourceUiOperation,
   WindowsSourceUiProfileStatus,
   WindowsSourceUiWorkflowStatus,
+  WindowsHelperPairingAuthorization,
+  WindowsHelperStatusList,
   AlbumDetail,
   AlbumMembershipSummary,
   AlbumSummary,
@@ -240,9 +243,11 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `Request failed with status ${response.status}`;
 
     try {
-      const errorPayload = (await response.json()) as { detail?: string };
-      if (errorPayload.detail) {
+      const errorPayload = (await response.json()) as { detail?: string | { message?: string } };
+      if (typeof errorPayload.detail === "string") {
         message = errorPayload.detail;
+      } else if (errorPayload.detail?.message) {
+        message = errorPayload.detail.message;
       }
     } catch {
       // Fall back to generic message when no JSON payload is returned.
@@ -256,6 +261,21 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getWindowsSourceUiProfile(sourceProfileId: number): Promise<WindowsSourceUiProfileStatus> {
   return apiRequest<WindowsSourceUiProfileStatus>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}`);
+}
+
+export function getWindowsSourceUiComputers(): Promise<WindowsSourceUiComputerList> {
+  return apiRequest<WindowsSourceUiComputerList>("/api/admin/windows-source-ui/computers");
+}
+
+export function createWindowsHelperPairing(computerAlias: string): Promise<WindowsHelperPairingAuthorization> {
+  return apiRequest<WindowsHelperPairingAuthorization>("/api/admin/windows-source-ui/computers/pairing", {
+    method: "POST",
+    body: JSON.stringify({ computer_alias: computerAlias }),
+  });
+}
+
+export function getWindowsHelperStatuses(): Promise<WindowsHelperStatusList> {
+  return apiRequest<WindowsHelperStatusList>("/api/admin/windows-helper/status");
 }
 
 export function startWindowsSourceUiProbe(sourceProfileId: number): Promise<WindowsSourceUiOperation> {

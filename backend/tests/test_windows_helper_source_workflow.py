@@ -15,9 +15,11 @@ from app.models.source_endpoint import (
     SourceEndpointObservedPath,
 )
 from app.schemas.windows_helper import (
+    CreateWindowsHelperPairingRequest,
     CreateWindowsHelperInventoryOperationRequest,
     CreateWindowsHelperProbeOperationRequest,
 )
+from app.schemas.windows_source_ui import WindowsSourceUiCreateProbeRequest
 from app.services.source_identity.creation_schema import (
     SourceCreationConfirmRequest,
     SourceCreationPlanRequest,
@@ -44,6 +46,11 @@ from app.services.windows_helper.service import (
     authenticate_credential,
     complete_pairing,
     create_pairing_authorization,
+)
+from app.services.windows_helper.ui_facade import (
+    create_computer_pairing,
+    create_creation_probe,
+    list_computers,
 )
 from app.windows_helper_shared.channel import PairingCompleteRequest
 from app.windows_helper_shared.identity.models import (
@@ -269,6 +276,54 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(result.creation_status, "completed")
         return setup, plan, result
+
+    def test_computer_projection_preserves_legacy_endpoint_display_without_rewriting_node(self) -> None:
+        _, _, result = self._create_profile()
+        endpoint = self.db.get(SourceEndpoint, result.source_endpoint_id)
+        node = self.db.scalar(
+            select(AccessNode).where(AccessNode.access_node_uuid == str(self.node_id))
+        )
+        original_node_label = node.label
+
+        projection = list_computers(self.db)
+
+        self.assertEqual(len(projection.computers), 1)
+        self.assertEqual(projection.computers[0].computer_alias, endpoint.alias)
+        self.assertEqual(projection.computers[0].source_device_aliases, [endpoint.alias])
+        self.assertEqual(node.label, original_node_label)
+        with self.assertRaisesRegex(WindowsHelperServiceError, "already paired"):
+            create_computer_pairing(
+                self.db,
+                CreateWindowsHelperPairingRequest(computer_alias=endpoint.alias.lower()),
+            )
+        self.assertEqual(self.db.query(AccessNode).count(), 1)
+
+    def test_external_creation_targets_access_node_but_keeps_source_device_alias_separate(self) -> None:
+        node = self.db.scalar(
+            select(AccessNode).where(AccessNode.access_node_uuid == str(self.node_id))
+        )
+        node.last_seen_at = datetime.now(timezone.utc)
+        self.db.commit()
+
+        created = create_creation_probe(
+            self.db,
+            WindowsSourceUiCreateProbeRequest(
+                access_node_id=self.node_id,
+                source_type="external",
+                device_alias="Travel Drive",
+                windows_root="H:\\Pictures",
+                profile_name="Travel photos",
+            ),
+        )
+        claimed = claim_operation(self.db, self.credential)
+
+        self.assertEqual(created.operation_token, claimed.operation.operation_id)
+        self.assertEqual(claimed.operation.request.source_type, SourceType.EXTERNAL)
+        self.assertEqual(
+            claimed.operation.request.provider_native_path.provider_native_root,
+            "H:\\Pictures",
+        )
+        self.assertEqual(node.label, "12.66 Windows Helper Development")
 
     def _create_external_profile(self) -> tuple[SourceEndpoint, IngestionSource]:
         node = self.db.scalar(

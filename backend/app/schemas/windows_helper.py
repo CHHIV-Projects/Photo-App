@@ -24,7 +24,9 @@ class _StrictModel(BaseModel):
 
 
 class CreateWindowsHelperPairingRequest(_StrictModel):
-    """Intentionally empty: the one approved Development identity is fixed."""
+    """Create or reuse one bounded Windows-computer enrollment identity."""
+
+    computer_alias: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class WindowsHelperPairingAuthorizationResponse(_StrictModel):

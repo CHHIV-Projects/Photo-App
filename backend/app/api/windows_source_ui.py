@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db_session
 from app.schemas.windows_source_ui import (
     WindowsSourceUiCandidateReview,
+    WindowsSourceUiComputerList,
     WindowsSourceUiCreateConfirmRequest,
     WindowsSourceUiCreatePlan,
     WindowsSourceUiCreatePlanRequest,
@@ -20,14 +21,20 @@ from app.schemas.windows_source_ui import (
     WindowsSourceUiProfileStatus,
     WindowsSourceUiWorkflowStatus,
 )
+from app.schemas.windows_helper import (
+    CreateWindowsHelperPairingRequest,
+    WindowsHelperPairingAuthorizationResponse,
+)
 from app.services.windows_helper.service import WindowsHelperServiceError
 from app.services.windows_helper.ui_facade import (
     advance_workflow,
     candidate_review,
     confirm_creation,
+    create_computer_pairing,
     create_creation_probe,
     create_profile_probe,
     creation_plan,
+    list_computers,
     operation_status,
     prepare_inventory,
     profile_status,
@@ -42,6 +49,28 @@ def _raise_http(exc: WindowsHelperServiceError) -> None:
         status_code=exc.http_status,
         detail={"code": exc.code, "message": exc.message},
     ) from exc
+
+
+@router.get("/computers", response_model=WindowsSourceUiComputerList)
+def get_computers(db: Session = Depends(get_db_session)) -> WindowsSourceUiComputerList:
+    return list_computers(db)
+
+
+@router.post(
+    "/computers/pairing",
+    response_model=WindowsHelperPairingAuthorizationResponse,
+)
+def post_computer_pairing(
+    body: CreateWindowsHelperPairingRequest,
+    response: Response,
+    db: Session = Depends(get_db_session),
+) -> WindowsHelperPairingAuthorizationResponse:
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    try:
+        return create_computer_pairing(db, body)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
 
 
 @router.get("/profiles/{source_profile_id}", response_model=WindowsSourceUiProfileStatus)
