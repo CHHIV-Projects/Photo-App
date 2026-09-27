@@ -70,7 +70,7 @@ import type {
   IcloudStagingCleanupReadinessResponse,
   WindowsSourceUiComputer,
 } from "@/types/ui-api";
-import { normalSelectorSourceTypes, sourceWorkbenchKind } from "@/lib/source-provider-ui";
+import { normalSelectorSourceTypes, sourcePresentationType, sourceWorkbenchKind } from "@/lib/source-provider-ui";
 
 import IcloudRunWorkflowPanel from "./IcloudRunWorkflowPanel";
 import WindowsComputerEnrollment from "./WindowsComputerEnrollment";
@@ -141,7 +141,7 @@ type WorkbenchDeviceOption = {
   profiles: SourceProfileSummary[];
 };
 
-type OperatorSourceType = "local" | "external" | "nas" | "removable" | "optical" | "icloud" | "advanced";
+type OperatorSourceType = "local" | "external" | "removable" | "server" | "nas" | "icloud" | "optical" | "advanced";
 
 const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
   { value: "active", label: "Active" },
@@ -189,10 +189,11 @@ const ADVANCED_SOURCE_TYPE_OPTIONS: Array<{ value: SourceProfileType; label: str
 const OPERATOR_SOURCE_TYPE_OPTIONS: Array<{ value: OperatorSourceType; label: string; disabled?: boolean }> = [
   { value: "local", label: "Local" },
   { value: "external", label: "External" },
+  { value: "removable", label: "Removable" },
+  { value: "server", label: "Server" },
   { value: "nas", label: "NAS" },
   { value: "icloud", label: "iCloud" },
-  { value: "removable", label: "Removable" },
-  { value: "optical", label: "Optical" },
+  { value: "optical", label: "Optical — Coming later" },
   { value: "advanced", label: "Advanced / Legacy" },
 ];
 
@@ -515,7 +516,7 @@ function persistedSourceTypeForOperator(value: OperatorSourceType): SourceProfil
 }
 
 function probeSourceTypeForOperator(value: OperatorSourceType): SourceIdentityProbeSourceType | null {
-  if (value === "local") {
+  if (value === "local" || value === "server") {
     return "local";
   }
   if (value === "nas") {
@@ -534,6 +535,9 @@ function probeSourceTypeForOperator(value: OperatorSourceType): SourceIdentityPr
 }
 
 function sourceCreationTypeForOperator(value: OperatorSourceType): SourceCreationType | null {
+  if (value === "server") {
+    return "local";
+  }
   if (value === "local" || value === "external" || value === "removable" || value === "optical" || value === "nas") {
     return value;
   }
@@ -825,24 +829,15 @@ function getRunDisabledReason(profile: SourceProfileSummary): string | null {
 }
 
 function getOperatorSourceType(profile: SourceProfileSummary): OperatorSourceType {
-  if (isIcloudProfile(profile)) {
-    return "icloud";
+  const classified = sourcePresentationType(profile);
+  if (classified !== "advanced") {
+    return classified as OperatorSourceType;
   }
-  if (profile.endpoint_source_type === "nas" || (profile.source_type === "local_folder" && isUncPath(profile.source_root_path))) {
+  if (profile.source_type === "local_folder" && isUncPath(profile.source_root_path)) {
     return "nas";
   }
-  if (profile.endpoint_source_type === "removable_media") {
-    return "removable";
-  }
-  if (profile.endpoint_source_type === "optical_media" || profile.source_type === "optical_media") {
-    return "optical";
-  }
-  if (profile.source_type === "local_folder") {
-    return "local";
-  }
-  if (profile.source_type === "external_drive") {
-    return "external";
-  }
+  if (profile.source_type === "local_folder") return "local";
+  if (profile.source_type === "external_drive") return "external";
   return "advanced";
 }
 
@@ -1354,7 +1349,7 @@ export default function IngestionView() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
   const [workbenchSourceType, setWorkbenchSourceType] = useState<OperatorSourceType>("local");
-  const [localAccessMethod, setLocalAccessMethod] = useState<"mounted" | "windows">("mounted");
+  const [setupPanel, setSetupPanel] = useState<"add" | "computers" | null>(null);
   const [selectedWorkbenchDeviceKey, setSelectedWorkbenchDeviceKey] = useState<string | null>(null);
   const [selectedWorkbenchSourceId, setSelectedWorkbenchSourceId] = useState<number | null>(null);
   const [sourceSelectionResult, setSourceSelectionResult] = useState<SourceSelectionResponse | null>(null);
@@ -2392,9 +2387,9 @@ export default function IngestionView() {
       setSourceCreationDuplicateIdsToInactivate(plan.duplicate_source_ids_to_inactivate);
       setSourceCreationSourceName(sourceCreationAllowsEditableSourceName(plan) ? plan.source_display_name : "");
       setSourceCreationNamingAction(
-        plan.selected_existing_endpoint_id == null && plan.possible_matches.length === 0
-          ? "create_new"
-          : null,
+        plan.selected_existing_endpoint_id != null
+          ? "use_existing"
+          : plan.possible_matches.length === 0 ? "create_new" : null,
       );
       setSourceCreationUseRegisteredType(!plan.source_type_mismatch);
       setSourceCreationReviewAcknowledged(false);
@@ -2478,7 +2473,7 @@ export default function IngestionView() {
     if (!sourceCreationNamingAction) {
       setSourceCreationError(
         hasExistingEndpoint
-          ? "Choose Use Existing Name, Rename Device, or Cancel."
+          ? "Use the existing immutable Device name or cancel."
           : "Enter a Device Name before creating this source.",
       );
       return;
@@ -4280,9 +4275,21 @@ export default function IngestionView() {
         </p>
       )}
 
-      <section className={styles.workbenchPanel} aria-labelledby="create-source-title">
+      <section className={styles.workbenchPanel} aria-label="Source setup actions">
+        <div className={styles.rowActions}>
+          <button type="button" className={styles.updateButton} onClick={() => setSetupPanel((current) => current === "add" ? null : "add")}>+ Add Source</button>
+          <button type="button" className={styles.button} onClick={() => setSetupPanel((current) => current === "computers" ? null : "computers")}>Manage Computers</button>
+        </div>
+        {setupPanel === "computers" && (
+          <div className={styles.createSourceBody}>
+            <WindowsComputerEnrollment computers={windowsComputers} onPaired={() => void loadWindowsComputers()} />
+          </div>
+        )}
+      </section>
+
+      {setupPanel === "add" && <section className={styles.workbenchPanel} aria-labelledby="create-source-title">
         <div className={styles.workbenchHeader}>
-          <h3 id="create-source-title" className={styles.runPanelTitle}>Create a Source</h3>
+          <h3 id="create-source-title" className={styles.runPanelTitle}>Add Source</h3>
         </div>
         <div className={styles.createSourceBody}>
             <div className={styles.workbenchControlGroup}>
@@ -4330,25 +4337,11 @@ export default function IngestionView() {
             </div>
 
             <div className={styles.createSourceControls}>
-              {createSourceForm.operatorSourceType === "local" && (
-                <div className={styles.workbenchControlGroup}>
-                  <span className={styles.detailLabel}>Access location</span>
-                  <div className={styles.segmentedControl} role="group" aria-label="Local Source access location">
-                    <button type="button" className={`${styles.segmentButton} ${localAccessMethod === "mounted" ? styles.segmentButtonActive : ""}`} aria-pressed={localAccessMethod === "mounted"} onClick={() => setLocalAccessMethod("mounted")}>This server</button>
-                    <button type="button" className={`${styles.segmentButton} ${localAccessMethod === "windows" ? styles.segmentButtonActive : ""}`} aria-pressed={localAccessMethod === "windows"} onClick={() => setLocalAccessMethod("windows")}>Windows device</button>
-                  </div>
-                </div>
-              )}
-
               {(
-                (createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows")
+                createSourceForm.operatorSourceType === "local"
                 || createSourceForm.operatorSourceType === "external"
                 || createSourceForm.operatorSourceType === "removable"
               ) && (
-                <>
-                  <WindowsComputerEnrollment
-                    onPaired={() => void loadWindowsComputers()}
-                  />
                   <WindowsSourceCreation
                     key={createSourceForm.operatorSourceType}
                     computers={windowsComputers}
@@ -4358,7 +4351,6 @@ export default function IngestionView() {
                       void loadWindowsComputers();
                     }}
                   />
-                </>
               )}
               {createSourceForm.operatorSourceType === "icloud" && (
                 <label className={styles.formLabel}>
@@ -4399,12 +4391,19 @@ export default function IngestionView() {
                 </>
               )}
 
+              {createSourceForm.operatorSourceType === "server" && (
+                <div className={styles.detailCard}>
+                  <span className={styles.detailLabel}>Server</span>
+                  <span>Photo Organizer Server</span>
+                  <span className={styles.helperText}>Choose an approved photo location on the machine hosting Photo Organizer.</span>
+                </div>
+              )}
+
               {mountedSourceRuntime === "available" && linuxSourceLocations !== null
-                && !(createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows")
-                && (createSourceForm.operatorSourceType === "local" || createSourceForm.operatorSourceType === "nas") ? (
+                && (createSourceForm.operatorSourceType === "server" || createSourceForm.operatorSourceType === "nas") ? (
                 <>
                   <label className={styles.formLabel}>
-                    Server Source Location
+                    {createSourceForm.operatorSourceType === "server" ? "Approved Server location" : "NAS location"}
                     <select
                       className={styles.formInput}
                       value={linuxSourceLocationId}
@@ -4418,9 +4417,9 @@ export default function IngestionView() {
                         setLinuxSourceLocationId(event.target.value);
                       }}
                     >
-                      <option value="">Choose a server-discovered location</option>
+                      <option value="">{createSourceForm.operatorSourceType === "server" ? "Choose an approved Server location" : "Choose the registered NAS location"}</option>
                       {linuxSourceLocations.locations
-                        .filter((location) => location.source_type === createSourceForm.operatorSourceType)
+                        .filter((location) => location.source_type === (createSourceForm.operatorSourceType === "server" ? "local" : "nas"))
                         .map((location) => (
                           <option key={location.location_id} value={location.location_id} disabled={location.availability !== "available"}>
                             {location.display_name} — {location.status_message}
@@ -4447,7 +4446,7 @@ export default function IngestionView() {
                 </>
               ) : createSourceForm.operatorSourceType !== "icloud"
                 && !(
-                  (createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows")
+                  createSourceForm.operatorSourceType === "local"
                   || createSourceForm.operatorSourceType === "external"
                   || createSourceForm.operatorSourceType === "removable"
                 ) && (
@@ -4524,7 +4523,7 @@ export default function IngestionView() {
                 </>
               )}
 
-              {!((createSourceForm.operatorSourceType === "local" && localAccessMethod === "windows")
+              {!((createSourceForm.operatorSourceType === "local")
                 || createSourceForm.operatorSourceType === "external"
                 || createSourceForm.operatorSourceType === "removable") && <div className={styles.createSourceAction}>
                 <button
@@ -4606,31 +4605,48 @@ export default function IngestionView() {
 
                 <div className={styles.creationResultGrid}>
                   <div>
-                    <span className={styles.detailLabel}>Selected Source Type</span>
+                    <span className={styles.detailLabel}>Source Type</span>
                     <span>{getOperatorSourceTypeLabel(createSourceForm.operatorSourceType)}</span>
                   </div>
-                  <div>
-                    <span className={styles.detailLabel}>Recognized Source Type</span>
-                    <span>{getOperatorSourceTypeLabel(sourceCreationPlan.recognized_source_type)}</span>
-                  </div>
-                  <div>
-                    <span className={styles.detailLabel}>Recognized Device</span>
-                    <span>{sourceCreationPlan.selected_existing_endpoint_id ? sourceCreationPlan.device_name : "New device"}</span>
-                  </div>
+                  {createSourceForm.operatorSourceType === "server" && (
+                    <div><span className={styles.detailLabel}>Server</span><span>Photo Organizer Server</span></div>
+                  )}
+                  {(createSourceForm.operatorSourceType === "server" || createSourceForm.operatorSourceType === "nas") && (
+                    <div>
+                      <span className={styles.detailLabel}>Approved Location</span>
+                      <span>{linuxSourceLocations?.locations.find((location) => location.location_id === linuxSourceLocationId)?.display_name ?? "Registered location"}</span>
+                    </div>
+                  )}
+                  {createSourceForm.operatorSourceType !== "server" && createSourceForm.operatorSourceType !== "nas" && (
+                    <>
+                      <div>
+                        <span className={styles.detailLabel}>Recognized Source Type</span>
+                        <span>{getOperatorSourceTypeLabel(sourceCreationPlan.recognized_source_type)}</span>
+                      </div>
+                      <div>
+                        <span className={styles.detailLabel}>Recognized Device</span>
+                        <span>{sourceCreationPlan.selected_existing_endpoint_id ? sourceCreationPlan.device_name : "New device"}</span>
+                      </div>
+                    </>
+                  )}
                   <div><span className={styles.detailLabel}>Source Name</span><span>{sourceCreationPlan.source_display_name}</span></div>
-                  <div>
-                    <span className={styles.detailLabel}>Durable Identity</span>
-                    <span className={durableIdentityBadgeClassName(sourceCreationPlan.durable_identity_status)}>
-                      {toDurableIdentityLabel(sourceCreationPlan.durable_identity_status)}
-                    </span>
-                  </div>
-                  <div><span className={styles.detailLabel}>Identifier Type</span><span>{sourceCreationPlan.durable_identity_identifier_type ?? "-"}</span></div>
-                  <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationPlan.durable_identity_identifier ?? "-"}</span></div>
-                  <div>
-                    <span className={styles.detailLabel}>{getSourceCreationRootLabel(sourceCreationPlan.recognized_source_type)}</span>
-                    <span>{sourceCreationPlan.entire_endpoint_label ?? sourceCreationPlan.endpoint_relative_root}</span>
-                  </div>
-                  <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationPlan.observed_path}</span></div>
+                  {createSourceForm.operatorSourceType !== "server" && createSourceForm.operatorSourceType !== "nas" && (
+                    <>
+                      <div>
+                        <span className={styles.detailLabel}>Durable Identity</span>
+                        <span className={durableIdentityBadgeClassName(sourceCreationPlan.durable_identity_status)}>
+                          {toDurableIdentityLabel(sourceCreationPlan.durable_identity_status)}
+                        </span>
+                      </div>
+                      <div><span className={styles.detailLabel}>Identifier Type</span><span>{sourceCreationPlan.durable_identity_identifier_type ?? "-"}</span></div>
+                      <div><span className={styles.detailLabel}>Identifier</span><span>{sourceCreationPlan.durable_identity_identifier ?? "-"}</span></div>
+                      <div>
+                        <span className={styles.detailLabel}>{getSourceCreationRootLabel(sourceCreationPlan.recognized_source_type)}</span>
+                        <span>{sourceCreationPlan.entire_endpoint_label ?? sourceCreationPlan.endpoint_relative_root}</span>
+                      </div>
+                      <div><span className={styles.detailLabel}>Current Observed Path</span><span>{sourceCreationPlan.observed_path}</span></div>
+                    </>
+                  )}
                   <div><span className={styles.detailLabel}>Exact Action</span><span>{sourceCreationFinalActionLabel(sourceCreationPlan, sourceCreationNamingAction)}</span></div>
                   {sourceCreationPlan.existing_source_status && (
                     <div><span className={styles.detailLabel}>Existing Source Status</span><span>{sourceCreationPlan.existing_source_status}</span></div>
@@ -4678,58 +4694,7 @@ export default function IngestionView() {
                     <p className={styles.helperText}>
                       Recognized Device: <strong>{sourceCreationPlan.device_name}</strong>
                     </p>
-                    <div className={styles.rowActions} role="group" aria-label={`${getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)} action`}>
-                      <button
-                        type="button"
-                        className={sourceCreationNamingAction === "use_existing" ? styles.updateButton : styles.button}
-                        onClick={() => {
-                          setSourceCreationNamingAction("use_existing");
-                          setCreateSourceForm((current) => ({ ...current, sourceLabel: "" }));
-                          setSourceCreationError(null);
-                        }}
-                      >
-                        Use Existing Name
-                      </button>
-                      <button
-                        type="button"
-                        className={sourceCreationNamingAction === "rename_existing" ? styles.updateButton : styles.button}
-                        onClick={() => {
-                          setSourceCreationNamingAction("rename_existing");
-                          setCreateSourceForm((current) => ({ ...current, sourceLabel: sourceCreationPlan.device_name }));
-                          setSourceCreationError(null);
-                        }}
-                      >
-                        {sourceCreationPlan.recognized_source_type === "removable"
-                          ? "Rename Media"
-                          : sourceCreationPlan.recognized_source_type === "optical"
-                            ? "Rename Disc"
-                            : "Rename Device"}
-                      </button>
-                      <button type="button" className={styles.button} onClick={resetSourceCreationOutcome}>
-                        Cancel
-                      </button>
-                    </div>
-                    {sourceCreationNamingAction === "rename_existing" && (
-                      <label className={styles.formLabel}>
-                        {sourceCreationPlan.recognized_source_type === "removable"
-                          ? "New Media Name"
-                          : sourceCreationPlan.recognized_source_type === "optical"
-                            ? "New Disc Name"
-                            : "New Device Name"}
-                        <input
-                          className={styles.formInput}
-                          autoComplete="off"
-                          value={createSourceForm.sourceLabel}
-                          onChange={(event) => {
-                            setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
-                            setSourceCreationError(null);
-                          }}
-                        />
-                        <span className={styles.helperText}>
-                          Durable identity, Sources, roots, and history will not change.
-                        </span>
-                      </label>
-                    )}
+                    <p className={styles.helperText}>The existing durable device identity and immutable name will be reused.</p>
                   </div>
                 )}
 
@@ -4856,6 +4821,10 @@ export default function IngestionView() {
                     duplicate_source_ids_to_inactivate: sourceCreationPlan.duplicate_source_ids_to_inactivate,
                     endpoint_action: sourceCreationPlan.endpoint_action,
                     source_action: sourceCreationPlan.source_action,
+                    persisted_recognized_source_type: sourceCreationPlan.recognized_source_type,
+                    durable_identity_identifier_type: sourceCreationPlan.durable_identity_identifier_type,
+                    durable_identity_identifier: sourceCreationPlan.durable_identity_identifier,
+                    observed_path: sourceCreationPlan.observed_path,
                     plan_fingerprint: sourceCreationPlan.plan_fingerprint,
                     ...sourceCreationPlan.advanced_details,
                   }, null, 2)}</pre>
@@ -4937,7 +4906,7 @@ export default function IngestionView() {
               </section>
             )}
         </div>
-      </section>
+      </section>}
 
       <section className={styles.workbenchPanel} aria-labelledby="source-selector-title">
         <div className={styles.workbenchHeader}>

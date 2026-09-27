@@ -32,6 +32,24 @@ class WindowsSourceUiOperation(_StrictModel):
     safe_message: str
 
 
+class WindowsSourceUiRoute(_StrictModel):
+    access_node_id: UUID
+    computer_alias: str
+
+
+class WindowsSourceUiRouteCheck(_StrictModel):
+    stage: Literal["checking_routes", "checking_source", "unavailable", "ambiguous", "failed"]
+    safe_message: str
+    observation_tokens: list[UUID] = Field(default_factory=list)
+    probe_operation_token: UUID | None = None
+    routes: list[WindowsSourceUiRoute] = Field(default_factory=list)
+
+
+class WindowsSourceUiRouteResolveRequest(_StrictModel):
+    observation_tokens: list[UUID] = Field(min_length=1, max_length=64)
+    selected_access_node_id: UUID | None = None
+
+
 class WindowsSourceUiPrepareRequest(_StrictModel):
     probe_operation_token: UUID
 
@@ -78,8 +96,33 @@ class WindowsSourceUiComputerList(_StrictModel):
     computers: list[WindowsSourceUiComputer] = Field(default_factory=list)
 
 
+class WindowsSourceUiPortableDiscoveryRequest(_StrictModel):
+    source_type: Literal["external", "removable"]
+
+
+class WindowsSourceUiPortableCandidate(_StrictModel):
+    candidate_token: str
+    device_alias: str | None = None
+    known_device: bool
+    current_root: str
+    drive_type: str
+    current_route_count: int
+
+
+class WindowsSourceUiPortableDiscovery(_StrictModel):
+    stage: Literal["checking_devices", "ready", "unavailable", "failed"]
+    safe_message: str
+    observation_tokens: list[UUID] = Field(default_factory=list)
+    candidates: list[WindowsSourceUiPortableCandidate] = Field(default_factory=list)
+
+
+class WindowsSourceUiPortableDiscoveryResolveRequest(WindowsSourceUiPortableDiscoveryRequest):
+    observation_tokens: list[UUID] = Field(min_length=1, max_length=64)
+
+
 class WindowsSourceUiCreateProbeRequest(_StrictModel):
-    access_node_id: UUID
+    access_node_id: UUID | None = None
+    discovery_candidate_token: str | None = Field(default=None, max_length=80)
     source_type: Literal["local", "external", "removable"] = "local"
     device_alias: str = Field(min_length=1, max_length=255)
     windows_root: str = Field(min_length=3, max_length=2048)

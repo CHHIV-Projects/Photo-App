@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { conciseSourceDeviceLabel, normalSelectorSourceTypes, sourceWorkbenchKind } from "./source-provider-ui";
+import { conciseSourceDeviceLabel, normalSelectorSourceTypes, sourcePresentationType, sourceWorkbenchKind } from "./source-provider-ui";
 import type { SourceProfileSummary } from "@/types/ui-api";
 
 
@@ -40,6 +40,12 @@ describe("provider-derived Source routing", () => {
   it("preserves mounted and iCloud routing", () => {
     expect(sourceWorkbenchKind(profile({ provider_kind: "mounted" }))).toBe("mounted");
     expect(sourceWorkbenchKind(profile({ provider_kind: "icloud", source_type: "cloud_export", cloud_provider: "icloud" }))).toBe("icloud");
+  });
+
+  it("classifies Server only from mounted provider plus durable Local endpoint type", () => {
+    expect(sourcePresentationType(profile({ provider_kind: "mounted", endpoint_source_type: "local" }))).toBe("server");
+    expect(sourcePresentationType(profile({ provider_kind: "windows_helper", endpoint_source_type: "local" }))).toBe("local");
+    expect(sourcePresentationType(profile({ provider_kind: "mounted", endpoint_source_type: "nas" }))).toBe("nas");
   });
 
   it("uses concise device aliases and hides unvalidated Windows provider types", () => {

@@ -19,7 +19,13 @@ from app.schemas.windows_helper import (
     CreateWindowsHelperInventoryOperationRequest,
     CreateWindowsHelperProbeOperationRequest,
 )
-from app.schemas.windows_source_ui import WindowsSourceUiCreateProbeRequest
+from app.schemas.windows_source_ui import (
+    WindowsSourceUiCreateProbeRequest,
+    WindowsSourceUiCreatePlanRequest,
+    WindowsSourceUiPortableDiscoveryRequest,
+    WindowsSourceUiPortableDiscoveryResolveRequest,
+    WindowsSourceUiRouteResolveRequest,
+)
 from app.services.source_identity.creation_schema import (
     SourceCreationConfirmRequest,
     SourceCreationPlanRequest,
@@ -48,9 +54,14 @@ from app.services.windows_helper.service import (
     create_pairing_authorization,
 )
 from app.services.windows_helper.ui_facade import (
+    begin_profile_route_check,
+    begin_portable_discovery,
     create_computer_pairing,
     create_creation_probe,
+    creation_plan,
     list_computers,
+    resolve_profile_route,
+    resolve_portable_discovery,
 )
 from app.windows_helper_shared.channel import PairingCompleteRequest
 from app.windows_helper_shared.identity.models import (
@@ -488,6 +499,130 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(WindowsHelperServiceError, "different Windows volume"):
             create_resolved_profile_probe_operation(self.db, wrong.operation_id)
 
+    def test_portable_routes_require_fresh_observation_and_fail_closed_on_multiple(self) -> None:
+        endpoint, source = self._create_external_profile()
+        second_authorization = create_pairing_authorization(self.db, "Family Laptop")
+        second_paired = complete_pairing(
+            self.db,
+            PairingCompleteRequest(
+                pairing_code=second_authorization.pairing_code,
+                access_node_id=second_authorization.access_node_id,
+                capability_identity=_capability(second_authorization.access_node_id),
+            ),
+        )
+        second_credential = authenticate_credential(
+            self.db,
+            f"PhotoOrganizerHelper {second_paired.credential_id}.{second_paired.credential_token}",
+        )
+        second_node = self.db.scalar(
+            select(AccessNode).where(
+                AccessNode.access_node_uuid == str(second_paired.access_node_id)
+            )
+        )
+        second_node.last_seen_at = datetime.now(timezone.utc)
+        self.db.commit()
+
+        started = begin_profile_route_check(self.db, source.id)
+        self.assertEqual(started.stage, "checking_routes")
+        self.assertEqual(len(started.observation_tokens), 2)
+        for credential, root in [(self.credential, "E:\\"), (second_credential, "H:\\")]:
+            claimed = claim_operation(self.db, credential)
+            complete_volume_observation_operation(
+                self.db,
+                credential,
+                claimed.operation.operation_id,
+                HelperObserveVolumesResponse(
+                    request_id=claimed.operation.operation_id,
+                    collector_name="windows_non_admin_probe_v1",
+                    collector_version="1",
+                    volumes=[
+                        MountedVolumeObservation(
+                            provider_native_root=root,
+                            identity_fingerprint_hash=FINGERPRINT,
+                            identity_fingerprint_version=FINGERPRINT_VERSION,
+                            drive_type="fixed",
+                        )
+                    ],
+                ),
+            )
+
+        ambiguous = resolve_profile_route(
+            self.db,
+            source.id,
+            WindowsSourceUiRouteResolveRequest(
+                observation_tokens=started.observation_tokens,
+            ),
+        )
+        self.assertEqual(ambiguous.stage, "ambiguous")
+        self.assertEqual(len(ambiguous.routes), 2)
+        selected = resolve_profile_route(
+            self.db,
+            source.id,
+            WindowsSourceUiRouteResolveRequest(
+                observation_tokens=started.observation_tokens,
+                selected_access_node_id=second_paired.access_node_id,
+            ),
+        )
+        self.assertEqual(selected.stage, "checking_source")
+        self.assertIsNotNone(selected.probe_operation_token)
+
+        second_node.last_seen_at = datetime.now(timezone.utc) - timedelta(seconds=91)
+        self.db.commit()
+        single = begin_profile_route_check(self.db, source.id)
+        self.assertEqual(len(single.observation_tokens), 1)
+
+    def test_portable_discovery_recognizes_known_fingerprint_without_exposing_it(self) -> None:
+        endpoint, _source = self._create_external_profile()
+        started = begin_portable_discovery(
+            self.db,
+            WindowsSourceUiPortableDiscoveryRequest(source_type="external"),
+        )
+        self.assertEqual(started.stage, "checking_devices")
+        claimed = claim_operation(self.db, self.credential)
+        complete_volume_observation_operation(
+            self.db,
+            self.credential,
+            claimed.operation.operation_id,
+            HelperObserveVolumesResponse(
+                request_id=claimed.operation.operation_id,
+                collector_name="windows_non_admin_probe_v1",
+                collector_version="1",
+                volumes=[
+                    MountedVolumeObservation(
+                        provider_native_root="D:\\",
+                        identity_fingerprint_hash="sha256:" + "d" * 64,
+                        identity_fingerprint_version=FINGERPRINT_VERSION,
+                        drive_type="cd-rom",
+                    ),
+                    MountedVolumeObservation(
+                        provider_native_root="G:\\",
+                        identity_fingerprint_hash="sha256:" + "e" * 64,
+                        identity_fingerprint_version=FINGERPRINT_VERSION,
+                        drive_type="fixed",
+                    ),
+                    MountedVolumeObservation(
+                        provider_native_root="H:\\",
+                        identity_fingerprint_hash=FINGERPRINT,
+                        identity_fingerprint_version=FINGERPRINT_VERSION,
+                        drive_type="fixed",
+                    )
+                ],
+            ),
+        )
+        resolved = resolve_portable_discovery(
+            self.db,
+            WindowsSourceUiPortableDiscoveryResolveRequest(
+                source_type="external",
+                observation_tokens=started.observation_tokens,
+            ),
+        )
+        self.assertEqual(resolved.stage, "ready")
+        self.assertEqual(len(resolved.candidates), 1)
+        self.assertTrue(resolved.candidates[0].known_device)
+        self.assertEqual(resolved.candidates[0].device_alias, endpoint.alias)
+        self.assertEqual(resolved.candidates[0].current_root, "H:\\")
+        self.assertNotIn(FINGERPRINT, resolved.model_dump_json())
+
     def test_creation_readiness_selection_and_inventory_happy_path(self) -> None:
         setup, plan, created = self._create_profile()
         self.assertEqual(created.endpoint_relative_root, "Controlled")
@@ -661,6 +796,81 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
                     inventory_generation=generation,
                     cursor="tampered_cursor",
                     page_size=1,
+                ),
+            )
+
+    def test_local_v1_invariant_reuses_same_volume_and_blocks_different_or_ambiguous(self) -> None:
+        setup, _plan, created = self._create_profile()
+        same = creation_plan(
+            self.db,
+            WindowsSourceUiCreatePlanRequest(
+                access_node_id=self.node_id,
+                source_type="local",
+                device_alias="ignored presentation alias",
+                windows_root=ROOT,
+                profile_name="Controlled Windows Local",
+                probe_operation_token=setup.operation_id,
+            ),
+        )
+        self.assertEqual(same.plan_status, "source_exists")
+        self.assertEqual(same.device_alias, "Controlled Windows Device")
+
+        other_fingerprint, _ = volume_guid_fingerprint(
+            "33333333-3333-3333-3333-333333333333"
+        )
+        different = self._complete_probe(
+            root="D:\\Pictures",
+            fingerprint=other_fingerprint,
+        )
+        with self.assertRaisesRegex(WindowsHelperServiceError, "Additional local volumes"):
+            creation_plan(
+                self.db,
+                WindowsSourceUiCreatePlanRequest(
+                    access_node_id=self.node_id,
+                    source_type="local",
+                    device_alias="ignored",
+                    windows_root="D:\\Pictures",
+                    profile_name="Other Local",
+                    probe_operation_token=different.operation_id,
+                ),
+            )
+
+        node = self.db.scalar(
+            select(AccessNode).where(AccessNode.access_node_uuid == str(self.node_id))
+        )
+        second = SourceEndpoint(
+            source_type="local",
+            alias="Historical second local",
+            alias_normalized="historical second local",
+            status="active",
+            identity_fingerprint_hash=other_fingerprint,
+            identity_fingerprint_version=FINGERPRINT_VERSION,
+            identity_confidence="strong_match",
+        )
+        self.db.add(second)
+        self.db.flush()
+        self.db.add(
+            SourceEndpointObservedPath(
+                source_endpoint_id=second.id,
+                access_node_id=node.id,
+                observed_path="D:\\",
+                normalized_observed_path="d:\\",
+                filesystem_boundary_type="local_folder",
+                is_valid_source_root_candidate=True,
+                safe_to_run="true",
+            )
+        )
+        self.db.commit()
+        with self.assertRaisesRegex(WindowsHelperServiceError, "operator review"):
+            creation_plan(
+                self.db,
+                WindowsSourceUiCreatePlanRequest(
+                    access_node_id=self.node_id,
+                    source_type="local",
+                    device_alias="ignored",
+                    windows_root=ROOT,
+                    profile_name="Controlled Windows Local",
+                    probe_operation_token=setup.operation_id,
                 ),
             )
 

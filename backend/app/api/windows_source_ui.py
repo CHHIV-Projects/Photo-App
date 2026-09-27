@@ -17,8 +17,13 @@ from app.schemas.windows_source_ui import (
     WindowsSourceUiCreateProbeRequest,
     WindowsSourceUiCreateResult,
     WindowsSourceUiOperation,
+    WindowsSourceUiPortableDiscovery,
+    WindowsSourceUiPortableDiscoveryRequest,
+    WindowsSourceUiPortableDiscoveryResolveRequest,
     WindowsSourceUiPrepareRequest,
     WindowsSourceUiProfileStatus,
+    WindowsSourceUiRouteCheck,
+    WindowsSourceUiRouteResolveRequest,
     WindowsSourceUiWorkflowStatus,
 )
 from app.schemas.windows_helper import (
@@ -28,6 +33,8 @@ from app.schemas.windows_helper import (
 from app.services.windows_helper.service import WindowsHelperServiceError
 from app.services.windows_helper.ui_facade import (
     advance_workflow,
+    begin_profile_route_check,
+    begin_portable_discovery,
     candidate_review,
     confirm_creation,
     create_computer_pairing,
@@ -38,6 +45,8 @@ from app.services.windows_helper.ui_facade import (
     operation_status,
     prepare_inventory,
     profile_status,
+    resolve_profile_route,
+    resolve_portable_discovery,
 )
 
 
@@ -89,6 +98,31 @@ def post_profile_probe(
 ) -> WindowsSourceUiOperation:
     try:
         return create_profile_probe(db, source_profile_id)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post("/profiles/{source_profile_id}/routes", response_model=WindowsSourceUiRouteCheck)
+def post_profile_routes(
+    source_profile_id: int, db: Session = Depends(get_db_session)
+) -> WindowsSourceUiRouteCheck:
+    try:
+        return begin_profile_route_check(db, source_profile_id)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/profiles/{source_profile_id}/routes/resolve",
+    response_model=WindowsSourceUiRouteCheck,
+)
+def post_profile_route_resolution(
+    source_profile_id: int,
+    body: WindowsSourceUiRouteResolveRequest,
+    db: Session = Depends(get_db_session),
+) -> WindowsSourceUiRouteCheck:
+    try:
+        return resolve_profile_route(db, source_profile_id, body)
     except WindowsHelperServiceError as exc:
         _raise_http(exc)
 
@@ -157,6 +191,28 @@ def post_creation_probe(
 ) -> WindowsSourceUiOperation:
     try:
         return create_creation_probe(db, body)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post("/creation/devices", response_model=WindowsSourceUiPortableDiscovery)
+def post_portable_discovery(
+    body: WindowsSourceUiPortableDiscoveryRequest,
+    db: Session = Depends(get_db_session),
+) -> WindowsSourceUiPortableDiscovery:
+    try:
+        return begin_portable_discovery(db, body)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post("/creation/devices/resolve", response_model=WindowsSourceUiPortableDiscovery)
+def post_portable_discovery_resolution(
+    body: WindowsSourceUiPortableDiscoveryResolveRequest,
+    db: Session = Depends(get_db_session),
+) -> WindowsSourceUiPortableDiscovery:
+    try:
+        return resolve_portable_discovery(db, body)
     except WindowsHelperServiceError as exc:
         _raise_http(exc)
 

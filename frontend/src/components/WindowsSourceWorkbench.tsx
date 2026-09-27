@@ -9,12 +9,15 @@ import {
   getWindowsSourceUiProfile,
   prepareWindowsSourceUiInventory,
   reviewWindowsSourceUiCandidates,
+  resolveWindowsSourceUiRoute,
+  startWindowsSourceUiRouteCheck,
   startWindowsSourceUiProbe,
 } from "@/lib/api";
 import type {
   SourceProfileSummary,
   WindowsSourceUiCandidateReview,
   WindowsSourceUiProfileStatus,
+  WindowsSourceUiRouteCheck,
   WindowsSourceUiWorkflowStatus,
 } from "@/types/ui-api";
 
@@ -58,7 +61,8 @@ export default function WindowsSourceWorkbench({
   wait = delay,
 }: Props) {
   const [access, setAccess] = useState<WindowsSourceUiProfileStatus | null>(null);
-  const [phase, setPhase] = useState<"idle" | "starting" | "checking" | "preparing" | "review" | "running" | "complete" | "failed">("idle");
+  const [phase, setPhase] = useState<"idle" | "starting" | "checking" | "route" | "preparing" | "review" | "running" | "complete" | "failed">("idle");
+  const [routeCheck, setRouteCheck] = useState<WindowsSourceUiRouteCheck | null>(null);
   const [review, setReview] = useState<WindowsSourceUiCandidateReview | null>(null);
   const [workflow, setWorkflow] = useState<WindowsSourceUiWorkflowStatus | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -73,6 +77,7 @@ export default function WindowsSourceWorkbench({
     setPhase("idle");
     setReview(null);
     setWorkflow(null);
+    setRouteCheck(null);
     setMessage(null);
     void refreshAccess().catch(() => setMessage("Windows access status is unavailable."));
   }, [refreshAccess]);
@@ -100,11 +105,8 @@ export default function WindowsSourceWorkbench({
     throw new Error("The Windows Source check timed out safely.");
   }, [operationTimeoutMs, wait]);
 
-  const prepare = useCallback(async () => {
-    setPhase("checking");
-    setMessage("Checking source");
-    const probe = await startWindowsSourceUiProbe(profile.source_id);
-    const readyProbe = await pollOperation(probe.operation_token);
+  const prepareFromProbe = useCallback(async (probeToken: string) => {
+    const readyProbe = await pollOperation(probeToken);
     setPhase("preparing");
     setMessage("Preparing files");
     const inventory = await prepareWindowsSourceUiInventory(
@@ -117,6 +119,56 @@ export default function WindowsSourceWorkbench({
     setPhase("review");
     setMessage(candidateReview.safe_message);
   }, [pollOperation, profile.source_id]);
+
+  const pollRoutes = useCallback(async (initial: WindowsSourceUiRouteCheck) => {
+    let current = initial;
+    const deadline = Date.now() + operationTimeoutMs;
+    while (current.stage === "checking_routes" && Date.now() < deadline) {
+      await wait(1000);
+      current = await resolveWindowsSourceUiRoute(profile.source_id, current.observation_tokens);
+    }
+    setRouteCheck(current);
+    if (current.stage === "ambiguous") {
+      setPhase("route");
+      setMessage(current.safe_message);
+      return;
+    }
+    if (current.stage !== "checking_source" || !current.probe_operation_token) {
+      throw new Error(current.safe_message);
+    }
+    await prepareFromProbe(current.probe_operation_token);
+  }, [operationTimeoutMs, prepareFromProbe, profile.source_id, wait]);
+
+  const prepare = useCallback(async () => {
+    setPhase("checking");
+    setMessage("Checking source");
+    if (["external_device", "removable_media"].includes(profile.endpoint_source_type ?? "")) {
+      await pollRoutes(await startWindowsSourceUiRouteCheck(profile.source_id));
+      return;
+    }
+    const probe = await startWindowsSourceUiProbe(profile.source_id);
+    await prepareFromProbe(probe.operation_token);
+  }, [pollRoutes, prepareFromProbe, profile.endpoint_source_type, profile.source_id]);
+
+  const chooseRoute = useCallback(async (accessNodeId: string) => {
+    if (!routeCheck) return;
+    setPhase("checking");
+    setMessage("Verifying the selected route...");
+    try {
+      const selected = await resolveWindowsSourceUiRoute(
+        profile.source_id,
+        routeCheck.observation_tokens,
+        accessNodeId,
+      );
+      if (selected.stage !== "checking_source" || !selected.probe_operation_token) {
+        throw new Error(selected.safe_message);
+      }
+      await prepareFromProbe(selected.probe_operation_token);
+    } catch (error) {
+      setPhase("failed");
+      setMessage(error instanceof Error ? error.message : "The selected route is no longer available.");
+    }
+  }, [prepareFromProbe, profile.source_id, routeCheck]);
 
   const runFromClick = useCallback(() => {
     setMessage(null);
@@ -166,12 +218,17 @@ export default function WindowsSourceWorkbench({
   }, [pollWorkflow, review]);
 
   const accessLabel = phase === "starting" ? "Starting" : access?.windows_access === "ready" ? "Ready" : access?.windows_access === "setup_required" ? "Setup required" : "Not available";
+  const sourceTypeLabel = profile.endpoint_source_type === "external_device"
+    ? "External"
+    : profile.endpoint_source_type === "removable_media"
+      ? "Removable"
+      : "Local";
 
   return (
-    <section className={styles.runPanel} aria-label="Windows Local ingestion workbench">
+    <section className={styles.runPanel} aria-label={`Windows ${sourceTypeLabel} ingestion workbench`}>
       <div className={styles.runPanelHeader}>
         <div>
-          <h3 className={styles.runPanelTitle}>Windows Local Ingestion</h3>
+          <h3 className={styles.runPanelTitle}>{`Windows ${sourceTypeLabel} Ingestion`}</h3>
           <p className={styles.helperText}>Windows access starts on demand and the backend verifies readiness before any file transfer.</p>
         </div>
       </div>
@@ -191,6 +248,19 @@ export default function WindowsSourceWorkbench({
             <span><strong>Folder:</strong> {review.windows_root}</span>
           </div>
           <button type="button" className={styles.runButton} onClick={() => void confirmRun()}>Start Ingestion</button>
+        </section>
+      )}
+      {phase === "route" && routeCheck?.stage === "ambiguous" && (
+        <section className={styles.creationReview} aria-label="Choose Windows access route">
+          <h4 className={styles.detailHeading}>Use computer</h4>
+          <p className={styles.helperText}>The same Source device is currently available through more than one registered computer.</p>
+          <div className={styles.rowActions}>
+            {routeCheck.routes.map((route) => (
+              <button key={route.access_node_id} type="button" className={styles.button} onClick={() => void chooseRoute(route.access_node_id)}>
+                {route.computer_alias}
+              </button>
+            ))}
+          </div>
         </section>
       )}
       {workflow && (

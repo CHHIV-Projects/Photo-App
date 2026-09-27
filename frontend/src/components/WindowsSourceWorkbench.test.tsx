@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import WindowsSourceWorkbench from "./WindowsSourceWorkbench";
 import type { SourceProfileSummary } from "@/types/ui-api";
@@ -13,6 +13,8 @@ vi.mock("@/lib/api", () => ({
   getWindowsSourceUiProfile: vi.fn(),
   prepareWindowsSourceUiInventory: vi.fn(),
   reviewWindowsSourceUiCandidates: vi.fn(),
+  resolveWindowsSourceUiRoute: vi.fn(),
+  startWindowsSourceUiRouteCheck: vi.fn(),
   startWindowsSourceUiProbe: vi.fn(),
 }));
 
@@ -56,12 +58,15 @@ const readyAccess = {
 const instantWait = async () => undefined;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(api.getWindowsSourceUiProfile).mockResolvedValue(readyAccess);
   vi.mocked(api.startWindowsSourceUiProbe).mockResolvedValue({ operation_token: "probe", stage: "checking_source", source_ready: false, safe_message: "Checking" });
   vi.mocked(api.getWindowsSourceUiOperation).mockResolvedValue({ operation_token: "operation", stage: "ready", source_ready: true, safe_message: "Ready" });
   vi.mocked(api.prepareWindowsSourceUiInventory).mockResolvedValue({ operation_token: "inventory", stage: "preparing_files", source_ready: false, safe_message: "Preparing" });
   vi.mocked(api.reviewWindowsSourceUiCandidates).mockResolvedValue({ workflow_token: "run", stage: "awaiting_confirmation", files_to_process: 5, total_bytes: 4_970_248, profile_name: profile.source_label, windows_root: profile.source_root_path!, safe_message: "Review" });
 });
+
+afterEach(() => cleanup());
 
 describe("Windows Source workbench", () => {
   it("shows ready state, candidate confirmation, progress, and unchanged-repeat result", async () => {
@@ -98,5 +103,51 @@ describe("Windows Source workbench", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run Ingestion" }));
     expect(await screen.findByText("Windows access could not be started.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try Again" })).toBeInTheDocument();
+  });
+
+  it("shows a computer choice only for verified portable route ambiguity", async () => {
+    const portable = {
+      ...profile,
+      source_id: 5,
+      source_label: "External photos",
+      source_type: "external_drive" as const,
+      endpoint_source_type: "external_device",
+      endpoint_alias: "Family Archive Drive",
+      source_root_path: "H:\\Pictures",
+    };
+    vi.mocked(api.startWindowsSourceUiRouteCheck).mockResolvedValue({
+      stage: "checking_routes",
+      safe_message: "Checking",
+      observation_tokens: ["one", "two"],
+      probe_operation_token: null,
+      routes: [],
+    });
+    vi.mocked(api.resolveWindowsSourceUiRoute)
+      .mockResolvedValueOnce({
+        stage: "ambiguous",
+        safe_message: "Choose a route",
+        observation_tokens: ["one", "two"],
+        probe_operation_token: null,
+        routes: [
+          { access_node_id: "node-one", computer_alias: "Chuck Desktop" },
+          { access_node_id: "node-two", computer_alias: "Family Laptop" },
+        ],
+      })
+      .mockResolvedValueOnce({
+        stage: "checking_source",
+        safe_message: "Verifying",
+        observation_tokens: ["one", "two"],
+        probe_operation_token: "selected-probe",
+        routes: [],
+      });
+    const view = render(<WindowsSourceWorkbench profile={portable} wait={instantWait} />);
+    expect((await view.findAllByText("Ready")).length).toBeGreaterThan(0);
+    fireEvent.click(view.getByRole("button", { name: "Run Ingestion" }));
+    expect(await view.findByRole("button", { name: "Chuck Desktop" })).toBeInTheDocument();
+    expect(view.getByRole("button", { name: "Family Laptop" })).toBeInTheDocument();
+    expect(api.prepareWindowsSourceUiInventory).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("button", { name: "Family Laptop" }));
+    expect(await view.findByRole("button", { name: "Start Ingestion" })).toBeInTheDocument();
+    expect(api.resolveWindowsSourceUiRoute).toHaveBeenLastCalledWith(portable.source_id, ["one", "two"], "node-two");
   });
 });

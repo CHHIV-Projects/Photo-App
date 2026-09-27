@@ -7,9 +7,12 @@ import WindowsSourceCreation from "./WindowsSourceCreation";
 
 vi.mock("@/lib/api", () => ({
   confirmWindowsSourceUiCreation: vi.fn(),
+  getWindowsSourceUiComputers: vi.fn(),
   getWindowsSourceUiOperation: vi.fn(),
   planWindowsSourceUiCreation: vi.fn(),
+  resolveWindowsPortableDiscovery: vi.fn(),
   startWindowsSourceUiCreationProbe: vi.fn(),
+  startWindowsPortableDiscovery: vi.fn(),
 }));
 
 const exactRoot = "C:\\Users\\chhen\\OneDrive\\Desktop\\Exif provanace";
@@ -25,6 +28,7 @@ const computer = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.getWindowsSourceUiComputers).mockResolvedValue({ computers: [computer] });
   vi.mocked(api.startWindowsSourceUiCreationProbe).mockResolvedValue({
     operation_token: "probe",
     stage: "checking_source",
@@ -39,8 +43,6 @@ beforeEach(() => {
   });
   vi.mocked(api.planWindowsSourceUiCreation).mockResolvedValue({
     plan_status: "source_exists",
-    access_node_id: computer.access_node_id,
-    source_type: "local",
     device_alias: "Chuck_Notebook",
     windows_root: exactRoot,
     profile_name: profileName,
@@ -49,6 +51,21 @@ beforeEach(() => {
     blockers: [],
     warnings: [],
   });
+  const discovery = {
+    stage: "ready" as const,
+    safe_message: "Select a detected Source device.",
+    observation_tokens: ["22222222-2222-2222-2222-222222222222"],
+    candidates: [{
+      candidate_token: "22222222-2222-2222-2222-222222222222:0",
+      device_alias: "External 1",
+      known_device: true,
+      current_root: "H:\\",
+      drive_type: "fixed",
+      current_route_count: 1,
+    }],
+  };
+  vi.mocked(api.startWindowsPortableDiscovery).mockResolvedValue(discovery);
+  vi.mocked(api.resolveWindowsPortableDiscovery).mockResolvedValue(discovery);
 });
 
 afterEach(cleanup);
@@ -65,7 +82,7 @@ describe("Windows Source creation", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Exact Windows Local folder"), {
+    fireEvent.change(screen.getByLabelText("Folder"), {
       target: { value: "relative\\folder" },
     });
     fireEvent.change(screen.getByLabelText("Source Profile name"), {
@@ -89,14 +106,11 @@ describe("Windows Source creation", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Exact Windows Local folder"), {
+    fireEvent.change(screen.getByLabelText("Folder"), {
       target: { value: exactRoot },
     });
     fireEvent.change(screen.getByLabelText("Source Profile name"), {
       target: { value: profileName },
-    });
-    fireEvent.change(screen.getByLabelText("Source device name"), {
-      target: { value: "Chuck_Notebook" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Review Source" }));
 
@@ -110,8 +124,6 @@ describe("Windows Source creation", () => {
     const launch = vi.fn();
     vi.mocked(api.planWindowsSourceUiCreation).mockResolvedValue({
       plan_status: "ready",
-      access_node_id: computer.access_node_id,
-      source_type: "external",
       device_alias: "External 1",
       windows_root: "H:\\Pictures",
       profile_name: "External photos",
@@ -122,16 +134,52 @@ describe("Windows Source creation", () => {
     });
     render(<WindowsSourceCreation computers={[computer]} sourceType="external" launchWindowsAccess={launch} onComplete={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText("Source device name"), { target: { value: "External 1" } });
-    fireEvent.change(screen.getByLabelText("Exact Windows External folder"), { target: { value: "H:\\Pictures" } });
+    fireEvent.click(screen.getByRole("button", { name: "Detect connected External devices" }));
+    fireEvent.change(await screen.findByLabelText("Detected External device"), { target: { value: "22222222-2222-2222-2222-222222222222:0" } });
+    fireEvent.change(screen.getByLabelText(/Folder within device/), { target: { value: "Pictures" } });
     fireEvent.change(screen.getByLabelText("Source Profile name"), { target: { value: "External photos" } });
     fireEvent.click(screen.getByRole("button", { name: "Review Source" }));
 
     expect(await screen.findByText("Review Windows External Source")).toBeInTheDocument();
     expect(api.startWindowsSourceUiCreationProbe).toHaveBeenCalledWith(expect.objectContaining({
-      access_node_id: computer.access_node_id,
+      discovery_candidate_token: "22222222-2222-2222-2222-222222222222:0",
       source_type: "external",
       device_alias: "External 1",
+      windows_root: "H:\\Pictures",
     }));
+    expect(api.getWindowsSourceUiComputers).toHaveBeenCalled();
+    expect(vi.mocked(api.getWindowsSourceUiComputers).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(api.startWindowsPortableDiscovery).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("asks for a durable Device name only after an unknown Removable device is detected", async () => {
+    const discovery = {
+      stage: "ready" as const,
+      safe_message: "Select a detected Source device.",
+      observation_tokens: ["33333333-3333-3333-3333-333333333333"],
+      candidates: [{
+        candidate_token: "33333333-3333-3333-3333-333333333333:0",
+        device_alias: null,
+        known_device: false,
+        current_root: "X:\\",
+        drive_type: "removable",
+        current_route_count: 1,
+      }],
+    };
+    vi.mocked(api.startWindowsPortableDiscovery).mockResolvedValue(discovery);
+    vi.mocked(api.resolveWindowsPortableDiscovery).mockResolvedValue(discovery);
+
+    render(<WindowsSourceCreation computers={[computer]} sourceType="removable" launchWindowsAccess={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(screen.queryByLabelText("Device name")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Computer")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Detect connected Removable devices" }));
+    fireEvent.change(await screen.findByLabelText("Detected Removable device"), {
+      target: { value: "33333333-3333-3333-3333-333333333333:0" },
+    });
+
+    expect(screen.getByLabelText("Device name")).toBeInTheDocument();
+    expect(screen.getByText("Current access: X:\\")).toBeInTheDocument();
   });
 });

@@ -30,7 +30,14 @@ from app.schemas.windows_source_ui import (
     WindowsSourceUiComputer,
     WindowsSourceUiComputerList,
     WindowsSourceUiOperation,
+    WindowsSourceUiPortableCandidate,
+    WindowsSourceUiPortableDiscovery,
+    WindowsSourceUiPortableDiscoveryRequest,
+    WindowsSourceUiPortableDiscoveryResolveRequest,
     WindowsSourceUiProfileStatus,
+    WindowsSourceUiRoute,
+    WindowsSourceUiRouteCheck,
+    WindowsSourceUiRouteResolveRequest,
     WindowsSourceUiWorkflowStatus,
 )
 from app.services.admin.run_ingestion_dispatch_service import RunIngestionDispatchService
@@ -41,9 +48,13 @@ from app.services.source_identity.creation_schema import (
     SourceCreationPlanRequest,
 )
 from app.services.source_identity.creation_service import SourceCreationService
+from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
 from app.services.windows_helper.operations import (
+    completed_probe,
+    completed_volume_observation,
     create_probe_operation,
     create_resolved_profile_probe_operation,
+    create_volume_observation_for_access_node,
     create_volume_observation_operation,
     get_operation_status,
     helper_is_online,
@@ -138,6 +149,190 @@ def create_computer_pairing(
     return create_pairing_authorization(db, request.computer_alias)
 
 
+def begin_portable_discovery(
+    db: Session, request: WindowsSourceUiPortableDiscoveryRequest
+) -> WindowsSourceUiPortableDiscovery:
+    nodes = list(
+        db.scalars(
+            select(AccessNode).where(
+                AccessNode.provider_name == HELPER_PROVIDER_NAME,
+                AccessNode.os_family == "windows",
+                AccessNode.status == "active",
+            ).order_by(AccessNode.id)
+        )
+    )
+    tokens: list[UUID] = []
+    for node in nodes:
+        try:
+            tokens.append(create_volume_observation_for_access_node(db, node).operation_id)
+        except WindowsHelperServiceError as exc:
+            if exc.code in {
+                "helper_offline",
+                "helper_credential_unavailable",
+                "volume_observation_capability_unavailable",
+            }:
+                continue
+            raise
+    return WindowsSourceUiPortableDiscovery(
+        stage="checking_devices" if tokens else "unavailable",
+        observation_tokens=tokens,
+        safe_message=(
+            "Checking connected Source devices."
+            if tokens
+            else "No registered computer is currently available to detect devices."
+        ),
+    )
+
+
+def resolve_portable_discovery(
+    db: Session, request: WindowsSourceUiPortableDiscoveryResolveRequest
+) -> WindowsSourceUiPortableDiscovery:
+    rows: dict[tuple[str, str], list[tuple[UUID, int, object]]] = {}
+    for token in request.observation_tokens:
+        status = get_operation_status(db, token)
+        if status.source_endpoint_id is not None or status.source_profile_id is not None:
+            raise WindowsHelperServiceError(
+                "portable_discovery_binding_invalid",
+                "A device-discovery observation has an unexpected Source binding.",
+                http_status=409,
+            )
+        if status.state in {"pending", "claimed"}:
+            return WindowsSourceUiPortableDiscovery(
+                stage="checking_devices",
+                observation_tokens=request.observation_tokens,
+                safe_message="Checking connected Source devices.",
+            )
+        if status.state != "completed":
+            continue
+        operation, result = completed_volume_observation(db, token, require_fresh=True)
+        for index, item in enumerate(result.volumes):
+            expected_drive_type = "removable" if request.source_type == "removable" else "fixed"
+            if item.drive_type != expected_drive_type:
+                continue
+            key = (item.identity_fingerprint_version, item.identity_fingerprint_hash)
+            rows.setdefault(key, []).append((token, index, item))
+    candidates: list[WindowsSourceUiPortableCandidate] = []
+    endpoint_type = "external_device" if request.source_type == "external" else "removable_media"
+    for (version, fingerprint), observations in sorted(rows.items(), key=lambda row: row[0]):
+        endpoints = list(
+            db.scalars(
+                select(SourceEndpoint).where(
+                    SourceEndpoint.identity_fingerprint_version == version,
+                    SourceEndpoint.identity_fingerprint_hash == fingerprint,
+                    SourceEndpoint.status != "retired",
+                )
+            )
+        )
+        if len(endpoints) > 1:
+            raise WindowsHelperServiceError(
+                "portable_identity_ambiguous",
+                "More than one Source device has the detected durable identity.",
+                http_status=409,
+            )
+        endpoint = endpoints[0] if endpoints else None
+        if endpoint is not None and endpoint.source_type != endpoint_type:
+            continue
+        # Helper 0.5.1 can distinguish native Windows drive types, but it does
+        # not carry physical-device backing evidence in observe_volumes.  An
+        # unknown fixed drive may therefore be internal or virtual/cloud-backed.
+        # Fail closed for unknown External drives while continuing to expose a
+        # previously enrolled External Endpoint by its durable fingerprint.
+        if request.source_type == "external" and endpoint is None:
+            continue
+        token, index, item = observations[0]
+        candidates.append(
+            WindowsSourceUiPortableCandidate(
+                candidate_token=f"{token}:{index}",
+                device_alias=endpoint.alias if endpoint is not None else None,
+                known_device=endpoint is not None,
+                current_root=item.provider_native_root,  # type: ignore[attr-defined]
+                drive_type=item.drive_type,  # type: ignore[attr-defined]
+                current_route_count=len({entry[0] for entry in observations}),
+            )
+        )
+    return WindowsSourceUiPortableDiscovery(
+        stage="ready" if candidates else "unavailable",
+        observation_tokens=request.observation_tokens,
+        candidates=candidates,
+        safe_message=(
+            "Select a detected Source device."
+            if candidates
+            else "No matching connected Source devices were detected."
+        ),
+    )
+
+
+def _resolve_discovery_candidate(db: Session, request):
+    if not request.discovery_candidate_token:
+        return request
+    try:
+        raw_token, raw_index = request.discovery_candidate_token.rsplit(":", 1)
+        token = UUID(raw_token)
+        index = int(raw_index)
+    except (ValueError, TypeError) as exc:
+        raise WindowsHelperServiceError(
+            "portable_candidate_invalid", "The selected device candidate is invalid.", http_status=400
+        ) from exc
+    operation, result = completed_volume_observation(db, token, require_fresh=True)
+    if operation.source_endpoint_id is not None or operation.source_profile_id is not None:
+        raise WindowsHelperServiceError(
+            "portable_candidate_binding_invalid", "The selected device candidate is invalid.", http_status=409
+        )
+    if index < 0 or index >= len(result.volumes):
+        raise WindowsHelperServiceError(
+            "portable_candidate_invalid", "The selected device candidate is invalid.", http_status=400
+        )
+    item = result.volumes[index]
+    expected_drive_type = "removable" if request.source_type == "removable" else "fixed"
+    if item.drive_type != expected_drive_type:
+        raise WindowsHelperServiceError(
+            "portable_candidate_type_mismatch", "The selected device type does not match this Source flow.", http_status=409
+        )
+    if ntpath.normcase(ntpath.splitdrive(request.windows_root)[0]) != ntpath.normcase(
+        ntpath.splitdrive(item.provider_native_root)[0]
+    ):
+        raise WindowsHelperServiceError(
+            "portable_candidate_root_mismatch",
+            "The selected folder is not on the detected Source device.",
+            http_status=409,
+        )
+    endpoints = list(
+        db.scalars(
+            select(SourceEndpoint).where(
+                SourceEndpoint.identity_fingerprint_version == item.identity_fingerprint_version,
+                SourceEndpoint.identity_fingerprint_hash == item.identity_fingerprint_hash,
+                SourceEndpoint.status != "retired",
+            )
+        )
+    )
+    if len(endpoints) > 1:
+        raise WindowsHelperServiceError(
+            "portable_identity_ambiguous", "The selected device identity is ambiguous.", http_status=409
+        )
+    if request.source_type == "external" and not endpoints:
+        raise WindowsHelperServiceError(
+            "external_physical_identity_unverified",
+            "Windows Helper 0.5.1 cannot safely distinguish this unknown fixed drive from virtual storage.",
+            http_status=409,
+        )
+    alias = endpoints[0].alias if endpoints else request.device_alias
+    if not alias or not alias.strip():
+        raise WindowsHelperServiceError(
+            "device_name_required", "Enter a Device name for this new physical device.", http_status=400
+        )
+    node = db.get(AccessNode, operation.access_node_id)
+    if node is None:
+        raise WindowsHelperServiceError(
+            "windows_computer_unavailable", "The observing computer is unavailable.", http_status=409
+        )
+    return request.model_copy(
+        update={
+            "access_node_id": UUID(node.access_node_uuid),
+            "device_alias": alias,
+        }
+    )
+
+
 def profile_status(db: Session, source_profile_id: int) -> WindowsSourceUiProfileStatus:
     source = db.get(IngestionSource, source_profile_id)
     if source is None or source.profile_status != "active" or source.endpoint_id is None:
@@ -162,22 +357,26 @@ def profile_status(db: Session, source_profile_id: int) -> WindowsSourceUiProfil
             .distinct()
         )
     )
-    if len(nodes) != 1:
+    if not nodes:
         raise WindowsHelperServiceError(
-            "source_access_node_ambiguous",
-            "The Source does not have one configured Windows access device.",
+            "source_access_node_unavailable",
+            "The Source has no registered Windows access route.",
             http_status=409,
         )
-    node = nodes[0]
-    credential = db.scalar(
-        select(WindowsHelperCredential).where(
-            WindowsHelperCredential.access_node_id == node.id,
-            WindowsHelperCredential.status == "active",
-            WindowsHelperCredential.revoked_at.is_(None),
+    states: list[tuple[AccessNode, bool, bool]] = []
+    for candidate in nodes:
+        credential = db.scalar(
+            select(WindowsHelperCredential).where(
+                WindowsHelperCredential.access_node_id == candidate.id,
+                WindowsHelperCredential.status == "active",
+                WindowsHelperCredential.revoked_at.is_(None),
+            )
         )
-    )
-    paired = credential is not None
-    online = paired and helper_is_online(node)
+        paired_candidate = credential is not None
+        states.append((candidate, paired_candidate, paired_candidate and helper_is_online(candidate)))
+    node = next((item[0] for item in states if item[2]), states[0][0])
+    paired = any(item[1] for item in states)
+    online = any(item[2] for item in states)
     return WindowsSourceUiProfileStatus(
         source_profile_id=source.id,
         profile_name=source.source_label,
@@ -187,6 +386,154 @@ def profile_status(db: Session, source_profile_id: int) -> WindowsSourceUiProfil
         paired=paired,
         online=online,
         helper_version=_helper_version(node),
+    )
+
+
+def begin_profile_route_check(db: Session, source_profile_id: int) -> WindowsSourceUiRouteCheck:
+    source = db.get(IngestionSource, source_profile_id)
+    endpoint = db.get(SourceEndpoint, source.endpoint_id) if source is not None and source.endpoint_id else None
+    if source is None or source.profile_status != "active" or endpoint is None or endpoint.status == "retired":
+        raise WindowsHelperServiceError(
+            "source_profile_unavailable", "The requested Source Profile is unavailable.", http_status=404
+        )
+    if endpoint.source_type not in {"external_device", "removable_media"}:
+        raise WindowsHelperServiceError(
+            "portable_route_not_required", "This Source does not use portable route discovery.", http_status=409
+        )
+    nodes = list(
+        db.scalars(
+            select(AccessNode).where(
+                AccessNode.provider_name == HELPER_PROVIDER_NAME,
+                AccessNode.os_family == "windows",
+                AccessNode.status == "active",
+            )
+            .order_by(AccessNode.id)
+        )
+    )
+    tokens: list[UUID] = []
+    for node in nodes:
+        try:
+            operation = create_volume_observation_for_access_node(
+                db,
+                node,
+                source_endpoint_id=endpoint.id,
+                source_profile_id=source.id,
+            )
+        except WindowsHelperServiceError as exc:
+            if exc.code in {
+                "helper_offline",
+                "helper_credential_unavailable",
+                "volume_observation_capability_unavailable",
+            }:
+                continue
+            raise
+        tokens.append(operation.operation_id)
+    if not tokens:
+        return WindowsSourceUiRouteCheck(
+            stage="unavailable",
+            safe_message="Device not connected.",
+        )
+    return WindowsSourceUiRouteCheck(
+        stage="checking_routes",
+        observation_tokens=tokens,
+        safe_message="Checking currently available computers for this device.",
+    )
+
+
+def resolve_profile_route(
+    db: Session,
+    source_profile_id: int,
+    request: WindowsSourceUiRouteResolveRequest,
+) -> WindowsSourceUiRouteCheck:
+    source = db.get(IngestionSource, source_profile_id)
+    endpoint = db.get(SourceEndpoint, source.endpoint_id) if source is not None and source.endpoint_id else None
+    if source is None or endpoint is None or source.profile_status != "active" or endpoint.status == "retired":
+        raise WindowsHelperServiceError(
+            "source_profile_unavailable", "The requested Source Profile is unavailable.", http_status=404
+        )
+    matching: list[tuple[UUID, AccessNode]] = []
+    pending = False
+    for token in request.observation_tokens:
+        status = get_operation_status(db, token)
+        if status.source_profile_id != source.id or status.source_endpoint_id != endpoint.id:
+            raise WindowsHelperServiceError(
+                "portable_route_binding_mismatch",
+                "A route observation is not bound to the selected Source.",
+                http_status=409,
+            )
+        if status.state in {"pending", "claimed"}:
+            pending = True
+            continue
+        if status.state != "completed":
+            continue
+        operation, result = completed_volume_observation(db, token, require_fresh=True)
+        matches = [
+            item for item in result.volumes
+            if item.identity_fingerprint_hash == endpoint.identity_fingerprint_hash
+            and item.identity_fingerprint_version == endpoint.identity_fingerprint_version
+        ]
+        if len(matches) > 1:
+            return WindowsSourceUiRouteCheck(
+                stage="failed",
+                observation_tokens=request.observation_tokens,
+                safe_message="Windows reported more than one matching device on one computer.",
+            )
+        if len(matches) == 1:
+            node = db.get(AccessNode, operation.access_node_id)
+            if node is not None and helper_is_online(node):
+                matching.append((token, node))
+    if pending:
+        return WindowsSourceUiRouteCheck(
+            stage="checking_routes",
+            observation_tokens=request.observation_tokens,
+            safe_message="Checking currently available computers for this device.",
+        )
+    by_node = {node.id: (token, node) for token, node in matching}
+    candidates = list(by_node.values())
+    if not candidates:
+        return WindowsSourceUiRouteCheck(
+            stage="unavailable",
+            observation_tokens=request.observation_tokens,
+            safe_message="Device not connected.",
+        )
+    routes = [
+        WindowsSourceUiRoute(
+            access_node_id=UUID(node.access_node_uuid),
+            computer_alias=next(
+                (item.computer_alias for item in list_computers(db).computers if item.access_node_id == UUID(node.access_node_uuid)),
+                node.label,
+            ),
+        )
+        for _, node in candidates
+    ]
+    selected: tuple[UUID, AccessNode] | None = None
+    if len(candidates) == 1:
+        selected = candidates[0]
+    elif request.selected_access_node_id is not None:
+        selected = next(
+            (item for item in candidates if item[1].access_node_uuid == str(request.selected_access_node_id)),
+            None,
+        )
+        if selected is None:
+            raise WindowsHelperServiceError(
+                "portable_route_selection_invalid",
+                "The selected computer is not a current verified route for this device.",
+                http_status=409,
+            )
+    if selected is None:
+        return WindowsSourceUiRouteCheck(
+            stage="ambiguous",
+            observation_tokens=request.observation_tokens,
+            routes=routes,
+            safe_message="This device is available through more than one computer. Choose one for this run.",
+        )
+    probe_token = create_resolved_profile_probe_operation(db, selected[0])
+    return WindowsSourceUiRouteCheck(
+        stage="checking_source",
+        observation_tokens=request.observation_tokens,
+        probe_operation_token=probe_token,
+        routes=routes,
+        safe_message="Verifying the selected Windows Source root.",
     )
 
 
@@ -454,6 +801,15 @@ def _creation_binding(
             "More than one Source device uses that name on this computer.",
             http_status=409,
         )
+    if not matches:
+        global_match = db.scalar(
+            select(SourceEndpoint).where(
+                SourceEndpoint.alias_normalized == device_alias.strip().casefold(),
+                SourceEndpoint.status != "retired",
+            )
+        )
+        if global_match is not None:
+            matches = [global_match]
     return (matches[0] if matches else None), node
 
 
@@ -465,9 +821,92 @@ def _helper_source_type(source_type: str) -> SourceType:
     }[source_type]
 
 
+def _normalized_creation_request(
+    db: Session,
+    request: WindowsSourceUiCreateProbeRequest | WindowsSourceUiCreatePlanRequest | WindowsSourceUiCreateConfirmRequest,
+):
+    request = _resolve_discovery_candidate(db, request)
+    if request.source_type != "local":
+        return request
+    computer = next(
+        (item for item in list_computers(db).computers if item.access_node_id == request.access_node_id),
+        None,
+    )
+    if computer is None:
+        raise WindowsHelperServiceError(
+            "windows_computer_unavailable", "Select one paired Windows computer.", http_status=409
+        )
+    return request.model_copy(update={"device_alias": computer.computer_alias})
+
+
+def _enforce_local_endpoint_invariant(
+    db: Session,
+    request: WindowsSourceUiCreatePlanRequest | WindowsSourceUiCreateConfirmRequest,
+    *,
+    lock_access_node: bool,
+) -> None:
+    if request.source_type != "local":
+        return
+    probe_operation, probe = completed_probe(
+        db,
+        request.probe_operation_token,
+        require_fresh=True,
+    )
+    statement = select(AccessNode).where(
+        AccessNode.access_node_uuid == str(request.access_node_id),
+        AccessNode.provider_name == HELPER_PROVIDER_NAME,
+        AccessNode.os_family == "windows",
+        AccessNode.status == "active",
+    )
+    if lock_access_node:
+        statement = statement.with_for_update()
+    node = db.scalar(statement)
+    if node is None or probe_operation.access_node_id != node.id:
+        raise WindowsHelperServiceError(
+            "local_access_node_mismatch",
+            "The Local Source check does not belong to the selected computer.",
+            http_status=409,
+        )
+    endpoints = list(
+        db.scalars(
+            select(SourceEndpoint)
+            .join(SourceEndpointObservedPath, SourceEndpointObservedPath.source_endpoint_id == SourceEndpoint.id)
+            .where(
+                SourceEndpointObservedPath.access_node_id == node.id,
+                SourceEndpoint.source_type == "local",
+                SourceEndpoint.status == "active",
+            )
+            .distinct()
+            .order_by(SourceEndpoint.id)
+        )
+    )
+    if len(endpoints) > 1:
+        raise WindowsHelperServiceError(
+            "local_endpoint_ambiguous",
+            "This computer has more than one active Local device and requires operator review.",
+            http_status=409,
+        )
+    fingerprint = fingerprint_from_probe(probe)
+    if len(endpoints) == 1 and (
+        fingerprint.strength != "strong"
+        or not fingerprint.hash_value
+        or endpoints[0].identity_fingerprint_hash != fingerprint.hash_value
+    ):
+        raise WindowsHelperServiceError(
+            "additional_local_volume_not_supported",
+            "Additional local volumes are not supported in this version.",
+            http_status=409,
+        )
+
+
 def create_creation_probe(
     db: Session, request: WindowsSourceUiCreateProbeRequest
 ) -> WindowsSourceUiOperation:
+    request = _normalized_creation_request(db, request)
+    if request.access_node_id is None:
+        raise WindowsHelperServiceError(
+            "windows_computer_unavailable", "No current Windows access route is available.", http_status=409
+        )
     _, node = _creation_binding(db, request.access_node_id, request.device_alias)
     root = request.windows_root.strip()
     if not ntpath.isabs(root) or not ntpath.splitdrive(root)[0]:
@@ -491,6 +930,12 @@ def create_creation_probe(
 
 
 def _creation_plan(db: Session, request: WindowsSourceUiCreatePlanRequest):
+    request = _normalized_creation_request(db, request)
+    if request.access_node_id is None:
+        raise WindowsHelperServiceError(
+            "windows_computer_unavailable", "No current Windows access route is available.", http_status=409
+        )
+    _enforce_local_endpoint_invariant(db, request, lock_access_node=False)
     endpoint, _ = _creation_binding(db, request.access_node_id, request.device_alias)
     return SourceCreationService(db).plan(
         SourceCreationPlanRequest(
@@ -498,6 +943,7 @@ def _creation_plan(db: Session, request: WindowsSourceUiCreatePlanRequest):
             observed_path=request.windows_root.strip(),
             source_name=request.profile_name.strip(),
             device_name=request.device_alias.strip(),
+            naming_action="use_existing" if endpoint is not None else "create_new",
             selected_existing_endpoint_id=endpoint.id if endpoint is not None else None,
             helper_probe_operation_id=request.probe_operation_token,
         )
@@ -505,6 +951,7 @@ def _creation_plan(db: Session, request: WindowsSourceUiCreatePlanRequest):
 
 
 def creation_plan(db: Session, request: WindowsSourceUiCreatePlanRequest) -> WindowsSourceUiCreatePlan:
+    request = _normalized_creation_request(db, request)
     plan = _creation_plan(db, request)
     return WindowsSourceUiCreatePlan(
         plan_status=plan.plan_status,
@@ -521,6 +968,12 @@ def creation_plan(db: Session, request: WindowsSourceUiCreatePlanRequest) -> Win
 def confirm_creation(
     db: Session, request: WindowsSourceUiCreateConfirmRequest
 ) -> WindowsSourceUiCreateResult:
+    request = _normalized_creation_request(db, request)
+    if request.access_node_id is None:
+        raise WindowsHelperServiceError(
+            "windows_computer_unavailable", "No current Windows access route is available.", http_status=409
+        )
+    _enforce_local_endpoint_invariant(db, request, lock_access_node=True)
     endpoint, _ = _creation_binding(db, request.access_node_id, request.device_alias)
     plan = _creation_plan(db, request)
     result = SourceCreationService(db).confirm(
@@ -529,6 +982,7 @@ def confirm_creation(
             observed_path=request.windows_root.strip(),
             source_name=request.profile_name.strip(),
             device_name=request.device_alias.strip(),
+            naming_action="use_existing" if endpoint is not None else "create_new",
             selected_existing_endpoint_id=endpoint.id if endpoint is not None else None,
             helper_probe_operation_id=request.probe_operation_token,
             operator_review_acknowledged=True,

@@ -36,11 +36,25 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("Windows computer enrollment", () => {
+  it("separates durable registration from current Helper availability", () => {
+    render(<WindowsComputerEnrollment computers={[{
+      access_node_id: authorization.access_node_id,
+      computer_alias: "Chuck_Notebook",
+      paired: true,
+      online: false,
+      helper_version: "0.5.1",
+      source_device_aliases: [],
+    }]} onPaired={vi.fn()} />);
+
+    expect(screen.getByText("Chuck_Notebook")).toBeInTheDocument();
+    expect(screen.getByText("Registered — Helper offline")).toBeInTheDocument();
+  });
+
   it("uses the existing pair command without embedding the one-time code", async () => {
     render(<WindowsComputerEnrollment onPaired={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Add / Pair Windows Device" }));
+    fireEvent.click(screen.getByRole("button", { name: "Register Computer" }));
     fireEvent.change(screen.getByLabelText("Computer-friendly name"), { target: { value: "Family laptop" } });
-    fireEvent.click(screen.getByRole("button", { name: "Begin Pairing" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Registration" }));
 
     const command = await screen.findByLabelText("PowerShell command");
     expect((command as HTMLTextAreaElement).value).toContain("pair --access-node-id");
@@ -52,12 +66,12 @@ describe("Windows computer enrollment", () => {
   it("requires pairing plus an authenticated heartbeat", async () => {
     const onPaired = vi.fn();
     render(<WindowsComputerEnrollment onPaired={onPaired} />);
-    fireEvent.click(screen.getByRole("button", { name: "Add / Pair Windows Device" }));
+    fireEvent.click(screen.getByRole("button", { name: "Register Computer" }));
     fireEvent.change(screen.getByLabelText("Computer-friendly name"), { target: { value: "Family laptop" } });
-    fireEvent.click(screen.getByRole("button", { name: "Begin Pairing" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Check Pairing" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare Registration" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check Registration" }));
 
-    expect(await screen.findByText("Windows computer paired and authenticated.")).toBeInTheDocument();
+    expect(await screen.findByText("Windows computer registered and authenticated.")).toBeInTheDocument();
     expect(onPaired).toHaveBeenCalledTimes(1);
   });
 });

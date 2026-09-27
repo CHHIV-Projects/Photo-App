@@ -92,7 +92,9 @@ import type {
   WindowsSourceUiCreatePlan,
   WindowsSourceUiCreateResult,
   WindowsSourceUiOperation,
+  WindowsSourceUiPortableDiscovery,
   WindowsSourceUiProfileStatus,
+  WindowsSourceUiRouteCheck,
   WindowsSourceUiWorkflowStatus,
   WindowsHelperPairingAuthorization,
   WindowsHelperStatusList,
@@ -282,6 +284,24 @@ export function startWindowsSourceUiProbe(sourceProfileId: number): Promise<Wind
   return apiRequest<WindowsSourceUiOperation>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/probe`, { method: "POST" });
 }
 
+export function startWindowsSourceUiRouteCheck(sourceProfileId: number): Promise<WindowsSourceUiRouteCheck> {
+  return apiRequest<WindowsSourceUiRouteCheck>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/routes`, { method: "POST" });
+}
+
+export function resolveWindowsSourceUiRoute(
+  sourceProfileId: number,
+  observationTokens: string[],
+  selectedAccessNodeId?: string,
+): Promise<WindowsSourceUiRouteCheck> {
+  return apiRequest<WindowsSourceUiRouteCheck>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/routes/resolve`, {
+    method: "POST",
+    body: JSON.stringify({
+      observation_tokens: observationTokens,
+      selected_access_node_id: selectedAccessNodeId ?? null,
+    }),
+  });
+}
+
 export function getWindowsSourceUiOperation(operationToken: string): Promise<WindowsSourceUiOperation> {
   return apiRequest<WindowsSourceUiOperation>(`/api/admin/windows-source-ui/operations/${operationToken}`);
 }
@@ -309,6 +329,23 @@ export function startWindowsSourceUiCreationProbe(fields: WindowsSourceUiCreateF
   return apiRequest<WindowsSourceUiOperation>("/api/admin/windows-source-ui/creation/probe", {
     method: "POST",
     body: JSON.stringify(fields),
+  });
+}
+
+export function startWindowsPortableDiscovery(sourceType: "external" | "removable"): Promise<WindowsSourceUiPortableDiscovery> {
+  return apiRequest<WindowsSourceUiPortableDiscovery>("/api/admin/windows-source-ui/creation/devices", {
+    method: "POST",
+    body: JSON.stringify({ source_type: sourceType }),
+  });
+}
+
+export function resolveWindowsPortableDiscovery(
+  sourceType: "external" | "removable",
+  observationTokens: string[],
+): Promise<WindowsSourceUiPortableDiscovery> {
+  return apiRequest<WindowsSourceUiPortableDiscovery>("/api/admin/windows-source-ui/creation/devices/resolve", {
+    method: "POST",
+    body: JSON.stringify({ source_type: sourceType, observation_tokens: observationTokens }),
   });
 }
 

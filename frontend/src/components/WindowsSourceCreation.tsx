@@ -4,15 +4,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   confirmWindowsSourceUiCreation,
+  getWindowsSourceUiComputers,
   getWindowsSourceUiOperation,
   planWindowsSourceUiCreation,
+  resolveWindowsPortableDiscovery,
   startWindowsSourceUiCreationProbe,
+  startWindowsPortableDiscovery,
 } from "@/lib/api";
 import type {
   WindowsSourceUiComputer,
   WindowsSourceUiCreateFields,
   WindowsSourceUiCreatePlan,
   WindowsSourceUiCreateResult,
+  WindowsSourceUiPortableCandidate,
+  WindowsSourceUiPortableDiscovery,
 } from "@/types/ui-api";
 
 import styles from "./ingestion-view.module.css";
@@ -59,10 +64,13 @@ export default function WindowsSourceCreation({
   const [fields, setFields] = useState<WindowsSourceUiCreateFields>({
     access_node_id: computers[0]?.access_node_id ?? "",
     source_type: sourceType,
-    device_alias: "",
+    device_alias: sourceType === "local" ? computers[0]?.computer_alias ?? "" : "",
     windows_root: "",
     profile_name: "",
   });
+  const [discovery, setDiscovery] = useState<WindowsSourceUiPortableDiscovery | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<WindowsSourceUiPortableCandidate | null>(null);
+  const [portableFolder, setPortableFolder] = useState("");
   const [probeToken, setProbeToken] = useState<string | null>(null);
   const [plan, setPlan] = useState<WindowsSourceUiCreatePlan | null>(null);
   const [result, setResult] = useState<WindowsSourceUiCreateResult | null>(null);
@@ -74,9 +82,14 @@ export default function WindowsSourceCreation({
       if (computers.some((computer) => computer.access_node_id === current.access_node_id)) {
         return current;
       }
-      return { ...current, access_node_id: computers[0]?.access_node_id ?? "" };
+      const first = computers[0];
+      return {
+        ...current,
+        access_node_id: first?.access_node_id ?? "",
+        device_alias: sourceType === "local" ? first?.computer_alias ?? "" : current.device_alias,
+      };
     });
-  }, [computers]);
+  }, [computers, sourceType]);
 
   const pathError = useMemo(() => {
     const root = fields.windows_root.trim();
@@ -93,9 +106,83 @@ export default function WindowsSourceCreation({
     setError(null);
   };
 
+  const waitForAvailableComputer = useCallback(async (accessNodeId?: string) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      const current = await getWindowsSourceUiComputers();
+      if (current.computers.some((computer) => (
+        computer.paired
+        && computer.online
+        && (!accessNodeId || computer.access_node_id === accessNodeId)
+      ))) {
+        return;
+      }
+      await delay(1000);
+    }
+    throw new Error("The registered Windows Helper did not become available in time.");
+  }, []);
+
+  const discover = useCallback(() => {
+    if (sourceType === "local") return;
+    if (!computers.some((computer) => computer.paired)) {
+      setError("Register a Windows computer before detecting Source devices.");
+      return;
+    }
+    launchWindowsAccess();
+    setBusy(true);
+    setError(null);
+    setSelectedCandidate(null);
+    void (async () => {
+      await waitForAvailableComputer();
+      let current = await startWindowsPortableDiscovery(sourceType);
+      const deadline = Date.now() + 120_000;
+      while (current.stage === "checking_devices" && Date.now() < deadline) {
+        await delay(1000);
+        current = await resolveWindowsPortableDiscovery(sourceType, current.observation_tokens);
+      }
+      setDiscovery(current);
+      if (current.stage !== "ready") setError(current.safe_message);
+    })().catch((caught: unknown) => {
+      setError(caught instanceof Error ? caught.message : "Connected devices could not be detected.");
+    }).finally(() => setBusy(false));
+  }, [computers, launchWindowsAccess, sourceType, waitForAvailableComputer]);
+
+  const chooseCandidate = (candidateToken: string) => {
+    const candidate = discovery?.candidates.find((item) => item.candidate_token === candidateToken) ?? null;
+    setSelectedCandidate(candidate);
+    setPortableFolder("");
+    setFields((current) => ({
+      ...current,
+      access_node_id: "",
+      discovery_candidate_token: candidate?.candidate_token ?? null,
+      device_alias: candidate?.device_alias ?? "",
+      windows_root: candidate?.current_root ?? "",
+    }));
+    setProbeToken(null);
+    setPlan(null);
+    setResult(null);
+    setError(null);
+  };
+
+  const updatePortableFolder = (value: string) => {
+    setPortableFolder(value);
+    const relative = value.trim().replace(/^[/\\]+/, "");
+    setFields((current) => ({
+      ...current,
+      windows_root: selectedCandidate
+        ? `${selectedCandidate.current_root}${relative}`
+        : current.windows_root,
+    }));
+    setProbeToken(null);
+    setPlan(null);
+    setResult(null);
+    setError(null);
+  };
+
   const identify = useCallback(() => {
-    if (!fields.access_node_id || !fields.device_alias.trim() || !fields.profile_name.trim() || pathError) {
-      setError(pathError ?? "Windows computer, Source device, and Profile name are required.");
+    const missingRoute = sourceType === "local" ? !fields.access_node_id : !fields.discovery_candidate_token;
+    if (missingRoute || !fields.device_alias.trim() || !fields.profile_name.trim() || pathError) {
+      setError(pathError ?? "Select the Source device and enter a Profile name.");
       return;
     }
     // Synchronous user gesture: a healthy existing instance safely reuses its OS mutex.
@@ -103,6 +190,9 @@ export default function WindowsSourceCreation({
     setBusy(true);
     setError(null);
     void (async () => {
+      if (sourceType === "local") {
+        await waitForAvailableComputer(fields.access_node_id);
+      }
       const probe = await startWindowsSourceUiCreationProbe(fields);
       const deadline = Date.now() + 120_000;
       while (Date.now() < deadline) {
@@ -120,7 +210,7 @@ export default function WindowsSourceCreation({
     })().catch((caught: unknown) => {
       setError(caught instanceof Error ? caught.message : "The Windows folder could not be checked.");
     }).finally(() => setBusy(false));
-  }, [fields, launchWindowsAccess, pathError]);
+  }, [fields, launchWindowsAccess, pathError, sourceType, waitForAvailableComputer]);
 
   const selectedComputer = computers.find((item) => item.access_node_id === fields.access_node_id);
   const sourceTypeLabel = sourceType === "external" ? "External" : sourceType === "removable" ? "Removable" : "Local";
@@ -143,35 +233,72 @@ export default function WindowsSourceCreation({
   return (
     <section aria-label={`Create Windows ${sourceTypeLabel} Source`}>
       <div className={styles.createSourceControls}>
-        <label className={styles.formLabel}>
-          Windows computer
-          <select className={styles.formInput} value={fields.access_node_id} onChange={(event) => update("access_node_id", event.target.value)} disabled={busy}>
-            {computers.length === 0 ? <option value="">No paired Windows computers</option> : computers.map((computer) => <option key={computer.access_node_id} value={computer.access_node_id}>{computer.computer_alias}</option>)}
-          </select>
-        </label>
-        <label className={styles.formLabel}>
-          Source device name
-          <input className={styles.formInput} list="windows-source-device-aliases" value={fields.device_alias} onChange={(event) => update("device_alias", event.target.value)} placeholder="Family external drive" disabled={busy} />
-          <datalist id="windows-source-device-aliases">
-            {(selectedComputer?.source_device_aliases ?? []).map((alias) => <option key={alias} value={alias} />)}
-          </datalist>
-        </label>
-        <label className={styles.formLabel}>
-          {`Exact Windows ${sourceTypeLabel} folder`}
-          <input className={styles.formInput} value={fields.windows_root} onChange={(event) => update("windows_root", event.target.value)} placeholder={sourceType === "local" ? "C:\\Users\\name\\Pictures" : "E:\\Family Photos"} disabled={busy} />
-        </label>
+        {sourceType === "local" && computers.length > 1 && (
+          <label className={styles.formLabel}>
+            Computer
+            <select className={styles.formInput} value={fields.access_node_id} onChange={(event) => {
+              const computer = computers.find((item) => item.access_node_id === event.target.value);
+              update("access_node_id", event.target.value);
+              if (computer) update("device_alias", computer.computer_alias);
+            }} disabled={busy}>
+              {computers.map((computer) => <option key={computer.access_node_id} value={computer.access_node_id}>{computer.computer_alias}</option>)}
+            </select>
+          </label>
+        )}
+        {sourceType === "local" && computers.length === 1 && (
+          <div className={styles.detailCard}><span className={styles.detailLabel}>Computer</span><span>{computers[0].computer_alias}</span></div>
+        )}
+        {sourceType === "local" && computers.length === 0 && (
+          <p className={styles.inlineWarning}>Register a Windows computer before adding a Local Source.</p>
+        )}
+        {sourceType !== "local" && (
+          <>
+            <button type="button" className={styles.updateButton} onClick={discover} disabled={busy}>{busy && !discovery ? "Detecting..." : `Detect connected ${sourceTypeLabel} devices`}</button>
+            {discovery?.stage === "ready" && (
+              <label className={styles.formLabel}>
+                {`Detected ${sourceTypeLabel} device`}
+                <select className={styles.formInput} value={selectedCandidate?.candidate_token ?? ""} onChange={(event) => chooseCandidate(event.target.value)} disabled={busy}>
+                  <option value="">Select device...</option>
+                  {discovery.candidates.map((candidate) => (
+                    <option key={candidate.candidate_token} value={candidate.candidate_token}>
+                      {candidate.device_alias ?? `New ${sourceTypeLabel} device`} ({candidate.current_root})
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {selectedCandidate && !selectedCandidate.known_device && (
+              <label className={styles.formLabel}>
+                Device name
+                <input className={styles.formInput} value={fields.device_alias} onChange={(event) => update("device_alias", event.target.value)} placeholder="Family Archive Drive" disabled={busy} />
+              </label>
+            )}
+          </>
+        )}
+        {sourceType === "local" ? (
+          <label className={styles.formLabel}>
+            Folder
+            <input className={styles.formInput} value={fields.windows_root} onChange={(event) => update("windows_root", event.target.value)} placeholder="C:\\Users\\name\\Pictures" disabled={busy} />
+          </label>
+        ) : selectedCandidate && (
+          <label className={styles.formLabel}>
+            Folder within device (optional)
+            <input className={styles.formInput} value={portableFolder} onChange={(event) => updatePortableFolder(event.target.value)} placeholder="Family Photos" disabled={busy} />
+            <span className={styles.helperText}>Current access: {selectedCandidate.current_root}</span>
+          </label>
+        )}
         <label className={styles.formLabel}>
           Source Profile name
           <input className={styles.formInput} value={fields.profile_name} onChange={(event) => update("profile_name", event.target.value)} placeholder="Family photos" disabled={busy} />
         </label>
-        <button type="button" className={styles.updateButton} onClick={identify} disabled={busy || computers.length === 0}>{busy && !plan ? "Checking..." : "Review Source"}</button>
+        <button type="button" className={styles.updateButton} onClick={identify} disabled={busy || (sourceType === "local" ? computers.length === 0 : !selectedCandidate)}>{busy && !plan ? "Checking..." : "Review Source"}</button>
       </div>
       {pathError && fields.windows_root && <p className={styles.helperText}>{pathError}</p>}
       {plan && !result && (
         <section className={styles.creationReview} aria-label={`Windows ${sourceTypeLabel} Source review`}>
           <h4 className={styles.detailHeading}>{`Review Windows ${sourceTypeLabel} Source`}</h4>
           <div className={styles.creationResultGrid}>
-            <div><span className={styles.detailLabel}>Windows computer</span><span>{selectedComputer?.computer_alias ?? "-"}</span></div>
+            {sourceType === "local" && <div><span className={styles.detailLabel}>Computer</span><span>{selectedComputer?.computer_alias ?? "-"}</span></div>}
             <div><span className={styles.detailLabel}>Source device</span><span>{plan.device_alias}</span></div>
             <div><span className={styles.detailLabel}>Source type</span><span>{sourceTypeLabel}</span></div>
             <div><span className={styles.detailLabel}>Folder</span><span>{plan.windows_root}</span></div>

@@ -282,19 +282,16 @@ def create_probe_operation(
     )
 
 
-def create_volume_observation_operation(
+def create_volume_observation_for_access_node(
     db: Session,
-    source_profile_id: int,
+    access_node: AccessNode,
+    *,
+    source_endpoint_id: int | None = None,
+    source_profile_id: int | None = None,
 ) -> WindowsHelperOperationCreatedResponse:
-    """Ask the bound Helper for safe mounted-volume metadata only."""
+    """Ask one explicit online Helper for bounded mounted-volume metadata."""
 
-    source, endpoint, node = _profile_binding(db, source_profile_id)
-    if endpoint.source_type not in {"external_device", "removable_media"}:
-        raise WindowsHelperServiceError(
-            "volume_observation_not_required",
-            "This Source type does not use mounted-volume resolution.",
-            http_status=409,
-        )
+    node = _load_access_node(db, UUID(access_node.access_node_uuid))
     if not helper_is_online(node):
         raise WindowsHelperServiceError(
             "helper_offline",
@@ -324,6 +321,27 @@ def create_volume_observation_operation(
         access_node=node,
         operation_type="observe_volumes",
         request=request,
+        source_endpoint_id=source_endpoint_id,
+        source_profile_id=source_profile_id,
+    )
+
+
+def create_volume_observation_operation(
+    db: Session,
+    source_profile_id: int,
+) -> WindowsHelperOperationCreatedResponse:
+    """Ask the single legacy-bound Helper for safe mounted-volume metadata."""
+
+    source, endpoint, node = _profile_binding(db, source_profile_id)
+    if endpoint.source_type not in {"external_device", "removable_media"}:
+        raise WindowsHelperServiceError(
+            "volume_observation_not_required",
+            "This Source type does not use mounted-volume resolution.",
+            http_status=409,
+        )
+    return create_volume_observation_for_access_node(
+        db,
+        node,
         source_endpoint_id=endpoint.id,
         source_profile_id=source.id,
     )
@@ -346,16 +364,21 @@ def create_resolved_profile_probe_operation(
             "The mounted-volume observation is not bound to a Source Profile.",
             http_status=409,
         )
-    source, endpoint, node = _profile_binding(db, observation.source_profile_id)
+    source = db.get(IngestionSource, observation.source_profile_id)
+    endpoint = db.get(SourceEndpoint, observation.source_endpoint_id)
+    node = db.get(AccessNode, observation.access_node_id)
     if (
-        observation.access_node_id != node.id
-        or observation.source_endpoint_id != endpoint.id
+        source is None
+        or endpoint is None
+        or node is None
+        or source.endpoint_id != endpoint.id
     ):
         raise WindowsHelperServiceError(
             "volume_observation_binding_mismatch",
             "The mounted-volume observation does not match the enrolled Source.",
             http_status=409,
         )
+    node = _load_access_node(db, UUID(node.access_node_uuid))
 
     resolution = resolve_mounted_volume_runtime_root(
         expected_fingerprint_hash=endpoint.identity_fingerprint_hash,
@@ -450,7 +473,28 @@ def create_inventory_operation(
         require_fresh=True,
         expected_source_profile_id=body.source_profile_id,
     )
-    source, endpoint, node = _profile_binding(db, body.source_profile_id)
+    access_node = db.get(AccessNode, probe_operation.access_node_id)
+    if access_node is None:
+        raise WindowsHelperServiceError(
+            "access_node_unavailable",
+            "The probe Access Node is unavailable.",
+            http_status=409,
+        )
+    node = _load_access_node(db, UUID(access_node.access_node_uuid))
+    source = db.get(IngestionSource, body.source_profile_id)
+    endpoint = db.get(SourceEndpoint, source.endpoint_id) if source is not None and source.endpoint_id else None
+    if (
+        source is None
+        or source.profile_status != "active"
+        or endpoint is None
+        or endpoint.status == "retired"
+        or probe_operation.source_endpoint_id != endpoint.id
+    ):
+        raise WindowsHelperServiceError(
+            "probe_profile_mismatch",
+            "The probe is not bound to the active Source Profile and Endpoint.",
+            http_status=409,
+        )
     if probe_operation.access_node_id != node.id:
         raise WindowsHelperServiceError(
             "access_node_mismatch",

@@ -1446,6 +1446,19 @@ export interface WindowsSourceUiOperation {
   safe_message: string;
 }
 
+export interface WindowsSourceUiRoute {
+  access_node_id: string;
+  computer_alias: string;
+}
+
+export interface WindowsSourceUiRouteCheck {
+  stage: "checking_routes" | "checking_source" | "unavailable" | "ambiguous" | "failed";
+  safe_message: string;
+  observation_tokens: string[];
+  probe_operation_token: string | null;
+  routes: WindowsSourceUiRoute[];
+}
+
 export interface WindowsSourceUiCandidateReview {
   workflow_token: string;
   stage: "awaiting_confirmation";
@@ -1505,14 +1518,34 @@ export interface WindowsHelperStatusList {
 
 export interface WindowsSourceUiCreateFields {
   access_node_id: string;
+  discovery_candidate_token?: string | null;
   source_type: "local" | "external" | "removable";
   device_alias: string;
   windows_root: string;
   profile_name: string;
 }
 
-export interface WindowsSourceUiCreatePlan extends WindowsSourceUiCreateFields {
+export interface WindowsSourceUiPortableCandidate {
+  candidate_token: string;
+  device_alias: string | null;
+  known_device: boolean;
+  current_root: string;
+  drive_type: string;
+  current_route_count: number;
+}
+
+export interface WindowsSourceUiPortableDiscovery {
+  stage: "checking_devices" | "ready" | "unavailable" | "failed";
+  safe_message: string;
+  observation_tokens: string[];
+  candidates: WindowsSourceUiPortableCandidate[];
+}
+
+export interface WindowsSourceUiCreatePlan {
   plan_status: "ready" | "source_exists" | "needs_review" | "blocked";
+  device_alias: string;
+  windows_root: string;
+  profile_name: string;
   device_action: string;
   profile_action: string;
   blockers: string[];
