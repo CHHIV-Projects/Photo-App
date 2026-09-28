@@ -148,7 +148,7 @@ require_authority() {
   if ((active_count == 0)); then
     ((autofs_count == 1)) || transient_fail "NAS authority is not configured."
     [[ "${allow_activation}" == "yes" ]] || transient_fail "NAS authority did not become active after the bounded automount attempt."
-    timeout --foreground 30 stat --format='%F' -- "${NAS_AUTHORITY}" >/dev/null 2>&1 || transient_fail "NAS automount did not become ready."
+    timeout --foreground 30 find "${NAS_AUTHORITY}" -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1 || transient_fail "NAS automount did not become ready."
     require_authority no
     return
   fi

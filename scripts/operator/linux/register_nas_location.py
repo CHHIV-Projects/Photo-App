@@ -192,6 +192,36 @@ def complete_registration_with_retry(registration_id: UUID) -> None:
             time.sleep(1)
 
 
+def require_namespace_instance_ready(instance: str) -> None:
+    """Require one namespace instance to have completed before API finalization."""
+
+    result = run(
+        [
+            "systemctl",
+            "show",
+            instance,
+            "--property=ActiveState",
+            "--property=SubState",
+            "--property=Result",
+            "--property=ExecMainStatus",
+        ],
+        check=False,
+    )
+    properties: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            properties[key] = value
+    expected = {
+        "ActiveState": "active",
+        "SubState": "exited",
+        "Result": "success",
+        "ExecMainStatus": "0",
+    }
+    if result.returncode != 0 or properties != expected:
+        fail("NAS namespace location did not activate safely.")
+
+
 def load_source_config() -> tuple[dict[str, Any], int]:
     group_id = grp.getgrnam("photo-organizer-source-access").gr_gid
     require_safe_file(SOURCE_CONFIG, mode=0o640, group=group_id)
@@ -442,6 +472,7 @@ def update_network_registration(
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "enable", "--now", automount_unit])
         run(["systemctl", "enable", "--now", instance], timeout=45)
+        require_namespace_instance_ready(instance)
         run(["systemctl", "restart", BROKER_UNIT])
         complete_registration_with_retry(registration_id)
     except Exception:
@@ -577,6 +608,7 @@ def install_registration(registration_id: UUID) -> None:
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "enable", "--now", automount_unit])
         run(["systemctl", "enable", "--now", instance], timeout=45)
+        require_namespace_instance_ready(instance)
         run(["systemctl", "restart", BROKER_UNIT])
         complete_registration_with_retry(registration_id)
     except Exception:

@@ -12,6 +12,7 @@ Restart=on-failure
 RestartSec=3s
 RuntimeDirectory=photo-organizer-source-access
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
 StateDirectory=photo-organizer-source-access
 StateDirectoryMode=0750
 UMask=0007

@@ -47,6 +47,13 @@ class RegisterNasLocationInstallerTests(unittest.TestCase):
         self.assertIn('shutil.copy2(rollback / "source-access.json", SOURCE_CONFIG)', self.text)
         self.assertIn('shutil.copy2(rollback / "nas-registrations.json", NAS_REGISTRY)', self.text)
 
+    def test_namespace_must_complete_before_broker_restart_and_api_completion(self) -> None:
+        self.assertIn("def require_namespace_instance_ready(instance: str)", self.text)
+        self.assertEqual(self.text.count("require_namespace_instance_ready(instance)"), 2)
+        first_ready = self.text.index("require_namespace_instance_ready(instance)")
+        following = self.text[first_ready:]
+        self.assertLess(following.index('run(["systemctl", "restart", BROKER_UNIT])'), following.index("complete_registration_with_retry(registration_id)"))
+
 
 if __name__ == "__main__":
     unittest.main()

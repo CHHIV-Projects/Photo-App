@@ -491,8 +491,41 @@ class SourceCreationService:
         canonical_device_name = ""
         name_decision_required = False
         will_rename_endpoint = False
+        registered_nas_location_name: str | None = None
+        if (
+            selected_endpoint is None
+            and recognized_source_type == "nas"
+            and probe is not None
+            and probe.location_id
+            and inspect(self._db.connection()).has_table("nas_share_registrations")
+        ):
+            registered_nas_share = self._db.scalar(
+                select(NasShareRegistration).where(
+                    NasShareRegistration.location_id == probe.location_id,
+                    NasShareRegistration.status == "registered",
+                )
+            )
+            if (
+                registered_nas_share is not None
+                and registered_nas_share.identity_fingerprint_hash == fingerprint.hash_value
+                and registered_nas_share.identity_fingerprint_version == fingerprint.version
+            ):
+                registered_nas_location_name = registered_nas_share.display_name
         if selected_endpoint is None and possible_matches:
             name_decision_required = True
+        elif selected_endpoint is None and registered_nas_location_name is not None:
+            naming_action = "create_new"
+            canonical_device_name = registered_nas_location_name
+            name_error = _validate_device_name(canonical_device_name)
+            if name_error is not None:
+                blockers.append(name_error)
+            elif self._alias_conflict(canonical_device_name, exclude_endpoint_id=None) is not None:
+                blockers.append(
+                    _message(
+                        "device_name_conflict",
+                        "The registered NAS Location Name is already used by a different durable device identity.",
+                    )
+                )
         elif selected_endpoint is None:
             if naming_action is None and requested_device_name:
                 naming_action = "create_new"

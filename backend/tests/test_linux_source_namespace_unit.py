@@ -117,6 +117,11 @@ class LinuxSourceNamespaceUnitTests(unittest.TestCase):
         self.assertEqual(self.broker.get("Requires"), ["photo-organizer-source-namespace.service"])
         self.assertNotIn("photo-organizer-source-nas@", self.broker_text)
 
+    def test_broker_preserves_runtime_directory_across_restart(self) -> None:
+        self.assertEqual(self.broker.get("RuntimeDirectory"), ["photo-organizer-source-access"])
+        self.assertEqual(self.broker.get("RuntimeDirectoryMode"), ["0750"])
+        self.assertEqual(self.broker.get("RuntimeDirectoryPreserve"), ["restart"])
+
     def test_broker_remains_non_root_identity_only_and_hardened(self) -> None:
         self.assertEqual(self.broker.get("Type"), ["simple"])
         self.assertEqual(self.broker.get("User"), ["photo-organizer-source-broker"])

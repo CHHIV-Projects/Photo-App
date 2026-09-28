@@ -546,6 +546,9 @@ function sourceCreationTypeForOperator(value: OperatorSourceType): SourceCreatio
 }
 
 function getSourceCreationDeviceLabel(value: OperatorSourceType): string {
+  if (value === "nas") {
+    return "NAS Location Name";
+  }
   if (value === "removable") {
     return "Media Name";
   }
@@ -2389,7 +2392,10 @@ export default function IngestionView() {
       );
       setSourceCreationUseRegisteredType(!plan.source_type_mismatch);
       setSourceCreationReviewAcknowledged(false);
-      setCreateSourceForm((current) => ({ ...current, sourceLabel: "" }));
+      setCreateSourceForm((current) => ({
+        ...current,
+        sourceLabel: usesMountedLocation && sourceType === "nas" ? plan.device_name : "",
+      }));
       setSourceCreationPhase("review");
 
       if (plan.plan_status === "blocked") {
@@ -2408,7 +2414,14 @@ export default function IngestionView() {
   ]);
 
   const handleCreateSource = useCallback(async (confirmReview = false) => {
-    const deviceName = createSourceForm.sourceLabel.trim();
+    const deviceName = (
+      createSourceForm.operatorSourceType === "nas"
+        && mountedSourceRuntime === "available"
+        && linuxSourceLocationId !== ""
+        && sourceCreationPlan
+        ? sourceCreationPlan.device_name
+        : createSourceForm.sourceLabel
+    ).trim();
     setSourceCreationError(null);
     setSourceCreationResult(null);
     setCreatedIcloudSource(null);
@@ -4728,24 +4741,36 @@ export default function IngestionView() {
                   && sourceCreationPlan.possible_matches.length === 0
                   && sourceCreationPlan.plan_status !== "blocked" && (
                   <div className={styles.createSourceDecision}>
-                    <label className={styles.formLabel}>
-                      {getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)}
-                      <input
-                        className={styles.formInput}
-                        autoComplete="off"
-                        value={createSourceForm.sourceLabel}
-                        placeholder={sourceCreationPlan.recognized_source_type === "removable"
-                          ? "Name this recognized medium"
-                          : sourceCreationPlan.recognized_source_type === "optical"
-                            ? "Name this recognized disc"
-                            : "Name this recognized device"}
-                        onChange={(event) => {
-                          setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
-                          setSourceCreationNamingAction("create_new");
-                          setSourceCreationError(null);
-                        }}
-                      />
-                    </label>
+                    {createSourceForm.operatorSourceType === "nas"
+                      && mountedSourceRuntime === "available"
+                      && linuxSourceLocationId !== "" ? (
+                      <div className={styles.detailCard}>
+                        <span className={styles.detailLabel}>NAS Location Name</span>
+                        <span>{sourceCreationPlan.device_name}</span>
+                        <span className={styles.helperText}>
+                          The registered NAS location supplies this durable Source device name.
+                        </span>
+                      </div>
+                    ) : (
+                      <label className={styles.formLabel}>
+                        {getSourceCreationDeviceLabel(sourceCreationPlan.recognized_source_type)}
+                        <input
+                          className={styles.formInput}
+                          autoComplete="off"
+                          value={createSourceForm.sourceLabel}
+                          placeholder={sourceCreationPlan.recognized_source_type === "removable"
+                            ? "Name this recognized medium"
+                            : sourceCreationPlan.recognized_source_type === "optical"
+                              ? "Name this recognized disc"
+                              : "Name this recognized device"}
+                          onChange={(event) => {
+                            setCreateSourceForm((current) => ({ ...current, sourceLabel: event.target.value }));
+                            setSourceCreationNamingAction("create_new");
+                            setSourceCreationError(null);
+                          }}
+                        />
+                      </label>
+                    )}
                   </div>
                 )}
 
@@ -4842,6 +4867,9 @@ export default function IngestionView() {
                         || sourceCreationNamingAction == null
                         || (sourceCreationAllowsEditableSourceName(sourceCreationPlan) && !sourceCreationSourceName.trim())
                         || ((sourceCreationNamingAction === "create_new" || sourceCreationNamingAction === "rename_existing")
+                          && !(createSourceForm.operatorSourceType === "nas"
+                            && mountedSourceRuntime === "available"
+                            && linuxSourceLocationId !== "")
                           && !createSourceForm.sourceLabel.trim())
                         || (sourceCreationPlan.source_type_mismatch && !sourceCreationUseRegisteredType)
                         || (sourceCreationRequiresReviewAcknowledgment(sourceCreationPlan)

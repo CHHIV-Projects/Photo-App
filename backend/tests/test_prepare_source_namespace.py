@@ -75,12 +75,26 @@ class GeneralizedNamespaceIdentityTests(unittest.TestCase):
 $NAS_AUTHORITY $NAS_SOURCE cifs / 0:52 shared"
               fi
             }
-            timeout() { activated=$((activated + 1)); }
+            timeout() {
+              activated=$((activated + 1))
+              activation_command="$*"
+            }
             require_authority
             [[ "$activated" == 1 && "$AUTHORITY_MAJOR_MINOR" == 0:52 ]]
+            [[ "$activation_command" == "--foreground 30 find $NAS_AUTHORITY -mindepth 1 -maxdepth 1 -print -quit" ]]
             """
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_automount_activation_opens_only_exact_authority_and_suppresses_output(self) -> None:
+        script = SCRIPT.read_text(encoding="utf-8")
+        expected = (
+            'timeout --foreground 30 find "${NAS_AUTHORITY}" '
+            '-mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>&1'
+        )
+        self.assertIn(expected, script)
+        self.assertNotIn("stat --format='%F' -- \"${NAS_AUTHORITY}\"", script)
+        self.assertNotIn('find "${SOURCE_NAMESPACE}"', script)
 
     def test_wrong_authority_fails_without_automount_retry(self) -> None:
         result = run_bash(
