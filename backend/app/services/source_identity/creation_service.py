@@ -16,6 +16,7 @@ from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.ingestion_source import IngestionSource
+from app.models.nas_registration import NasShareRegistration
 from app.models.source_endpoint import (
     AccessNode,
     SourceEndpoint,
@@ -1408,6 +1409,35 @@ class SourceCreationService:
             )
 
         endpoint = context.selected_endpoint
+        nas_share_registration: NasShareRegistration | None = None
+        if (
+            plan.recognized_source_type == "nas"
+            and probe.location_id
+            and inspect(self._db.connection()).has_table("nas_share_registrations")
+        ):
+            nas_share_registration = self._db.scalar(
+                select(NasShareRegistration).where(
+                    NasShareRegistration.location_id == probe.location_id,
+                    NasShareRegistration.status == "registered",
+                )
+            )
+            if nas_share_registration is not None and (
+                nas_share_registration.identity_fingerprint_hash != context.fingerprint.hash_value
+                or nas_share_registration.identity_fingerprint_version != context.fingerprint.version
+            ):
+                return self._blocked_confirm_response(
+                    plan,
+                    [_message("nas_registration_identity_mismatch", "Registered NAS identity changed before Source creation.")],
+                )
+            if (
+                nas_share_registration is not None
+                and nas_share_registration.source_endpoint_id is not None
+                and (endpoint is None or endpoint.id != nas_share_registration.source_endpoint_id)
+            ):
+                return self._blocked_confirm_response(
+                    plan,
+                    [_message("nas_registration_endpoint_conflict", "Registered NAS location is linked to a different Source device.")],
+                )
         created_endpoint = False
         reused_endpoint = endpoint is not None
         upgraded_legacy_endpoint = False
@@ -1575,6 +1605,11 @@ class SourceCreationService:
             self._db.add(duplicate_source)
             inactivated_duplicate_source_ids.append(duplicate_source.id)
         if inactivated_duplicate_source_ids:
+            self._db.flush()
+
+        if nas_share_registration is not None and nas_share_registration.source_endpoint_id is None:
+            nas_share_registration.source_endpoint_id = endpoint.id
+            self._db.add(nas_share_registration)
             self._db.flush()
 
         self._db.commit()

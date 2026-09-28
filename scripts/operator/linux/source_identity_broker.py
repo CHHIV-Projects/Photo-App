@@ -23,10 +23,9 @@ from typing import Any
 
 PROTOCOL_VERSION = 1
 PROVIDER_NAME = "linux_stable_mount_v1"
-PROVIDER_VERSION = "1"
+PROVIDER_VERSION = "2"
 MAX_MESSAGE_BYTES = 256 * 1024
 COMMAND_TIMEOUT_SECONDS = 3.0
-CANONICAL_NAS_SOURCE = "//192.168.1.171/PhotoOrganizer"
 FINGERPRINT_PREFIX = "sha256:"
 NAS_FINGERPRINT_VERSION = "source_endpoint_identity_v1"
 LOCAL_FINGERPRINT_VERSION = "linux_filesystem_uuid_v1"
@@ -106,6 +105,10 @@ class LinuxSourceIdentityBroker:
             if set(request) != {"protocol_version", "action"}:
                 raise BrokerError("malformed_request", "Location listing does not accept path input.")
             locations = [self._safe_listing(item) for item in self._locations.values()]
+        elif action == "discover_nas":
+            if set(request) != {"protocol_version", "action"}:
+                raise BrokerError("malformed_request", "NAS discovery does not accept path input.")
+            return self._discover_nas()
         elif action == "probe":
             location_id = request.get("location_id")
             if not isinstance(location_id, str) or location_id not in self._locations:
@@ -131,10 +134,16 @@ class LinuxSourceIdentityBroker:
         try:
             return self._probe_location(location, "", listing=True)
         except BrokerError as exc:
+            unavailable_codes = {
+                "mount_evidence_missing",
+                "mount_evidence_unavailable",
+                "nas_location_unavailable",
+                "source_path_unavailable",
+            }
             return _location_response(
                 location,
                 self._access_node,
-                status="blocked",
+                status="unavailable" if exc.code in unavailable_codes else "blocked",
                 status_message=exc.message,
                 relative_root="",
                 blockers=[{"code": exc.code, "message": exc.message}],
@@ -286,15 +295,22 @@ class LinuxSourceIdentityBroker:
 
     def _verify_nas(self, location: dict[str, Any], row: dict[str, str]) -> dict[str, Any]:
         if row["fstype"].lower() != "cifs":
+            if row["target"] != location["host_slot"]:
+                raise BrokerError("nas_location_unavailable", "Registered NAS location is not currently mounted.")
             raise BrokerError("nas_filesystem_type_mismatch", "Configured NAS filesystem is not active CIFS.")
         canonical = _canonical_cifs_source(row["source"])
-        if canonical != location["canonical_source"] or canonical != CANONICAL_NAS_SOURCE:
+        if canonical.casefold() != location["canonical_source"].casefold():
             raise BrokerError(
                 "nas_source_mismatch",
                 "Configured NAS source does not match the approved canonical share.",
             )
         authoritative_rows = self._findmnt_rows(location["authoritative_target"])
-        authoritative = _select_active_row(authoritative_rows, location["authoritative_target"])
+        try:
+            authoritative = _select_active_row(authoritative_rows, location["authoritative_target"])
+        except BrokerError as exc:
+            if exc.code == "mount_evidence_ambiguous":
+                raise BrokerError("nas_location_unavailable", "Registered NAS authority is not currently mounted.") from exc
+            raise
         if authoritative["fstype"].lower() != "cifs" or _canonical_cifs_source(authoritative["source"]) != canonical:
             raise BrokerError(
                 "nas_authoritative_mount_mismatch",
@@ -305,7 +321,6 @@ class LinuxSourceIdentityBroker:
                 "nas_mount_identity_mismatch",
                 "NAS stable slot and authoritative mount identities differ.",
             )
-        fingerprint = versioned_hash(NAS_FINGERPRINT_VERSION, ["nas", "192.168.1.171", "photoorganizer"])
         return {
             "filesystem_type": "cifs",
             "mount_source_masked": canonical,
@@ -316,7 +331,55 @@ class LinuxSourceIdentityBroker:
             "authoritative_mount_verified": True,
             "namespace_mapping_verified": True,
             "readable": True,
-            "_identity_fingerprint_hash": fingerprint,
+            "_identity_fingerprint_hash": location.get("identity_fingerprint_hash")
+            or versioned_hash(NAS_FINGERPRINT_VERSION, ["nas", "192.168.1.171", "photoorganizer"]),
+        }
+
+    def _discover_nas(self) -> dict[str, Any]:
+        result = self._runner.run([
+            "/usr/bin/avahi-browse",
+            "--resolve",
+            "--terminate",
+            "--parsable",
+            "_smb._tcp",
+        ])
+        if result.returncode != 0:
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "action": "discover_nas",
+                "provider_name": PROVIDER_NAME,
+                "provider_version": PROVIDER_VERSION,
+                "candidates": [],
+                "blockers": [{
+                    "code": "nas_discovery_unavailable",
+                    "message": "Bounded NAS discovery is unavailable; enter the NAS manually.",
+                }],
+            }
+        candidates: dict[str, dict[str, str]] = {}
+        for line in result.stdout.splitlines():
+            fields = line.split(";")
+            if len(fields) < 9 or fields[0] != "=":
+                continue
+            service_name, host, address = fields[3], fields[6], fields[7]
+            if not service_name or not host or not address:
+                continue
+            normalized_host = host.rstrip(".").casefold()
+            candidate_id = versioned_hash("nas_discovery_candidate_v1", [normalized_host])
+            candidates[candidate_id] = {
+                "candidate_id": candidate_id,
+                "suggested_name": service_name[:255],
+                "network_host": normalized_host,
+                "address_hint": address,
+            }
+            if len(candidates) >= 16:
+                break
+        return {
+            "protocol_version": PROTOCOL_VERSION,
+            "action": "discover_nas",
+            "provider_name": PROVIDER_NAME,
+            "provider_version": PROVIDER_VERSION,
+            "candidates": list(candidates.values()),
+            "blockers": [],
         }
 
 
@@ -369,7 +432,7 @@ def _access_node_evidence(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(config, dict) or config.get("protocol_version") != PROTOCOL_VERSION:
+    if not isinstance(config, dict) or config.get("protocol_version") not in {1, 2}:
         raise BrokerError("configuration_invalid", "Broker configuration version is invalid.")
     allowed = {
         "protocol_version",
@@ -389,6 +452,10 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(locations, list) or not locations or len(locations) > 64:
         raise BrokerError("configuration_invalid", "Broker location allowlist is missing or exceeds its safe bound.")
     ids: set[str] = set()
+    host_slots: set[str] = set()
+    runtime_slots: set[str] = set()
+    authority_targets: set[str] = set()
+    canonical_sources: set[str] = set()
     for item in locations:
         common = {"location_id", "source_type", "display_name", "host_slot", "runtime_slot", "filesystem_type"}
         if not isinstance(item, dict) or not common.issubset(item):
@@ -407,6 +474,10 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
             or posixpath.normpath(runtime_slot) != runtime_slot
         ):
             raise BrokerError("configuration_invalid", "Broker location is outside the fixed Source namespace.")
+        if host_slot in host_slots or runtime_slot in runtime_slots:
+            raise BrokerError("configuration_invalid", "Broker location slot identity is duplicated.")
+        host_slots.add(host_slot)
+        runtime_slots.add(runtime_slot)
         if item["source_type"] == "local":
             if (
                 set(item) != common | {"filesystem_uuid", "slot_device", "slot_inode"}
@@ -418,10 +489,49 @@ def _validate_config(config: dict[str, Any]) -> dict[str, Any]:
             ):
                 raise BrokerError("configuration_invalid", "Local location requires one strong filesystem UUID.")
         elif item["source_type"] == "nas":
-            if set(item) != common | {"canonical_source", "authoritative_target"}:
+            legacy_fields = common | {"canonical_source", "authoritative_target"}
+            registered_fields = legacy_fields | {
+                "nas_appliance_id",
+                "nas_share_id",
+                "server_guid_hash",
+                "server_guid_masked",
+                "identity_fingerprint_hash",
+                "identity_fingerprint_version",
+            }
+            item_fields = frozenset(item)
+            if item_fields not in {frozenset(legacy_fields), frozenset(registered_fields)}:
                 raise BrokerError("configuration_invalid", "NAS location configuration is invalid.")
-            if item["canonical_source"] != CANONICAL_NAS_SOURCE or item["filesystem_type"] != "cifs":
+            if item["filesystem_type"] != "cifs":
                 raise BrokerError("configuration_invalid", "NAS location is not the approved canonical CIFS share.")
+            canonical = str(item["canonical_source"])
+            authority = str(item["authoritative_target"])
+            if (
+                not canonical.startswith("//")
+                or canonical.count("/") != 3
+                or (
+                    not authority.startswith("/mnt/nas/photo-organizer-")
+                    and not (
+                        item["location_id"] == "linux-nas-photo-organizer"
+                        and authority == "/mnt/nas/photo-organizer"
+                    )
+                )
+                or posixpath.normpath(authority) != authority
+                or authority in authority_targets
+                or canonical.casefold() in canonical_sources
+            ):
+                raise BrokerError("configuration_invalid", "NAS authority identity is unsafe or duplicated.")
+            authority_targets.add(authority)
+            canonical_sources.add(canonical.casefold())
+            if item_fields == frozenset(registered_fields):
+                if (
+                    not str(item["server_guid_hash"]).startswith(FINGERPRINT_PREFIX)
+                    or not str(item["identity_fingerprint_hash"]).startswith(FINGERPRINT_PREFIX)
+                    or item["identity_fingerprint_version"] not in {
+                        NAS_FINGERPRINT_VERSION,
+                        "registered_nas_share_v1",
+                    }
+                ):
+                    raise BrokerError("configuration_invalid", "Registered NAS identity evidence is invalid.")
         else:
             raise BrokerError("configuration_invalid", "Only Local and NAS locations are implemented.")
     return config
@@ -475,9 +585,9 @@ def _location_response(
         identifier_masked = mount["filesystem_uuid_masked"]
     elif mount and location["source_type"] == "nas":
         fingerprint = mount.pop("_identity_fingerprint_hash")
-        fingerprint_version = NAS_FINGERPRINT_VERSION
+        fingerprint_version = location.get("identity_fingerprint_version", NAS_FINGERPRINT_VERSION)
         identifier_type = "nas_server_share"
-        identifier_masked = CANONICAL_NAS_SOURCE
+        identifier_masked = location["canonical_source"]
     return {
         "location_id": location["location_id"],
         "source_type": location["source_type"],

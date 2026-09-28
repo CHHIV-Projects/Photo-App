@@ -38,6 +38,10 @@ import type {
   SourceIdentityProbeRequest,
   SourceIdentityProbeResponse,
   LinuxSourceLocationsResponse,
+  NasDiscoveryResponse,
+  NasPendingRegistrationRequest,
+  NasPendingRegistrationResponse,
+  NasRegistrationListResponse,
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
   SourceIntakeSourcesResponse,
@@ -1158,6 +1162,25 @@ export function createSourceProfile(
 
 export function getLinuxSourceLocations(): Promise<LinuxSourceLocationsResponse> {
   return apiRequest<LinuxSourceLocationsResponse>("/api/admin/source-identity/locations");
+}
+
+export function getNasRegistrations(): Promise<NasRegistrationListResponse> {
+  return apiRequest<NasRegistrationListResponse>("/api/admin/nas-registrations");
+}
+
+export function discoverNasAppliances(): Promise<NasDiscoveryResponse> {
+  return apiRequest<NasDiscoveryResponse>("/api/admin/nas-registrations/discover", {
+    method: "POST",
+  });
+}
+
+export function createNasPendingRegistration(
+  payload: NasPendingRegistrationRequest,
+): Promise<NasPendingRegistrationResponse> {
+  return apiRequest<NasPendingRegistrationResponse>("/api/admin/nas-registrations/pending", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function probeSourceIdentity(

@@ -27,6 +27,7 @@ from app.windows_helper_shared.identity.fingerprints import (
 
 
 LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION = "linux_filesystem_uuid_v1"
+REGISTERED_NAS_SHARE_FINGERPRINT_VERSION = "registered_nas_share_v1"
 STRONG_FINGERPRINT_STRENGTHS = {"strong"}
 
 
@@ -75,7 +76,10 @@ def fingerprint_from_probe(probe: SourceIdentityProbeResponse) -> FingerprintRes
                 or (
                     probe.source_type == "nas"
                     and item.code == "linux_nas_canonical_share_present"
-                    and item.fingerprint_version == FINGERPRINT_VERSION
+                    and item.fingerprint_version in {
+                        FINGERPRINT_VERSION,
+                        REGISTERED_NAS_SHARE_FINGERPRINT_VERSION,
+                    }
                 )
             )
         ):

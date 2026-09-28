@@ -8,7 +8,7 @@ import json
 import socket
 
 MAX_BYTES = 256 * 1024
-EXPECTED_LOCATIONS = {"linux-local-server-photos", "linux-nas-photo-organizer"}
+REQUIRED_COMPATIBILITY_LOCATIONS = {"linux-local-server-photos", "linux-nas-photo-organizer"}
 
 
 def fail(message: str) -> None:
@@ -45,7 +45,7 @@ def verify_envelope(payload: dict[str, object]) -> None:
     if (
         payload.get("protocol_version") != 1
         or payload.get("provider_name") != "linux_stable_mount_v1"
-        or payload.get("provider_version") != "1"
+        or payload.get("provider_version") != "2"
     ):
         fail("broker protocol/provider identity differs from the approved contract.")
 
@@ -65,8 +65,12 @@ def main() -> None:
     if not isinstance(locations, list):
         fail("broker location inventory is malformed.")
     ids = [item.get("location_id") for item in locations if isinstance(item, dict)]
-    if len(ids) != len(EXPECTED_LOCATIONS) or set(ids) != EXPECTED_LOCATIONS:
-        fail("broker location inventory differs from the approved exact set.")
+    if (
+        not REQUIRED_COMPATIBILITY_LOCATIONS.issubset(set(ids))
+        or len(ids) != len(set(ids))
+        or not 2 <= len(ids) <= 64
+    ):
+        fail("broker location inventory is missing compatibility locations or is not uniquely bounded.")
     statuses = sorted(str(item.get("status", "invalid")) for item in locations)
     if any(status not in {"available", "unavailable", "blocked", "error"} for status in statuses):
         fail("broker location status is malformed.")
@@ -77,7 +81,7 @@ def main() -> None:
         if isinstance(node, dict) and isinstance(node.get("access_node_id"), str)
     }
     if (
-        len(access_nodes) != len(EXPECTED_LOCATIONS)
+        len(access_nodes) != len(ids)
         or len(access_node_ids) != 1
         or not next(iter(access_node_ids), "").startswith("linux-access-node:")
         or any(

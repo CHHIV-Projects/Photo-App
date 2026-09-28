@@ -73,6 +73,7 @@ import type {
 import { normalSelectorSourceTypes, sourcePresentationType, sourceWorkbenchKind } from "@/lib/source-provider-ui";
 
 import IcloudRunWorkflowPanel from "./IcloudRunWorkflowPanel";
+import NasRegistration from "./NasRegistration";
 import WindowsComputerEnrollment from "./WindowsComputerEnrollment";
 import WindowsSourceCreation from "./WindowsSourceCreation";
 import WindowsSourceWorkbench from "./WindowsSourceWorkbench";
@@ -1375,28 +1376,23 @@ export default function IngestionView() {
   const [linuxSourceLocationId, setLinuxSourceLocationId] = useState("");
   const [linuxSourceRelativeRoot, setLinuxSourceRelativeRoot] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    void getLinuxSourceLocations()
-      .then((response) => {
-        if (!cancelled) {
-          setLinuxSourceLocations(response);
-          setMountedSourceRuntime(
-            response.os_family === "linux" && response.provider_name === "linux_stable_mount_v1"
-              ? "available"
-              : "unavailable",
-          );
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setMountedSourceRuntime("unavailable");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
+  const loadLinuxSourceLocations = useCallback(async () => {
+    try {
+      const response = await getLinuxSourceLocations();
+      setLinuxSourceLocations(response);
+      setMountedSourceRuntime(
+        response.os_family === "linux" && response.provider_name === "linux_stable_mount_v1"
+          ? "available"
+          : "unavailable",
+      );
+    } catch {
+      setMountedSourceRuntime("unavailable");
+    }
   }, []);
+
+  useEffect(() => {
+    void loadLinuxSourceLocations();
+  }, [loadLinuxSourceLocations]);
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>("create");
@@ -4397,6 +4393,10 @@ export default function IngestionView() {
                   <span>Photo Organizer Server</span>
                   <span className={styles.helperText}>Choose an approved photo location on the machine hosting Photo Organizer.</span>
                 </div>
+              )}
+
+              {createSourceForm.operatorSourceType === "nas" && (
+                <NasRegistration onLocationsChanged={loadLinuxSourceLocations} />
               )}
 
               {mountedSourceRuntime === "available" && linuxSourceLocations !== null

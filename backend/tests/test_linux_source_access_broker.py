@@ -269,6 +269,73 @@ class LinuxSourceIdentityBrokerTests(unittest.TestCase):
                 }
             )
 
+    def test_one_unavailable_registered_nas_does_not_hide_healthy_locations(self) -> None:
+        second = {
+            "location_id": "linux-nas-2222222222222222",
+            "source_type": "nas",
+            "display_name": "Offline Archive",
+            "host_slot": "/mnt/photo-organizer-sources/nas/2222222222222222",
+            "runtime_slot": "/app/sources/nas/2222222222222222",
+            "filesystem_type": "cifs",
+            "canonical_source": "//archive.example/Archive",
+            "authoritative_target": "/mnt/nas/photo-organizer-2222222222222222",
+            "nas_appliance_id": "11111111-1111-4111-8111-111111111111",
+            "nas_share_id": "22222222-2222-4222-8222-222222222222",
+            "server_guid_hash": "sha256:" + "1" * 64,
+            "server_guid_masked": "sha256:…111111111111",
+            "identity_fingerprint_hash": "sha256:" + "2" * 64,
+            "identity_fingerprint_version": "registered_nas_share_v1",
+        }
+        self.config["protocol_version"] = 2
+        self.config["locations"].append(second)
+
+        class OneOfflineRunner(FakeRunner):
+            def run(self, argv: list[str]):
+                if argv[0] == "findmnt" and "2222222222222222" in argv[argv.index("--target") + 1]:
+                    return broker_module.CommandResult(1, "")
+                return super().run(argv)
+
+        result = self._broker(OneOfflineRunner()).handle({
+            "protocol_version": 1,
+            "action": "list_locations",
+        })
+        statuses = {item["location_id"]: item["status"] for item in result["locations"]}
+        self.assertEqual(statuses["linux-local-server-photos"], "available")
+        self.assertEqual(statuses["linux-nas-photo-organizer"], "available")
+        self.assertEqual(statuses["linux-nas-2222222222222222"], "unavailable")
+
+    def test_discovery_is_bounded_deduplicated_and_creates_no_registration(self) -> None:
+        class DiscoveryRunner(FakeRunner):
+            def run(self, argv: list[str]):
+                if argv[0] == "/usr/bin/avahi-browse":
+                    return broker_module.CommandResult(
+                        0,
+                        "=;eth0;IPv4;Family NAS;_smb._tcp;local;family-nas.local;192.0.2.10;445;\n"
+                        "=;eth0;IPv4;Duplicate;_smb._tcp;local;family-nas.local;192.0.2.10;445;\n"
+                        "malformed advertisement\n",
+                    )
+                return super().run(argv)
+
+        before = json.dumps(self.config, sort_keys=True)
+        result = self._broker(DiscoveryRunner()).handle({
+            "protocol_version": 1,
+            "action": "discover_nas",
+        })
+        self.assertEqual(result["action"], "discover_nas")
+        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(result["candidates"][0]["network_host"], "family-nas.local")
+        self.assertEqual(json.dumps(self.config, sort_keys=True), before)
+
+    def test_conflicting_generalized_location_id_is_rejected(self) -> None:
+        duplicate = dict(self.config["locations"][1])
+        duplicate["canonical_source"] = "//archive.example/Archive"
+        duplicate["authoritative_target"] = "/mnt/nas/photo-organizer-duplicate"
+        duplicate["host_slot"] = "/mnt/photo-organizer-sources/nas/duplicate"
+        duplicate["runtime_slot"] = "/app/sources/nas/duplicate"
+        self.config["locations"].append(duplicate)
+        with self.assertRaisesRegex(broker_module.BrokerError, "duplicated"):
+            self._broker()
+
     def test_wrong_local_filesystem_type_fails_closed(self) -> None:
         class WrongLocalFilesystemRunner(FakeRunner):
             def run(self, argv: list[str]):

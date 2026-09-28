@@ -1695,6 +1695,58 @@ export interface LinuxSourceLocationsResponse {
   blockers: Array<{ code: string; message: string }>;
 }
 
+export interface NasRegistrationSummary {
+  appliance_id: string;
+  share_id: string;
+  appliance_name: string;
+  location_name: string;
+  share_name: string;
+  location_id: string;
+  registration_status: "registered" | "retired";
+  availability: "available" | "unavailable" | "identity_conflict" | "blocked";
+  status_message: string;
+  source_endpoint_id: number | null;
+}
+
+export interface NasRegistrationListResponse {
+  registrations: NasRegistrationSummary[];
+}
+
+export interface NasDiscoveryCandidate {
+  candidate_id: string;
+  suggested_name: string;
+  network_host: string;
+  address_hint: string;
+}
+
+export interface NasDiscoveryResponse {
+  status: "completed" | "unavailable";
+  candidates: NasDiscoveryCandidate[];
+  manual_entry_available: boolean;
+  messages: Array<{ code: string; message: string }>;
+}
+
+export interface NasPendingRegistrationRequest {
+  network_host: string;
+  share_name: string;
+  appliance_name: string;
+  location_name: string;
+}
+
+export interface NasPendingRegistrationResponse {
+  registration_id: string;
+  state: "pending" | "completed" | "cancelled" | "expired";
+  appliance_name: string;
+  location_name: string;
+  share_name: string;
+  server_guid_masked: string;
+  reuses_registered_appliance: boolean;
+  operation: "create_share" | "update_network_host";
+  expires_at: string;
+  operator_command: string;
+  messages: Array<{ code: string; message: string }>;
+}
+
 export interface SourceIdentityProbeEvidenceItem {
   category: string;
   code: string;

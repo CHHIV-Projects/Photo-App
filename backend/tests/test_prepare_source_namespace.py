@@ -1,4 +1,4 @@
-"""Focused safety tests for the clean Mounted Source namespace mechanism."""
+"""Focused safety tests for generalized per-location Source namespace setup."""
 
 from __future__ import annotations
 
@@ -19,288 +19,157 @@ def run_bash(body: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-class NamespaceIdentityValidationTests(unittest.TestCase):
-    def test_exact_authority_with_optional_autofs_row_is_accepted(self) -> None:
+class GeneralizedNamespaceIdentityTests(unittest.TestCase):
+    def test_one_exact_registered_slot_is_accepted(self) -> None:
         result = run_bash(
-            """rows=$'/mnt/nas/photo-organizer systemd-1 autofs / 0:41 shared\\n"""
-            """/mnt/nas/photo-organizer //192.168.1.171/PhotoOrganizer cifs / 0:52 shared'; """
-            """validate_authority_rows "$rows"; [[ "$authority_major_minor" == "0:52" ]]"""
+            """
+            NAS_SLOT=/mnt/photo-organizer-sources/nas/abc
+            NAS_SOURCE=//nas.example/Photos
+            AUTHORITY_MAJOR_MINOR=0:52
+            query_mountpoint() {
+              local -n result_ref="$3"
+              result_ref="$NAS_SLOT $NAS_SOURCE cifs / 0:52 shared"
+            }
+            require_slot
+            """
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_missing_duplicate_or_wrong_authority_is_rejected(self) -> None:
+    def test_wrong_duplicate_or_unshared_slot_is_rejected(self) -> None:
+        exact = "/mnt/photo-organizer-sources/nas/abc //nas.example/Photos cifs / 0:52 shared"
         cases = [
-            "/mnt/nas/photo-organizer systemd-1 autofs / 0:41 shared",
-            (
-                "/mnt/nas/photo-organizer //192.168.1.171/PhotoOrganizer cifs / 0:52 shared\n"
-                "/mnt/nas/photo-organizer //192.168.1.171/PhotoOrganizer cifs / 0:52 shared"
-            ),
-            "/mnt/nas/photo-organizer //HENDERSON-NAS/PhotoOrganizer cifs / 0:52 shared",
-            "/mnt/nas/photo-organizer //192.168.1.171/PhotoOrganizer nfs / 0:52 shared",
+            exact + "\n" + exact,
+            exact.replace("0:52", "0:53"),
+            exact.replace("/Photos", "/Wrong"),
+            exact.replace(" shared", " private"),
+            exact.replace(" cifs ", " nfs "),
         ]
         for rows in cases:
             with self.subTest(rows=rows):
-                result = run_bash(f"rows=$'{rows}'; ! validate_authority_rows \"$rows\"")
+                escaped = rows.replace("'", "'\\''")
+                result = run_bash(
+                    f"""
+                    NAS_SLOT=/mnt/photo-organizer-sources/nas/abc
+                    NAS_SOURCE=//nas.example/Photos
+                    AUTHORITY_MAJOR_MINOR=0:52
+                    query_mountpoint() {{ local -n result_ref="$3"; result_ref=$'{escaped}'; }}
+                    ! require_slot
+                    """
+                )
                 self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_exact_inactive_automount_row_is_recognized_but_not_active_identity(self) -> None:
-        row = "/mnt/nas/photo-organizer systemd-1 autofs / 0:41 shared"
-        result = run_bash(
-            f"rows=$'{row}'; validate_inactive_authority_rows \"$rows\"; "
-            "! validate_authority_rows \"$rows\""
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_inactive_automount_is_activated_before_strict_validation(self) -> None:
+    def test_inactive_automount_gets_one_bounded_activation_attempt(self) -> None:
         result = run_bash(
             """
-            query_count=0
+            NAS_AUTHORITY=/mnt/nas/photo-organizer-abc
+            NAS_SOURCE=//nas.example/Photos
+            calls=0
             activated=0
             query_mountpoint() {
               local -n result_ref="$3"
-              query_count=$((query_count + 1))
-              if ((query_count == 1)); then
+              calls=$((calls + 1))
+              if ((calls == 1)); then
                 result_ref="$NAS_AUTHORITY systemd-1 autofs / 0:41 shared"
               else
                 result_ref="$NAS_AUTHORITY systemd-1 autofs / 0:41 shared
 $NAS_AUTHORITY $NAS_SOURCE cifs / 0:52 shared"
               fi
             }
-            timeout() { [[ "${*: -1}" == "$NAS_AUTHORITY" ]]; activated=1; }
-            require_authoritative_nas
-            [[ "$activated" == "1" ]]
-            [[ "$authority_major_minor" == "0:52" ]]
+            timeout() { activated=$((activated + 1)); }
+            require_authority
+            [[ "$activated" == 1 && "$AUTHORITY_MAJOR_MINOR" == 0:52 ]]
             """
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "")
 
-    def test_wrong_authority_fails_without_dereferencing_target(self) -> None:
+    def test_wrong_authority_fails_without_automount_retry(self) -> None:
         result = run_bash(
             """
+            NAS_AUTHORITY=/mnt/nas/photo-organizer-abc
+            NAS_SOURCE=//nas.example/Photos
             query_mountpoint() {
               local -n result_ref="$3"
-              result_ref="$NAS_AUTHORITY //192.168.1.171/Wrong cifs / 0:52 shared"
+              result_ref="$NAS_AUTHORITY //other.example/Photos cifs / 0:52 shared"
             }
             timeout() { printf 'unexpected-activation\n'; return 97; }
-            require_authoritative_nas
+            require_authority
             """
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
-        self.assertIn("missing, duplicated, or conflicting", result.stderr)
+        self.assertIn("identity conflicts", result.stderr)
 
-    def test_one_exact_nas_slot_is_accepted(self) -> None:
-        row = (
-            "/mnt/photo-organizer-sources/nas/photo-organizer "
-            "//192.168.1.171/PhotoOrganizer cifs / 0:52 shared"
+    def test_unavailable_authority_returns_transient_status(self) -> None:
+        result = run_bash(
+            """
+            NAS_AUTHORITY=/mnt/nas/photo-organizer-abc
+            NAS_SOURCE=//nas.example/Photos
+            query_mountpoint() { return 1; }
+            require_authority
+            """
         )
-        result = run_bash(f"rows=$'{row}'; validate_nas_slot_rows \"$rows\" 0:52 shared")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_duplicate_wrong_identity_or_wrong_propagation_slot_is_rejected(self) -> None:
-        exact = (
-            "/mnt/photo-organizer-sources/nas/photo-organizer "
-            "//192.168.1.171/PhotoOrganizer cifs / 0:52 shared"
-        )
-        cases = [
-            exact + "\n" + exact,
-            exact.replace("0:52", "0:53"),
-            exact.replace("//192.168.1.171/PhotoOrganizer", "//192.168.1.171/Wrong"),
-            exact.replace(" shared", " private"),
-        ]
-        for rows in cases:
-            with self.subTest(rows=rows):
-                result = run_bash(f"rows=$'{rows}'; ! validate_nas_slot_rows \"$rows\" 0:52 shared")
-                self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_namespace_requires_one_exact_identity_and_propagation(self) -> None:
-        exact = "/mnt/photo-organizer-sources UUID-1 ext4 private"
-        accepted = run_bash(f"rows=$'{exact}'; validate_namespace_rows \"$rows\" uuid-1 EXT4 private")
-        self.assertEqual(accepted.returncode, 0, accepted.stderr)
-        for rows in (exact + "\n" + exact, exact.replace("UUID-1", "UUID-2"), exact.replace("private", "shared")):
-            with self.subTest(rows=rows):
-                rejected = run_bash(
-                    f"rows=$'{rows}'; ! validate_namespace_rows \"$rows\" uuid-1 ext4 private"
-                )
-                self.assertEqual(rejected.returncode, 0, rejected.stderr)
+        self.assertEqual(result.returncode, 75)
+        self.assertIn("RETRY:", result.stderr)
 
 
-class NamespaceTopologyContractTests(unittest.TestCase):
+class GeneralizedNamespaceTopologyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.script = SCRIPT.read_text(encoding="utf-8")
-        cls.topology = cls.script.split("prepare_mount_topology() {", 1)[1].split("\nmain() {", 1)[0]
+        cls.prepare = cls.script.split("prepare_location() {", 1)[1].split("\nmain() {", 1)[0]
 
-    def test_private_bind_validate_shared_validate_order(self) -> None:
-        private = self.topology.index('mount --make-rprivate "${SOURCE_NAMESPACE}"')
-        bind = self.topology.index('mount --bind "${NAS_AUTHORITY}" "${NAS_SLOT}"')
-        pre_share_validation = self.topology.index('require_nas_slot "any"')
-        shared = self.topology.index('mount --make-rshared "${SOURCE_NAMESPACE}"')
-        final_namespace_validation = self.topology.index('require_namespace "shared"', shared)
-        final_slot_validation = self.topology.index('require_nas_slot "shared"', shared)
-        self.assertLess(private, bind)
-        self.assertLess(bind, pre_share_validation)
-        self.assertLess(pre_share_validation, shared)
-        self.assertLess(shared, final_namespace_validation)
-        self.assertLess(final_namespace_validation, final_slot_validation)
+    def test_paths_come_from_protected_config_not_browser_arguments(self) -> None:
+        self.assertIn('load_nas_location "${LOCATION_ID}"', self.script)
+        self.assertIn('matches = [item for item in locations if item.get("location_id") == location_id]', self.script)
+        self.assertNotIn("eval ", self.script)
+        self.assertNotIn("bash -c", self.script)
 
-    def test_preexisting_slot_requires_exact_unique_shared_evidence(self) -> None:
-        self.assertIn(
-            'validate_nas_slot_rows "${slot_rows}" "${authority_major_minor}" "shared"',
-            self.topology,
-        )
-        self.assertIn('fail "Pre-existing NAS slot is not one exact shared mount."', self.topology)
-
-    def test_existing_exact_slot_is_not_prepared_or_rebound(self) -> None:
+    def test_existing_exact_slot_returns_without_metadata_or_rebind(self) -> None:
         result = run_bash(
             """
-            query_mountpoint() {
-              local target="$1"
-              local -n result_ref="$3"
-              if [[ "$target" == "$SOURCE_NAMESPACE" ]]; then
-                result_ref="$SOURCE_NAMESPACE UUID-1 ext4 shared"
-              else
-                result_ref="$NAS_SLOT $NAS_SOURCE cifs / 0:52 shared"
-              fi
-            }
-            install() { printf 'unexpected-install:%s\\n' "$*"; return 97; }
-            chmod() { printf 'unexpected-chmod:%s\\n' "$*"; return 96; }
-            chown() { printf 'unexpected-chown:%s\\n' "$*"; return 95; }
-            mount() { printf 'unexpected-mount:%s\\n' "$*"; return 98; }
-            expected_namespace_uuid=UUID-1
-            expected_namespace_fstype=ext4
-            authority_major_minor=0:52
-            prepare_mount_topology
-            """
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "")
-
-    def test_absent_slot_is_prepared_before_bind(self) -> None:
-        result = run_bash(
-            """
-            query_mountpoint() {
-              local target="$1"
-              local -n result_ref="$3"
-              if [[ "$target" == "$SOURCE_NAMESPACE" ]]; then
-                result_ref="$SOURCE_NAMESPACE UUID-1 ext4 shared"
-                return 0
-              fi
-              result_ref=""
-              return 1
-            }
-            install() { printf 'install:%s\\n' "$*"; }
-            mount() { printf 'mount:%s\\n' "$*"; }
+            NAS_SLOT=/mnt/photo-organizer-sources/nas/abc
+            NAS_AUTHORITY=/mnt/nas/photo-organizer-abc
+            NAS_SOURCE=//nas.example/Photos
+            LOCATION_ID=linux-nas-abc
             require_namespace() { :; }
-            require_nas_slot() { :; }
-            expected_namespace_uuid=UUID-1
-            expected_namespace_fstype=ext4
-            authority_major_minor=0:52
-            prepare_mount_topology
+            require_authority() { AUTHORITY_MAJOR_MINOR=0:52; }
+            query_mountpoint() { local -n result_ref="$3"; result_ref="$NAS_SLOT $NAS_SOURCE cifs / 0:52 shared"; }
+            require_slot() { :; }
+            install() { printf 'unexpected-install\n'; return 97; }
+            mount() { printf 'unexpected-mount\n'; return 98; }
+            prepare_location
             """
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        lines = result.stdout.splitlines()
-        self.assertIn(
-            "install:-d -o root -g root -m 0755 /mnt/photo-organizer-sources/nas/photo-organizer",
-            lines,
-        )
-        self.assertIn(
-            "mount:--bind /mnt/nas/photo-organizer /mnt/photo-organizer-sources/nas/photo-organizer",
-            lines,
-        )
-        self.assertLess(
-            next(i for i, line in enumerate(lines) if line.startswith("install:")),
-            next(i for i, line in enumerate(lines) if line.startswith("mount:--bind")),
-        )
+        self.assertNotIn("unexpected", result.stdout)
 
-    def test_existing_wrong_or_duplicate_slot_fails_without_mutation(self) -> None:
-        exact = (
-            "/mnt/photo-organizer-sources/nas/photo-organizer "
-            "//192.168.1.171/PhotoOrganizer cifs / 0:52 shared"
-        )
-        for slot_rows in (exact.replace("0:52", "0:53"), exact + "\\n" + exact):
-            with self.subTest(slot_rows=slot_rows):
-                result = run_bash(
-                    f"""
-                    query_mountpoint() {{
-                      local target="$1"
-                      local -n result_ref="$3"
-                      if [[ "$target" == "$SOURCE_NAMESPACE" ]]; then
-                        result_ref="$SOURCE_NAMESPACE UUID-1 ext4 shared"
-                      else
-                        result_ref=$'{slot_rows}'
-                      fi
-                    }}
-                    install() {{ printf 'unexpected-install:%s\\n' "$*"; return 97; }}
-                    chmod() {{ printf 'unexpected-chmod:%s\\n' "$*"; return 96; }}
-                    chown() {{ printf 'unexpected-chown:%s\\n' "$*"; return 95; }}
-                    mount() {{ printf 'unexpected-mount:%s\\n' "$*"; return 98; }}
-                    expected_namespace_uuid=UUID-1
-                    expected_namespace_fstype=ext4
-                    authority_major_minor=0:52
-                    prepare_mount_topology
-                    """
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(result.stdout, "")
-                self.assertIn("Pre-existing NAS slot is not one exact shared mount", result.stderr)
+    def test_absent_slot_preparation_precedes_bind_and_exact_validation(self) -> None:
+        install = self.prepare.index('install -d -o root -g root -m 0755 "${NAS_SLOT}"')
+        bind = self.prepare.index('mount --bind "${NAS_AUTHORITY}" "${NAS_SLOT}"')
+        propagation = self.prepare.index('mount --make-rshared "${SOURCE_NAMESPACE}"')
+        validate = self.prepare.index("require_slot ||", propagation)
+        self.assertLess(install, bind)
+        self.assertLess(bind, propagation)
+        self.assertLess(propagation, validate)
 
-    def test_rollback_is_invocation_owned_and_reverse_ordered(self) -> None:
-        result = run_bash(
-            """
-            cleanup_nas_slot() { printf 'slot\\n'; }
-            cleanup_namespace() { printf 'namespace\\n'; }
-            created_nas_slot_mount=1
-            created_namespace_mount=1
-            rollback_invocation
-            """
+    def test_authority_is_never_metadata_or_unmount_target(self) -> None:
+        forbidden = (
+            'install -d -o root -g root -m 0755 "${NAS_AUTHORITY}"',
+            'chmod "${NAS_AUTHORITY}"',
+            'chown "${NAS_AUTHORITY}"',
+            'umount -- "${NAS_AUTHORITY}"',
         )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["slot", "namespace"])
+        for value in forbidden:
+            self.assertNotIn(value, self.script)
 
-    def test_preexisting_namespace_is_restored_not_unmounted(self) -> None:
-        result = run_bash(
-            """
-            cleanup_nas_slot() { printf 'slot\\n'; }
-            cleanup_namespace() { printf 'unexpected-namespace-cleanup\\n'; return 1; }
-            mount() { printf '%s\\n' "$*"; }
-            require_namespace() { printf 'validated-%s\\n' "$1"; }
-            created_nas_slot_mount=1
-            created_namespace_mount=0
-            changed_preexisting_propagation=1
-            rollback_invocation
-            """
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            result.stdout.splitlines(),
-            ["slot", "--make-rshared /mnt/photo-organizer-sources", "validated-shared"],
-        )
+    def test_invocation_owned_slot_is_the_only_rollback_unmount(self) -> None:
+        self.assertEqual(self.prepare.count('umount -- "${NAS_SLOT}"'), 2)
+        self.assertNotIn('umount -- "${SOURCE_NAMESPACE}"', self.prepare)
 
-    def test_authoritative_nas_path_is_never_an_unmount_target(self) -> None:
-        umount_lines = [line.strip() for line in self.script.splitlines() if "umount --" in line]
-        self.assertEqual(
-            umount_lines,
-            ['umount -- "${NAS_SLOT}" || return 1', 'umount -- "${SOURCE_NAMESPACE}" || return 1'],
-        )
-        self.assertNotIn('umount -- "${NAS_AUTHORITY}"', self.script)
-
-    def test_authoritative_nas_path_is_never_a_metadata_or_unmount_target(self) -> None:
-        forbidden_commands = ("install ", "chmod ", "chown ", "umount ")
-        authority_command_lines = [
-            line.strip()
-            for line in self.script.splitlines()
-            if "${NAS_AUTHORITY}" in line and line.lstrip().startswith(forbidden_commands)
-        ]
-        self.assertEqual(authority_command_lines, [])
-
-    def test_authoritative_nas_activation_is_read_only_and_bounded(self) -> None:
-        self.assertIn(
-            "timeout --foreground 30 stat --format='%F' -- \"${NAS_AUTHORITY}\"",
-            self.script,
-        )
+    def test_base_and_location_modes_are_explicit(self) -> None:
+        self.assertIn("--base)", self.script)
+        self.assertIn("--location)", self.script)
+        self.assertIn('fail "Use --base or --location LOCATION_ID."', self.script)
 
 
 if __name__ == "__main__":

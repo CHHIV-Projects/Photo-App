@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 NAMESPACE_UNIT = ROOT / "scripts/operator/linux/photo-organizer-source-namespace.service"
+NAS_NAMESPACE_UNIT = ROOT / "scripts/operator/linux/photo-organizer-source-nas@.service"
 BROKER_UNIT = ROOT / "scripts/operator/linux/photo-organizer-source-identity-broker.service"
 
 
@@ -28,6 +29,8 @@ class LinuxSourceNamespaceUnitTests(unittest.TestCase):
     def setUp(self) -> None:
         self.namespace_text = NAMESPACE_UNIT.read_text(encoding="utf-8")
         self.namespace = directives(NAMESPACE_UNIT)
+        self.nas_namespace_text = NAS_NAMESPACE_UNIT.read_text(encoding="utf-8")
+        self.nas_namespace = directives(NAS_NAMESPACE_UNIT)
         self.broker_text = BROKER_UNIT.read_text(encoding="utf-8")
         self.broker = directives(BROKER_UNIT)
 
@@ -36,7 +39,7 @@ class LinuxSourceNamespaceUnitTests(unittest.TestCase):
         self.assertEqual(self.namespace.get("RemainAfterExit"), ["yes"])
         self.assertEqual(
             self.namespace.get("ExecStart"),
-            ["/usr/local/lib/photo-organizer/prepare-source-namespace.sh"],
+            ["/usr/local/lib/photo-organizer/prepare-source-namespace.sh --base"],
         )
         self.assertEqual(
             self.namespace.get("CapabilityBoundingSet"),
@@ -98,13 +101,21 @@ class LinuxSourceNamespaceUnitTests(unittest.TestCase):
         for forbidden_value in ("docker.sock", "/dev/", "/mnt/", "DOCKER_HOST"):
             self.assertNotIn(forbidden_value, self.namespace_text)
 
-    def test_namespace_retries_only_transient_startup_failures(self) -> None:
-        self.assertEqual(self.namespace.get("Restart"), ["on-failure"])
-        self.assertEqual(self.namespace.get("RestartSec"), ["15s"])
-        self.assertEqual(self.namespace.get("RestartPreventExitStatus"), ["1"])
-        self.assertEqual(self.namespace.get("StartLimitIntervalSec"), ["0"])
-        self.assertIn("network-online.target", self.namespace.get("After", [""])[0])
-        self.assertIn("network-online.target", self.namespace.get("Wants", [""])[0])
+    def test_each_nas_location_retries_transient_failure_independently(self) -> None:
+        self.assertEqual(self.nas_namespace.get("Restart"), ["on-failure"])
+        self.assertEqual(self.nas_namespace.get("RestartSec"), ["15s"])
+        self.assertEqual(self.nas_namespace.get("RestartPreventExitStatus"), ["1"])
+        self.assertEqual(self.nas_namespace.get("StartLimitIntervalSec"), ["0"])
+        self.assertIn("network-online.target", self.nas_namespace.get("After", [""])[0])
+        self.assertEqual(
+            self.nas_namespace.get("ExecStart"),
+            ["/usr/local/lib/photo-organizer/prepare-source-namespace.sh --location %i"],
+        )
+        self.assertEqual(self.nas_namespace.get("Requires"), ["photo-organizer-source-namespace.service"])
+
+    def test_broker_requires_only_healthy_base_not_every_nas_instance(self) -> None:
+        self.assertEqual(self.broker.get("Requires"), ["photo-organizer-source-namespace.service"])
+        self.assertNotIn("photo-organizer-source-nas@", self.broker_text)
 
     def test_broker_remains_non_root_identity_only_and_hardened(self) -> None:
         self.assertEqual(self.broker.get("Type"), ["simple"])

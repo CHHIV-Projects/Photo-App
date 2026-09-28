@@ -6,7 +6,9 @@ readonly BROKER_USER="photo-organizer-source-broker"
 readonly SOCKET_GROUP="photo-organizer-source-access"
 readonly PROGRAM_TARGET="/usr/local/lib/photo-organizer/source-identity-broker.py"
 readonly NAMESPACE_PROGRAM_TARGET="/usr/local/lib/photo-organizer/prepare-source-namespace.sh"
+readonly NAS_REGISTRATION_PROGRAM_TARGET="/usr/local/lib/photo-organizer/register-nas-location.py"
 readonly NAMESPACE_UNIT_TARGET="/etc/systemd/system/photo-organizer-source-namespace.service"
+readonly NAS_NAMESPACE_UNIT_TARGET="/etc/systemd/system/photo-organizer-source-nas@.service"
 readonly CONFIG_TARGET="/etc/photo-organizer/source-access.json"
 readonly UNIT_TARGET="/etc/systemd/system/photo-organizer-source-identity-broker.service"
 readonly STATE_DIRECTORY="/var/lib/photo-organizer-source-access"
@@ -32,7 +34,9 @@ for fixed_path in \
   "${STATE_DIRECTORY}" \
   "${PROGRAM_TARGET}" \
   "${NAMESPACE_PROGRAM_TARGET}" \
+  "${NAS_REGISTRATION_PROGRAM_TARGET}" \
   "${NAMESPACE_UNIT_TARGET}" \
+  "${NAS_NAMESPACE_UNIT_TARGET}" \
   "${UNIT_TARGET}" \
   "${ACCESS_NODE_ID_FILE}"; do
   [[ ! -L "${fixed_path}" ]] || fail "Fixed installation target must not be a symbolic link: ${fixed_path}"
@@ -54,7 +58,9 @@ install -d -o root -g root -m 0755 /usr/local/lib/photo-organizer
 install -d -o root -g root -m 0755 /mnt/photo-organizer-sources
 install -o root -g root -m 0755 "${script_directory}/source_identity_broker.py" "${PROGRAM_TARGET}"
 install -o root -g root -m 0755 "${script_directory}/prepare_source_namespace.sh" "${NAMESPACE_PROGRAM_TARGET}"
+install -o root -g root -m 0755 "${script_directory}/register_nas_location.py" "${NAS_REGISTRATION_PROGRAM_TARGET}"
 install -o root -g root -m 0644 "${script_directory}/photo-organizer-source-namespace.service" "${NAMESPACE_UNIT_TARGET}"
+install -o root -g root -m 0644 "${script_directory}/photo-organizer-source-nas@.service" "${NAS_NAMESPACE_UNIT_TARGET}"
 install -o root -g root -m 0644 "${script_directory}/photo-organizer-source-identity-broker.service" "${UNIT_TARGET}"
 install -d -o "${BROKER_USER}" -g "${SOCKET_GROUP}" -m 0750 "${STATE_DIRECTORY}"
 if [[ ! -e "${ACCESS_NODE_ID_FILE}" ]]; then

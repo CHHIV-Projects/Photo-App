@@ -1,0 +1,27 @@
+[Unit]
+Description=Photo Organizer registered NAS Source namespace location %i
+Requires=photo-organizer-source-namespace.service
+After=photo-organizer-source-namespace.service remote-fs.target network-online.target
+Wants=remote-fs.target network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/photo-organizer/prepare-source-namespace.sh --location %i
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=15s
+RestartPreventExitStatus=1
+UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+PrivateMounts=false
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

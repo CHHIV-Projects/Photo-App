@@ -24,6 +24,7 @@ from app.api.visual_enrichment import router as visual_enrichment_router
 from app.api.windows_helper_admin import router as windows_helper_admin_router
 from app.api.windows_source_ui import router as windows_source_ui_router
 from app.api.source_acquisition_admin import router as source_acquisition_admin_router
+from app.api.nas_registrations import router as nas_registrations_router
 from app.core.config import settings
 from app.core.runtime_paths import prepare_runtime_directories
 from app.db.session import SessionLocal
@@ -58,6 +59,8 @@ from app.services.previews.heic_preview_processing_service import _reset_stale_r
 from app.services.windows_helper.schema import ensure_windows_helper_schema
 from app.services.source_acquisition.schema import ensure_source_acquisition_schema
 from app.services.source_acquisition.service import reset_stale_acquisition_bridges
+from app.services.nas_registration.schema import ensure_nas_registration_schema
+from app.services.nas_registration.service import ensure_existing_nas_adoption
 
 
 def create_app() -> FastAPI:
@@ -100,6 +103,7 @@ def create_app() -> FastAPI:
 	app.include_router(windows_helper_admin_router)
 	app.include_router(windows_source_ui_router)
 	app.include_router(source_acquisition_admin_router)
+	app.include_router(nas_registrations_router)
 
 	@app.on_event("startup")
 	def _sync_face_incremental_schema() -> None:
@@ -128,6 +132,8 @@ def create_app() -> FastAPI:
 			ensure_place_geocoding_schema(db_session.connection())
 			ensure_windows_helper_schema(db_session)
 			ensure_source_acquisition_schema(db_session)
+			ensure_nas_registration_schema(db_session)
+			ensure_existing_nas_adoption(db_session)
 			_reset_stale_runs(db_session)
 			reset_stale_acquisition_bridges(db_session)
 			_reset_stale_icloud_acquisition_runs(db_session)

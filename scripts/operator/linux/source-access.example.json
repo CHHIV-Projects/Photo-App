@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "access_node_label": "henderson-server1",
   "access_node_id_file": "/var/lib/photo-organizer-source-access/access-node-id",
   "source_namespace": "/mnt/photo-organizer-sources",
@@ -24,7 +24,13 @@
       "runtime_slot": "/app/sources/nas/photo-organizer",
       "filesystem_type": "cifs",
       "canonical_source": "//192.168.1.171/PhotoOrganizer",
-      "authoritative_target": "/mnt/nas/photo-organizer"
+      "authoritative_target": "/mnt/nas/photo-organizer",
+      "nas_appliance_id": "d5dfade9-d7fa-533e-97dc-5ac8cb2cf525",
+      "nas_share_id": "a69241b8-76fc-520c-996e-d1e360f39b2a",
+      "server_guid_hash": "REPLACE_WITH_VERIFIED_SMB_SERVER_GUID_HASH",
+      "server_guid_masked": "REPLACE_WITH_MASKED_SMB_SERVER_GUID_HASH",
+      "identity_fingerprint_hash": "sha256:39da4b1667b654e2e3f7efd6ce59a319b29e23c9814871f67747249181505cb3",
+      "identity_fingerprint_version": "source_endpoint_identity_v1"
     }
   ]
 }

@@ -33,7 +33,7 @@ RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-ReadOnlyPaths=/etc/photo-organizer/source-access.json /mnt/photo-organizer-sources -/mnt/nas/photo-organizer
+ReadOnlyPaths=/etc/photo-organizer/source-access.json /mnt/photo-organizer-sources -/mnt/nas
 ReadWritePaths=/run/photo-organizer-source-access /var/lib/photo-organizer-source-access
 
 [Install]
