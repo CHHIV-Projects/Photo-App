@@ -32,6 +32,10 @@ from app.services.windows_helper.service import (
     HELPER_PROVIDER_NAME,
     WindowsHelperServiceError,
 )
+from app.services.windows_helper.storage_classification import (
+    mounted_volume_capability_version,
+    observation_allows_known_endpoint,
+)
 from app.windows_helper_shared.channel import (
     ClaimedAcquireOperation,
     ClaimedInventoryOperation,
@@ -57,7 +61,9 @@ from app.windows_helper_shared.protocol import (
     MAX_INVENTORY_RESULT_BYTES,
     ProviderNativePath,
     canonical_protocol_digest,
+    capability_version,
     require_capability,
+    require_capability_versions,
 )
 from app.windows_helper_shared.identity.windows import MountedVolumeCandidate
 
@@ -300,7 +306,11 @@ def create_volume_observation_for_access_node(
         )
     try:
         capabilities = HelperCapabilityIdentity.model_validate_json(node.capabilities_json or "")
-        require_capability(capabilities.capabilities, "mounted_volume_observation", "1")
+        require_capability_versions(
+            capabilities.capabilities,
+            "mounted_volume_observation",
+            {"1", "2"},
+        )
     except (TypeError, ValueError) as exc:
         raise WindowsHelperServiceError(
             "volume_observation_capability_unavailable",
@@ -379,6 +389,16 @@ def create_resolved_profile_probe_operation(
             http_status=409,
         )
     node = _load_access_node(db, UUID(node.access_node_uuid))
+    mounted_capability = mounted_volume_capability_version(node)
+    eligible_volumes = [
+        item
+        for item in result.volumes
+        if observation_allows_known_endpoint(
+            item,
+            capability=mounted_capability,
+            endpoint_type=endpoint.source_type,
+        )
+    ]
 
     resolution = resolve_mounted_volume_runtime_root(
         expected_fingerprint_hash=endpoint.identity_fingerprint_hash,
@@ -393,7 +413,7 @@ def create_resolved_profile_probe_operation(
                 drive_type=item.drive_type,
                 identity_identifier_masked=item.identity_identifier_masked,
             )
-            for item in result.volumes
+            for item in eligible_volumes
         ],
     )
     if resolution.status == "ambiguous":
@@ -873,6 +893,32 @@ def complete_volume_observation_operation(
         raise WindowsHelperServiceError(
             "operation_result_mismatch",
             "The Helper result does not match the authorized operation.",
+            http_status=409,
+        )
+    try:
+        capabilities = HelperCapabilityIdentity.model_validate_json(
+            operation.access_node.capabilities_json or ""
+        )
+        mounted_version = capability_version(
+            capabilities.capabilities,
+            "mounted_volume_observation",
+        )
+    except (TypeError, ValueError) as exc:
+        raise WindowsHelperServiceError(
+            "volume_observation_capability_unavailable",
+            "The Helper capability identity is unavailable.",
+            http_status=409,
+        ) from exc
+    if mounted_version == "2" and any(item.storage_evidence is None for item in result.volumes):
+        raise WindowsHelperServiceError(
+            "volume_observation_evidence_missing",
+            "The Helper omitted required mounted-volume classification evidence.",
+            http_status=409,
+        )
+    if mounted_version not in {"1", "2"}:
+        raise WindowsHelperServiceError(
+            "volume_observation_capability_unavailable",
+            "The Helper mounted-volume capability is unsupported.",
             http_status=409,
         )
     return _complete(db, operation, result)

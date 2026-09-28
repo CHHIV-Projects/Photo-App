@@ -81,6 +81,7 @@ from app.windows_helper_shared.protocol import (
     InventoryResultStatus,
     MachineIssue,
     MountedVolumeObservation,
+    MountedVolumeStorageEvidence,
     ProbeResultStatus,
     ProviderNativePath,
     SourceType,
@@ -97,9 +98,15 @@ class _ForbiddenLocalProbe:
         raise AssertionError("Windows Helper workflows must not use backend-local probing.")
 
 
-def _capability(access_node_id: UUID) -> HelperCapabilityIdentity:
+def _capability(
+    access_node_id: UUID,
+    *,
+    mounted_volume_version: str = "1",
+) -> HelperCapabilityIdentity:
     return HelperCapabilityIdentity(
-        helper_version="0.5.1",
+        helper_version=(
+            "0.5.2" if mounted_volume_version == "2" else "0.5.1"
+        ),
         intended_access_node_id=access_node_id,
         supported_source_types=[SourceType.LOCAL, SourceType.EXTERNAL, SourceType.REMOVABLE],
         collectors=[
@@ -113,7 +120,10 @@ def _capability(access_node_id: UUID) -> HelperCapabilityIdentity:
             CapabilityVersion(name="authenticated_channel", version="1"),
             CapabilityVersion(name="remote_operations", version="1"),
             CapabilityVersion(name="bounded_inventory", version="1"),
-            CapabilityVersion(name="mounted_volume_observation", version="1"),
+            CapabilityVersion(
+                name="mounted_volume_observation",
+                version=mounted_volume_version,
+            ),
         ],
     )
 
@@ -226,6 +236,18 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.db.close()
         self.engine.dispose()
+
+    def _set_mounted_volume_capability(self, version: str) -> AccessNode:
+        node = self.db.scalar(
+            select(AccessNode).where(AccessNode.access_node_uuid == str(self.node_id))
+        )
+        node.capabilities_json = _capability(
+            self.node_id,
+            mounted_volume_version=version,
+        ).model_dump_json()
+        node.last_seen_at = datetime.now(timezone.utc)
+        self.db.commit()
+        return node
 
     def _complete_probe(
         self,
@@ -622,6 +644,148 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
         self.assertEqual(resolved.candidates[0].device_alias, endpoint.alias)
         self.assertEqual(resolved.candidates[0].current_root, "H:\\")
         self.assertNotIn(FINGERPRINT, resolved.model_dump_json())
+
+    def test_v2_verified_unknown_external_is_discoverable_and_can_start_existing_probe_path(self) -> None:
+        self._set_mounted_volume_capability("2")
+        started = begin_portable_discovery(
+            self.db,
+            WindowsSourceUiPortableDiscoveryRequest(source_type="external"),
+        )
+        claimed = claim_operation(self.db, self.credential)
+        complete_volume_observation_operation(
+            self.db,
+            self.credential,
+            claimed.operation.operation_id,
+            HelperObserveVolumesResponse(
+                request_id=claimed.operation.operation_id,
+                collector_name="windows_non_admin_probe_v1",
+                collector_version="1",
+                volumes=[
+                    MountedVolumeObservation(
+                        provider_native_root="H:\\",
+                        identity_fingerprint_hash="sha256:" + "9" * 64,
+                        identity_fingerprint_version=FINGERPRINT_VERSION,
+                        drive_type="fixed",
+                        storage_evidence=MountedVolumeStorageEvidence(
+                            backing_association="exact",
+                            storage_bus_type="usb",
+                            device_class="disk",
+                            removal_policy="surprise",
+                            external_connection="usb",
+                            operational_state="online",
+                            is_boot=False,
+                            is_system=False,
+                        ),
+                    )
+                ],
+            ),
+        )
+
+        resolved = resolve_portable_discovery(
+            self.db,
+            WindowsSourceUiPortableDiscoveryResolveRequest(
+                source_type="external",
+                observation_tokens=started.observation_tokens,
+            ),
+        )
+        self.assertEqual(resolved.stage, "ready")
+        self.assertEqual(len(resolved.candidates), 1)
+        self.assertFalse(resolved.candidates[0].known_device)
+        self.assertIsNone(resolved.candidates[0].device_alias)
+
+        created = create_creation_probe(
+            self.db,
+            WindowsSourceUiCreateProbeRequest(
+                discovery_candidate_token=resolved.candidates[0].candidate_token,
+                source_type="external",
+                device_alias="New USB Archive",
+                windows_root="H:\\Pictures",
+                profile_name="New USB Photos",
+            ),
+        )
+        probe_claim = claim_operation(self.db, self.credential)
+        self.assertEqual(created.operation_token, probe_claim.operation.operation_id)
+        self.assertEqual(probe_claim.operation.request.source_type, SourceType.EXTERNAL)
+        self.assertEqual(
+            probe_claim.operation.request.provider_native_path.provider_native_root,
+            "H:\\Pictures",
+        )
+        self.assertEqual(self.db.scalar(select(func.count(SourceEndpoint.id))), 0)
+
+    def test_v2_contradictory_virtual_evidence_blocks_known_external_route(self) -> None:
+        endpoint, _source = self._create_external_profile()
+        self._set_mounted_volume_capability("2")
+        started = begin_portable_discovery(
+            self.db,
+            WindowsSourceUiPortableDiscoveryRequest(source_type="external"),
+        )
+        claimed = claim_operation(self.db, self.credential)
+        complete_volume_observation_operation(
+            self.db,
+            self.credential,
+            claimed.operation.operation_id,
+            HelperObserveVolumesResponse(
+                request_id=claimed.operation.operation_id,
+                collector_name="windows_non_admin_probe_v1",
+                collector_version="1",
+                volumes=[
+                    MountedVolumeObservation(
+                        provider_native_root="H:\\",
+                        identity_fingerprint_hash=endpoint.identity_fingerprint_hash,
+                        identity_fingerprint_version=endpoint.identity_fingerprint_version,
+                        drive_type="fixed",
+                        storage_evidence=MountedVolumeStorageEvidence(
+                            backing_association="exact",
+                            storage_bus_type="file_backed_virtual",
+                            device_class="virtual",
+                            external_connection="none",
+                            is_boot=False,
+                            is_system=False,
+                        ),
+                    )
+                ],
+            ),
+        )
+
+        resolved = resolve_portable_discovery(
+            self.db,
+            WindowsSourceUiPortableDiscoveryResolveRequest(
+                source_type="external",
+                observation_tokens=started.observation_tokens,
+            ),
+        )
+        self.assertEqual(resolved.stage, "unavailable")
+        self.assertEqual(resolved.candidates, [])
+        self.assertEqual(self.db.get(SourceEndpoint, endpoint.id).alias, "Controlled External")
+
+    def test_v2_result_missing_storage_evidence_is_rejected(self) -> None:
+        self._set_mounted_volume_capability("2")
+        started = begin_portable_discovery(
+            self.db,
+            WindowsSourceUiPortableDiscoveryRequest(source_type="external"),
+        )
+        claimed = claim_operation(self.db, self.credential)
+
+        with self.assertRaisesRegex(WindowsHelperServiceError, "omitted required"):
+            complete_volume_observation_operation(
+                self.db,
+                self.credential,
+                claimed.operation.operation_id,
+                HelperObserveVolumesResponse(
+                    request_id=claimed.operation.operation_id,
+                    collector_name="windows_non_admin_probe_v1",
+                    collector_version="1",
+                    volumes=[
+                        MountedVolumeObservation(
+                            provider_native_root="H:\\",
+                            identity_fingerprint_hash="sha256:" + "8" * 64,
+                            identity_fingerprint_version=FINGERPRINT_VERSION,
+                            drive_type="fixed",
+                        )
+                    ],
+                ),
+            )
+        self.assertEqual(len(started.observation_tokens), 1)
 
     def test_creation_readiness_selection_and_inventory_happy_path(self) -> None:
         setup, plan, created = self._create_profile()

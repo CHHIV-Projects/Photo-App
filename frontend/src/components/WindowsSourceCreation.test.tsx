@@ -142,6 +142,7 @@ describe("Windows Source creation", () => {
 
     expect(await screen.findByText("Review Windows External Source")).toBeInTheDocument();
     expect(api.startWindowsSourceUiCreationProbe).toHaveBeenCalledWith(expect.objectContaining({
+      access_node_id: null,
       discovery_candidate_token: "22222222-2222-2222-2222-222222222222:0",
       source_type: "external",
       device_alias: "External 1",
@@ -169,6 +170,16 @@ describe("Windows Source creation", () => {
     };
     vi.mocked(api.startWindowsPortableDiscovery).mockResolvedValue(discovery);
     vi.mocked(api.resolveWindowsPortableDiscovery).mockResolvedValue(discovery);
+    vi.mocked(api.planWindowsSourceUiCreation).mockResolvedValue({
+      plan_status: "ready",
+      device_alias: "8GB Card",
+      windows_root: "X:\\Family Photos",
+      profile_name: "8GB Card Test",
+      device_action: "create_new_endpoint",
+      profile_action: "create_new_source",
+      blockers: [],
+      warnings: [],
+    });
 
     render(<WindowsSourceCreation computers={[computer]} sourceType="removable" launchWindowsAccess={vi.fn()} onComplete={vi.fn()} />);
 
@@ -181,5 +192,49 @@ describe("Windows Source creation", () => {
 
     expect(screen.getByLabelText("Device name")).toBeInTheDocument();
     expect(screen.getByText("Current access: X:\\")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Device name"), { target: { value: "8GB Card" } });
+    fireEvent.change(screen.getByLabelText(/Folder within device/), { target: { value: "Family Photos" } });
+    fireEvent.change(screen.getByLabelText("Source Profile name"), { target: { value: "8GB Card Test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review Source" }));
+
+    expect(await screen.findByText("Review Windows Removable Source")).toBeInTheDocument();
+    expect(api.startWindowsSourceUiCreationProbe).toHaveBeenCalledWith(expect.objectContaining({
+      access_node_id: null,
+      discovery_candidate_token: "33333333-3333-3333-3333-333333333333:0",
+      source_type: "removable",
+      device_alias: "8GB Card",
+      windows_root: "X:\\Family Photos",
+      profile_name: "8GB Card Test",
+    }));
+  });
+
+  it("asks for a durable Device name after a verified unknown External device is detected", async () => {
+    const discovery = {
+      stage: "ready" as const,
+      safe_message: "Select a detected Source device.",
+      observation_tokens: ["44444444-4444-4444-4444-444444444444"],
+      candidates: [{
+        candidate_token: "44444444-4444-4444-4444-444444444444:0",
+        device_alias: null,
+        known_device: false,
+        current_root: "H:\\",
+        drive_type: "fixed",
+        current_route_count: 1,
+      }],
+    };
+    vi.mocked(api.startWindowsPortableDiscovery).mockResolvedValue(discovery);
+    vi.mocked(api.resolveWindowsPortableDiscovery).mockResolvedValue(discovery);
+
+    render(<WindowsSourceCreation computers={[computer]} sourceType="external" launchWindowsAccess={vi.fn()} onComplete={vi.fn()} />);
+
+    expect(screen.queryByLabelText("Device name")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Detect connected External devices" }));
+    fireEvent.change(await screen.findByLabelText("Detected External device"), {
+      target: { value: "44444444-4444-4444-4444-444444444444:0" },
+    });
+
+    expect(screen.getByLabelText("Device name")).toBeInTheDocument();
+    expect(screen.getByText("Current access: H:\\")).toBeInTheDocument();
   });
 });

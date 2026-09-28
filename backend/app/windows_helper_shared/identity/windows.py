@@ -72,6 +72,23 @@ class MountedVolumeCandidate:
     identity_fingerprint_version: str | None = None
     drive_type: str | None = None
     identity_identifier_masked: str | None = None
+    storage_evidence: "MountedVolumeStorageEvidence | None" = None
+
+
+@dataclass(frozen=True)
+class MountedVolumeStorageEvidence:
+    """Bounded Windows storage facts used only for classification."""
+
+    storage_evidence_version: str = "windows-storage-v1"
+    backing_association: str = "error"
+    storage_bus_type: str = "unknown"
+    storage_media_type: str = "unspecified"
+    device_class: str = "unknown"
+    removal_policy: str = "unknown"
+    external_connection: str = "unknown"
+    operational_state: str = "unknown"
+    is_boot: bool | None = None
+    is_system: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +203,11 @@ def enumerate_windows_mounted_volume_candidates(
         if match:
             fingerprint_hash, fingerprint_version = volume_guid_fingerprint(match.group(1))
             masked_identifier = f"{{...{match.group(1)[-4:].casefold()}}}"
+        storage_evidence = _mounted_volume_storage_evidence(
+            drive,
+            (drive_type or "").strip().casefold(),
+            runner,
+        )
         candidates.append(
             MountedVolumeCandidate(
                 root_path=_drive_root_path(drive),
@@ -193,9 +215,148 @@ def enumerate_windows_mounted_volume_candidates(
                 identity_fingerprint_version=fingerprint_version,
                 drive_type=(drive_type or "").strip().casefold() or None,
                 identity_identifier_masked=masked_identifier,
+                storage_evidence=storage_evidence,
             )
         )
     return sorted(candidates, key=lambda item: ntpath.normcase(item.root_path))
+
+
+_STORAGE_BUS_TYPES = {
+    0: "unknown",
+    1: "scsi",
+    2: "atapi",
+    3: "ata",
+    4: "ieee1394",
+    5: "ssa",
+    6: "fibre_channel",
+    7: "usb",
+    8: "raid",
+    9: "iscsi",
+    10: "sas",
+    11: "sata",
+    12: "sd",
+    13: "mmc",
+    14: "virtual",
+    15: "file_backed_virtual",
+    16: "spaces",
+    17: "nvme",
+    18: "scm",
+    19: "ufs",
+    20: "nvme_of",
+}
+_REMOVAL_POLICIES = {1: "no_removal", 2: "orderly", 3: "surprise"}
+
+
+def _mounted_volume_storage_evidence(
+    drive: str,
+    drive_type: str,
+    runner: CommandRunner,
+) -> MountedVolumeStorageEvidence:
+    """Collect one exact partition/disk relationship without exposing identifiers."""
+
+    if drive_type == "network":
+        return MountedVolumeStorageEvidence(
+            backing_association="none",
+            device_class="network",
+            external_connection="none",
+        )
+    if drive_type == "cd-rom":
+        return MountedVolumeStorageEvidence(
+            backing_association="none",
+            device_class="optical",
+            external_connection="none",
+        )
+    if drive_type == "ramdisk":
+        return MountedVolumeStorageEvidence(
+            backing_association="none",
+            device_class="virtual",
+            external_connection="none",
+        )
+    if drive_type not in {"fixed", "removable"}:
+        return MountedVolumeStorageEvidence(backing_association="none")
+
+    letter = drive[0].upper()
+    script = (
+        "$ErrorActionPreference='Stop';"
+        "$r=[ordered]@{QueryError=$false;PartitionCount=0;DiskCount=0;BusType=0;"
+        "IsBoot=$null;IsSystem=$null;IsOffline=$null;RemovalPolicy=$null};"
+        "try{"
+        f"$p=@(Get-CimInstance -Namespace 'ROOT/Microsoft/Windows/Storage' -ClassName 'MSFT_Partition' -Filter \"DriveLetter = '{letter}'\" -OperationTimeoutSec 10);"
+        "$r.PartitionCount=$p.Count;"
+        "if($p.Count -eq 1){"
+        "$n=[uint32]$p[0].DiskNumber;"
+        "$d=@(Get-CimInstance -Namespace 'ROOT/Microsoft/Windows/Storage' -ClassName 'MSFT_Disk' -Filter \"Number = $n\" -OperationTimeoutSec 10);"
+        "$r.DiskCount=$d.Count;"
+        "if($d.Count -eq 1){"
+        "$r.BusType=[int]$d[0].BusType;"
+        "$r.IsBoot=[bool]($p[0].IsBoot -or $d[0].IsBoot);"
+        "$r.IsSystem=[bool]($p[0].IsSystem -or $d[0].IsSystem);"
+        "$r.IsOffline=[bool]($p[0].IsOffline -or $d[0].IsOffline);"
+        "try{"
+        "$w=@(Get-CimInstance -Namespace 'ROOT/CIMV2' -ClassName 'Win32_DiskDrive' -Filter \"Index = $n\" -Property Index,PNPDeviceID -OperationTimeoutSec 10);"
+        "if($w.Count -eq 1 -and (Get-Command 'Get-PnpDeviceProperty' -ErrorAction SilentlyContinue)){"
+        "$q=Get-PnpDeviceProperty -InstanceId $w[0].PNPDeviceID -KeyName 'DEVPKEY_Device_RemovalPolicy';"
+        "$r.RemovalPolicy=[int]$q.Data}}catch{}}}}"
+        "catch{$r.QueryError=$true};"
+        "[pscustomobject]$r|ConvertTo-Json -Compress"
+    )
+    result = runner.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        timeout_seconds=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0 or result.timed_out or not result.stdout.strip():
+        return MountedVolumeStorageEvidence(backing_association="error")
+    try:
+        payload = json.loads(result.stdout.strip())
+        if payload.get("QueryError"):
+            return MountedVolumeStorageEvidence(backing_association="error")
+        partition_count = int(payload.get("PartitionCount", 0))
+        disk_count = int(payload.get("DiskCount", 0))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return MountedVolumeStorageEvidence(backing_association="error")
+
+    if partition_count > 1 or disk_count > 1:
+        association = "multiple"
+    elif partition_count == 1 and disk_count == 1:
+        association = "exact"
+    else:
+        association = "none"
+    if association != "exact":
+        return MountedVolumeStorageEvidence(backing_association=association)
+
+    is_boot = payload.get("IsBoot")
+    is_system = payload.get("IsSystem")
+    is_offline = payload.get("IsOffline")
+    if not all(isinstance(value, bool) for value in (is_boot, is_system, is_offline)):
+        return MountedVolumeStorageEvidence(backing_association="error")
+    try:
+        bus_type = _STORAGE_BUS_TYPES.get(int(payload.get("BusType", 0)), "unknown")
+        removal_value = payload.get("RemovalPolicy")
+        removal_policy = (
+            _REMOVAL_POLICIES.get(int(removal_value), "unknown")
+            if removal_value is not None
+            else "unknown"
+        )
+    except (TypeError, ValueError):
+        return MountedVolumeStorageEvidence(backing_association="error")
+    device_class = (
+        "network"
+        if bus_type in {"fibre_channel", "iscsi", "nvme_of"}
+        else "virtual"
+        if bus_type in {"virtual", "file_backed_virtual", "spaces"}
+        else "disk"
+    )
+    external_connection = bus_type if bus_type in {"usb", "ieee1394"} else "none"
+    return MountedVolumeStorageEvidence(
+        backing_association="exact",
+        storage_bus_type=bus_type,
+        device_class=device_class,
+        removal_policy=removal_policy,
+        external_connection=external_connection,
+        operational_state="offline" if is_offline else "online",
+        is_boot=is_boot,
+        is_system=is_system,
+    )
 
 
 def _windows_mounted_drive_roots() -> list[tuple[str, str | None]]:

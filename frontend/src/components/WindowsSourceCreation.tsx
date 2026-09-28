@@ -62,7 +62,7 @@ export default function WindowsSourceCreation({
   launchWindowsAccess = invokeWindowsAccess,
 }: Props) {
   const [fields, setFields] = useState<WindowsSourceUiCreateFields>({
-    access_node_id: computers[0]?.access_node_id ?? "",
+    access_node_id: computers[0]?.access_node_id ?? null,
     source_type: sourceType,
     device_alias: sourceType === "local" ? computers[0]?.computer_alias ?? "" : "",
     windows_root: "",
@@ -85,7 +85,7 @@ export default function WindowsSourceCreation({
       const first = computers[0];
       return {
         ...current,
-        access_node_id: first?.access_node_id ?? "",
+        access_node_id: first?.access_node_id ?? null,
         device_alias: sourceType === "local" ? first?.computer_alias ?? "" : current.device_alias,
       };
     });
@@ -153,7 +153,7 @@ export default function WindowsSourceCreation({
     setPortableFolder("");
     setFields((current) => ({
       ...current,
-      access_node_id: "",
+      access_node_id: null,
       discovery_candidate_token: candidate?.candidate_token ?? null,
       device_alias: candidate?.device_alias ?? "",
       windows_root: candidate?.current_root ?? "",
@@ -191,7 +191,7 @@ export default function WindowsSourceCreation({
     setError(null);
     void (async () => {
       if (sourceType === "local") {
-        await waitForAvailableComputer(fields.access_node_id);
+        await waitForAvailableComputer(fields.access_node_id ?? undefined);
       }
       const probe = await startWindowsSourceUiCreationProbe(fields);
       const deadline = Date.now() + 120_000;
@@ -236,7 +236,7 @@ export default function WindowsSourceCreation({
         {sourceType === "local" && computers.length > 1 && (
           <label className={styles.formLabel}>
             Computer
-            <select className={styles.formInput} value={fields.access_node_id} onChange={(event) => {
+            <select className={styles.formInput} value={fields.access_node_id ?? ""} onChange={(event) => {
               const computer = computers.find((item) => item.access_node_id === event.target.value);
               update("access_node_id", event.target.value);
               if (computer) update("device_alias", computer.computer_alias);

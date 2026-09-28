@@ -25,6 +25,7 @@ from windows_helper_shared.protocol import (
 )
 
 from .acquisition import execute_acquisition
+from . import HELPER_VERSION
 from .capabilities import capability_identity
 from .client import HelperApiClient, HelperClientError
 from .credential_store import DpapiCredentialStore, StoredCredential
@@ -36,7 +37,7 @@ from .tunnel import TunnelError, TunnelManager
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="photo-organizer-windows-helper")
-    parser.add_argument("--version", action="version", version="0.5.1")
+    parser.add_argument("--version", action="version", version=HELPER_VERSION)
     subcommands = parser.add_subparsers(dest="command", required=True)
     pair = subcommands.add_parser("pair", help="Pair this Helper through the approved channel.")
     pair.add_argument("--access-node-id", required=True, type=UUID)
@@ -225,7 +226,7 @@ def _run_packaged_uri(uri: str) -> int:
             if not instance.acquire():
                 logger.info("event=duplicate_start_reused")
                 return 0
-            logger.info("event=packaged_start version=0.5.1")
+            logger.info("event=packaged_start version=%s", HELPER_VERSION)
             with TunnelManager():
                 result = _serve(
                     HelperApiClient(),

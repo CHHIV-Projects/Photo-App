@@ -13,7 +13,9 @@ type Props = {
   onPaired: () => void;
 };
 
-const HELPER_EXE = "$env:LOCALAPPDATA\\PhotoOrganizer\\WindowsHelper\\bin\\0.5.1\\PhotoOrganizerWindowsHelper.exe";
+const HELPER_EXECUTABLES = ["0.5.2", "0.5.1"]
+  .map((version) => `"$env:LOCALAPPDATA\\PhotoOrganizer\\WindowsHelper\\bin\\${version}\\PhotoOrganizerWindowsHelper.exe"`)
+  .join(",");
 
 export default function WindowsComputerEnrollment({ computers = [], onPaired }: Props) {
   const [open, setOpen] = useState(false);
@@ -25,7 +27,7 @@ export default function WindowsComputerEnrollment({ computers = [], onPaired }: 
 
   const command = useMemo(() => {
     if (!authorization) return "";
-    return `& "${HELPER_EXE}" pair --access-node-id "${authorization.access_node_id}"; if ($LASTEXITCODE -eq 0) { & "${HELPER_EXE}" heartbeat }`;
+    return `$helperExe = @(${HELPER_EXECUTABLES}) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1; if (-not $helperExe) { throw "Photo Organizer Windows Helper is not installed." }; & $helperExe pair --access-node-id "${authorization.access_node_id}"; if ($LASTEXITCODE -eq 0) { & $helperExe heartbeat }`;
   }, [authorization]);
 
   const beginPairing = async () => {

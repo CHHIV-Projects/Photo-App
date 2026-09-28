@@ -1517,7 +1517,7 @@ export interface WindowsHelperStatusList {
 }
 
 export interface WindowsSourceUiCreateFields {
-  access_node_id: string;
+  access_node_id: string | null;
   discovery_candidate_token?: string | null;
   source_type: "local" | "external" | "removable";
   device_alias: string;

@@ -66,6 +66,11 @@ from app.services.windows_helper.service import (
     WindowsHelperServiceError,
     create_pairing_authorization,
 )
+from app.services.windows_helper.storage_classification import (
+    classify_storage_observation,
+    mounted_volume_capability_version,
+    observation_allows_known_endpoint,
+)
 from app.windows_helper_shared.protocol import HelperCapabilityIdentity, ProbeMode, SourceType
 
 
@@ -187,7 +192,7 @@ def begin_portable_discovery(
 def resolve_portable_discovery(
     db: Session, request: WindowsSourceUiPortableDiscoveryResolveRequest
 ) -> WindowsSourceUiPortableDiscovery:
-    rows: dict[tuple[str, str], list[tuple[UUID, int, object]]] = {}
+    rows: dict[tuple[str, str], list[tuple[UUID, int, object, str | None]]] = {}
     for token in request.observation_tokens:
         status = get_operation_status(db, token)
         if status.source_endpoint_id is not None or status.source_profile_id is not None:
@@ -205,12 +210,15 @@ def resolve_portable_discovery(
         if status.state != "completed":
             continue
         operation, result = completed_volume_observation(db, token, require_fresh=True)
+        mounted_capability = mounted_volume_capability_version(operation.access_node)
         for index, item in enumerate(result.volumes):
             expected_drive_type = "removable" if request.source_type == "removable" else "fixed"
             if item.drive_type != expected_drive_type:
                 continue
+            if item.identity_fingerprint_version is None or item.identity_fingerprint_hash is None:
+                continue
             key = (item.identity_fingerprint_version, item.identity_fingerprint_hash)
-            rows.setdefault(key, []).append((token, index, item))
+            rows.setdefault(key, []).append((token, index, item, mounted_capability))
     candidates: list[WindowsSourceUiPortableCandidate] = []
     endpoint_type = "external_device" if request.source_type == "external" else "removable_media"
     for (version, fingerprint), observations in sorted(rows.items(), key=lambda row: row[0]):
@@ -232,14 +240,25 @@ def resolve_portable_discovery(
         endpoint = endpoints[0] if endpoints else None
         if endpoint is not None and endpoint.source_type != endpoint_type:
             continue
-        # Helper 0.5.1 can distinguish native Windows drive types, but it does
-        # not carry physical-device backing evidence in observe_volumes.  An
-        # unknown fixed drive may therefore be internal or virtual/cloud-backed.
-        # Fail closed for unknown External drives while continuing to expose a
-        # previously enrolled External Endpoint by its durable fingerprint.
-        if request.source_type == "external" and endpoint is None:
+        eligible_observations = [
+            entry
+            for entry in observations
+            if (
+                observation_allows_known_endpoint(
+                    entry[2],
+                    capability=entry[3],
+                    endpoint_type=endpoint_type,
+                )
+                if endpoint is not None
+                else classify_storage_observation(
+                    entry[2], capability=entry[3]
+                )
+                == ("external" if request.source_type == "external" else "removable")
+            )
+        ]
+        if not eligible_observations:
             continue
-        token, index, item = observations[0]
+        token, index, item, _mounted_capability = eligible_observations[0]
         candidates.append(
             WindowsSourceUiPortableCandidate(
                 candidate_token=f"{token}:{index}",
@@ -247,7 +266,7 @@ def resolve_portable_discovery(
                 known_device=endpoint is not None,
                 current_root=item.provider_native_root,  # type: ignore[attr-defined]
                 drive_type=item.drive_type,  # type: ignore[attr-defined]
-                current_route_count=len({entry[0] for entry in observations}),
+                current_route_count=len({entry[0] for entry in eligible_observations}),
             )
         )
     return WindowsSourceUiPortableDiscovery(
@@ -283,6 +302,7 @@ def _resolve_discovery_candidate(db: Session, request):
             "portable_candidate_invalid", "The selected device candidate is invalid.", http_status=400
         )
     item = result.volumes[index]
+    mounted_capability = mounted_volume_capability_version(operation.access_node)
     expected_drive_type = "removable" if request.source_type == "removable" else "fixed"
     if item.drive_type != expected_drive_type:
         raise WindowsHelperServiceError(
@@ -309,10 +329,26 @@ def _resolve_discovery_candidate(db: Session, request):
         raise WindowsHelperServiceError(
             "portable_identity_ambiguous", "The selected device identity is ambiguous.", http_status=409
         )
-    if request.source_type == "external" and not endpoints:
+    endpoint_type = "external_device" if request.source_type == "external" else "removable_media"
+    if endpoints:
+        if endpoints[0].source_type != endpoint_type or not observation_allows_known_endpoint(
+            item,
+            capability=mounted_capability,
+            endpoint_type=endpoint_type,
+        ):
+            raise WindowsHelperServiceError(
+                "portable_candidate_evidence_contradictory",
+                "The selected device evidence does not match the enrolled Source device.",
+                http_status=409,
+            )
+    elif classify_storage_observation(item, capability=mounted_capability) != (
+        "external" if request.source_type == "external" else "removable"
+    ):
         raise WindowsHelperServiceError(
-            "external_physical_identity_unverified",
-            "Windows Helper 0.5.1 cannot safely distinguish this unknown fixed drive from virtual storage.",
+            "external_physical_identity_unverified"
+            if request.source_type == "external"
+            else "removable_identity_unverified",
+            "The selected device lacks the required physical-storage evidence.",
             http_status=409,
         )
     alias = endpoints[0].alias if endpoints else request.device_alias
@@ -467,10 +503,16 @@ def resolve_profile_route(
         if status.state != "completed":
             continue
         operation, result = completed_volume_observation(db, token, require_fresh=True)
+        mounted_capability = mounted_volume_capability_version(operation.access_node)
         matches = [
             item for item in result.volumes
             if item.identity_fingerprint_hash == endpoint.identity_fingerprint_hash
             and item.identity_fingerprint_version == endpoint.identity_fingerprint_version
+            and observation_allows_known_endpoint(
+                item,
+                capability=mounted_capability,
+                endpoint_type=endpoint.source_type,
+            )
         ]
         if len(matches) > 1:
             return WindowsSourceUiRouteCheck(

@@ -58,6 +58,8 @@ describe("Windows computer enrollment", () => {
 
     const command = await screen.findByLabelText("PowerShell command");
     expect((command as HTMLTextAreaElement).value).toContain("pair --access-node-id");
+    expect((command as HTMLTextAreaElement).value).toContain("bin\\0.5.2");
+    expect((command as HTMLTextAreaElement).value).toContain("bin\\0.5.1");
     expect((command as HTMLTextAreaElement).value).not.toContain(authorization.pairing_code);
     expect(screen.getByLabelText(/One-time pairing code/)).toHaveValue(authorization.pairing_code);
     expect(api.createWindowsHelperPairing).toHaveBeenCalledWith("Family laptop");

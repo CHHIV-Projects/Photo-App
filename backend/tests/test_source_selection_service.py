@@ -292,11 +292,22 @@ class SourceSelectionServiceTests(unittest.TestCase):
     def test_windows_mounted_volume_enumeration_is_bounded_and_read_only(self) -> None:
         fingerprint_hash, fingerprint_version = volume_guid_fingerprint("55555555-5555-5555-5555-555555555555")
         runner = Mock()
-        runner.run.return_value = CommandResult(
-            args=("cmd", "/c", "mountvol", "E:", "/L"),
-            returncode=0,
-            stdout="\\\\?\\Volume{55555555-5555-5555-5555-555555555555}\\\n",
-        )
+        runner.run.side_effect = [
+            CommandResult(
+                args=("cmd", "/c", "mountvol", "E:", "/L"),
+                returncode=0,
+                stdout="\\\\?\\Volume{55555555-5555-5555-5555-555555555555}\\\n",
+            ),
+            CommandResult(
+                args=("powershell",),
+                returncode=0,
+                stdout=(
+                    '{"QueryError":false,"PartitionCount":1,"DiskCount":1,'
+                    '"BusType":7,"IsBoot":false,"IsSystem":false,'
+                    '"IsOffline":false,"RemovalPolicy":3}'
+                ),
+            ),
+        ]
 
         with patch("app.windows_helper_shared.identity.windows.platform.system", return_value="Windows"):
             candidates = enumerate_windows_mounted_volume_candidates(
@@ -309,7 +320,11 @@ class SourceSelectionServiceTests(unittest.TestCase):
         self.assertEqual(candidates[0].identity_fingerprint_hash, fingerprint_hash)
         self.assertEqual(candidates[0].identity_fingerprint_version, fingerprint_version)
         self.assertEqual(candidates[0].identity_identifier_masked, "{...5555}")
-        runner.run.assert_called_once_with(
+        self.assertEqual(candidates[0].storage_evidence.backing_association, "exact")
+        self.assertEqual(candidates[0].storage_evidence.storage_bus_type, "usb")
+        self.assertEqual(candidates[0].storage_evidence.removal_policy, "surprise")
+        self.assertEqual(runner.run.call_count, 2)
+        runner.run.assert_any_call(
             ["cmd", "/c", "mountvol", "E:", "/L"],
             timeout_seconds=10.0,
         )

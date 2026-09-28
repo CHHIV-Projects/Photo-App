@@ -190,6 +190,13 @@ class ClientTests(unittest.TestCase):
     def test_pair_and_heartbeat_use_only_approved_routes_and_auth_header(self) -> None:
         node_id = uuid4()
         capability = capability_identity(str(node_id))
+        mounted = [
+            item
+            for item in capability.capabilities
+            if item.name == "mounted_volume_observation"
+        ]
+        self.assertEqual([(item.name, item.version) for item in mounted], [("mounted_volume_observation", "2")])
+        self.assertEqual(capability.helper_version, "0.5.2")
         pairing_request = PairingCompleteRequest(
             pairing_code="p_" + "a" * 32 + "." + "b" * 43,
             access_node_id=node_id,

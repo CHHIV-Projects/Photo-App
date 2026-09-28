@@ -313,6 +313,9 @@ def execute_volume_observation(
                 identity_fingerprint_version=item.identity_fingerprint_version,
                 drive_type=item.drive_type,
                 identity_identifier_masked=item.identity_identifier_masked,
+                storage_evidence=(
+                    vars(item.storage_evidence) if item.storage_evidence is not None else None
+                ),
             )
             for item in candidates
         ],

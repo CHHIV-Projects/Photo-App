@@ -199,6 +199,45 @@ class HelperObserveVolumesRequest(_StrictProtocolModel):
         return self
 
 
+class MountedVolumeStorageEvidence(_StrictProtocolModel):
+    """Normalized classification evidence; never durable Source identity."""
+
+    storage_evidence_version: Literal["windows-storage-v1"] = "windows-storage-v1"
+    backing_association: Literal["exact", "none", "multiple", "error"]
+    storage_bus_type: Literal[
+        "unknown",
+        "scsi",
+        "atapi",
+        "ata",
+        "ieee1394",
+        "ssa",
+        "fibre_channel",
+        "usb",
+        "raid",
+        "iscsi",
+        "sas",
+        "sata",
+        "sd",
+        "mmc",
+        "virtual",
+        "file_backed_virtual",
+        "spaces",
+        "nvme",
+        "scm",
+        "ufs",
+        "nvme_of",
+    ] = "unknown"
+    storage_media_type: Literal["hdd", "ssd", "scm", "unspecified"] = "unspecified"
+    device_class: Literal["disk", "optical", "network", "virtual", "unknown"] = "unknown"
+    removal_policy: Literal["no_removal", "orderly", "surprise", "unknown"] = "unknown"
+    external_connection: Literal[
+        "usb", "ieee1394", "usb4_thunderbolt", "none", "unknown"
+    ] = "unknown"
+    operational_state: Literal["online", "offline", "unknown"] = "unknown"
+    is_boot: bool | None = None
+    is_system: bool | None = None
+
+
 class MountedVolumeObservation(_StrictProtocolModel):
     """Safe identity metadata for one current Windows drive root."""
 
@@ -212,6 +251,7 @@ class MountedVolumeObservation(_StrictProtocolModel):
     identity_fingerprint_version: str | None = Field(default=None, max_length=64)
     drive_type: str | None = Field(default=None, max_length=32)
     identity_identifier_masked: str | None = Field(default=None, max_length=128)
+    storage_evidence: MountedVolumeStorageEvidence | None = None
 
     @model_validator(mode="after")
     def _validate_observation(self) -> "MountedVolumeObservation":
@@ -456,6 +496,29 @@ def require_capability(capabilities: list[CapabilityVersion], name: str, version
         raise ProtocolCompatibilityError(f"Required capability is unavailable: {name} version {version}.")
 
 
+def capability_version(capabilities: list[CapabilityVersion], name: str) -> str | None:
+    """Return the one advertised version for a uniquely named capability."""
+
+    matches = [item.version for item in capabilities if item.name == name]
+    return matches[0] if len(matches) == 1 else None
+
+
+def require_capability_versions(
+    capabilities: list[CapabilityVersion],
+    name: str,
+    versions: set[str],
+) -> str:
+    """Require one capability whose version is in the explicitly accepted set."""
+
+    version = capability_version(capabilities, name)
+    if version not in versions:
+        accepted = ", ".join(sorted(versions))
+        raise ProtocolCompatibilityError(
+            f"Required capability is unavailable: {name} accepted versions {accepted}."
+        )
+    return version
+
+
 def canonical_protocol_json(message: _StrictProtocolModel) -> str:
     """Serialize machine-authority fields deterministically with a versioned domain."""
     payload = {
@@ -641,6 +704,7 @@ __all__ = [
     "InventoryResultStatus",
     "MachineIssue",
     "MountedVolumeObservation",
+    "MountedVolumeStorageEvidence",
     "ProbeMode",
     "ProbeResultStatus",
     "ProtocolCompatibilityError",
@@ -648,7 +712,9 @@ __all__ = [
     "SourceType",
     "canonical_protocol_digest",
     "canonical_protocol_json",
+    "capability_version",
     "probe_response_from_collection",
     "require_capability",
+    "require_capability_versions",
     "require_protocol_version",
 ]

@@ -5,7 +5,7 @@ import stat
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
@@ -14,11 +14,16 @@ from photo_organizer_windows_helper.operations import HelperOperationExecutor, W
 from windows_helper_shared.channel import ClaimedObserveVolumesOperation
 from windows_helper_shared.identity.fingerprints import volume_guid_fingerprint
 from windows_helper_shared.identity.models import (
+    CommandResult,
     IdentityFingerprintCandidate,
     NormalizedIdentityEvidence,
     ProviderNativeRootEvidence,
 )
-from windows_helper_shared.identity.windows import MountedVolumeCandidate
+from windows_helper_shared.identity.windows import (
+    MountedVolumeCandidate,
+    MountedVolumeStorageEvidence,
+    enumerate_windows_mounted_volume_candidates,
+)
 from windows_helper_shared.protocol import (
     MAX_INVENTORY_PAGE_SIZE,
     MAX_INVENTORY_RESULT_BYTES,
@@ -145,6 +150,94 @@ class InventoryProtocolTests(unittest.TestCase):
 
 
 class MountedVolumeObservationTests(unittest.TestCase):
+    def test_non_admin_storage_collector_normalizes_live_classification_matrix(self) -> None:
+        payloads = {
+            "C": '{"QueryError":false,"PartitionCount":1,"DiskCount":1,"BusType":17,"IsBoot":true,"IsSystem":true,"IsOffline":false,"RemovalPolicy":1}',
+            "G": '{"QueryError":false,"PartitionCount":0,"DiskCount":0,"BusType":0,"IsBoot":null,"IsSystem":null,"IsOffline":null,"RemovalPolicy":null}',
+            "H": '{"QueryError":false,"PartitionCount":1,"DiskCount":1,"BusType":7,"IsBoot":false,"IsSystem":false,"IsOffline":false,"RemovalPolicy":3}',
+            "X": '{"QueryError":false,"PartitionCount":1,"DiskCount":1,"BusType":7,"IsBoot":false,"IsSystem":false,"IsOffline":false,"RemovalPolicy":3}',
+        }
+
+        class _Runner:
+            def run(self, args, *, timeout_seconds):
+                if args[:3] == ["cmd", "/c", "mountvol"]:
+                    return CommandResult(
+                        args=tuple(args),
+                        returncode=0,
+                        stdout="\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\",
+                    )
+                script = args[-1]
+                letter = next(key for key in payloads if f"DriveLetter = '{key}'" in script)
+                return CommandResult(
+                    args=tuple(args),
+                    returncode=0,
+                    stdout=payloads[letter],
+                )
+
+        with patch(
+            "windows_helper_shared.identity.windows.platform.system",
+            return_value="Windows",
+        ):
+            candidates = enumerate_windows_mounted_volume_candidates(
+                command_runner=_Runner(),
+                mounted_drive_provider=lambda: [
+                    ("C:\\", "fixed"),
+                    ("G:\\", "fixed"),
+                    ("H:\\", "fixed"),
+                    ("X:\\", "removable"),
+                ],
+            )
+
+        evidence = {item.root_path: item.storage_evidence for item in candidates}
+        self.assertEqual(evidence["C:\\"].storage_bus_type, "nvme")
+        self.assertTrue(evidence["C:\\"].is_boot)
+        self.assertEqual(evidence["G:\\"].backing_association, "none")
+        self.assertEqual(evidence["H:\\"].storage_bus_type, "usb")
+        self.assertEqual(evidence["H:\\"].external_connection, "usb")
+        self.assertEqual(evidence["H:\\"].removal_policy, "surprise")
+        self.assertEqual(evidence["H:\\"].operational_state, "online")
+        self.assertEqual(evidence["X:\\"].storage_bus_type, "usb")
+
+    def test_storage_collector_fails_closed_for_timeout_and_malformed_state(self) -> None:
+        cases = [
+            CommandResult(args=("powershell",), returncode=1, timed_out=True),
+            CommandResult(args=("powershell",), returncode=0, stdout="not-json"),
+            CommandResult(
+                args=("powershell",),
+                returncode=0,
+                stdout=(
+                    '{"QueryError":false,"PartitionCount":1,"DiskCount":1,'
+                    '"BusType":7,"IsBoot":null,"IsSystem":false,'
+                    '"IsOffline":false,"RemovalPolicy":3}'
+                ),
+            ),
+        ]
+
+        for collector_result in cases:
+            with self.subTest(result=collector_result):
+                runner = Mock()
+                runner.run.side_effect = [
+                    CommandResult(
+                        args=("cmd", "/c", "mountvol", "H:", "/L"),
+                        returncode=0,
+                        stdout="\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\",
+                    ),
+                    collector_result,
+                ]
+                with patch(
+                    "windows_helper_shared.identity.windows.platform.system",
+                    return_value="Windows",
+                ):
+                    candidates = enumerate_windows_mounted_volume_candidates(
+                        command_runner=runner,
+                        mounted_drive_provider=lambda: [("H:\\", "fixed")],
+                    )
+
+                self.assertEqual(
+                    candidates[0].storage_evidence.backing_association,
+                    "error",
+                )
+
     def test_observation_reuses_safe_volume_candidates_without_file_authority(self) -> None:
         request_id = uuid4()
         request = HelperObserveVolumesRequest(
@@ -161,6 +254,16 @@ class MountedVolumeObservationTests(unittest.TestCase):
                     identity_fingerprint_version=FINGERPRINT_VERSION,
                     drive_type="fixed",
                     identity_identifier_masked="{...1111}",
+                    storage_evidence=MountedVolumeStorageEvidence(
+                        backing_association="exact",
+                        storage_bus_type="usb",
+                        device_class="disk",
+                        removal_policy="surprise",
+                        external_connection="usb",
+                        operational_state="online",
+                        is_boot=False,
+                        is_system=False,
+                    ),
                 )
             ]
         )
@@ -174,6 +277,8 @@ class MountedVolumeObservationTests(unittest.TestCase):
 
         self.assertIsInstance(result, HelperObserveVolumesResponse)
         self.assertEqual([item.provider_native_root for item in result.volumes], ["E:\\"])
+        self.assertEqual(result.volumes[0].storage_evidence.storage_bus_type, "usb")
+        self.assertEqual(result.volumes[0].storage_evidence.backing_association, "exact")
         payload = result.model_dump(mode="json")
         serialized = json.dumps(payload)
         self.assertTrue(
