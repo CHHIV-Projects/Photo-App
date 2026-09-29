@@ -150,6 +150,11 @@ def _download_request(
 
 
 class IcloudExactSelectionHelperTests(unittest.TestCase):
+    def test_default_exports_root_uses_backend_project_root(self) -> None:
+        expected = (Path(__file__).resolve().parents[1] / "storage" / "exports" / "icloud").resolve()
+
+        self.assertEqual(helper_module._default_exports_root(), expected)
+
     def test_pinned_provider_mapping_exposes_explicit_live_photo_resources(self) -> None:
         provider = object.__new__(IcloudpdInternalProvider)
         provider._asset_original = "original"

@@ -133,6 +133,12 @@ class Settings:
 	icloudpd_run_timeout_seconds: int = int(os.getenv("ICLOUDPD_RUN_TIMEOUT_SECONDS", "7200"))
 	icloudpd_probe_timeout_seconds: int = int(os.getenv("ICLOUDPD_PROBE_TIMEOUT_SECONDS", "30"))
 	icloudpd_min_version: str = os.getenv("ICLOUDPD_MIN_VERSION", "1.32.0").strip()
+	icloud_auth_state_path: str = os.getenv("ICLOUD_AUTH_STATE_PATH", "/app/icloud-auth").strip()
+	icloud_auth_session_ttl_seconds: int = int(os.getenv("ICLOUD_AUTH_SESSION_TTL_SECONDS", "600"))
+	icloud_provider_python_path: str = os.getenv(
+		"ICLOUD_PROVIDER_PYTHON_PATH",
+		"/opt/photo-organizer-icloud/bin/python",
+	).strip()
 	icloud_exact_helper_env_root: str = os.getenv(
 		"ICLOUD_EXACT_HELPER_ENV_ROOT",
 		"../.tools/icloud_exact_helper",

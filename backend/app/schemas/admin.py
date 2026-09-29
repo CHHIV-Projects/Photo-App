@@ -370,7 +370,15 @@ class IcloudSourceReadinessResponse(BaseModel):
     source_root_alignment_status: Literal["matched", "mismatch", "unknown"] = "unknown"
     source_registration_status: Literal["matched", "mismatch", "unknown"] = "unknown"
 
-    auth_status: Literal["unknown", "action_required"] = "unknown"
+    auth_status: Literal[
+        "authenticated",
+        "authentication_required",
+        "session_expired",
+        "authentication_failed",
+        "provider_unavailable",
+        "action_required",
+        "unknown",
+    ] = "unknown"
     last_auth_error_code: str | None = None
 
     operation_conflicts: IcloudReadinessOperationConflicts
@@ -379,6 +387,46 @@ class IcloudSourceReadinessResponse(BaseModel):
     blocking_reasons: list[IcloudReadinessReason] = Field(default_factory=list)
     warnings: list[IcloudReadinessReason] = Field(default_factory=list)
     recommended_action: str
+
+
+class IcloudAuthenticationStartRequest(BaseModel):
+    """Start one bounded interactive sign-in session."""
+
+    source_profile_id: int = Field(gt=0)
+
+
+class IcloudAuthenticationSecretRequest(BaseModel):
+    """Submit one ephemeral sign-in secret for a Source-bound session."""
+
+    source_profile_id: int = Field(gt=0)
+    value: str = Field(min_length=1, max_length=1024)
+
+
+class IcloudAuthenticationCancelRequest(BaseModel):
+    """Cancel one Source-bound interactive sign-in session."""
+
+    source_profile_id: int = Field(gt=0)
+
+
+class IcloudAuthenticationResponse(BaseModel):
+    """Browser-safe interactive iCloud sign-in state."""
+
+    session_id: UUID | None = None
+    source_profile_id: int
+    provider: Literal["icloud"] = "icloud"
+    account_hint: str
+    state: Literal[
+        "password_required",
+        "mfa_required",
+        "authenticating",
+        "authenticated",
+        "authentication_failed",
+        "expired",
+        "cancelled",
+    ]
+    message: str
+    retryable: bool
+    expires_at: datetime | None = None
 
 
 class SourceProfilePathCheckResponse(BaseModel):

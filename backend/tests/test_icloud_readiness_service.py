@@ -97,12 +97,15 @@ class IcloudReadinessServiceTests(unittest.TestCase):
         with patch("app.services.admin.icloud_readiness_service.get_source_profile_detail", return_value=detail), patch(
             "app.services.admin.icloud_readiness_service._resolve_latest_matching_acquisition",
             return_value=matching_run,
+        ), patch(
+            "app.services.admin.icloud_readiness_service.probe_icloud_authentication",
+            return_value="authentication_required",
         ):
             snapshot = get_icloud_source_readiness(self.db, source_id=7)
 
-        self.assertEqual(snapshot.auth_status, "action_required")
+        self.assertEqual(snapshot.auth_status, "authentication_required")
         self.assertEqual(snapshot.readiness_status, "not_ready")
-        self.assertIn("AUTH_REQUIRED", [reason.code for reason in snapshot.blocking_reasons])
+        self.assertIn("AUTHENTICATION_REQUIRED", [reason.code for reason in snapshot.blocking_reasons])
 
     def test_global_source_intake_conflict_blocks_readiness(self) -> None:
         detail = _detail()
@@ -138,12 +141,16 @@ class IcloudReadinessServiceTests(unittest.TestCase):
     def test_no_recent_acquisition_warns_when_core_alignment_passes(self) -> None:
         detail = _detail()
 
-        with patch("app.services.admin.icloud_readiness_service.get_source_profile_detail", return_value=detail):
+        with patch("app.services.admin.icloud_readiness_service.get_source_profile_detail", return_value=detail), patch(
+            "app.services.admin.icloud_readiness_service.probe_icloud_authentication",
+            return_value="authenticated",
+        ):
             snapshot = get_icloud_source_readiness(self.db, source_id=7)
 
         warning_codes = {reason.code for reason in snapshot.warnings}
         self.assertEqual(snapshot.readiness_status, "warning")
-        self.assertIn("AUTH_UNKNOWN", warning_codes)
+        self.assertEqual(snapshot.auth_status, "authenticated")
+        self.assertNotIn("AUTH_UNKNOWN", warning_codes)
         self.assertIn("NO_RECENT_ACQUISITION", warning_codes)
 
 

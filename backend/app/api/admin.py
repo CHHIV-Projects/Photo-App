@@ -51,6 +51,10 @@ from app.schemas.admin import (
     SourceProfilesResponse,
     IcloudReadinessReason,
     IcloudSourceReadinessResponse,
+    IcloudAuthenticationStartRequest,
+    IcloudAuthenticationSecretRequest,
+    IcloudAuthenticationCancelRequest,
+    IcloudAuthenticationResponse,
     IcloudAcquisitionRunRequest,
     IcloudAcquisitionRunResponse,
     IcloudAcquisitionRunStatus,
@@ -234,8 +238,37 @@ from app.services.previews.heic_preview_processing_service import (
     request_heic_preview_stop,
     start_heic_preview_background,
 )
+from app.services.icloud_authentication_service import (
+    IcloudAuthenticationError,
+    IcloudAuthenticationSnapshot,
+    cancel_icloud_authentication,
+    start_icloud_authentication,
+    submit_icloud_mfa,
+    submit_icloud_password,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def _to_icloud_authentication_response(
+    snapshot: IcloudAuthenticationSnapshot,
+) -> IcloudAuthenticationResponse:
+    return IcloudAuthenticationResponse(
+        session_id=snapshot.session_id,
+        source_profile_id=snapshot.source_profile_id,
+        account_hint=snapshot.account_hint,
+        state=snapshot.state,
+        message=snapshot.message,
+        retryable=snapshot.retryable,
+        expires_at=snapshot.expires_at,
+    )
+
+
+def _icloud_authentication_error_response(exc: IcloudAuthenticationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": exc.safe_message, "code": exc.code, "retryable": exc.retryable},
+    )
 
 
 def get_source_identity_probe_service() -> SourceIdentityProbeService:
@@ -1987,6 +2020,83 @@ def get_source_profile_icloud_readiness(
             status_code=status.HTTP_404_NOT_FOUND,
             content={"detail": "Source profile not found."},
         )
+
+
+@router.post("/icloud-auth/sessions", response_model=IcloudAuthenticationResponse)
+def post_icloud_authentication_session(
+    body: IcloudAuthenticationStartRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudAuthenticationResponse | JSONResponse:
+    """Start or reuse one short-lived Source-bound iCloud sign-in session."""
+    try:
+        return _to_icloud_authentication_response(
+            start_icloud_authentication(db, source_profile_id=body.source_profile_id)
+        )
+    except LookupError:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Source profile not found."})
+    except IcloudAuthenticationError as exc:
+        return _icloud_authentication_error_response(exc)
+
+
+@router.post("/icloud-auth/sessions/{session_id}/password", response_model=IcloudAuthenticationResponse)
+def post_icloud_authentication_password(
+    session_id: UUID,
+    body: IcloudAuthenticationSecretRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudAuthenticationResponse | JSONResponse:
+    """Consume an ephemeral password without returning or persisting it."""
+    try:
+        return _to_icloud_authentication_response(
+            submit_icloud_password(
+                db,
+                session_id=session_id,
+                source_profile_id=body.source_profile_id,
+                password=body.value,
+            )
+        )
+    except LookupError:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Source profile not found."})
+    except IcloudAuthenticationError as exc:
+        return _icloud_authentication_error_response(exc)
+
+
+@router.post("/icloud-auth/sessions/{session_id}/mfa", response_model=IcloudAuthenticationResponse)
+def post_icloud_authentication_mfa(
+    session_id: UUID,
+    body: IcloudAuthenticationSecretRequest,
+    db: Session = Depends(get_db_session),
+) -> IcloudAuthenticationResponse | JSONResponse:
+    """Consume one ephemeral Apple verification code."""
+    try:
+        return _to_icloud_authentication_response(
+            submit_icloud_mfa(
+                db,
+                session_id=session_id,
+                source_profile_id=body.source_profile_id,
+                code=body.value,
+            )
+        )
+    except LookupError:
+        return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Source profile not found."})
+    except IcloudAuthenticationError as exc:
+        return _icloud_authentication_error_response(exc)
+
+
+@router.post("/icloud-auth/sessions/{session_id}/cancel", response_model=IcloudAuthenticationResponse)
+def post_icloud_authentication_cancel(
+    session_id: UUID,
+    body: IcloudAuthenticationCancelRequest,
+) -> IcloudAuthenticationResponse | JSONResponse:
+    """Cancel a short-lived iCloud sign-in session without changing Source identity."""
+    try:
+        return _to_icloud_authentication_response(
+            cancel_icloud_authentication(
+                session_id=session_id,
+                source_profile_id=body.source_profile_id,
+            )
+        )
+    except IcloudAuthenticationError as exc:
+        return _icloud_authentication_error_response(exc)
 
 
 @router.post("/source-profiles", response_model=SourceProfileCreateResponse)

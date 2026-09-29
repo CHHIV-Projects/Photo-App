@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 import secrets
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any, Callable
@@ -20,6 +21,7 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.runtime_paths import icloud_exports_root
 from app.models.ingestion_source import IngestionSource
 from app.services.icloud_acquisition.exact_selection_protocol import (
     AUTHENTICATED,
@@ -53,7 +55,7 @@ from app.services.icloud_path_service import resolve_icloud_staging_path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 PROJECT_ROOT = BACKEND_ROOT.parent
-APPROVED_EXPORTS_ROOT = (PROJECT_ROOT / "storage" / "exports" / "icloud").resolve()
+APPROVED_EXPORTS_ROOT = icloud_exports_root().expanduser().resolve()
 HELPER_SCRIPT = Path(__file__).with_name("icloud_exact_selection_helper.py").resolve()
 DEFAULT_LIBRARY = "PrimarySync"
 DEFAULT_HELPER_TIMEOUT_SECONDS = int(
@@ -178,6 +180,11 @@ def _resolve_helper_root() -> Path:
 
 
 def resolve_exact_selection_helper_python() -> Path | None:
+    configured_provider_python = Path(settings.icloud_provider_python_path).expanduser()
+    if configured_provider_python.is_absolute() and configured_provider_python.is_file():
+        # Preserve the virtual-environment launcher path.  Resolving this symlink
+        # selects the base interpreter and silently drops the venv site-packages.
+        return configured_provider_python
     helper_root = _resolve_helper_root()
     for candidate in (
         helper_root / "Scripts" / "python.exe",
@@ -186,7 +193,10 @@ def resolve_exact_selection_helper_python() -> Path | None:
         helper_root / "bin" / "python",
     ):
         if candidate.exists() and candidate.is_file():
-            return candidate.resolve()
+            return candidate
+    system_python = Path(sys.executable)
+    if system_python.exists() and system_python.is_file():
+        return system_python.resolve()
     return None
 
 

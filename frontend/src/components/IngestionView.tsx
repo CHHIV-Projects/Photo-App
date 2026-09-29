@@ -32,6 +32,10 @@ import {
   startSourceIntake,
   stopIcloudAcquisition,
   stopSourceIntake,
+  startIcloudAuthentication,
+  submitIcloudAuthenticationPassword,
+  submitIcloudAuthenticationMfa,
+  cancelIcloudAuthentication,
   updateSourceProfileMetadata,
   verifySourceProfilePath,
 } from "@/lib/api";
@@ -68,11 +72,17 @@ import type {
   SourceIntakeStatusSnapshot,
   IcloudStagingCleanupRunStatus,
   IcloudStagingCleanupReadinessResponse,
+  IcloudAuthenticationResponse,
   WindowsSourceUiComputer,
 } from "@/types/ui-api";
 import { normalSelectorSourceTypes, sourcePresentationType, sourceWorkbenchKind } from "@/lib/source-provider-ui";
 
 import IcloudRunWorkflowPanel from "./IcloudRunWorkflowPanel";
+import {
+  readWorkbenchSelection,
+  resolveCanonicalTerminalReportFilename,
+  writeWorkbenchSelection,
+} from "@/lib/ingestion-session-ui";
 import NasRegistration from "./NasRegistration";
 import WindowsComputerEnrollment from "./WindowsComputerEnrollment";
 import WindowsSourceCreation from "./WindowsSourceCreation";
@@ -253,11 +263,6 @@ function initialFormState(): EditorFormState {
     acquisitionMethod: "icloudpd",
     managedStagingPath: "",
   };
-}
-
-function computeManagedStagingPreview(sourceLabel: string): string {
-  const slug = sanitizeIcloudLabelForMatch(sourceLabel);
-  return `storage/exports/icloud/${slug}`;
 }
 
 function toIcloudReadinessLabel(value: IcloudReadinessState): string {
@@ -1353,12 +1358,18 @@ export default function IngestionView() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [banner, setBanner] = useState<BannerState>(null);
   const [workbenchSourceType, setWorkbenchSourceType] = useState<OperatorSourceType>("local");
+  const [workbenchSelectionRestored, setWorkbenchSelectionRestored] = useState(false);
   const [setupPanel, setSetupPanel] = useState<"add" | "computers" | null>(null);
   const [selectedWorkbenchDeviceKey, setSelectedWorkbenchDeviceKey] = useState<string | null>(null);
   const [selectedWorkbenchSourceId, setSelectedWorkbenchSourceId] = useState<number | null>(null);
   const [sourceSelectionResult, setSourceSelectionResult] = useState<SourceSelectionResponse | null>(null);
   const [sourceSelectionError, setSourceSelectionError] = useState<string | null>(null);
   const [isSelectingSource, setIsSelectingSource] = useState(false);
+  const [icloudAuthentication, setIcloudAuthentication] = useState<IcloudAuthenticationResponse | null>(null);
+  const [icloudPassword, setIcloudPassword] = useState("");
+  const [icloudMfaCode, setIcloudMfaCode] = useState("");
+  const [icloudAuthenticationError, setIcloudAuthenticationError] = useState<string | null>(null);
+  const [isSubmittingIcloudAuthentication, setIsSubmittingIcloudAuthentication] = useState(false);
   const [runIngestionDispatchResult, setRunIngestionDispatchResult] = useState<RunIngestionDispatchResponse | null>(null);
   const [runIngestionDispatchError, setRunIngestionDispatchError] = useState<string | null>(null);
   const [createSourceForm, setCreateSourceForm] = useState<EditorFormState>(initialFormState());
@@ -1378,6 +1389,16 @@ export default function IngestionView() {
   const [mountedSourceRuntime, setMountedSourceRuntime] = useState<"checking" | "available" | "unavailable">("checking");
   const [linuxSourceLocationId, setLinuxSourceLocationId] = useState("");
   const [linuxSourceRelativeRoot, setLinuxSourceRelativeRoot] = useState("");
+
+  useEffect(() => {
+    const restored = readWorkbenchSelection(typeof window === "undefined" ? null : window.sessionStorage);
+    if (restored) {
+      setWorkbenchSourceType(restored.sourceType);
+      setSelectedWorkbenchDeviceKey(restored.deviceKey);
+      setSelectedWorkbenchSourceId(restored.sourceId);
+    }
+    setWorkbenchSelectionRestored(true);
+  }, []);
 
   const loadLinuxSourceLocations = useCallback(async () => {
     try {
@@ -2021,6 +2042,9 @@ export default function IngestionView() {
   }, [selectedWorkbenchSourceId, workbenchSourceOptions]);
 
   useEffect(() => {
+    if (!workbenchSelectionRestored || profiles.length === 0) {
+      return;
+    }
     if (
       workbenchSourceTypeOptions.length > 0
       && !workbenchSourceTypeOptions.some((option) => option.value === workbenchSourceType)
@@ -2029,9 +2053,12 @@ export default function IngestionView() {
       setSelectedWorkbenchDeviceKey(null);
       setSelectedWorkbenchSourceId(null);
     }
-  }, [workbenchSourceType, workbenchSourceTypeOptions]);
+  }, [profiles.length, workbenchSelectionRestored, workbenchSourceType, workbenchSourceTypeOptions]);
 
   useEffect(() => {
+    if (!workbenchSelectionRestored || profiles.length === 0) {
+      return;
+    }
     if (
       selectedWorkbenchDeviceKey != null
       && workbenchDevices.some((device) => device.key === selectedWorkbenchDeviceKey)
@@ -2039,9 +2066,12 @@ export default function IngestionView() {
       return;
     }
     setSelectedWorkbenchDeviceKey(workbenchDevices[0]?.key ?? null);
-  }, [selectedWorkbenchDeviceKey, workbenchDevices]);
+  }, [profiles.length, selectedWorkbenchDeviceKey, workbenchDevices, workbenchSelectionRestored]);
 
   useEffect(() => {
+    if (!workbenchSelectionRestored || profiles.length === 0) {
+      return;
+    }
     if (
       selectedWorkbenchSourceId != null
       && workbenchSourceOptions.some((profile) => profile.source_id === selectedWorkbenchSourceId)
@@ -2049,20 +2079,23 @@ export default function IngestionView() {
       return;
     }
     setSelectedWorkbenchSourceId(workbenchSourceOptions[0]?.source_id ?? null);
-  }, [selectedWorkbenchSourceId, workbenchSourceOptions]);
+  }, [profiles.length, selectedWorkbenchSourceId, workbenchSelectionRestored, workbenchSourceOptions]);
+
+  useEffect(() => {
+    if (!workbenchSelectionRestored || profiles.length === 0 || typeof window === "undefined") {
+      return;
+    }
+    writeWorkbenchSelection(window.sessionStorage, {
+      sourceType: workbenchSourceType,
+      deviceKey: selectedWorkbenchDeviceKey,
+      sourceId: selectedWorkbenchSourceId,
+    });
+  }, [profiles.length, selectedWorkbenchDeviceKey, selectedWorkbenchSourceId, workbenchSelectionRestored, workbenchSourceType]);
 
   useEffect(() => {
     setSourceSelectionResult(null);
     setSourceSelectionError(null);
   }, [selectedWorkbenchDeviceKey, selectedWorkbenchSourceId, workbenchSourceType]);
-
-  const managedStagingPreview = useMemo(() => {
-    return computeManagedStagingPreview(editorForm.sourceLabel);
-  }, [editorForm.sourceLabel]);
-
-  const createManagedStagingPreview = useMemo(() => {
-    return computeManagedStagingPreview(createSourceForm.sourceLabel);
-  }, [createSourceForm.sourceLabel]);
 
   const editorSourceIdentitySupport = useMemo(() => (
     editorMode === "create"
@@ -2445,7 +2478,6 @@ export default function IngestionView() {
           cloud_provider: "icloud",
           account_username: createSourceForm.accountUsername.trim(),
           acquisition_method: createSourceForm.acquisitionMethod,
-          managed_staging_path: createSourceForm.managedStagingPath.trim() || createManagedStagingPreview,
         });
         setCreatedIcloudSource(response.profile);
         setSourceCreationPhase("complete");
@@ -2567,7 +2599,6 @@ export default function IngestionView() {
       setSourceCreationError(error instanceof Error ? error.message : "Failed to create source.");
     }
   }, [
-    createManagedStagingPreview,
     createSourceForm,
     clearSourceCreationInputsAfterSuccess,
     handleIdentifySourceLocation,
@@ -2817,6 +2848,21 @@ export default function IngestionView() {
     try {
       const result = await selectSourceProfile({ source_profile_id: selectedWorkbenchProfile.source_id });
       setSourceSelectionResult(result);
+      const blockingReasons = Array.isArray(result.advanced_details.icloud_blocking_reasons)
+        ? result.advanced_details.icloud_blocking_reasons as Array<{ code?: string }>
+        : [];
+      const authenticationRequired = blockingReasons.some((reason) => (
+        reason.code === "AUTHENTICATION_REQUIRED"
+        || reason.code === "SESSION_EXPIRED"
+        || reason.code === "AUTHENTICATION_FAILED"
+      ));
+      if (authenticationRequired && selectedWorkbenchProfile.cloud_provider === "icloud") {
+        const authentication = await startIcloudAuthentication(selectedWorkbenchProfile.source_id);
+        setIcloudAuthentication(authentication);
+        setIcloudPassword("");
+        setIcloudMfaCode("");
+        setIcloudAuthenticationError(null);
+      }
     } catch (error) {
       setSourceSelectionResult(null);
       setSourceSelectionError(error instanceof Error ? error.message : "Failed to select Source.");
@@ -2824,6 +2870,61 @@ export default function IngestionView() {
       setIsSelectingSource(false);
     }
   }, [selectedWorkbenchProfile]);
+
+  const closeIcloudAuthentication = useCallback(async () => {
+    const sessionId = icloudAuthentication?.session_id;
+    const sourceProfileId = icloudAuthentication?.source_profile_id;
+    setIcloudPassword("");
+    setIcloudMfaCode("");
+    setIcloudAuthenticationError(null);
+    setIcloudAuthentication(null);
+    if (sessionId && sourceProfileId) {
+      try {
+        await cancelIcloudAuthentication(sessionId, sourceProfileId);
+      } catch {
+        // The server may already have expired or completed the bounded session.
+      }
+    }
+  }, [icloudAuthentication]);
+
+  const submitIcloudAuthentication = useCallback(async () => {
+    if (!icloudAuthentication?.session_id) {
+      return;
+    }
+    const isMfa = icloudAuthentication.state === "mfa_required";
+    const secret = isMfa ? icloudMfaCode : icloudPassword;
+    setIsSubmittingIcloudAuthentication(true);
+    setIcloudAuthenticationError(null);
+    try {
+      const result = isMfa
+        ? await submitIcloudAuthenticationMfa(
+          icloudAuthentication.session_id,
+          icloudAuthentication.source_profile_id,
+          secret,
+        )
+        : await submitIcloudAuthenticationPassword(
+          icloudAuthentication.session_id,
+          icloudAuthentication.source_profile_id,
+          secret,
+        );
+      setIcloudPassword("");
+      setIcloudMfaCode("");
+      setIcloudAuthentication(result);
+      if (result.state === "authenticated") {
+        const selection = await selectSourceProfile({ source_profile_id: result.source_profile_id });
+        setSourceSelectionResult(selection);
+        setSourceSelectionError(null);
+        setIcloudAuthentication(null);
+        setBanner({ kind: "success", message: "iCloud sign-in succeeded. The Source is ready for review." });
+      }
+    } catch (error) {
+      setIcloudPassword("");
+      setIcloudMfaCode("");
+      setIcloudAuthenticationError(error instanceof Error ? error.message : "iCloud sign-in failed safely.");
+    } finally {
+      setIsSubmittingIcloudAuthentication(false);
+    }
+  }, [icloudAuthentication, icloudMfaCode, icloudPassword]);
 
   const handleDispatchFilesystemRunIngestion = useCallback(async () => {
     const context = sourceSelectionResult?.selected_source_context;
@@ -3309,9 +3410,7 @@ export default function IngestionView() {
           cloud_provider: editorForm.sourceType === "cloud_export" ? editorForm.cloudProvider : null,
           account_username: editorForm.accountUsername.trim() || null,
           acquisition_method: editorForm.sourceType === "cloud_export" ? editorForm.acquisitionMethod : null,
-          managed_staging_path: editorForm.sourceType === "cloud_export"
-            ? (editorForm.managedStagingPath.trim() || managedStagingPreview)
-            : null,
+          managed_staging_path: null,
         };
 
         const response = await createSourceProfile(payload);
@@ -3389,7 +3488,6 @@ export default function IngestionView() {
     editorMode,
     editingProfile,
     loadProfiles,
-    managedStagingPreview,
     runSourceIdentityEnrollmentPlan,
     statusFilter,
     sourceIdentityAlias,
@@ -3556,10 +3654,11 @@ export default function IngestionView() {
     && currentTerminalRunKey !== dismissedTerminalRunKey,
   );
 
-  const terminalReportFilename =
-    extractReportFilename(sourceIntakeStatus?.report_path ?? null)
-    || activeRunReport?.report_filename
-    || null;
+  const terminalReportFilename = resolveCanonicalTerminalReportFilename(
+    sourceIntakeStatus?.report_path ?? null,
+    sourceIntakeStatus?.ingestion_run_id ?? null,
+    sourceIntakeReports,
+  );
 
   const latestReportBySourceId = useMemo(() => {
     const bySource = new Map<number, SourceIntakeReportSummary>();
@@ -4523,14 +4622,9 @@ export default function IngestionView() {
                   <label className={styles.formLabel}>
                     Managed Staging Path
                     <input
-                      className={styles.formInput}
-                      value={createSourceForm.managedStagingPath || createManagedStagingPreview}
-                      disabled={sourceCreationPhase === "confirming"}
-                      placeholder={createManagedStagingPreview}
-                      onChange={(event) => {
-                        resetSourceCreationOutcome();
-                        setCreateSourceForm((current) => ({ ...current, managedStagingPath: event.target.value }));
-                      }}
+                      className={`${styles.formInput} ${styles.readOnlyInput}`}
+                      value="Managed automatically by Photo Organizer"
+                      readOnly
                     />
                   </label>
                 </>
@@ -5101,6 +5195,11 @@ export default function IngestionView() {
                 <span className={styles.detailMeta}>{getSourceWorkflowPlaceholder(selectedWorkbenchProfile)}</span>
               </div>
             </div>
+            {(sourceSelectionError || sourceSelectionResult?.result === "not_selected") && (
+              <p className={styles.inlineError} role="alert">
+                {sourceSelectionError ?? sourceSelectionResult?.message}
+              </p>
+            )}
             {sourceSelectionResult && (
               <details className={styles.advancedDetails}>
                 <summary>Advanced Details</summary>
@@ -5110,7 +5209,28 @@ export default function IngestionView() {
                 }, null, 2)}</pre>
               </details>
             )}
-            {sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? (
+            {isIcloudProfile(selectedWorkbenchProfile) ? (
+              <IcloudRunWorkflowPanel
+                selectedSourceId={selectedWorkbenchProfile.source_id}
+                selectedSourceLabel={selectedWorkbenchProfile.source_label}
+                selectedSourceContext={
+                  sourceSelectionResult?.result === "selected"
+                    && sourceSelectionResult.availability === "available"
+                    && sourceSelectionResult.workflow_kind === "icloud_intake"
+                    ? sourceSelectionResult.selected_source_context
+                    : null
+                }
+                actionsEnabled={Boolean(
+                  sourceSelectionResult?.result === "selected"
+                    && sourceSelectionResult.availability === "available"
+                    && sourceSelectionResult.workflow_kind === "icloud_intake"
+                    && sourceSelectionResult.selected_source_context
+                )}
+                onActionComplete={() => {
+                  void loadProfiles({ refreshOnly: true, resetBanner: false });
+                }}
+              />
+            ) : sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? (
               <WindowsSourceWorkbench
                 profile={selectedWorkbenchProfile}
                 onComplete={() => void loadProfiles({ refreshOnly: true, resetBanner: false })}
@@ -5119,17 +5239,7 @@ export default function IngestionView() {
               && sourceSelectionResult.availability === "available"
               && sourceSelectionResult.workflow_kind
               && sourceSelectionResult.selected_source_context ? (
-                sourceSelectionResult.workflow_kind === "icloud_intake" ? (
-                  <IcloudRunWorkflowPanel
-                    selectedSourceId={sourceSelectionResult.selected_source_context.source_profile_id}
-                    selectedSourceLabel={sourceSelectionResult.selected_source_context.source_name}
-                    selectedSourceContext={sourceSelectionResult.selected_source_context}
-                    onActionComplete={() => {
-                      void loadProfiles({ refreshOnly: true, resetBanner: false });
-                    }}
-                  />
-                ) : (
-                  <section className={styles.runPanel} aria-label="Filesystem Source Intake Step 3">
+                <section className={styles.runPanel} aria-label="Filesystem Source Intake Step 3">
                     <div className={styles.runPanelHeader}>
                       <div>
                         <h3 className={styles.runPanelTitle}>Filesystem Source Intake</h3>
@@ -5233,7 +5343,6 @@ export default function IngestionView() {
                         </div>
                     </>
                   </section>
-                )
               ) : (
                 <div className={styles.stepPlaceholder}>
                   <span className={styles.detailLabel}>Step 3</span>
@@ -5878,14 +5987,9 @@ export default function IngestionView() {
                     Managed Staging Path
                     {editorMode === "create" ? (
                       <input
-                        className={styles.formInput}
-                        value={editorForm.managedStagingPath || managedStagingPreview}
-                        disabled={sourceIdentityPhase !== "idle"}
-                        onChange={(event) => setEditorForm((prev) => ({
-                          ...prev,
-                          managedStagingPath: event.target.value,
-                        }))}
-                        placeholder={managedStagingPreview}
+                        className={`${styles.formInput} ${styles.readOnlyInput}`}
+                        value="Managed automatically by Photo Organizer"
+                        readOnly
                       />
                     ) : (
                       <input className={`${styles.formInput} ${styles.readOnlyInput}`} value={editorForm.managedStagingPath || "-"} readOnly />
@@ -5908,13 +6012,10 @@ export default function IngestionView() {
             ) : editorMode === "create" ? (
               <div className={styles.pathPreviewBlock}>
                 <p className={styles.helperText}>
-                  Managed staging path should match the canonical iCloud path for this label.
+                  Photo Organizer assigns the canonical managed staging path when the Source is saved.
                 </p>
                 <p className={styles.pathPreviewLine}>
-                  <strong>Preview path:</strong> {managedStagingPreview}
-                </p>
-                <p className={styles.pathPreviewLine}>
-                  <strong>Resolved path:</strong> Stored by the backend on save.
+                  Runtime filesystem paths are backend-managed and are not entered in the browser.
                 </p>
               </div>
             ) : null}
@@ -6169,6 +6270,74 @@ export default function IngestionView() {
                 onClick={closeEditor}
                 disabled={isSavingEditor || sourceIdentityPhase === "planning" || sourceIdentityPhase === "confirming"}
               >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {icloudAuthentication && (
+        <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="icloud-auth-title">
+          <div className={styles.modalPanel}>
+            <div className={styles.drawerHeader}>
+              <div>
+                <h3 id="icloud-auth-title" className={styles.drawerTitle}>Sign in to iCloud</h3>
+                <p className={styles.drawerSubtitle}>
+                  Authenticate {icloudAuthentication.account_hint} for this Source. Photo Organizer does not store your password or verification code.
+                </p>
+              </div>
+              <button type="button" className={styles.closeButton} onClick={() => void closeIcloudAuthentication()} disabled={isSubmittingIcloudAuthentication}>
+                Cancel
+              </button>
+            </div>
+
+            <p className={styles.note}>{icloudAuthentication.message}</p>
+            {icloudAuthentication.state === "authenticating" ? (
+              <p className={styles.note}>The bounded iCloud sign-in request is in progress.</p>
+            ) : icloudAuthentication.state === "mfa_required" ? (
+              <label className={styles.formLabel}>
+                Apple verification code
+                <input
+                  className={styles.formInput}
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={icloudMfaCode}
+                  onChange={(event) => setIcloudMfaCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  disabled={isSubmittingIcloudAuthentication}
+                />
+              </label>
+            ) : (
+              <label className={styles.formLabel}>
+                Apple account password
+                <input
+                  className={styles.formInput}
+                  type="password"
+                  autoComplete="current-password"
+                  value={icloudPassword}
+                  onChange={(event) => setIcloudPassword(event.target.value)}
+                  disabled={isSubmittingIcloudAuthentication}
+                />
+              </label>
+            )}
+
+            {icloudAuthenticationError && <p className={styles.inlineError} role="alert">{icloudAuthenticationError}</p>}
+            <div className={styles.rowActions}>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                onClick={() => void submitIcloudAuthentication()}
+                disabled={
+                  isSubmittingIcloudAuthentication
+                  || icloudAuthentication.state === "authenticating"
+                  || (icloudAuthentication.state === "mfa_required" ? icloudMfaCode.length !== 6 : !icloudPassword)
+                }
+              >
+                {isSubmittingIcloudAuthentication || icloudAuthentication.state === "authenticating" ? "Signing in..." : icloudAuthentication.state === "mfa_required" ? "Verify code" : "Continue"}
+              </button>
+              <button type="button" className={styles.button} onClick={() => void closeIcloudAuthentication()} disabled={isSubmittingIcloudAuthentication}>
                 Cancel
               </button>
             </div>

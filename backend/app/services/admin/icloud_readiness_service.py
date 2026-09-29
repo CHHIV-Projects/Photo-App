@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
+from app.models.ingestion_source import IngestionSource
 from app.schemas.admin import (
     IcloudReadinessLastAcquisition,
     IcloudReadinessReason,
@@ -15,9 +16,16 @@ from app.schemas.admin import (
 from app.services.admin.ingestion_operation_guardrail_service import get_ingestion_operation_guardrail_snapshot
 from app.services.admin.source_intake_service import get_source_profile_detail
 from app.services.ingestion.ingestion_context_service import normalize_source_root_path
+from app.services.icloud_authentication_service import (
+    AUTHENTICATED,
+    AUTHENTICATION_FAILED,
+    AUTHENTICATION_REQUIRED,
+    PROVIDER_UNAVAILABLE,
+    SESSION_EXPIRED,
+    probe_icloud_authentication,
+)
+from app.services.icloud_path_service import resolve_icloud_staging_path
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]
-_APPROVED_ICLOUD_EXPORTS_ROOT = (_PROJECT_ROOT / "storage" / "exports" / "icloud").resolve()
 _AUTH_REQUIRED_CODES = {"AUTH_REQUIRED", "SESSION_EXPIRED"}
 
 
@@ -32,8 +40,10 @@ class _ReasonMessages:
     SOURCE_REGISTRATION_UNKNOWN: str = "Source registration status is unknown because required identity data is incomplete."
     STAGING_FOLDER_MISSING: str = "Staging folder is missing but path is safe and can be created."
     AUTH_UNKNOWN: str = "iCloud authentication status is unknown."
-    AUTH_REQUIRED: str = "iCloud authentication is required. Re-authenticate icloudpd outside Photo Organizer."
-    SESSION_EXPIRED: str = "iCloud session expired. Re-authenticate icloudpd outside Photo Organizer."
+    AUTH_REQUIRED: str = "iCloud authentication is required. Sign in through Photo Organizer to continue."
+    SESSION_EXPIRED: str = "The iCloud session expired. Sign in through Photo Organizer to continue."
+    AUTHENTICATION_FAILED: str = "iCloud authentication could not be verified. Sign in again to continue."
+    PROVIDER_UNAVAILABLE: str = "The iCloud authentication provider is temporarily unavailable."
     ICLOUD_ACQUISITION_ACTIVE: str = "Another iCloud acquisition run is currently active."
     SOURCE_INTAKE_ACTIVE: str = "A Source Intake run is currently active."
     ICLOUD_CLEANUP_ACTIVE: str = "An iCloud staging cleanup run is currently active."
@@ -62,7 +72,7 @@ def _is_under_approved_root(path_value: str | None) -> bool | None:
         return None
     try:
         resolved = Path(path_value).expanduser().resolve()
-        resolved.relative_to(_APPROVED_ICLOUD_EXPORTS_ROOT)
+        resolved.relative_to(resolve_icloud_staging_path("_").parent)
         return True
     except (ValueError, OSError):
         return False
@@ -118,7 +128,7 @@ def _recommended_action(
     if "SOURCE_REGISTRATION_MISMATCH" in blocking_codes:
         return "Align source registration identity (label/type/path) with expected iCloud acquisition path."
     if "AUTH_REQUIRED" in blocking_codes or "SESSION_EXPIRED" in blocking_codes:
-        return "Re-authenticate icloudpd outside Photo Organizer, then refresh readiness."
+        return "Sign in to iCloud through Photo Organizer, then readiness will refresh."
     if {
         "ICLOUD_ACQUISITION_ACTIVE",
         "SOURCE_INTAKE_ACTIVE",
@@ -127,8 +137,8 @@ def _recommended_action(
         return "Wait for active ingestion-related operations to finish, then refresh readiness."
     if "STAGING_FOLDER_MISSING" in warning_codes:
         return "Verify or create the staging folder before acquisition."
-    if "AUTH_UNKNOWN" in warning_codes:
-        return "Authentication state is unknown. Confirm icloudpd session health outside the app, then refresh readiness."
+    if "PROVIDER_UNAVAILABLE" in blocking_codes:
+        return "Retry when the iCloud authentication provider is available."
     return "Profile appears ready for the future iCloud acquisition step."
 
 
@@ -256,15 +266,7 @@ def get_icloud_source_readiness(
             report_path=matching_acquisition.report_path,
         )
         if matching_acquisition.error_code in _AUTH_REQUIRED_CODES:
-            auth_status = "action_required"
             last_auth_error_code = matching_acquisition.error_code
-            add_block(matching_acquisition.error_code, _MESSAGES.AUTH_REQUIRED if matching_acquisition.error_code == "AUTH_REQUIRED" else _MESSAGES.SESSION_EXPIRED)
-        else:
-            auth_status = "unknown"
-            add_warning("AUTH_UNKNOWN", _MESSAGES.AUTH_UNKNOWN)
-    elif is_icloud:
-        auth_status = "unknown"
-        add_warning("AUTH_UNKNOWN", _MESSAGES.AUTH_UNKNOWN)
 
     guardrail_snapshot = get_ingestion_operation_guardrail_snapshot(db_session, source_id=source_id)
     conflicts = guardrail_snapshot.operation_conflicts
@@ -283,6 +285,20 @@ def get_icloud_source_readiness(
         "MANAGED_STAGING_PATH_MISSING",
     }
     has_core_blockers = any(reason.code in core_blocking_codes for reason in blocking_reasons)
+    if is_icloud and not has_core_blockers:
+        raw_source = db_session.get(IngestionSource, source_id)
+        account_username = (raw_source.account_username if raw_source is not None else None) or ""
+        auth_status = probe_icloud_authentication(account_username)
+        if auth_status == AUTHENTICATION_REQUIRED:
+            add_block("AUTHENTICATION_REQUIRED", _MESSAGES.AUTH_REQUIRED)
+        elif auth_status == SESSION_EXPIRED:
+            add_block("SESSION_EXPIRED", _MESSAGES.SESSION_EXPIRED)
+        elif auth_status == AUTHENTICATION_FAILED:
+            add_block("AUTHENTICATION_FAILED", _MESSAGES.AUTHENTICATION_FAILED)
+        elif auth_status == PROVIDER_UNAVAILABLE:
+            add_block("PROVIDER_UNAVAILABLE", _MESSAGES.PROVIDER_UNAVAILABLE)
+        elif auth_status != AUTHENTICATED:
+            add_block("AUTHENTICATION_REQUIRED", _MESSAGES.AUTH_REQUIRED)
     if is_icloud and matching_acquisition is None and not has_core_blockers:
         add_warning("NO_RECENT_ACQUISITION", _MESSAGES.NO_RECENT_ACQUISITION)
 

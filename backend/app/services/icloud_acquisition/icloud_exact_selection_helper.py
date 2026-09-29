@@ -91,17 +91,24 @@ class ExactSelectionProvider(Protocol):
     def open_resource(self, asset: object, resource_id: str) -> DownloadResponse: ...
 
 
-def _auth_directory() -> Path:
+def _auth_directory(account_username: str) -> Path:
     configured = (os.environ.get("PHOTO_ORGANIZER_ICLOUD_EXACT_AUTH_DIR") or "").strip()
     if configured:
         auth_root = Path(configured).expanduser()
     else:
-        local_app_data = (os.environ.get("LOCALAPPDATA") or "").strip()
-        if not local_app_data:
-            raise SafeHelperError(HELPER_UNAVAILABLE)
-        auth_root = Path(local_app_data) / "PhotoOrganizer" / "icloud_exact_helper" / "auth"
+        linux_auth_root = (os.environ.get("ICLOUD_AUTH_STATE_PATH") or "").strip()
+        if linux_auth_root:
+            auth_root = Path(linux_auth_root).expanduser()
+        else:
+            local_app_data = (os.environ.get("LOCALAPPDATA") or "").strip()
+            if not local_app_data:
+                raise SafeHelperError(HELPER_UNAVAILABLE)
+            auth_root = Path(local_app_data) / "PhotoOrganizer" / "icloud_exact_helper" / "auth"
+    account_key = hashlib.sha256(account_username.casefold().encode("utf-8")).hexdigest()
+    auth_root = auth_root / account_key
     try:
-        auth_root.mkdir(parents=True, exist_ok=True)
+        auth_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(auth_root, 0o700)
     except OSError as exc:
         raise SafeHelperError(HELPER_UNAVAILABLE) from exc
     return auth_root.resolve()
@@ -131,7 +138,6 @@ class IcloudpdInternalProvider:
                 PyiCloudServiceUnavailableException,
             )
             from pyicloud_ipd.file_match import FileMatchPolicy
-            from pyicloud_ipd.utils import get_password_from_keyring
             from pyicloud_ipd.version_size import AssetVersionSize, LivePhotoVersionSize
         except ImportError as exc:
             raise SafeHelperError(HELPER_UNAVAILABLE) from exc
@@ -150,7 +156,7 @@ class IcloudpdInternalProvider:
         normalized_username = account_username.strip().lower()
 
         def password_provider() -> str | None:
-            return get_password_from_keyring(normalized_username)
+            return None
 
         try:
             self._icloud = PyiCloudService(
@@ -158,7 +164,7 @@ class IcloudpdInternalProvider:
                 normalized_username,
                 password_provider,
                 None,
-                cookie_directory=str(_auth_directory()),
+                cookie_directory=str(_auth_directory(normalized_username)),
                 client_id=os.environ.get("CLIENT_ID"),
                 http_timeout=30.0,
             )
@@ -678,7 +684,7 @@ def execute_download_selected(
 
 
 def _default_exports_root() -> Path:
-    return (Path(__file__).resolve().parents[4] / "storage" / "exports" / "icloud").resolve()
+    return (Path(__file__).resolve().parents[3] / "storage" / "exports" / "icloud").resolve()
 
 
 def _auth_state_response(operation: str, auth_state: str) -> dict[str, Any]:

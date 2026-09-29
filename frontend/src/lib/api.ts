@@ -88,6 +88,7 @@ import type {
   IcloudAcquisitionStatusResponse,
   IcloudAcquisitionRunStatus,
   IcloudAcquisitionRunRequest,
+  IcloudAuthenticationResponse,
   IcloudAcquisitionRunResponse,
   IcloudAcquisitionStopResponse,
   WindowsSourceUiCandidateReview,
@@ -1234,6 +1235,42 @@ export function selectSourceProfile(
   return apiRequest<SourceSelectionResponse>("/api/admin/source-selection/select", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function startIcloudAuthentication(sourceProfileId: number): Promise<IcloudAuthenticationResponse> {
+  return apiRequest<IcloudAuthenticationResponse>("/api/admin/icloud-auth/sessions", {
+    method: "POST",
+    body: JSON.stringify({ source_profile_id: sourceProfileId }),
+  });
+}
+
+export function submitIcloudAuthenticationPassword(
+  sessionId: string,
+  sourceProfileId: number,
+  value: string,
+): Promise<IcloudAuthenticationResponse> {
+  return apiRequest<IcloudAuthenticationResponse>(`/api/admin/icloud-auth/sessions/${sessionId}/password`, {
+    method: "POST",
+    body: JSON.stringify({ source_profile_id: sourceProfileId, value }),
+  });
+}
+
+export function submitIcloudAuthenticationMfa(
+  sessionId: string,
+  sourceProfileId: number,
+  value: string,
+): Promise<IcloudAuthenticationResponse> {
+  return apiRequest<IcloudAuthenticationResponse>(`/api/admin/icloud-auth/sessions/${sessionId}/mfa`, {
+    method: "POST",
+    body: JSON.stringify({ source_profile_id: sourceProfileId, value }),
+  });
+}
+
+export function cancelIcloudAuthentication(sessionId: string, sourceProfileId: number): Promise<IcloudAuthenticationResponse> {
+  return apiRequest<IcloudAuthenticationResponse>(`/api/admin/icloud-auth/sessions/${sessionId}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ source_profile_id: sourceProfileId }),
   });
 }
 

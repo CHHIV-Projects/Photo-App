@@ -111,7 +111,7 @@ describe("Windows Source workbench", () => {
       source_id: 5,
       source_label: "External photos",
       source_type: "external_drive" as const,
-      endpoint_source_type: "external_device",
+      endpoint_source_type: "external_device" as const,
       endpoint_alias: "Family Archive Drive",
       source_root_path: "H:\\Pictures",
     };

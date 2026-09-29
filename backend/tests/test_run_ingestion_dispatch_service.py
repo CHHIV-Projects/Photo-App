@@ -23,6 +23,7 @@ from app.schemas.admin import (
     RunIngestionWindowsHelperOptions,
 )
 from app.services.admin.run_ingestion_dispatch_service import RunIngestionDispatchError, RunIngestionDispatchService
+from app.services.icloud_acquisition.exact_selection_adapter import ExactSelectionPrototypeError
 from app.services.source_identity.probe_service import SourceIdentityProbeService
 from app.services.source_identity.providers.linux_development_fixture import (
     APPROVED_CONTAINER_FIXTURE_ROOT,
@@ -830,13 +831,18 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
             import_operator_message="Import run created.",
         )
 
-        with patch("app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot", return_value=SimpleNamespace(blocked=False)), patch(
+        with patch("app.services.admin.run_ingestion_dispatch_service.create_source_profile_staging_folder"), patch(
+            "app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot", return_value=SimpleNamespace(blocked=False)
+        ), patch(
             "app.services.admin.run_ingestion_dispatch_service.get_icloud_intake_import_status",
             return_value=status_before,
         ), patch(
             "app.services.admin.run_ingestion_dispatch_service.start_icloud_intake_import",
             return_value=status_after,
-        ) as mocked_start:
+        ) as mocked_start, patch(
+            "app.services.admin.run_ingestion_dispatch_service.start_icloud_intake_import_background",
+            return_value=True,
+        ) as mocked_background:
             result = service.dispatch(
                 RunIngestionDispatchRequest(
                     source_profile_id=66,
@@ -848,6 +854,114 @@ class RunIngestionDispatchServiceTests(unittest.TestCase):
         self.assertEqual(result.action, "icloud_import_started")
         self.assertEqual(result.underlying_run_id, 44)
         self.assertEqual(mocked_start.call_args.kwargs["target_logical_assets"], 3)
+        mocked_background.assert_called_once_with(self.db, source_id=66, import_run_id=44)
+
+    def test_icloud_dispatch_launches_remaining_run_in_background(self) -> None:
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(self._icloud_selection()))
+        current = SimpleNamespace(
+            can_resume_import=False,
+            can_advance_import=True,
+            can_start_import=False,
+            target_logical_candidates=1000,
+            logical_candidates_ready=900,
+            available_inventory="yes",
+            import_run_id=44,
+            import_status="running",
+            import_operator_message="Ready for the next chunk.",
+        )
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.create_source_profile_staging_folder"), patch(
+            "app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot",
+            return_value=SimpleNamespace(blocked=False),
+        ), patch(
+            "app.services.admin.run_ingestion_dispatch_service.get_icloud_intake_import_status",
+            return_value=current,
+        ), patch(
+            "app.services.admin.run_ingestion_dispatch_service.start_icloud_intake_import_background",
+            return_value=True,
+        ) as mocked_start:
+            result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=66))
+
+        self.assertEqual(result.result, "started")
+        self.assertEqual(result.action, "icloud_import_advanced")
+        self.assertEqual(result.status, "running")
+        mocked_start.assert_called_once_with(self.db, source_id=66, import_run_id=44)
+
+    def test_icloud_dispatch_resume_rearms_and_launches_remaining_run(self) -> None:
+        service = RunIngestionDispatchService(self.db, source_selection_service=_FakeSelectionService(self._icloud_selection()))
+        current = SimpleNamespace(
+            can_resume_import=True,
+            can_advance_import=False,
+            can_start_import=False,
+            target_logical_candidates=1000,
+            logical_candidates_ready=800,
+            available_inventory="yes",
+            import_run_id=44,
+            import_status="resume_available",
+            import_operator_message="Resume available.",
+        )
+        resumed = SimpleNamespace(
+            import_run_id=44,
+            import_status="running",
+            import_operator_message="Resume confirmed.",
+        )
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.create_source_profile_staging_folder"), patch(
+            "app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot",
+            return_value=SimpleNamespace(blocked=False),
+        ), patch(
+            "app.services.admin.run_ingestion_dispatch_service.get_icloud_intake_import_status",
+            return_value=current,
+        ), patch(
+            "app.services.admin.run_ingestion_dispatch_service.resume_icloud_intake_import",
+            return_value=resumed,
+        ) as mocked_resume, patch(
+            "app.services.admin.run_ingestion_dispatch_service.start_icloud_intake_import_background",
+            return_value=True,
+        ) as mocked_background:
+            result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=66))
+
+        self.assertEqual(result.result, "started")
+        self.assertEqual(result.action, "icloud_import_resumed")
+        self.assertEqual(result.status, "running")
+        mocked_resume.assert_called_once_with(self.db, source_id=66, import_run_id=44)
+        mocked_background.assert_called_once_with(self.db, source_id=66, import_run_id=44)
+
+    def test_icloud_prepare_helper_failure_returns_structured_block(self) -> None:
+        service = RunIngestionDispatchService(
+            self.db,
+            source_selection_service=_FakeSelectionService(self._icloud_selection()),
+        )
+        current = SimpleNamespace(
+            can_resume_import=False,
+            can_advance_import=False,
+            can_start_import=False,
+            target_logical_candidates=1000,
+            logical_candidates_ready=0,
+            available_inventory="unknown",
+            import_run_id=None,
+            import_status=None,
+            import_operator_message="Prepare inventory.",
+        )
+
+        with patch("app.services.admin.run_ingestion_dispatch_service.create_source_profile_staging_folder"), patch(
+            "app.services.admin.run_ingestion_dispatch_service.get_ingestion_operation_guardrail_snapshot",
+            return_value=SimpleNamespace(blocked=False),
+        ), patch(
+            "app.services.admin.run_ingestion_dispatch_service.get_icloud_intake_import_status",
+            return_value=current,
+        ), patch(
+            "app.services.admin.run_ingestion_dispatch_service.refresh_historical_inventory",
+            side_effect=ExactSelectionPrototypeError(
+                "The helper reported a safe terminal failure.",
+                code="helper_unavailable",
+            ),
+        ):
+            result = service.dispatch(RunIngestionDispatchRequest(source_profile_id=66))
+
+        self.assertEqual(result.result, "blocked")
+        self.assertEqual(result.action, "none")
+        self.assertEqual(result.status, "helper_unavailable")
 
     def _selection(
         self,

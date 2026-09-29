@@ -1329,7 +1329,7 @@ export interface IcloudSourceReadiness {
   path_alignment_status: "matched" | "mismatch" | "unknown";
   source_root_alignment_status: "matched" | "mismatch" | "unknown";
   source_registration_status: "matched" | "mismatch" | "unknown";
-  auth_status: "unknown" | "action_required";
+  auth_status: "authenticated" | "authentication_required" | "session_expired" | "authentication_failed" | "provider_unavailable" | "action_required" | "unknown";
   last_auth_error_code: string | null;
   operation_conflicts: IcloudReadinessOperationConflicts;
   last_acquisition: IcloudReadinessLastAcquisition | null;
@@ -1593,6 +1593,26 @@ export interface SourceSelectionResponse {
   message: string;
   retry_guidance: string | null;
   advanced_details: Record<string, unknown>;
+}
+
+export type IcloudAuthenticationState =
+  | "password_required"
+  | "mfa_required"
+  | "authenticating"
+  | "authenticated"
+  | "authentication_failed"
+  | "expired"
+  | "cancelled";
+
+export interface IcloudAuthenticationResponse {
+  session_id: string | null;
+  source_profile_id: number;
+  provider: "icloud";
+  account_hint: string;
+  state: IcloudAuthenticationState;
+  message: string;
+  retryable: boolean;
+  expires_at: string | null;
 }
 
 export interface RunIngestionFilesystemOptions {

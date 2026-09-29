@@ -32,6 +32,7 @@ from app.services.icloud_historical_routine_service import (
     get_icloud_intake_import_status,
     recover_icloud_intake_import_cleanup,
     resume_icloud_intake_import,
+    run_icloud_intake_import_to_boundary,
     start_icloud_intake_import,
 )
 from backend.tests.test_icloud_historical_routine_service import (
@@ -125,6 +126,59 @@ class IcloudIntakeImportRunResumeTests(IcloudHistoricalRoutineFixture):
         self.assertIsNotNone(chunks[0].chunk_total_seconds)
         self.assertEqual(chunks[0].cleanup_eligible_count, 2)
 
+    def test_run_level_orchestrator_completes_all_pending_chunks(self) -> None:
+        _, rows = self._prepared_rows(5)
+        observed_batches: list[tuple[int, ...]] = []
+        start = start_icloud_intake_import(self.db, source_id=self.source.id, internal_batch_size=2)
+
+        def _fake_acquire(db_session, *_args, **kwargs):
+            inventory_ids = tuple(kwargs["inventory_ids"])
+            observed_batches.append(inventory_ids)
+            return _successful_acquire(db_session, source_id=self.source.id, inventory_ids=inventory_ids)
+
+        with patch(
+            "app.services.icloud_historical_routine_service.run_icloud_backfill_acquisition",
+            side_effect=_fake_acquire,
+        ), patch(
+            "app.services.icloud_historical_routine_service._cleanup_chunk_timed",
+            side_effect=lambda *_args, **kwargs: _timed_cleanup(len(kwargs["acquired_paths"])),
+        ):
+            completed = run_icloud_intake_import_to_boundary(
+                self.db,
+                source_id=self.source.id,
+                import_run_id=start.import_run_id,
+            )
+
+        self.assertEqual(completed.import_status, IMPORT_STATUS_COMPLETED)
+        self.assertEqual(completed.completed_chunk_count, 3)
+        self.assertEqual(completed.logical_imported, 5)
+        self.assertEqual(
+            observed_batches,
+            [(rows[0].id, rows[1].id), (rows[2].id, rows[3].id), (rows[4].id,)],
+        )
+
+    def test_run_level_orchestrator_stops_when_a_chunk_makes_no_progress(self) -> None:
+        self._prepared_rows(3)
+        start = start_icloud_intake_import(self.db, source_id=self.source.id, internal_batch_size=2)
+
+        with patch(
+            "app.services.icloud_historical_routine_service.advance_icloud_intake_import",
+            return_value=start,
+        ) as mocked_advance:
+            result = run_icloud_intake_import_to_boundary(
+                self.db,
+                source_id=self.source.id,
+                import_run_id=start.import_run_id,
+            )
+
+        self.assertEqual(result.import_status, start.import_status)
+        self.assertEqual(result.completed_chunk_count, 0)
+        mocked_advance.assert_called_once_with(
+            self.db,
+            source_id=self.source.id,
+            import_run_id=start.import_run_id,
+        )
+
     def test_running_chunk_blocks_status_and_advance(self) -> None:
         self._prepared_rows(3)
         start = start_icloud_intake_import(self.db, source_id=self.source.id, internal_batch_size=2)
@@ -168,6 +222,15 @@ class IcloudIntakeImportRunResumeTests(IcloudHistoricalRoutineFixture):
                 advance_icloud_intake_import(self.db, source_id=self.source.id, import_run_id=start.import_run_id)
 
         run = self.db.get(IcloudIntakeImportRun, start.import_run_id)
+        pending_chunk = self.db.scalars(
+            select(IcloudIntakeImportChunk)
+            .where(
+                IcloudIntakeImportChunk.import_run_id == run.id,
+                IcloudIntakeImportChunk.status == "pending",
+            )
+        ).one()
+        pending_chunk.status = "running"
+        pending_chunk.started_at = datetime.now(UTC) - timedelta(minutes=5)
         run.last_progress_at = datetime.now(UTC) - timedelta(minutes=5)
         self.db.commit()
         with patch("app.services.icloud_historical_routine_service.DEFAULT_IMPORT_STALE_SECONDS", 0):
@@ -183,6 +246,34 @@ class IcloudIntakeImportRunResumeTests(IcloudHistoricalRoutineFixture):
 
         self.assertEqual(final.import_status, IMPORT_STATUS_COMPLETED)
         self.assertEqual(observed_batches, [(rows[0].id, rows[1].id), (rows[2].id,)])
+
+    def test_stale_wait_between_chunks_remains_advanceable(self) -> None:
+        self._prepared_rows(3)
+        start = start_icloud_intake_import(self.db, source_id=self.source.id, internal_batch_size=2)
+
+        with patch(
+            "app.services.icloud_historical_routine_service.run_icloud_backfill_acquisition",
+            side_effect=lambda db_session, *_args, **kwargs: _successful_acquire(
+                db_session,
+                source_id=self.source.id,
+                inventory_ids=tuple(kwargs["inventory_ids"]),
+            ),
+        ), patch(
+            "app.services.icloud_historical_routine_service._cleanup_chunk_timed",
+            side_effect=lambda *_args, **kwargs: _timed_cleanup(len(kwargs["acquired_paths"])),
+        ):
+            advance_icloud_intake_import(self.db, source_id=self.source.id, import_run_id=start.import_run_id)
+
+        run = self.db.get(IcloudIntakeImportRun, start.import_run_id)
+        run.last_progress_at = datetime.now(UTC) - timedelta(minutes=5)
+        self.db.commit()
+
+        with patch("app.services.icloud_historical_routine_service.DEFAULT_IMPORT_STALE_SECONDS", 0):
+            status = get_icloud_intake_import_status(self.db, source_id=self.source.id)
+
+        self.assertEqual(status.import_status, IMPORT_STATUS_RUNNING)
+        self.assertTrue(status.can_advance_import)
+        self.assertEqual(status.current_phase, "waiting_for_next_chunk")
 
     def test_source_intake_failure_records_chunk_and_run_review_state(self) -> None:
         self._prepared_rows(1)

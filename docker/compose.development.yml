@@ -63,6 +63,9 @@ services:
       LOGS_PATH: /app/storage/logs
       REPORTS_PATH: /app/storage/logs
       EXPORTS_ICLOUD_PATH: /app/storage/exports/icloud
+      ICLOUD_AUTH_STATE_PATH: /app/icloud-auth
+      ICLOUD_PROVIDER_PYTHON_PATH: /opt/photo-organizer-icloud/bin/python
+      ICLOUDPD_EXECUTABLE_PATH: /opt/photo-organizer-icloud/bin/icloudpd
       MODEL_ROOT_PATH: /app/app/services/vision/models
       MODEL_CACHE_PATH: /app/storage/models
       DEEPFACE_HOME: /app/storage/models
@@ -73,6 +76,7 @@ services:
       - "${SOURCE_ACCESS_DATA_GID:?Set SOURCE_ACCESS_DATA_GID to the approved Source/NAS data-read group GID}"
     volumes:
       - application_storage:/app/storage
+      - icloud_auth_state:/app/icloud-auth
       - windows_acquisition_receiving:/app/storage/acquisition/windows
       - type: bind
         source: /mnt/photo-organizer-sources
@@ -153,3 +157,4 @@ volumes:
   redis_data:
   application_storage:
   windows_acquisition_receiving:
+  icloud_auth_state:

@@ -17,7 +17,12 @@ from app.services.admin.source_intake_service import (
     verify_source_profile_path,
 )
 from app.services.ingestion.ingestion_context_service import normalize_source_root_path
-from app.services.icloud_path_service import resolve_icloud_staging_path, sanitize_icloud_source_label
+from app.services.icloud_path_service import (
+    IcloudPathError,
+    require_canonical_icloud_staging_path,
+    resolve_icloud_staging_path,
+    sanitize_icloud_source_label,
+)
 
 
 class IcloudPathServiceTests(unittest.TestCase):
@@ -28,6 +33,38 @@ class IcloudPathServiceTests(unittest.TestCase):
     def test_resolve_icloud_staging_path_uses_canonical_exports_root(self) -> None:
         resolved = resolve_icloud_staging_path("Chuck iCloud PD")
         self.assertEqual(resolved.as_posix().lower().split("/storage/exports/icloud/")[-1], "chuck_icloud_pd")
+
+    def test_custom_backend_exports_root_is_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "app.services.icloud_path_service.icloud_exports_root",
+            return_value=Path(temp_dir) / "configured" / "exports" / "icloud",
+        ):
+            resolved = resolve_icloud_staging_path("Family Photos")
+        self.assertEqual(resolved, Path(temp_dir).resolve() / "configured" / "exports" / "icloud" / "family_photos")
+
+    def test_noncanonical_client_path_is_rejected(self) -> None:
+        with self.assertRaises(IcloudPathError):
+            require_canonical_icloud_staging_path("Family Photos", "/tmp/browser-authored-path")
+
+    def test_traversal_like_label_remains_beneath_configured_root(self) -> None:
+        resolved = resolve_icloud_staging_path("../../Family Photos")
+        self.assertEqual(resolved.name, "family_photos")
+        self.assertEqual(resolved.parent, resolve_icloud_staging_path("placeholder").parent)
+
+    def test_invalid_override_fails_before_persistence(self) -> None:
+        db_session = MagicMock()
+        payload = SourceProfileCreateRequest(
+            source_label="Family Photos",
+            source_type="cloud_export",
+            profile_status="active",
+            cloud_provider="icloud",
+            account_username="family@example.com",
+            acquisition_method="icloudpd",
+            managed_staging_path="/tmp/not-canonical",
+        )
+        with patch("app.services.admin.source_intake_service.ensure_ingestion_context_schema"), self.assertRaises(IcloudPathError):
+            create_source_profile(db_session, payload=payload)
+        db_session.add.assert_not_called()
 
     def test_create_source_profile_sets_canonical_icloud_paths(self) -> None:
         db_session = MagicMock()
@@ -73,7 +110,9 @@ class IcloudPathServiceTests(unittest.TestCase):
         with patch("app.services.admin.source_intake_service.ensure_ingestion_context_schema"), patch(
             "app.services.admin.source_intake_service._build_single_source_profile_summary",
             return_value=fake_summary,
-        ):
+        ), patch(
+            "app.services.admin.source_intake_service.create_source_profile_staging_folder",
+        ) as mocked_create_staging:
             response = create_source_profile(db_session, payload=payload)
 
         self.assertFalse(response.already_exists)
@@ -85,6 +124,7 @@ class IcloudPathServiceTests(unittest.TestCase):
             created_source.source_root_path_normalized,
             normalize_source_root_path(str(resolve_icloud_staging_path("Chuck iCloud PD"))),
         )
+        mocked_create_staging.assert_called_once_with(db_session, source_id=created_source.id)
 
     def test_get_source_profile_detail_does_not_run_schema_ensure(self) -> None:
         db_session = MagicMock()

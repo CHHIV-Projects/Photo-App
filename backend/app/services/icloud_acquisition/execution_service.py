@@ -27,6 +27,7 @@ from app.services.icloud_acquisition.known_state_service import (
     evaluate_known_state,
     parse_preflight_candidates,
 )
+from app.services.icloud_authentication_service import icloud_auth_directory_path
 from app.services.icloud_path_service import resolve_icloud_staging_path, sanitize_icloud_source_label
 from app.services.icloud_acquisition.schema import ensure_icloud_acquisition_schema
 from app.services.ingestion.ingestion_context_service import (
@@ -376,6 +377,8 @@ def build_icloudpd_command(*, executable: Path, username: str, staging_root: Pat
         str(executable),
         "--username",
         username,
+        "--cookie-directory",
+        str(icloud_auth_directory_path(username)),
         "--directory",
         str(staging_root),
         "--recent",
@@ -388,6 +391,8 @@ def build_icloudpd_preflight_command(*, executable: Path, username: str, staging
         str(executable),
         "--username",
         username,
+        "--cookie-directory",
+        str(icloud_auth_directory_path(username)),
         "--directory",
         str(staging_root),
         "--recent",
@@ -400,7 +405,9 @@ def build_icloudpd_preflight_command(*, executable: Path, username: str, staging
 def _tail_text(value: str | None, *, max_lines: int = MAX_TAIL_LINES, max_chars: int = MAX_REPORT_TAIL_BYTES) -> str | None:
     if value is None:
         return None
-    lines = value.splitlines()
+    protected_auth_root = str(Path(settings.icloud_auth_state_path).expanduser())
+    redacted_value = value.replace(protected_auth_root, "[protected-icloud-auth-state]")
+    lines = redacted_value.splitlines()
     tail = "\n".join(lines[-max_lines:])
     if len(tail) > max_chars:
         tail = tail[-max_chars:]
@@ -1363,4 +1370,3 @@ def _sync_startup_state() -> None:
     with SessionLocal() as db_session:
         ensure_icloud_acquisition_schema(db_session)
         _reset_stale_runs(db_session)
-

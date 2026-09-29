@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -130,6 +131,11 @@ class _FakeHelperClient:
 
 
 class IcloudExactSelectionAdapterTests(unittest.TestCase):
+    def test_approved_exports_root_matches_canonical_path_authority(self) -> None:
+        canonical = adapter.resolve_icloud_staging_path("Adapter Root Test")
+
+        self.assertEqual(adapter.APPROVED_EXPORTS_ROOT, canonical.parent)
+
     def setUp(self) -> None:
         self.engine = create_engine(
             "sqlite+pysqlite://",
@@ -531,6 +537,21 @@ class IcloudExactSelectionAdapterTests(unittest.TestCase):
                 }
             )
         self.assertEqual(context.exception.code, "helper_forbidden_output")
+
+    def test_configured_virtualenv_python_symlink_is_not_dereferenced(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_root:
+            configured_python = Path(temporary_root) / "python"
+            configured_python.symlink_to(Path(sys.executable))
+
+            with patch.object(
+                adapter,
+                "settings",
+                SimpleNamespace(icloud_provider_python_path=str(configured_python)),
+            ):
+                resolved = adapter.resolve_exact_selection_helper_python()
+
+            self.assertEqual(resolved, configured_python)
+            self.assertNotEqual(resolved, configured_python.resolve())
 
     def test_default_subprocess_path_polls_with_heartbeat(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:

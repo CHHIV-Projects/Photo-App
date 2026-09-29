@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import stat
 import sys
 
 
@@ -31,8 +33,23 @@ def require_gpu_if_configured() -> None:
     )
 
 
+def validate_icloud_auth_state_directory() -> None:
+    """Fail closed unless protected provider state has a private persistent directory."""
+    configured = os.getenv("ICLOUD_AUTH_STATE_PATH", "").strip()
+    if not configured:
+        return
+    path = Path(configured)
+    if path.is_symlink() or not path.is_dir():
+        raise RuntimeError("ICLOUD_AUTH_STATE_PATH must be a real directory.")
+    os.chmod(path, 0o700)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode != 0o700 or path.stat().st_uid != os.getuid():
+        raise RuntimeError("ICLOUD_AUTH_STATE_PATH must be owned by the runtime user with mode 0700.")
+
+
 def main() -> None:
     require_gpu_if_configured()
+    validate_icloud_auth_state_directory()
     command = [
         "uvicorn",
         "app.main:app",
