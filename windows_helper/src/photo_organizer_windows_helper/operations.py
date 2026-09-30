@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 from uuid import UUID, uuid4
 
 from windows_helper_shared.channel import (
+    ClaimedChildAttestationOperation,
     ClaimedInventoryOperation,
     ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
@@ -26,6 +27,7 @@ from windows_helper_shared.identity.windows import (
 )
 from windows_helper_shared.protocol import (
     HelperInventoryItem,
+    HelperChildAttestationResponse,
     HelperInventoryPageRequest,
     HelperInventoryPageResponse,
     HelperObserveVolumesRequest,
@@ -282,8 +284,11 @@ class HelperOperationExecutor:
             ClaimedProbeOperation
             | ClaimedObserveVolumesOperation
             | ClaimedInventoryOperation
+            | ClaimedChildAttestationOperation
         ),
-    ) -> HelperProbeResponse | HelperObserveVolumesResponse | HelperInventoryPageResponse:
+        *,
+        attestation_authority: object | None = None,
+    ) -> HelperProbeResponse | HelperObserveVolumesResponse | HelperInventoryPageResponse | HelperChildAttestationResponse:
         if isinstance(operation, ClaimedProbeOperation):
             return execute_probe(self._identity_collector, operation.request)
         if isinstance(operation, ClaimedObserveVolumesOperation):
@@ -293,6 +298,10 @@ class HelperOperationExecutor:
             )
         if isinstance(operation, ClaimedInventoryOperation):
             return self._inventory_collector.inventory_page(operation.request)
+        if isinstance(operation, ClaimedChildAttestationOperation):
+            if attestation_authority is None:
+                raise ValueError("Child attestation authority is unavailable.")
+            return attestation_authority.attest(operation, self._identity_collector)  # type: ignore[no-any-return,union-attr]
         raise ValueError("Unsupported Helper operation type.")
 
 

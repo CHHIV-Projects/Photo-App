@@ -17,6 +17,7 @@ from app.models.ingestion_source import IngestionSource
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
 from app.models.source_acquisition import SourceAcquisitionItem, SourceAcquisitionRun
 from app.models.windows_helper import WindowsHelperCredential, WindowsHelperOperation
+from app.models.windows_source_workflow import WindowsSourceWorkflow, WindowsSourceWorkflowChild
 from app.schemas.windows_helper import (
     CreateWindowsHelperInventoryOperationRequest,
     CreateWindowsHelperProbeOperationRequest,
@@ -38,6 +39,7 @@ from app.services.windows_helper.storage_classification import (
 )
 from app.windows_helper_shared.channel import (
     ClaimedAcquireOperation,
+    ClaimedChildAttestationOperation,
     ClaimedInventoryOperation,
     ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
@@ -49,6 +51,8 @@ from app.windows_helper_shared.channel import (
 from app.windows_helper_shared.protocol import (
     HelperAcquireItemRequest,
     HelperAcquireItemResponse,
+    HelperChildAttestationRequest,
+    HelperChildAttestationResponse,
     HelperCapabilityIdentity,
     ErrorCode,
     HelperInventoryPageRequest,
@@ -203,7 +207,7 @@ def _create_operation(
     operation_id: UUID,
     access_node: AccessNode,
     operation_type: str,
-    request: HelperProbeRequest | HelperInventoryPageRequest | HelperAcquireItemRequest,
+    request: HelperProbeRequest | HelperInventoryPageRequest | HelperAcquireItemRequest | HelperChildAttestationRequest,
     source_endpoint_id: int | None = None,
     source_profile_id: int | None = None,
 ) -> WindowsHelperOperationCreatedResponse:
@@ -583,6 +587,9 @@ def create_inventory_operation(
 def create_acquire_operation(
     db: Session,
     acquisition_item_id: UUID,
+    *,
+    parent_workflow_id: UUID | None = None,
+    child_attestation_token: str | None = None,
 ) -> SourceAcquisitionOperationResponse:
     _expire_stale(db)
     item = db.scalar(
@@ -660,6 +667,8 @@ def create_acquire_operation(
         expected_file_id_digest=item.expected_file_id_digest,
         expected_windows_file_attributes=item.windows_file_attributes,
         expected_local_residency="resident",
+        parent_workflow_id=parent_workflow_id,
+        child_attestation_token=child_attestation_token,
     )
     operation = WindowsHelperOperation(
         operation_uuid=str(operation_id), access_node_id=node.id,
@@ -679,6 +688,139 @@ def create_acquire_operation(
         expires_at=operation.expires_at, acquisition_run_id=UUID(run.run_uuid),
         acquisition_item_id=acquisition_item_id,
     )
+
+
+def child_attestation_for_run(
+    db: Session,
+    run_id: UUID,
+) -> tuple[str, UUID | None, str | None, UUID | None]:
+    """Return legacy/awaiting/ready and create at most one needed attestation."""
+    run = db.scalar(select(SourceAcquisitionRun).where(SourceAcquisitionRun.run_uuid == str(run_id)))
+    if run is None:
+        raise WindowsHelperServiceError("acquisition_run_not_found", "The acquisition run was not found.", http_status=404)
+    node = db.get(AccessNode, run.access_node_id)
+    if node is None:
+        raise WindowsHelperServiceError("access_node_unavailable", "The acquisition Access Node is unavailable.", http_status=409)
+    try:
+        identity = HelperCapabilityIdentity.model_validate_json(node.capabilities_json or "")
+        supported = capability_version(identity.capabilities, "child_identity_attestation") == "1"
+    except (TypeError, ValueError):
+        supported = False
+    if not supported:
+        return "legacy", None, None, None
+
+    child = db.scalar(
+        select(WindowsSourceWorkflowChild).where(
+            WindowsSourceWorkflowChild.acquisition_run_id == run.id
+        )
+    )
+    parent = db.get(WindowsSourceWorkflow, child.workflow_id) if child is not None else None
+    if child is None or parent is None:
+        return "legacy", None, None, None
+    parent_id = UUID(parent.workflow_uuid)
+
+    matching: list[tuple[WindowsHelperOperation, HelperChildAttestationRequest]] = []
+    for operation in db.scalars(
+        select(WindowsHelperOperation)
+        .where(
+            WindowsHelperOperation.operation_type == "attest_child",
+            WindowsHelperOperation.access_node_id == run.access_node_id,
+            WindowsHelperOperation.source_endpoint_id == run.source_endpoint_id,
+            WindowsHelperOperation.source_profile_id == run.source_profile_id,
+        )
+        .order_by(WindowsHelperOperation.id.desc())
+    ):
+        request = HelperChildAttestationRequest.model_validate_json(operation.request_json)
+        if request.acquisition_run_id == run_id:
+            matching.append((operation, request))
+    if matching and matching[0][0].state in {"failed", "expired"}:
+        failed = matching[0][0]
+        if failed.state == "failed" and failed.error_code != "operation_expired":
+            code = (
+                "source_identity_mismatch"
+                if failed.error_code == "identity_changed"
+                else "child_attestation_failed"
+            )
+            raise WindowsHelperServiceError(
+                code,
+                "The child physical identity attestation failed closed.",
+                http_status=409,
+            )
+    for operation, _ in matching:
+        if operation.state in {"pending", "claimed"}:
+            return "awaiting", UUID(operation.operation_uuid), None, parent_id
+
+    invalidated_at = None
+    for operation in db.scalars(
+        select(WindowsHelperOperation)
+        .where(
+            WindowsHelperOperation.operation_type == "acquire_item",
+            WindowsHelperOperation.access_node_id == run.access_node_id,
+            WindowsHelperOperation.source_endpoint_id == run.source_endpoint_id,
+            WindowsHelperOperation.source_profile_id == run.source_profile_id,
+        )
+        .order_by(WindowsHelperOperation.id.desc())
+    ):
+        request = HelperAcquireItemRequest.model_validate_json(operation.request_json)
+        if request.acquisition_run_id != run_id or not operation.result_json:
+            continue
+        result = HelperAcquireItemResponse.model_validate_json(operation.result_json)
+        if result.result_status.value == "attestation_required":
+            invalidated_at = operation.completed_at
+            break
+    now = _now()
+    for operation, _ in matching:
+        if operation.state != "completed" or not operation.result_json or operation.completed_at is None:
+            continue
+        result = HelperChildAttestationResponse.model_validate_json(operation.result_json)
+        if (
+            _aware(result.expires_at) > now
+            and (invalidated_at is None or _aware(operation.completed_at) > _aware(invalidated_at))
+        ):
+            return "ready", UUID(operation.operation_uuid), result.attestation_token, parent_id
+
+    operation_id = uuid4()
+    endpoint = db.get(SourceEndpoint, run.source_endpoint_id)
+    if endpoint is None:
+        raise WindowsHelperServiceError(
+            "source_endpoint_unavailable",
+            "The acquisition Source Endpoint is unavailable.",
+            http_status=409,
+        )
+    root_path = ProviderNativePath(
+        provider_native_root=run.provider_native_root,
+        provider_native_relative_path="",
+        provider_native_full_path=run.provider_native_root,
+    )
+    attestation_ttl = settings.windows_child_attestation_ttl_seconds
+    if not 60 <= attestation_ttl <= 3600:
+        raise WindowsHelperServiceError(
+            "child_attestation_configuration_invalid",
+            "The configured child attestation lifetime is outside the safe bound.",
+            http_status=500,
+        )
+    request = HelperChildAttestationRequest(
+        request_id=operation_id,
+        intended_access_node_id=UUID(node.access_node_uuid),
+        source_endpoint_id=run.source_endpoint_id,
+        source_profile_id=run.source_profile_id,
+        source_type=endpoint.source_type,
+        provider_native_path=root_path,
+        expected_identity_fingerprint=run.source_fingerprint,
+        parent_workflow_id=parent_id,
+        acquisition_run_id=run_id,
+        attestation_lifetime_seconds=attestation_ttl,
+    )
+    created = _create_operation(
+        db,
+        operation_id=operation_id,
+        access_node=node,
+        operation_type="attest_child",
+        request=request,
+        source_endpoint_id=run.source_endpoint_id,
+        source_profile_id=run.source_profile_id,
+    )
+    return "awaiting", created.operation_id, None, parent_id
 
 
 def _expire_stale(db: Session) -> None:
@@ -740,6 +882,7 @@ def claim_operation(
         "probe_source",
         "observe_volumes",
         "inventory_page",
+        "attest_child",
         "acquire_item",
     }:
         operation.state = "failed"
@@ -770,6 +913,13 @@ def claim_operation(
         elif operation.operation_type == "inventory_page":
             request = HelperInventoryPageRequest.model_validate_json(operation.request_json)
             claimed = ClaimedInventoryOperation(
+                operation_id=operation_id,
+                lease_expires_at=operation.lease_expires_at,
+                request=request,
+            )
+        elif operation.operation_type == "attest_child":
+            request = HelperChildAttestationRequest.model_validate_json(operation.request_json)
+            claimed = ClaimedChildAttestationOperation(
                 operation_id=operation_id,
                 lease_expires_at=operation.lease_expires_at,
                 request=request,
@@ -1020,10 +1170,43 @@ def complete_acquire_operation(
         raise WindowsHelperServiceError(
             "operation_result_mismatch", "The Helper acquisition result does not match the authorized operation.", http_status=409
         )
-    from app.services.source_acquisition.receiving import finalize_item
-
     _validate_completion_state(operation, canonical_protocol_digest(result))
+    if result.result_status.value == "attestation_required":
+        return _complete(db, operation, result)
+    from app.services.source_acquisition.receiving import finalize_item
     finalize_item(db, credential, operation_id, result)
+    return _complete(db, operation, result)
+
+
+def complete_child_attestation_operation(
+    db: Session,
+    credential: WindowsHelperCredential,
+    operation_id: UUID,
+    result: HelperChildAttestationResponse,
+) -> HelperOperationCompletionResponse:
+    operation = _load_owned_operation(db, credential, operation_id)
+    if operation.operation_type != "attest_child":
+        raise WindowsHelperServiceError("operation_type_mismatch", "Operation type mismatch.", http_status=409)
+    request = HelperChildAttestationRequest.model_validate_json(operation.request_json)
+    if (
+        result.request_id != operation_id
+        or request.request_id != operation_id
+        or result.intended_access_node_id != request.intended_access_node_id
+        or result.source_endpoint_id != request.source_endpoint_id
+        or result.source_profile_id != request.source_profile_id
+        or result.source_type != request.source_type
+        or result.provider_native_path != request.provider_native_path
+        or result.expected_identity_fingerprint != request.expected_identity_fingerprint
+        or result.parent_workflow_id != request.parent_workflow_id
+        or result.acquisition_run_id != request.acquisition_run_id
+        or (_aware(result.expires_at) - _aware(result.issued_at)).total_seconds()
+        > request.attestation_lifetime_seconds
+    ):
+        raise WindowsHelperServiceError(
+            "operation_result_mismatch",
+            "The child attestation result does not match the authorized operation.",
+            http_status=409,
+        )
     return _complete(db, operation, result)
 
 
@@ -1034,6 +1217,7 @@ def _complete(
         HelperProbeResponse
         | HelperObserveVolumesResponse
         | HelperInventoryPageResponse
+        | HelperChildAttestationResponse
         | HelperAcquireItemResponse
     ),
 ) -> HelperOperationCompletionResponse:

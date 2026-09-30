@@ -16,7 +16,10 @@ from app.services.source_acquisition.service import (
     get_run,
     plan_acquisition_bridge,
 )
-from app.services.windows_helper.operations import create_acquire_operation
+from app.services.windows_helper.operations import (
+    child_attestation_for_run,
+    create_acquire_operation,
+)
 from app.services.windows_helper.service import WindowsHelperServiceError
 from app.windows_helper_shared.protocol import HelperAcquireItemRequest
 
@@ -89,6 +92,18 @@ def advance_source_acquisition_workflow(
                 helper_operation_state=active_operation.state,
                 message="The exact acquisition item operation is awaiting the Helper.",
             )
+        attestation_state, attestation_operation_id, attestation_token, parent_workflow_id = (
+            child_attestation_for_run(db, run_id)
+        )
+        if attestation_state == "awaiting":
+            return SourceAcquisitionWorkflowResponse(
+                acquisition_run_id=run_id,
+                stage="awaiting_helper",
+                acquisition=acquisition,
+                helper_operation_id=attestation_operation_id,
+                helper_operation_state="pending",
+                message="The bounded child physical identity attestation is awaiting the Helper.",
+            )
         run = db.scalar(
             select(SourceAcquisitionRun).where(SourceAcquisitionRun.run_uuid == str(run_id))
         )
@@ -112,7 +127,12 @@ def advance_source_acquisition_workflow(
                 "The active acquisition has no safely transferable next item.",
                 http_status=409,
             )
-        operation = create_acquire_operation(db, UUID(next_item.item_uuid))
+        operation = create_acquire_operation(
+            db,
+            UUID(next_item.item_uuid),
+            parent_workflow_id=parent_workflow_id if attestation_state == "ready" else None,
+            child_attestation_token=attestation_token if attestation_state == "ready" else None,
+        )
         return SourceAcquisitionWorkflowResponse(
             acquisition_run_id=run_id,
             stage="awaiting_helper",
@@ -122,9 +142,13 @@ def advance_source_acquisition_workflow(
             message="The next exact acquisition item operation was authorized for the Helper.",
         )
 
-    bridge = plan_acquisition_bridge(db, run_id)
+    snapshots: list[object] = []
+    bridge = plan_acquisition_bridge(db, run_id, _snapshot_out=snapshots)  # type: ignore[arg-type]
     if bridge.bridge_state == "not_started":
-        bridge = execute_acquisition_bridge(db, run_id, bridge.bridge_plan_digest)
+        execute_kwargs = {"_snapshot": snapshots[0]} if snapshots else {}
+        bridge = execute_acquisition_bridge(
+            db, run_id, bridge.bridge_plan_digest, **execute_kwargs  # type: ignore[arg-type]
+        )
     if bridge.bridge_state == "failed":
         stage = "failed"
     elif bridge.bridge_state == "completed":

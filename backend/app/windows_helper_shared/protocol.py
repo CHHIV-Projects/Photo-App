@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import ntpath
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
@@ -419,6 +420,54 @@ class AcquireResultStatus(StrEnum):
     SOURCE_CHANGED = "source_changed"
     PLACEHOLDER_UNAVAILABLE = "placeholder_unavailable"
     TRANSFER_FAILED = "transfer_failed"
+    ATTESTATION_REQUIRED = "attestation_required"
+
+
+class HelperChildAttestationRequest(_StrictProtocolModel):
+    """Authorize one process-local physical identity attestation for one child."""
+
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
+    parent_workflow_id: UUID
+    acquisition_run_id: UUID
+    attestation_lifetime_seconds: int = Field(default=900, ge=60, le=3600)
+
+    @model_validator(mode="after")
+    def _validate_attestation_request(self) -> "HelperChildAttestationRequest":
+        require_protocol_version(self.protocol_version)
+        if self.provider_native_path.provider_native_relative_path:
+            raise ValueError("child attestation must target the authoritative Source root")
+        return self
+
+
+class HelperChildAttestationResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
+    parent_workflow_id: UUID
+    acquisition_run_id: UUID
+    issued_at: datetime
+    expires_at: datetime
+    attestation_token: str = Field(min_length=64, max_length=4096)
+    token_version: Literal["child-attestation-v1"] = "child-attestation-v1"
+
+    @model_validator(mode="after")
+    def _validate_attestation_response(self) -> "HelperChildAttestationResponse":
+        require_protocol_version(self.protocol_version)
+        if self.expires_at <= self.issued_at:
+            raise ValueError("child attestation expiry must follow issuance")
+        return self
 
 
 class HelperAcquireItemRequest(_StrictProtocolModel):
@@ -443,6 +492,8 @@ class HelperAcquireItemRequest(_StrictProtocolModel):
     expected_local_residency: Literal["resident"] = "resident"
     normal_chunk_bytes: int = Field(default=NORMAL_ACQUISITION_CHUNK_BYTES, ge=1, le=MAX_ACQUISITION_CHUNK_BYTES)
     maximum_chunk_bytes: int = Field(default=MAX_ACQUISITION_CHUNK_BYTES, ge=1, le=MAX_ACQUISITION_CHUNK_BYTES)
+    parent_workflow_id: UUID | None = None
+    child_attestation_token: str | None = Field(default=None, min_length=64, max_length=4096)
 
     @model_validator(mode="after")
     def _validate_acquire_request(self) -> "HelperAcquireItemRequest":
@@ -451,6 +502,8 @@ class HelperAcquireItemRequest(_StrictProtocolModel):
             raise ValueError("normal chunk size exceeds maximum chunk size")
         if not self.provider_native_path.provider_native_relative_path:
             raise ValueError("acquisition item must be beneath the authorized root")
+        if (self.parent_workflow_id is None) != (self.child_attestation_token is None):
+            raise ValueError("optimized acquisition requires both parent workflow and child attestation")
         return self
 
 

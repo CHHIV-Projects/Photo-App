@@ -10,7 +10,7 @@ PACKAGING = Path(__file__).resolve().parents[1] / "packaging"
 class PackagingAssetTests(unittest.TestCase):
     def test_install_is_per_user_versioned_and_quotes_uri_argument(self) -> None:
         script = (PACKAGING / "install-package.ps1").read_text(encoding="utf-8")
-        self.assertIn('$version = "0.5.2"', script)
+        self.assertIn('$version = "0.5.3"', script)
         self.assertIn("HKCU:\\Software\\Classes\\photoorganizer-helper", script)
         self.assertIn("PhotoOrganizer\\WindowsHelper", script)
         self.assertIn("'\"{0}\" \"%1\"'", script)

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import unittest
 from uuid import UUID
+from uuid import uuid4
+import json
 
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
@@ -15,6 +17,7 @@ from app.services.source_identity.identity_fingerprint import volume_guid_finger
 from app.services.windows_helper.operations import (
     claim_operation,
     complete_probe_operation,
+    complete_child_attestation_operation,
     create_probe_operation,
     fail_operation,
 )
@@ -39,6 +42,8 @@ from app.windows_helper_shared.protocol import (
     CollectorCapability,
     HelperCapabilityIdentity,
     HelperProbeResponse,
+    HelperChildAttestationRequest,
+    HelperChildAttestationResponse,
     MachineIssue,
     ProbeResultStatus,
     ProviderNativePath,
@@ -258,7 +263,68 @@ class WindowsHelperOperationTests(unittest.TestCase):
         self.assertEqual(unknown.state, "failed")
         self.assertEqual(unknown.error_code, "operation_unsupported")
 
+    def test_child_attestation_claim_and_completion_preserve_exact_binding(self) -> None:
+        operation_id = uuid4()
+        parent_id = uuid4()
+        run_id = uuid4()
+        path = ProviderNativePath(
+            provider_native_root="C:\\Controlled",
+            provider_native_relative_path="",
+            provider_native_full_path="C:\\Controlled",
+        )
+        request = HelperChildAttestationRequest(
+            request_id=operation_id,
+            intended_access_node_id=self.node_id,
+            source_endpoint_id=2,
+            source_profile_id=3,
+            source_type=SourceType.LOCAL,
+            provider_native_path=path,
+            expected_identity_fingerprint="sha256:" + "a" * 64,
+            parent_workflow_id=parent_id,
+            acquisition_run_id=run_id,
+        )
+        operation = WindowsHelperOperation(
+            operation_uuid=str(operation_id),
+            access_node_id=self.credential.access_node_id,
+            source_endpoint_id=None,
+            source_profile_id=None,
+            operation_type="attest_child",
+            request_json=json.dumps(request.model_dump(mode="json"), sort_keys=True),
+            request_digest="sha256:" + "a" * 64,
+            state="pending",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        self.db.add(operation)
+        self.db.commit()
+        claim = claim_operation(self.db, self.credential)
+        self.assertEqual(claim.operation.operation_type, "attest_child")
+        issued = datetime.now(timezone.utc)
+        response = HelperChildAttestationResponse(
+            request_id=operation_id,
+            intended_access_node_id=self.node_id,
+            source_endpoint_id=2,
+            source_profile_id=3,
+            source_type=SourceType.LOCAL,
+            provider_native_path=path,
+            expected_identity_fingerprint=request.expected_identity_fingerprint,
+            parent_workflow_id=parent_id,
+            acquisition_run_id=run_id,
+            issued_at=issued,
+            expires_at=issued + timedelta(minutes=15),
+            attestation_token="t" * 64,
+        )
+        completed = complete_child_attestation_operation(
+            self.db, self.credential, operation_id, response
+        )
+        self.assertEqual(completed.state, "completed")
+        with self.assertRaises(WindowsHelperServiceError):
+            complete_child_attestation_operation(
+                self.db,
+                self.credential,
+                operation_id,
+                response.model_copy(update={"acquisition_run_id": uuid4()}),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
-

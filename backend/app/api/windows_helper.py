@@ -13,6 +13,7 @@ from app.db.session import get_db_session
 from app.models.windows_helper import WindowsHelperCredential
 from app.services.windows_helper.operations import (
     complete_acquire_operation,
+    complete_child_attestation_operation,
     claim_operation,
     complete_inventory_operation,
     complete_probe_operation,
@@ -41,6 +42,7 @@ from app.windows_helper_shared.channel import (
 )
 from app.windows_helper_shared.protocol import (
     HelperAcquireItemResponse,
+    HelperChildAttestationResponse,
     HelperInventoryPageResponse,
     HelperObserveVolumesResponse,
     HelperProbeResponse,
@@ -152,6 +154,22 @@ def complete_inventory(
 ) -> HelperOperationCompletionResponse:
     try:
         return complete_inventory_operation(db, credential, operation_id, body)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/operations/{operation_id}/complete-child-attestation",
+    response_model=HelperOperationCompletionResponse,
+)
+def complete_child_attestation(
+    operation_id: UUID,
+    body: HelperChildAttestationResponse,
+    credential: WindowsHelperCredential = Depends(get_authenticated_helper),
+    db: Session = Depends(get_db_session),
+) -> HelperOperationCompletionResponse:
+    try:
+        return complete_child_attestation_operation(db, credential, operation_id, body)
     except WindowsHelperServiceError as exc:
         _raise_http(exc)
 

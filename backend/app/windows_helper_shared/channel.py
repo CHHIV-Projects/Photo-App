@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .protocol import (
     HelperAcquireItemRequest,
+    HelperChildAttestationRequest,
     HelperCapabilityIdentity,
     HelperInventoryPageRequest,
     HelperObserveVolumesRequest,
@@ -103,10 +104,18 @@ class ClaimedAcquireOperation(_StrictChannelModel):
     request: HelperAcquireItemRequest
 
 
+class ClaimedChildAttestationOperation(_StrictChannelModel):
+    operation_type: Literal["attest_child"] = "attest_child"
+    operation_id: UUID
+    lease_expires_at: datetime
+    request: HelperChildAttestationRequest
+
+
 ClaimedHelperOperation = Annotated[
     ClaimedProbeOperation
     | ClaimedObserveVolumesOperation
     | ClaimedInventoryOperation
+    | ClaimedChildAttestationOperation
     | ClaimedAcquireOperation,
     Field(discriminator="operation_type"),
 ]
@@ -119,7 +128,7 @@ class HelperOperationClaimResponse(_StrictChannelModel):
 
 class HelperOperationCompletionResponse(_StrictChannelModel):
     operation_id: UUID
-    operation_type: Literal["probe_source", "observe_volumes", "inventory_page", "acquire_item"]
+    operation_type: Literal["probe_source", "observe_volumes", "inventory_page", "attest_child", "acquire_item"]
     state: Literal["completed"] = "completed"
     result_digest: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
     idempotent_replay: bool = False
