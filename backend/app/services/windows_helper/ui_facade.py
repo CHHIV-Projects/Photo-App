@@ -13,6 +13,7 @@ from app.models.source_acquisition import SourceAcquisitionRun
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointObservedPath
 from app.models.source_intake_run import SourceIntakeRun
 from app.models.windows_helper import WindowsHelperCredential
+from app.models.windows_source_workflow import WindowsSourceWorkflow
 from app.schemas.admin import RunIngestionDispatchRequest, RunIngestionWindowsHelperOptions
 from app.schemas.source_acquisition import CreateSourceAcquisitionPlanRequest
 from app.schemas.windows_helper import (
@@ -70,6 +71,13 @@ from app.services.windows_helper.storage_classification import (
     classify_storage_observation,
     mounted_volume_capability_version,
     observation_allows_known_endpoint,
+)
+from app.services.windows_helper.source_workflow import (
+    approve_or_resume_workflow,
+    create_inventory_workflow,
+    latest_workflow_status,
+    review_inventory_workflow,
+    workflow_operation_status,
 )
 from app.windows_helper_shared.protocol import HelperCapabilityIdentity, ProbeMode, SourceType
 
@@ -308,13 +316,24 @@ def _resolve_discovery_candidate(db: Session, request):
         raise WindowsHelperServiceError(
             "portable_candidate_type_mismatch", "The selected device type does not match this Source flow.", http_status=409
         )
-    if ntpath.normcase(ntpath.splitdrive(request.windows_root)[0]) != ntpath.normcase(
-        ntpath.splitdrive(item.provider_native_root)[0]
-    ):
+    relative_root = _validated_endpoint_relative_root(request.endpoint_relative_root or "")
+    observed_root = ntpath.normpath(item.provider_native_root)
+    authoritative_root = ntpath.normpath(
+        ntpath.join(observed_root, relative_root) if relative_root else observed_root
+    )
+    try:
+        contained = ntpath.commonpath([observed_root, authoritative_root])
+    except ValueError as exc:
         raise WindowsHelperServiceError(
-            "portable_candidate_root_mismatch",
-            "The selected folder is not on the detected Source device.",
-            http_status=409,
+            "portable_relative_root_invalid",
+            "The folder within the device is invalid.",
+            http_status=400,
+        ) from exc
+    if ntpath.normcase(contained) != ntpath.normcase(observed_root):
+        raise WindowsHelperServiceError(
+            "portable_relative_root_escape",
+            "The folder within the device must stay on the selected device.",
+            http_status=400,
         )
     endpoints = list(
         db.scalars(
@@ -365,8 +384,39 @@ def _resolve_discovery_candidate(db: Session, request):
         update={
             "access_node_id": UUID(node.access_node_uuid),
             "device_alias": alias,
+            "windows_root": authoritative_root,
+            "endpoint_relative_root": relative_root,
         }
     )
+
+
+def _validated_endpoint_relative_root(value: str) -> str:
+    """Validate one browser-supplied path relative to a discovered volume root."""
+    raw = value.strip()
+    if not raw:
+        return ""
+    if raw.startswith(("\\", "/")) or ntpath.isabs(raw) or ntpath.splitdrive(raw)[0]:
+        raise WindowsHelperServiceError(
+            "portable_relative_root_absolute",
+            "Enter a folder within the selected device, without a drive letter or network path.",
+            http_status=400,
+        )
+    normalized_separators = raw.replace("/", "\\")
+    segments = normalized_separators.split("\\")
+    if any(
+        not segment
+        or segment in {".", ".."}
+        or ":" in segment
+        or any(character in segment for character in '<>"|?*')
+        or segment.endswith((" ", "."))
+        for segment in segments
+    ):
+        raise WindowsHelperServiceError(
+            "portable_relative_root_invalid",
+            "The folder within the device is invalid.",
+            http_status=400,
+        )
+    return "\\".join(segments)
 
 
 def profile_status(db: Session, source_profile_id: int) -> WindowsSourceUiProfileStatus:
@@ -607,6 +657,9 @@ def create_profile_probe(db: Session, source_profile_id: int) -> WindowsSourceUi
 
 
 def operation_status(db: Session, operation_id: UUID) -> WindowsSourceUiOperation:
+    parent_status = workflow_operation_status(db, operation_id)
+    if parent_status is not None:
+        return parent_status
     status = get_operation_status(db, operation_id)
     if status.state in {"failed", "expired"}:
         return WindowsSourceUiOperation(
@@ -672,6 +725,19 @@ def operation_status(db: Session, operation_id: UUID) -> WindowsSourceUiOperatio
 def prepare_inventory(
     db: Session, source_profile_id: int, probe_operation_id: UUID
 ) -> WindowsSourceUiOperation:
+    existing = db.scalar(
+        select(WindowsSourceWorkflow)
+        .where(
+            WindowsSourceWorkflow.source_profile_id == source_profile_id,
+            WindowsSourceWorkflow.state.in_(("inventorying", "awaiting_confirmation")),
+        )
+        .order_by(WindowsSourceWorkflow.id.desc())
+        .limit(1)
+    )
+    if existing is not None:
+        current = workflow_operation_status(db, UUID(existing.workflow_uuid))
+        if current is not None:
+            return current
     result = RunIngestionDispatchService(db).dispatch(
         RunIngestionDispatchRequest(
             source_profile_id=source_profile_id,
@@ -686,16 +752,24 @@ def prepare_inventory(
             "windows_inventory_not_started", result.message, http_status=409
         )
     operation_id = UUID(str(result.workflow_payload["operation_id"]))
-    return WindowsSourceUiOperation(
-        operation_token=operation_id,
-        stage="preparing_files",
-        safe_message="Preparing the bounded file list.",
+    return create_inventory_workflow(
+        db,
+        source_profile_id=source_profile_id,
+        probe_operation_id=probe_operation_id,
+        first_inventory_operation_id=operation_id,
     )
 
 
 def candidate_review(
     db: Session, source_profile_id: int, inventory_operation_id: UUID
 ) -> WindowsSourceUiCandidateReview:
+    parent = db.scalar(
+        select(WindowsSourceWorkflow).where(
+            WindowsSourceWorkflow.workflow_uuid == str(inventory_operation_id)
+        )
+    )
+    if isinstance(parent, WindowsSourceWorkflow):
+        return review_inventory_workflow(db, source_profile_id, inventory_operation_id)
     status = get_operation_status(db, inventory_operation_id)
     if (
         status.operation_type != "inventory_page"
@@ -751,7 +825,24 @@ def candidate_review(
     )
 
 
-def advance_workflow(db: Session, run_id: UUID, *, confirm: bool) -> WindowsSourceUiWorkflowStatus:
+def latest_workflow(db: Session, source_profile_id: int) -> WindowsSourceUiWorkflowStatus | None:
+    return latest_workflow_status(db, source_profile_id)
+
+
+def advance_workflow(
+    db: Session, run_id: UUID, *, confirm: bool, resume: bool = True
+) -> WindowsSourceUiWorkflowStatus:
+    parent = db.scalar(
+        select(WindowsSourceWorkflow).where(
+            WindowsSourceWorkflow.workflow_uuid == str(run_id)
+        )
+    )
+    if isinstance(parent, WindowsSourceWorkflow):
+        if resume or confirm:
+            return approve_or_resume_workflow(db, run_id, confirm=confirm)
+        from app.services.windows_helper.source_workflow import workflow_status
+
+        return workflow_status(db, run_id)
     acquisition = get_run(db, run_id)
     proposal_digest = acquisition.proposal_digest if confirm and acquisition.state == "planned" else None
     workflow = advance_source_acquisition_workflow(db, run_id, proposal_digest=proposal_digest)
@@ -780,6 +871,13 @@ def advance_workflow(db: Session, run_id: UUID, *, confirm: bool) -> WindowsSour
         stage=stage,
         files_total=acquisition.selected_item_count,
         files_completed=completed if stage != "complete" else acquisition.selected_item_count,
+        inventory_candidates=acquisition.selected_item_count,
+        predictable_rejections=0,
+        chunks_completed=1 if stage == "complete" else 0,
+        chunks_total=1,
+        files_remaining=(
+            0 if stage == "complete" else max(0, acquisition.selected_item_count - completed)
+        ),
         expected_bytes=acquisition.expected_byte_count,
         transferred_bytes=acquisition.committed_byte_count,
         new_library_items=new_items,
@@ -950,7 +1048,7 @@ def create_creation_probe(
             "windows_computer_unavailable", "No current Windows access route is available.", http_status=409
         )
     _, node = _creation_binding(db, request.access_node_id, request.device_alias)
-    root = request.windows_root.strip()
+    root = (request.windows_root or "").strip()
     if not ntpath.isabs(root) or not ntpath.splitdrive(root)[0]:
         raise WindowsHelperServiceError(
             "invalid_windows_root", "Enter an absolute Windows folder path.", http_status=400
@@ -982,7 +1080,7 @@ def _creation_plan(db: Session, request: WindowsSourceUiCreatePlanRequest):
     return SourceCreationService(db).plan(
         SourceCreationPlanRequest(
             source_type=request.source_type,
-            observed_path=request.windows_root.strip(),
+            observed_path=(request.windows_root or "").strip(),
             source_name=request.profile_name.strip(),
             device_name=request.device_alias.strip(),
             naming_action="use_existing" if endpoint is not None else "create_new",
@@ -1021,7 +1119,7 @@ def confirm_creation(
     result = SourceCreationService(db).confirm(
         SourceCreationConfirmRequest(
             source_type=request.source_type,
-            observed_path=request.windows_root.strip(),
+            observed_path=(request.windows_root or "").strip(),
             source_name=request.profile_name.strip(),
             device_name=request.device_alias.strip(),
             naming_action="use_existing" if endpoint is not None else "create_new",

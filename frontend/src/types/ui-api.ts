@@ -1463,6 +1463,9 @@ export interface WindowsSourceUiCandidateReview {
   workflow_token: string;
   stage: "awaiting_confirmation";
   files_to_process: number;
+  inventory_candidates: number;
+  predictable_rejections: number;
+  expected_chunks: number;
   total_bytes: number;
   profile_name: string;
   windows_root: string;
@@ -1471,9 +1474,18 @@ export interface WindowsSourceUiCandidateReview {
 
 export interface WindowsSourceUiWorkflowStatus {
   workflow_token: string;
-  stage: "awaiting_confirmation" | "transferring_files" | "processing_library" | "complete" | "failed";
+  source_profile_id?: number | null;
+  source_label?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  stage: "inventorying" | "awaiting_confirmation" | "transferring_files" | "processing_library" | "paused" | "complete" | "failed";
   files_total: number;
   files_completed: number;
+  inventory_candidates: number;
+  predictable_rejections: number;
+  chunks_completed: number;
+  chunks_total: number;
+  files_remaining: number;
   expected_bytes: number;
   transferred_bytes: number;
   new_library_items: number;
@@ -1516,14 +1528,21 @@ export interface WindowsHelperStatusList {
   helpers: WindowsHelperStatus[];
 }
 
-export interface WindowsSourceUiCreateFields {
+export type WindowsSourceUiCreateFields = {
   access_node_id: string | null;
-  discovery_candidate_token?: string | null;
-  source_type: "local" | "external" | "removable";
   device_alias: string;
-  windows_root: string;
   profile_name: string;
-}
+} & ({
+  source_type: "local";
+  discovery_candidate_token?: null;
+  windows_root: string;
+  endpoint_relative_root?: null;
+} | {
+  source_type: "external" | "removable";
+  discovery_candidate_token: string | null;
+  windows_root?: null;
+  endpoint_relative_root: string;
+});
 
 export interface WindowsSourceUiPortableCandidate {
   candidate_token: string;

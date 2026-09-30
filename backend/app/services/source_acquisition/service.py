@@ -213,8 +213,6 @@ def _validated_inventory_chain(
     references = [item.candidate_reference for item in all_items]
     if len(normalized_paths) != len(set(normalized_paths)) or len(references) != len(set(references)):
         raise WindowsHelperServiceError("inventory_chain_ambiguous", "Inventory chain contains duplicate candidates.", http_status=409)
-    if normalized_paths != sorted(normalized_paths):
-        raise WindowsHelperServiceError("inventory_chain_not_ordered", "Inventory chain is not globally ordered.", http_status=409)
     chain_digest = _digest(
         {
             "domain": "photo-organizer-source-acquisition-inventory-chain-v1",
@@ -242,7 +240,6 @@ def create_planned_run(db: Session, request: CreateSourceAcquisitionPlanRequest)
         selected = [by_reference[reference] for reference in request.candidate_references]
     except KeyError as exc:
         raise WindowsHelperServiceError("candidate_not_in_inventory", "A selected candidate is not in the reviewed inventory.", http_status=409) from exc
-    selected.sort(key=lambda item: ntpath.normcase(item.provider_native_path.provider_native_relative_path))
     for item in selected:
         extension = PureWindowsPath(item.filename).suffix.casefold()
         if (
@@ -330,6 +327,139 @@ def create_planned_run(db: Session, request: CreateSourceAcquisitionPlanRequest)
     return acquisition_response(db, run)
 
 
+def create_planned_child_run(
+    db: Session,
+    *,
+    idempotency_key: UUID,
+    source_profile_id: int,
+    inventory_generation: UUID,
+    inventory_chain_digest: str,
+    runtime_root: str,
+    candidates: list[object],
+    access_node_db_id: int,
+) -> SourceAcquisitionRunResponse:
+    """Create one <=100-item child from a durable, already-reviewed parent proposal."""
+    if not candidates or len(candidates) > 100:
+        raise WindowsHelperServiceError(
+            "acquisition_child_bound_invalid",
+            "A Windows acquisition child must contain between 1 and 100 candidates.",
+            http_status=409,
+        )
+    source = db.get(IngestionSource, source_profile_id)
+    endpoint = db.get(SourceEndpoint, source.endpoint_id) if source is not None and source.endpoint_id else None
+    node = db.get(AccessNode, access_node_db_id)
+    if (
+        source is None
+        or endpoint is None
+        or node is None
+        or node.provider_name != "windows_helper_v1"
+        or node.os_family != "windows"
+        or node.status != "active"
+        or not endpoint.identity_fingerprint_hash
+    ):
+        raise WindowsHelperServiceError(
+            "source_access_node_unavailable",
+            "The selected Windows route is no longer available.",
+            http_status=409,
+        )
+    existing = db.scalar(
+        select(SourceAcquisitionRun).where(
+            SourceAcquisitionRun.idempotency_key == str(idempotency_key)
+        )
+    )
+    if existing is not None:
+        return acquisition_response(db, existing)
+    base = _receiving_base()
+    expected_bytes = sum(int(getattr(item, "size_bytes")) for item in candidates)
+    free_bytes = shutil.disk_usage(base).free
+    reserve = settings.acquisition_disk_reserve_bytes
+    if free_bytes < expected_bytes + reserve:
+        raise WindowsHelperServiceError(
+            "receiving_capacity_insufficient",
+            "Receiving storage lacks the required safety reserve.",
+            http_status=409,
+        )
+    run_uuid = uuid4()
+    receiving_root = str(base / str(run_uuid))
+    item_uuids = [uuid4() for _ in candidates]
+    evidence = [
+        {
+            "reference": getattr(item, "candidate_reference"),
+            "relative_path": getattr(item, "normalized_path"),
+            "size": getattr(item, "size_bytes"),
+            "mtime_ns": getattr(item, "modified_time_ns"),
+            "file_id": getattr(item, "stable_file_id_digest"),
+            "local_residency": getattr(item, "local_residency"),
+            "windows_file_attributes": getattr(item, "windows_file_attributes"),
+        }
+        for item in candidates
+    ]
+    proposal_digest = _digest(
+        {
+            "domain": "photo-organizer-source-acquisition-proposal-v1",
+            "run_id": str(run_uuid),
+            "item_ids": [str(value) for value in item_uuids],
+            "inventory_chain_digest": inventory_chain_digest,
+            "receiving_root": receiving_root,
+            "total_expected_bytes": expected_bytes,
+            "candidate_evidence": evidence,
+        }
+    )
+    run = SourceAcquisitionRun(
+        run_uuid=str(run_uuid),
+        idempotency_key=str(idempotency_key),
+        provider=PROVIDER,
+        access_node_id=node.id,
+        source_endpoint_id=endpoint.id,
+        source_profile_id=source.id,
+        inventory_generation=str(inventory_generation),
+        inventory_chain_digest=inventory_chain_digest,
+        proposal_digest=proposal_digest,
+        source_fingerprint=endpoint.identity_fingerprint_hash,
+        provider_native_root=runtime_root,
+        receiving_root=receiving_root,
+        state="planned",
+        selected_item_count=len(candidates),
+        expected_byte_count=expected_bytes,
+        disk_free_bytes_at_plan=free_bytes,
+        disk_reserve_bytes=reserve,
+    )
+    db.add(run)
+    db.flush()
+    for ordinal, (candidate, item_uuid) in enumerate(
+        zip(candidates, item_uuids, strict=True), start=1
+    ):
+        db.add(
+            SourceAcquisitionItem(
+                item_uuid=str(item_uuid),
+                run_id=run.id,
+                ordinal=ordinal,
+                candidate_reference=getattr(candidate, "candidate_reference"),
+                inventory_generation=str(inventory_generation),
+                provider_native_root=runtime_root,
+                provider_native_relative_path=getattr(candidate, "relative_path"),
+                provider_native_relative_path_normalized=getattr(candidate, "normalized_path"),
+                provider_native_relative_path_normalized_digest=getattr(candidate, "normalized_path_digest"),
+                provider_native_full_path=getattr(candidate, "full_path"),
+                filename=getattr(candidate, "filename"),
+                safe_extension=getattr(candidate, "safe_extension"),
+                expected_size_bytes=getattr(candidate, "size_bytes"),
+                expected_modified_time_ns=getattr(candidate, "modified_time_ns"),
+                expected_file_id_digest=getattr(candidate, "stable_file_id_digest"),
+                source_fingerprint=endpoint.identity_fingerprint_hash,
+                windows_file_attributes=getattr(candidate, "windows_file_attributes"),
+                local_residency=getattr(candidate, "local_residency"),
+                eligibility_reason=getattr(candidate, "eligibility_reason"),
+                state="pending",
+                partial_relative_path=f"partial/{item_uuid}.part",
+                ready_relative_path=f"ready/{item_uuid}{getattr(candidate, 'safe_extension')}",
+            )
+        )
+    db.commit()
+    db.refresh(run)
+    return acquisition_response(db, run)
+
+
 def activate_run(db: Session, run_id: UUID, proposal_digest: str) -> SourceAcquisitionRunResponse:
     run = db.scalar(select(SourceAcquisitionRun).where(SourceAcquisitionRun.run_uuid == str(run_id)).with_for_update())
     if run is None:
@@ -340,7 +470,15 @@ def activate_run(db: Session, run_id: UUID, proposal_digest: str) -> SourceAcqui
         return acquisition_response(db, run)
     if run.state != "planned":
         raise WindowsHelperServiceError("acquisition_run_not_planned", "Only a planned run may be activated.", http_status=409)
-    source, endpoint, node = _load_profile(db, run.source_profile_id)
+    source = db.get(IngestionSource, run.source_profile_id)
+    endpoint = db.get(SourceEndpoint, run.source_endpoint_id)
+    node = db.get(AccessNode, run.access_node_id)
+    if source is None or endpoint is None or node is None:
+        raise WindowsHelperServiceError(
+            "acquisition_binding_missing",
+            "The acquisition Source binding is unavailable.",
+            http_status=409,
+        )
     items = list(
         db.scalars(
             select(SourceAcquisitionItem)

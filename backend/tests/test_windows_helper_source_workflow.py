@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import unittest
+from unittest.mock import patch
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine, func, select
@@ -13,6 +16,11 @@ from app.models.source_endpoint import (
     SourceEndpoint,
     SourceEndpointAliasEvent,
     SourceEndpointObservedPath,
+)
+from app.models.windows_source_workflow import (
+    WindowsSourceWorkflow,
+    WindowsSourceWorkflowCandidate,
+    WindowsSourceWorkflowPage,
 )
 from app.schemas.windows_helper import (
     CreateWindowsHelperPairingRequest,
@@ -35,6 +43,7 @@ from app.services.source_identity.identity_fingerprint import volume_guid_finger
 from app.services.source_identity.readiness_service import SourceProfileReadinessService
 from app.services.source_identity.source_selection_schema import SourceSelectionRequest
 from app.services.source_identity.source_selection_service import SourceSelectionService
+from app.services.source_acquisition.schema import ensure_source_acquisition_schema
 from app.services.windows_helper.operations import (
     claim_operation,
     complete_inventory_operation,
@@ -62,6 +71,10 @@ from app.services.windows_helper.ui_facade import (
     list_computers,
     resolve_profile_route,
     resolve_portable_discovery,
+)
+from app.services.windows_helper.source_workflow import (
+    _advance_inventory,
+    approve_or_resume_workflow,
 )
 from app.windows_helper_shared.channel import PairingCompleteRequest
 from app.windows_helper_shared.identity.models import (
@@ -217,6 +230,7 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
         SourceEndpointObservedPath.__table__.create(self.engine)
         self.db = Session(self.engine, expire_on_commit=False)
         ensure_windows_helper_schema(self.db)
+        ensure_source_acquisition_schema(self.db)
 
         authorization = create_pairing_authorization(self.db)
         paired = complete_pairing(
@@ -331,32 +345,15 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
             )
         self.assertEqual(self.db.query(AccessNode).count(), 1)
 
-    def test_external_creation_targets_access_node_but_keeps_source_device_alias_separate(self) -> None:
-        node = self.db.scalar(
-            select(AccessNode).where(AccessNode.access_node_uuid == str(self.node_id))
-        )
-        node.last_seen_at = datetime.now(timezone.utc)
-        self.db.commit()
-
-        created = create_creation_probe(
-            self.db,
+    def test_external_creation_rejects_the_retired_browser_composed_root_contract(self) -> None:
+        with self.assertRaisesRegex(ValueError, "discovery candidate token"):
             WindowsSourceUiCreateProbeRequest(
                 access_node_id=self.node_id,
                 source_type="external",
                 device_alias="Travel Drive",
                 windows_root="H:\\Pictures",
                 profile_name="Travel photos",
-            ),
-        )
-        claimed = claim_operation(self.db, self.credential)
-
-        self.assertEqual(created.operation_token, claimed.operation.operation_id)
-        self.assertEqual(claimed.operation.request.source_type, SourceType.EXTERNAL)
-        self.assertEqual(
-            claimed.operation.request.provider_native_path.provider_native_root,
-            "H:\\Pictures",
-        )
-        self.assertEqual(node.label, "12.66 Windows Helper Development")
+            )
 
     def _create_external_profile(self) -> tuple[SourceEndpoint, IngestionSource]:
         node = self.db.scalar(
@@ -699,7 +696,7 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
                 discovery_candidate_token=resolved.candidates[0].candidate_token,
                 source_type="external",
                 device_alias="New USB Archive",
-                windows_root="H:\\Pictures",
+                endpoint_relative_root="Pictures",
                 profile_name="New USB Photos",
             ),
         )
@@ -962,6 +959,125 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
                     page_size=1,
                 ),
             )
+
+    def test_parent_inventory_preserves_helper_dfs_order_and_creates_bounded_children(self) -> None:
+        _setup, _plan, created = self._create_profile()
+        readiness_probe = self._complete_probe(source_profile_id=created.source_profile_id)
+        first = create_inventory_operation(
+            self.db,
+            CreateWindowsHelperInventoryOperationRequest(
+                source_profile_id=created.source_profile_id,
+                probe_operation_id=readiness_probe.operation_id,
+                page_size=100,
+            ),
+        )
+        first_claim = claim_operation(self.db, self.credential)
+        generation = uuid4()
+        first_items = [
+            HelperInventoryItem(
+                candidate_reference=f"candidate_{index}",
+                provider_native_path=_native_path(relative=("z.jpg" if index == 0 else f"folder\\{index:03}.jpg")),
+                filename="z.jpg" if index == 0 else f"{index:03}.jpg",
+                size_bytes=60 * 1024,
+                modified_time_ns=index + 1,
+                entry_kind=InventoryEntryKind.REGULAR_FILE,
+                local_residency="resident",
+            )
+            for index in range(100)
+        ]
+        complete_inventory_operation(
+            self.db,
+            self.credential,
+            first.operation_id,
+            HelperInventoryPageResponse(
+                request_id=first.operation_id,
+                result_status=InventoryResultStatus.SUCCESS,
+                source_endpoint_id=created.source_endpoint_id,
+                source_profile_id=created.source_profile_id,
+                source_type=SourceType.LOCAL,
+                provider_native_path=first_claim.operation.request.provider_native_path,
+                inventory_generation=generation,
+                identity_probe=_probe(first.operation_id),
+                items=first_items,
+                next_cursor="opaque_cursor_100",
+            ),
+        )
+        node = self.db.scalar(select(AccessNode).where(AccessNode.access_node_uuid == str(self.node_id)))
+        parent = WindowsSourceWorkflow(
+            source_profile_id=created.source_profile_id,
+            source_endpoint_id=created.source_endpoint_id,
+            access_node_id=node.id,
+            probe_operation_uuid=str(readiness_probe.operation_id),
+            state="inventorying",
+            source_fingerprint=FINGERPRINT,
+            provider_native_root=ROOT,
+            max_observed_entries=100_000,
+        )
+        self.db.add(parent)
+        self.db.flush()
+        self.db.add(WindowsSourceWorkflowPage(workflow_id=parent.id, page_index=1, operation_uuid=str(first.operation_id)))
+        self.db.commit()
+
+        with TemporaryDirectory() as receiving:
+            with patch(
+                "app.services.windows_helper.source_workflow.settings",
+                SimpleNamespace(
+                    acquisition_receiving_path=receiving,
+                    acquisition_disk_reserve_bytes=0,
+                ),
+            ):
+                self.assertFalse(_advance_inventory(self.db, parent))
+        second_claim = claim_operation(self.db, self.credential)
+        second_item = HelperInventoryItem(
+            candidate_reference="candidate_100",
+            provider_native_path=_native_path(relative="a\\nested.jpg"),
+            filename="nested.jpg",
+            size_bytes=60 * 1024,
+            modified_time_ns=101,
+            entry_kind=InventoryEntryKind.REGULAR_FILE,
+            local_residency="resident",
+        )
+        complete_inventory_operation(
+            self.db,
+            self.credential,
+            second_claim.operation.operation_id,
+            HelperInventoryPageResponse(
+                request_id=second_claim.operation.operation_id,
+                result_status=InventoryResultStatus.SUCCESS,
+                source_endpoint_id=created.source_endpoint_id,
+                source_profile_id=created.source_profile_id,
+                source_type=SourceType.LOCAL,
+                provider_native_path=second_claim.operation.request.provider_native_path,
+                inventory_generation=generation,
+                identity_probe=_probe(second_claim.operation.operation_id),
+                items=[second_item],
+                next_cursor=None,
+            ),
+        )
+        with TemporaryDirectory() as receiving:
+            with patch(
+                "app.services.windows_helper.source_workflow.settings",
+                SimpleNamespace(
+                    acquisition_receiving_path=receiving,
+                    acquisition_disk_reserve_bytes=0,
+                ),
+            ):
+                self.assertFalse(_advance_inventory(self.db, parent))
+        self.db.refresh(parent)
+        self.assertEqual(parent.state, "awaiting_confirmation")
+        self.assertEqual(parent.observed_item_count, 101)
+        self.assertEqual(parent.eligible_item_count, 101)
+        ordered = list(self.db.scalars(select(WindowsSourceWorkflowCandidate).where(WindowsSourceWorkflowCandidate.workflow_id == parent.id).order_by(WindowsSourceWorkflowCandidate.ordinal)))
+        self.assertEqual(ordered[0].relative_path, "z.jpg")
+        self.assertEqual(ordered[-1].relative_path, "a\\nested.jpg")
+        with patch("app.services.windows_helper.source_workflow.start_or_resume_worker"):
+            approved = approve_or_resume_workflow(self.db, UUID(parent.workflow_uuid), confirm=True)
+        self.assertEqual(approved.files_total, 101)
+        self.assertEqual(approved.source_profile_id, created.source_profile_id)
+        self.assertEqual(approved.source_label, "Controlled Windows Local")
+        self.assertIsNotNone(approved.started_at)
+        self.assertIsNone(approved.finished_at)
+        self.assertEqual(parent.child_count, 2)
 
     def test_local_v1_invariant_reuses_same_volume_and_blocks_different_or_ambiguous(self) -> None:
         setup, _plan, created = self._create_profile()

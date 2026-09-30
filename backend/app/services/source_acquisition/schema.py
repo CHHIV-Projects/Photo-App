@@ -8,6 +8,12 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.models.source_acquisition import SourceAcquisitionItem, SourceAcquisitionRun
+from app.models.windows_source_workflow import (
+    WindowsSourceWorkflow,
+    WindowsSourceWorkflowCandidate,
+    WindowsSourceWorkflowChild,
+    WindowsSourceWorkflowPage,
+)
 
 
 @dataclass(frozen=True)
@@ -56,7 +62,14 @@ def ensure_source_acquisition_schema(db_session: Session) -> SourceAcquisitionSc
     added_columns: list[str] = []
     added_indexes: list[str] = []
     added_constraints: list[str] = []
-    for table in (SourceAcquisitionRun.__table__, SourceAcquisitionItem.__table__):
+    for table in (
+        SourceAcquisitionRun.__table__,
+        SourceAcquisitionItem.__table__,
+        WindowsSourceWorkflow.__table__,
+        WindowsSourceWorkflowPage.__table__,
+        WindowsSourceWorkflowCandidate.__table__,
+        WindowsSourceWorkflowChild.__table__,
+    ):
         if table.name not in existing:
             table.create(bind=connection, checkfirst=True)
             created.append(table.name)

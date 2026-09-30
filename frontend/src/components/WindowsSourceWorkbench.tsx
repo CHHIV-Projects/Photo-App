@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   advanceWindowsSourceUiRun,
   confirmWindowsSourceUiRun,
+  getLatestWindowsSourceUiRun,
+  getWindowsSourceUiRun,
   getWindowsSourceUiOperation,
   getWindowsSourceUiProfile,
   prepareWindowsSourceUiInventory,
@@ -45,7 +47,7 @@ function formatBytes(value: number): string {
 
 type Props = {
   profile: SourceProfileSummary;
-  onComplete?: () => void;
+  onComplete?: (workflow: WindowsSourceUiWorkflowStatus) => void;
   launchWindowsAccess?: () => void;
   launchTimeoutMs?: number;
   operationTimeoutMs?: number;
@@ -72,15 +74,6 @@ export default function WindowsSourceWorkbench({
     setAccess(current);
     return current;
   }, [profile.source_id]);
-
-  useEffect(() => {
-    setPhase("idle");
-    setReview(null);
-    setWorkflow(null);
-    setRouteCheck(null);
-    setMessage(null);
-    void refreshAccess().catch(() => setMessage("Windows access status is unavailable."));
-  }, [refreshAccess]);
 
   const pollAccess = useCallback(async () => {
     const deadline = Date.now() + launchTimeoutMs;
@@ -193,15 +186,66 @@ export default function WindowsSourceWorkbench({
 
   const pollWorkflow = useCallback(async (token: string, initial: WindowsSourceUiWorkflowStatus) => {
     let current = initial;
-    while (current.stage !== "complete" && current.stage !== "failed") {
+    while (!["complete", "failed", "paused"].includes(current.stage)) {
       await wait(1500);
-      current = await advanceWindowsSourceUiRun(token);
-      setWorkflow(current);
+      try {
+        current = await getWindowsSourceUiRun(token);
+        setWorkflow(current);
+      } catch {
+        setMessage("Progress could not be refreshed; the durable backend workflow continues.");
+      }
     }
     setPhase(current.stage === "complete" ? "complete" : "failed");
     setMessage(current.safe_message);
-    if (current.stage === "complete") onComplete?.();
+    if (current.stage === "complete") onComplete?.(current);
   }, [onComplete, wait]);
+
+  useEffect(() => {
+    setPhase("idle");
+    setReview(null);
+    setWorkflow(null);
+    setRouteCheck(null);
+    setMessage(null);
+    void Promise.all([refreshAccess(), getLatestWindowsSourceUiRun(profile.source_id)])
+      .then(([, latest]) => {
+        if (!latest) return;
+        setWorkflow(latest);
+        if (latest.stage === "inventorying") {
+          setPhase("preparing");
+          setMessage(latest.safe_message);
+          void pollOperation(latest.workflow_token)
+            .then(() => reviewWindowsSourceUiCandidates(profile.source_id, latest.workflow_token))
+            .then((candidateReview) => {
+              setReview(candidateReview);
+              setPhase("review");
+              setMessage(candidateReview.safe_message);
+            })
+            .catch((error: unknown) => {
+              setPhase("failed");
+              setMessage(error instanceof Error ? error.message : "The complete proposal could not be restored.");
+            });
+          return;
+        }
+        if (latest.stage === "awaiting_confirmation") {
+          void reviewWindowsSourceUiCandidates(profile.source_id, latest.workflow_token)
+            .then((candidateReview) => {
+              setReview(candidateReview);
+              setPhase("review");
+              setMessage(candidateReview.safe_message);
+            });
+          return;
+        }
+        setPhase(latest.stage === "complete" ? "complete" : latest.stage === "failed" || latest.stage === "paused" ? "failed" : "running");
+        setMessage(latest.safe_message);
+        if (latest.stage === "complete") {
+          onComplete?.(latest);
+        }
+        if (["transferring_files", "processing_library"].includes(latest.stage)) {
+          void pollWorkflow(latest.workflow_token, latest);
+        }
+      })
+      .catch(() => setMessage("Windows access status is unavailable."));
+  }, [onComplete, pollOperation, pollWorkflow, profile.source_id, refreshAccess]);
 
   const confirmRun = useCallback(async () => {
     if (!review) return;
@@ -243,6 +287,9 @@ export default function WindowsSourceWorkbench({
           <h4 className={styles.detailHeading}>Files ready for confirmation</h4>
           <div className={styles.runMetrics}>
             <span><strong>Files to process:</strong> {review.files_to_process}</span>
+            <span><strong>Inventory entries:</strong> {review.inventory_candidates}</span>
+            <span><strong>Predictable rejections:</strong> {review.predictable_rejections}</span>
+            <span><strong>Internal chunks:</strong> {review.expected_chunks}</span>
             <span><strong>Total size:</strong> {formatBytes(review.total_bytes)}</span>
             <span><strong>Source:</strong> {review.profile_name}</span>
             <span><strong>Folder:</strong> {review.windows_root}</span>
@@ -265,8 +312,10 @@ export default function WindowsSourceWorkbench({
       )}
       {workflow && (
         <div className={styles.runMetrics} aria-label="Windows ingestion progress">
-          <span><strong>Stage:</strong> {workflow.stage === "transferring_files" ? "Transferring files" : workflow.stage === "processing_library" ? "Processing library" : workflow.stage === "complete" ? "Complete" : "Stopped"}</span>
+          <span><strong>Stage:</strong> {workflow.stage === "inventorying" ? "Preparing proposal" : workflow.stage === "awaiting_confirmation" ? "Awaiting confirmation" : workflow.stage === "transferring_files" ? "Transferring files" : workflow.stage === "processing_library" ? "Processing library" : workflow.stage === "paused" ? "Paused" : workflow.stage === "complete" ? "Complete" : "Stopped"}</span>
           <span><strong>Files:</strong> {workflow.files_completed} / {workflow.files_total}</span>
+          <span><strong>Chunks:</strong> {workflow.chunks_completed} / {workflow.chunks_total}</span>
+          <span><strong>Remaining:</strong> {workflow.files_remaining}</span>
           <span><strong>Transferred:</strong> {formatBytes(workflow.transferred_bytes)} / {formatBytes(workflow.expected_bytes)}</span>
           {workflow.stage === "complete" && <><span><strong>New library items:</strong> {workflow.new_library_items}</span><span><strong>Already represented:</strong> {workflow.already_represented}</span><span><strong>Failed:</strong> {workflow.failed_items}</span></>}
         </div>
@@ -275,8 +324,26 @@ export default function WindowsSourceWorkbench({
       {(phase === "idle" || phase === "failed") && (
         <div className={styles.rowActions}>
           <button type="button" className={styles.runButton} onClick={runFromClick}>Run Ingestion</button>
-          {phase === "failed" && <button type="button" className={styles.button} onClick={() => void refreshAccess()}>Try Again</button>}
+          {phase === "failed" && workflow?.stage !== "paused" && <button type="button" className={styles.button} onClick={() => void refreshAccess()}>Try Again</button>}
+          {phase === "failed" && workflow?.stage === "paused" && <button type="button" className={styles.button} onClick={() => {
+            launchWindowsAccess();
+            void pollAccess()
+              .then(() => advanceWindowsSourceUiRun(workflow.workflow_token))
+              .then((current) => {
+                setWorkflow(current);
+                setPhase("running");
+                setMessage(current.safe_message);
+                return pollWorkflow(current.workflow_token, current);
+              })
+              .catch((error: unknown) => {
+                setPhase("failed");
+                setMessage(error instanceof Error ? error.message : "The approved run could not be resumed.");
+              });
+          }}>Resume approved run</button>}
         </div>
+      )}
+      {phase === "complete" && (
+        <button type="button" className={styles.runButton} onClick={runFromClick}>Run Again</button>
       )}
     </section>
   );

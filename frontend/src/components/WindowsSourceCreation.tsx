@@ -65,9 +65,11 @@ export default function WindowsSourceCreation({
     access_node_id: computers[0]?.access_node_id ?? null,
     source_type: sourceType,
     device_alias: sourceType === "local" ? computers[0]?.computer_alias ?? "" : "",
-    windows_root: "",
+    ...(sourceType === "local"
+      ? { windows_root: "" }
+      : { discovery_candidate_token: null, endpoint_relative_root: "" }),
     profile_name: "",
-  });
+  } as WindowsSourceUiCreateFields);
   const [discovery, setDiscovery] = useState<WindowsSourceUiPortableDiscovery | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<WindowsSourceUiPortableCandidate | null>(null);
   const [portableFolder, setPortableFolder] = useState("");
@@ -92,11 +94,21 @@ export default function WindowsSourceCreation({
   }, [computers, sourceType]);
 
   const pathError = useMemo(() => {
-    const root = fields.windows_root.trim();
-    return /^[A-Za-z]:\\/.test(root) || /^\\\\[^\\]+\\[^\\]+/.test(root)
-      ? null
-      : "Enter an absolute Windows folder path.";
-  }, [fields.windows_root]);
+    if (fields.source_type === "local") {
+      const root = fields.windows_root.trim();
+      return /^[A-Za-z]:\\/.test(root) || /^\\\\[^\\]+\\[^\\]+/.test(root)
+        ? null
+        : "Enter an absolute Windows folder path.";
+    }
+    const relative = fields.endpoint_relative_root.trim().replaceAll("/", "\\");
+    if (!relative) return null;
+    const segments = relative.split("\\");
+    return /^[A-Za-z]:/.test(relative)
+      || relative.startsWith("\\")
+      || segments.some((segment) => !segment || segment === "." || segment === ".." || /[:<>"|?*]/.test(segment) || /[ .]$/.test(segment))
+      ? "Enter a folder relative to the selected device, for example: Chuck Iphone"
+      : null;
+  }, [fields]);
 
   const update = (key: keyof WindowsSourceUiCreateFields, value: string) => {
     setFields((current) => ({ ...current, [key]: value }));
@@ -156,8 +168,9 @@ export default function WindowsSourceCreation({
       access_node_id: null,
       discovery_candidate_token: candidate?.candidate_token ?? null,
       device_alias: candidate?.device_alias ?? "",
-      windows_root: candidate?.current_root ?? "",
-    }));
+      endpoint_relative_root: "",
+      windows_root: undefined,
+    } as WindowsSourceUiCreateFields));
     setProbeToken(null);
     setPlan(null);
     setResult(null);
@@ -166,13 +179,10 @@ export default function WindowsSourceCreation({
 
   const updatePortableFolder = (value: string) => {
     setPortableFolder(value);
-    const relative = value.trim().replace(/^[/\\]+/, "");
     setFields((current) => ({
       ...current,
-      windows_root: selectedCandidate
-        ? `${selectedCandidate.current_root}${relative}`
-        : current.windows_root,
-    }));
+      endpoint_relative_root: value,
+    } as WindowsSourceUiCreateFields));
     setProbeToken(null);
     setPlan(null);
     setResult(null);
@@ -278,13 +288,14 @@ export default function WindowsSourceCreation({
         {sourceType === "local" ? (
           <label className={styles.formLabel}>
             Folder
-            <input className={styles.formInput} value={fields.windows_root} onChange={(event) => update("windows_root", event.target.value)} placeholder="C:\\Users\\name\\Pictures" disabled={busy} />
+            <input className={styles.formInput} value={fields.windows_root ?? ""} onChange={(event) => update("windows_root", event.target.value)} placeholder="C:\\Users\\name\\Pictures" disabled={busy} />
           </label>
         ) : selectedCandidate && (
           <label className={styles.formLabel}>
             Folder within device (optional)
             <input className={styles.formInput} value={portableFolder} onChange={(event) => updatePortableFolder(event.target.value)} placeholder="Family Photos" disabled={busy} />
             <span className={styles.helperText}>Current access: {selectedCandidate.current_root}</span>
+            <span className={styles.helperText}>Enter a folder relative to this device. Do not include a drive letter.</span>
           </label>
         )}
         <label className={styles.formLabel}>
@@ -293,7 +304,7 @@ export default function WindowsSourceCreation({
         </label>
         <button type="button" className={styles.updateButton} onClick={identify} disabled={busy || (sourceType === "local" ? computers.length === 0 : !selectedCandidate)}>{busy && !plan ? "Checking..." : "Review Source"}</button>
       </div>
-      {pathError && fields.windows_root && <p className={styles.helperText}>{pathError}</p>}
+      {pathError && <p className={styles.helperText}>{pathError}</p>}
       {plan && !result && (
         <section className={styles.creationReview} aria-label={`Windows ${sourceTypeLabel} Source review`}>
           <h4 className={styles.detailHeading}>{`Review Windows ${sourceTypeLabel} Source`}</h4>

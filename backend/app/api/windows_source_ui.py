@@ -42,6 +42,7 @@ from app.services.windows_helper.ui_facade import (
     create_profile_probe,
     creation_plan,
     list_computers,
+    latest_workflow,
     operation_status,
     prepare_inventory,
     profile_status,
@@ -180,6 +181,29 @@ def post_advance(
 ) -> WindowsSourceUiWorkflowStatus:
     try:
         return advance_workflow(db, run_id, confirm=False)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.get("/runs/{run_id}", response_model=WindowsSourceUiWorkflowStatus)
+def get_run_status(
+    run_id: UUID, db: Session = Depends(get_db_session)
+) -> WindowsSourceUiWorkflowStatus:
+    try:
+        return advance_workflow(db, run_id, confirm=False, resume=False)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.get(
+    "/profiles/{source_profile_id}/workflow/latest",
+    response_model=WindowsSourceUiWorkflowStatus | None,
+)
+def get_latest_workflow(
+    source_profile_id: int, db: Session = Depends(get_db_session)
+) -> WindowsSourceUiWorkflowStatus | None:
+    try:
+        return latest_workflow(db, source_profile_id)
     except WindowsHelperServiceError as exc:
         _raise_http(exc)
 

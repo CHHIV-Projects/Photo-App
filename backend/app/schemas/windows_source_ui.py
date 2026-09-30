@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _StrictModel(BaseModel):
@@ -58,6 +59,9 @@ class WindowsSourceUiCandidateReview(_StrictModel):
     workflow_token: UUID
     stage: Literal["awaiting_confirmation"] = "awaiting_confirmation"
     files_to_process: int
+    inventory_candidates: int = 0
+    predictable_rejections: int = 0
+    expected_chunks: int = 1
     total_bytes: int
     profile_name: str
     windows_root: str
@@ -66,15 +70,26 @@ class WindowsSourceUiCandidateReview(_StrictModel):
 
 class WindowsSourceUiWorkflowStatus(_StrictModel):
     workflow_token: UUID
+    source_profile_id: int | None = None
+    source_label: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     stage: Literal[
+        "inventorying",
         "awaiting_confirmation",
         "transferring_files",
         "processing_library",
+        "paused",
         "complete",
         "failed",
     ]
     files_total: int
     files_completed: int
+    inventory_candidates: int = 0
+    predictable_rejections: int = 0
+    chunks_completed: int = 0
+    chunks_total: int = 1
+    files_remaining: int = 0
     expected_bytes: int
     transferred_bytes: int
     new_library_items: int
@@ -125,8 +140,25 @@ class WindowsSourceUiCreateProbeRequest(_StrictModel):
     discovery_candidate_token: str | None = Field(default=None, max_length=80)
     source_type: Literal["local", "external", "removable"] = "local"
     device_alias: str = Field(min_length=1, max_length=255)
-    windows_root: str = Field(min_length=3, max_length=2048)
+    windows_root: str | None = Field(default=None, min_length=3, max_length=2048)
+    endpoint_relative_root: str | None = Field(default=None, max_length=2048)
     profile_name: str = Field(min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def _validate_path_contract(self):
+        if self.source_type == "local":
+            if self.discovery_candidate_token is not None or self.endpoint_relative_root is not None:
+                raise ValueError("Local Sources require only an absolute Windows root.")
+            if self.windows_root is None:
+                raise ValueError("Local Sources require an absolute Windows root.")
+        else:
+            if self.discovery_candidate_token is None:
+                raise ValueError("Portable Sources require a discovery candidate token.")
+            if self.windows_root is not None:
+                raise ValueError("Portable Sources do not accept a browser-supplied Windows root.")
+            if self.endpoint_relative_root is None:
+                self.endpoint_relative_root = ""
+        return self
 
 
 class WindowsSourceUiCreatePlanRequest(WindowsSourceUiCreateProbeRequest):

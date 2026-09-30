@@ -59,6 +59,7 @@ from app.services.previews.heic_preview_processing_service import _reset_stale_r
 from app.services.windows_helper.schema import ensure_windows_helper_schema
 from app.services.source_acquisition.schema import ensure_source_acquisition_schema
 from app.services.source_acquisition.service import reset_stale_acquisition_bridges
+from app.services.windows_helper.source_workflow import reset_interrupted_workflows
 from app.services.nas_registration.schema import ensure_nas_registration_schema
 from app.services.nas_registration.service import ensure_existing_nas_adoption
 
@@ -136,6 +137,7 @@ def create_app() -> FastAPI:
 			ensure_existing_nas_adoption(db_session)
 			_reset_stale_runs(db_session)
 			reset_stale_acquisition_bridges(db_session)
+			reset_interrupted_workflows(db_session)
 			_reset_stale_icloud_acquisition_runs(db_session)
 			reset_stale_cleanup_runs(db_session)
 			_reset_stale_face_processing_runs(db_session)

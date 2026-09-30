@@ -250,9 +250,14 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `Request failed with status ${response.status}`;
 
     try {
-      const errorPayload = (await response.json()) as { detail?: string | { message?: string } };
+      const errorPayload = (await response.json()) as {
+        detail?: string | { message?: string } | Array<{ msg?: string }>;
+      };
       if (typeof errorPayload.detail === "string") {
         message = errorPayload.detail;
+      } else if (Array.isArray(errorPayload.detail)) {
+        const validationMessage = errorPayload.detail.find((item) => item.msg)?.msg;
+        if (validationMessage) message = validationMessage.replace(/^Value error,\s*/i, "");
       } else if (errorPayload.detail?.message) {
         message = errorPayload.detail.message;
       }
@@ -328,6 +333,14 @@ export function confirmWindowsSourceUiRun(workflowToken: string): Promise<Window
 
 export function advanceWindowsSourceUiRun(workflowToken: string): Promise<WindowsSourceUiWorkflowStatus> {
   return apiRequest<WindowsSourceUiWorkflowStatus>(`/api/admin/windows-source-ui/runs/${workflowToken}/advance`, { method: "POST" });
+}
+
+export function getWindowsSourceUiRun(workflowToken: string): Promise<WindowsSourceUiWorkflowStatus> {
+  return apiRequest<WindowsSourceUiWorkflowStatus>(`/api/admin/windows-source-ui/runs/${workflowToken}`);
+}
+
+export function getLatestWindowsSourceUiRun(sourceProfileId: number): Promise<WindowsSourceUiWorkflowStatus | null> {
+  return apiRequest<WindowsSourceUiWorkflowStatus | null>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/workflow/latest`);
 }
 
 export function startWindowsSourceUiCreationProbe(fields: WindowsSourceUiCreateFields): Promise<WindowsSourceUiOperation> {

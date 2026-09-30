@@ -146,12 +146,24 @@ describe("Windows Source creation", () => {
       discovery_candidate_token: "22222222-2222-2222-2222-222222222222:0",
       source_type: "external",
       device_alias: "External 1",
-      windows_root: "H:\\Pictures",
+      endpoint_relative_root: "Pictures",
+      windows_root: undefined,
     }));
     expect(api.getWindowsSourceUiComputers).toHaveBeenCalled();
     expect(vi.mocked(api.getWindowsSourceUiComputers).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(api.startWindowsPortableDiscovery).mock.invocationCallOrder[0],
     );
+  });
+
+  it("rejects a drive-qualified portable folder before submission", async () => {
+    render(<WindowsSourceCreation computers={[computer]} sourceType="external" launchWindowsAccess={vi.fn()} onComplete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Detect connected External devices" }));
+    fireEvent.change(await screen.findByLabelText("Detected External device"), { target: { value: "22222222-2222-2222-2222-222222222222:0" } });
+    fireEvent.change(screen.getByLabelText(/Folder within device/), { target: { value: "H:\\Pictures" } });
+    fireEvent.change(screen.getByLabelText("Source Profile name"), { target: { value: "External photos" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review Source" }));
+    expect(screen.getAllByText(/Enter a folder relative to the selected device/).length).toBeGreaterThan(0);
+    expect(api.startWindowsSourceUiCreationProbe).not.toHaveBeenCalled();
   });
 
   it("asks for a durable Device name only after an unknown Removable device is detected", async () => {
@@ -204,7 +216,8 @@ describe("Windows Source creation", () => {
       discovery_candidate_token: "33333333-3333-3333-3333-333333333333:0",
       source_type: "removable",
       device_alias: "8GB Card",
-      windows_root: "X:\\Family Photos",
+      endpoint_relative_root: "Family Photos",
+      windows_root: undefined,
       profile_name: "8GB Card Test",
     }));
   });

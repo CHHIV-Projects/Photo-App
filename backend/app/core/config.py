@@ -113,6 +113,9 @@ class Settings:
 	acquisition_disk_reserve_bytes: int = int(
 		os.getenv("ACQUISITION_DISK_RESERVE_BYTES", str(1024 * 1024 * 1024))
 	)
+	windows_inventory_max_entries: int = int(
+		os.getenv("WINDOWS_INVENTORY_MAX_ENTRIES", "100000")
+	)
 	nas_mount_path: str = (os.getenv("NAS_MOUNT_PATH") or "").strip()
 	nas_environment_marker: str = (
 		os.getenv("NAS_ENVIRONMENT_MARKER") or ".photo-organizer-environment"

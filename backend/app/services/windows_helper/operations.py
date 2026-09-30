@@ -963,12 +963,6 @@ def complete_inventory_operation(
             "The Helper inventory result contains duplicate entries.",
             http_status=409,
         )
-    if paths != sorted(paths):
-        raise WindowsHelperServiceError(
-            "inventory_result_not_ordered",
-            "The Helper inventory result is not in deterministic Windows path order.",
-            http_status=409,
-        )
     for item in result.items:
         if (
             ntpath.normcase(item.provider_native_path.provider_native_root)

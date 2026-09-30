@@ -17,7 +17,12 @@ from app.schemas.windows_source_ui import (
     WindowsSourceUiOperation,
     WindowsSourceUiProfileStatus,
 )
-from app.services.windows_helper.ui_facade import advance_workflow
+from app.services.windows_helper.service import WindowsHelperServiceError
+from app.services.windows_helper.ui_facade import (
+    _validated_endpoint_relative_root,
+    advance_workflow,
+)
+from app.services.windows_helper.source_workflow import acquisition_chunk_sizes
 
 
 class _DummySession:
@@ -90,8 +95,54 @@ class WindowsSourceUiApiTests(unittest.TestCase):
         self.assertEqual(payload["source_device_aliases"], ["Internal Photos", "Travel Drive"])
         self.assertNotIn("credential", payload)
 
+    def test_portable_creation_rejects_browser_supplied_full_path_before_service_mutation(self) -> None:
+        with patch("app.api.windows_source_ui.create_creation_probe") as create_probe:
+            response = self.client.post(
+                "/api/admin/windows-source-ui/creation/probe",
+                json={
+                    "discovery_candidate_token": "candidate-token",
+                    "source_type": "external",
+                    "device_alias": "Travel Drive",
+                    "windows_root": "E:\\Chuck Iphone",
+                    "endpoint_relative_root": "Chuck Iphone",
+                    "profile_name": "Travel photos",
+                },
+            )
+        self.assertEqual(response.status_code, 422)
+        create_probe.assert_not_called()
+
 
 class WindowsSourceUiResultProjectionTests(unittest.TestCase):
+    def test_exact_parent_child_shapes_keep_one_hundred_as_an_internal_bound(self) -> None:
+        expected = {
+            0: [],
+            1: [1],
+            99: [99],
+            100: [100],
+            101: [100, 1],
+            267: [100, 100, 67],
+            356: [100, 100, 100, 56],
+        }
+        for total, chunks in expected.items():
+            with self.subTest(total=total):
+                self.assertEqual(acquisition_chunk_sizes(total), chunks)
+
+    def test_portable_relative_root_rejects_absolute_escape_unc_and_ads_forms(self) -> None:
+        self.assertEqual(
+            _validated_endpoint_relative_root("Family Photos/2026"),
+            "Family Photos\\2026",
+        )
+        for unsafe in (
+            "E:\\Pictures",
+            "\\\\server\\share",
+            "..\\Pictures",
+            "Pictures\\..\\Other",
+            "Pictures:stream",
+            "\\Pictures",
+        ):
+            with self.subTest(unsafe=unsafe), self.assertRaises(WindowsHelperServiceError):
+                _validated_endpoint_relative_root(unsafe)
+
     def test_repeat_counts_use_common_intake_result_not_transferred_item_count(self) -> None:
         run_id = uuid4()
         acquisition = SourceAcquisitionRunResponse.model_construct(

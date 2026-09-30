@@ -74,6 +74,7 @@ import type {
   IcloudStagingCleanupReadinessResponse,
   IcloudAuthenticationResponse,
   WindowsSourceUiComputer,
+  WindowsSourceUiWorkflowStatus,
 } from "@/types/ui-api";
 import { normalSelectorSourceTypes, sourcePresentationType, sourceWorkbenchKind } from "@/lib/source-provider-ui";
 
@@ -387,6 +388,13 @@ function toRegistrationStatusLabel(value: IcloudSourceRegistrationState): string
 
 function toDisplayDate(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "-";
+}
+
+function formatStorageBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
 function cleanupSourceLabel(status: IcloudStagingCleanupRunStatus | null): string {
@@ -1476,6 +1484,7 @@ export default function IngestionView() {
   const [icloudCleanupFreshnessNow, setIcloudCleanupFreshnessNow] = useState(() => Date.now());
   const [sourceIntakeStatus, setSourceIntakeStatus] = useState<SourceIntakeStatusSnapshot | null>(null);
   const [sourceIntakeReports, setSourceIntakeReports] = useState<SourceIntakeReportSummary[]>([]);
+  const [latestWindowsCompletion, setLatestWindowsCompletion] = useState<WindowsSourceUiWorkflowStatus | null>(null);
   const [isRunActionLoading, setIsRunActionLoading] = useState(false);
   const [runPreflightSourceId, setRunPreflightSourceId] = useState<number | null>(null);
   const [rowRunErrors, setRowRunErrors] = useState<Record<number, string>>({});
@@ -1720,6 +1729,22 @@ export default function IngestionView() {
       // Keep run/report polling resilient and avoid replacing current table state on intermittent report errors.
     }
   }, []);
+
+  const handleWindowsWorkflowComplete = useCallback((workflow: WindowsSourceUiWorkflowStatus) => {
+    setLatestWindowsCompletion((current) => {
+      const nextFinished = Date.parse(workflow.finished_at ?? "");
+      const currentFinished = Date.parse(current?.finished_at ?? "");
+      if (current && Number.isFinite(currentFinished) && (!Number.isFinite(nextFinished) || currentFinished > nextFinished)) {
+        return current;
+      }
+      return workflow;
+    });
+    void Promise.all([
+      loadProfiles({ refreshOnly: true, resetBanner: false }),
+      loadSourceIntakeStatus(),
+      loadSourceIntakeReports(),
+    ]);
+  }, [loadProfiles, loadSourceIntakeReports, loadSourceIntakeStatus]);
 
   useEffect(() => {
     void loadSourceIntakeStatus();
@@ -3646,6 +3671,15 @@ export default function IngestionView() {
     ? ["completed", "failed", "stopped"].includes(sourceIntakeStatus.status)
     : false;
 
+  const showLatestWindowsCompletion = useMemo(() => {
+    if (isSourceIntakeActive || latestWindowsCompletion?.stage !== "complete") {
+      return false;
+    }
+    const windowsFinished = Date.parse(latestWindowsCompletion.finished_at ?? "");
+    const intakeFinished = Date.parse(sourceIntakeStatus?.finished_at ?? sourceIntakeStatus?.started_at ?? "");
+    return Number.isFinite(windowsFinished) && (!Number.isFinite(intakeFinished) || windowsFinished >= intakeFinished);
+  }, [isSourceIntakeActive, latestWindowsCompletion, sourceIntakeStatus?.finished_at, sourceIntakeStatus?.started_at]);
+
   const currentTerminalRunKey = useMemo(() => terminalSummaryKey(sourceIntakeStatus), [sourceIntakeStatus]);
   const showTerminalSummary = Boolean(
     sourceIntakeStatus
@@ -5233,7 +5267,7 @@ export default function IngestionView() {
             ) : sourceWorkbenchKind(selectedWorkbenchProfile) === "windows_helper" ? (
               <WindowsSourceWorkbench
                 profile={selectedWorkbenchProfile}
-                onComplete={() => void loadProfiles({ refreshOnly: true, resetBanner: false })}
+                onComplete={handleWindowsWorkflowComplete}
               />
             ) : sourceSelectionResult?.result === "selected"
               && sourceSelectionResult.availability === "available"
@@ -5391,7 +5425,35 @@ export default function IngestionView() {
         </section>
       )}
 
-      {sourceIntakeStatus && showTerminalSummary && (
+      {showLatestWindowsCompletion && latestWindowsCompletion && (
+        <section className={styles.runPanel}>
+          <div className={styles.runPanelHeader}>
+            <h3 className={styles.runPanelTitle}>Last Ingestion Summary</h3>
+          </div>
+          <div className={styles.runMetrics}>
+            <span>
+              <strong>Final Status:</strong>{" "}
+              <span className={`${styles.runStatusBadge} ${statusClassName("completed")}`}>
+                Completed
+              </span>
+            </span>
+            <span><strong>Workflow:</strong> Windows Source</span>
+            <span><strong>Source:</strong> {latestWindowsCompletion.source_label ?? selectedWorkbenchProfile?.source_label ?? "-"}</span>
+            <span><strong>Started:</strong> {toDisplayDate(latestWindowsCompletion.started_at ?? null)}</span>
+            <span><strong>Finished:</strong> {toDisplayDate(latestWindowsCompletion.finished_at ?? null)}</span>
+            <span><strong>Inventory Entries:</strong> {latestWindowsCompletion.inventory_candidates}</span>
+            <span><strong>Files Processed:</strong> {latestWindowsCompletion.files_completed}</span>
+            <span><strong>Chunks:</strong> {latestWindowsCompletion.chunks_completed} / {latestWindowsCompletion.chunks_total}</span>
+            <span><strong>Processed New:</strong> {latestWindowsCompletion.new_library_items}</span>
+            <span><strong>Already Represented:</strong> {latestWindowsCompletion.already_represented}</span>
+            <span><strong>Predictable Rejections:</strong> {latestWindowsCompletion.predictable_rejections}</span>
+            <span><strong>Failed:</strong> {latestWindowsCompletion.failed_items}</span>
+            <span><strong>Transferred:</strong> {formatStorageBytes(latestWindowsCompletion.transferred_bytes)}</span>
+          </div>
+        </section>
+      )}
+
+      {!showLatestWindowsCompletion && sourceIntakeStatus && showTerminalSummary && (
         <section className={styles.runPanel}>
           <div className={styles.runPanelHeader}>
             <h3 className={styles.runPanelTitle}>Last Source Intake Summary</h3>
@@ -5455,7 +5517,7 @@ export default function IngestionView() {
         </section>
       )}
 
-      {!isSourceIntakeActive && !showTerminalSummary && (
+      {!showLatestWindowsCompletion && !isSourceIntakeActive && !showTerminalSummary && (
         <section className={styles.runPanel}>
           <div className={styles.runPanelHeader}>
             <h3 className={styles.runPanelTitle}>Last Source Intake Summary</h3>

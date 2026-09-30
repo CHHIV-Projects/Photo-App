@@ -9,6 +9,8 @@ import * as api from "@/lib/api";
 vi.mock("@/lib/api", () => ({
   advanceWindowsSourceUiRun: vi.fn(),
   confirmWindowsSourceUiRun: vi.fn(),
+  getLatestWindowsSourceUiRun: vi.fn(),
+  getWindowsSourceUiRun: vi.fn(),
   getWindowsSourceUiOperation: vi.fn(),
   getWindowsSourceUiProfile: vi.fn(),
   prepareWindowsSourceUiInventory: vi.fn(),
@@ -60,18 +62,21 @@ const instantWait = async () => undefined;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getWindowsSourceUiProfile).mockResolvedValue(readyAccess);
+  vi.mocked(api.getLatestWindowsSourceUiRun).mockResolvedValue(null);
   vi.mocked(api.startWindowsSourceUiProbe).mockResolvedValue({ operation_token: "probe", stage: "checking_source", source_ready: false, safe_message: "Checking" });
   vi.mocked(api.getWindowsSourceUiOperation).mockResolvedValue({ operation_token: "operation", stage: "ready", source_ready: true, safe_message: "Ready" });
   vi.mocked(api.prepareWindowsSourceUiInventory).mockResolvedValue({ operation_token: "inventory", stage: "preparing_files", source_ready: false, safe_message: "Preparing" });
-  vi.mocked(api.reviewWindowsSourceUiCandidates).mockResolvedValue({ workflow_token: "run", stage: "awaiting_confirmation", files_to_process: 5, total_bytes: 4_970_248, profile_name: profile.source_label, windows_root: profile.source_root_path!, safe_message: "Review" });
+  vi.mocked(api.reviewWindowsSourceUiCandidates).mockResolvedValue({ workflow_token: "run", stage: "awaiting_confirmation", files_to_process: 5, inventory_candidates: 6, predictable_rejections: 1, expected_chunks: 1, total_bytes: 4_970_248, profile_name: profile.source_label, windows_root: profile.source_root_path!, safe_message: "Review" });
 });
 
 afterEach(() => cleanup());
 
 describe("Windows Source workbench", () => {
   it("shows ready state, candidate confirmation, progress, and unchanged-repeat result", async () => {
-    vi.mocked(api.confirmWindowsSourceUiRun).mockResolvedValue({ workflow_token: "run", stage: "complete", files_total: 5, files_completed: 5, expected_bytes: 4_970_248, transferred_bytes: 4_970_248, new_library_items: 0, already_represented: 5, failed_items: 0, safe_message: "Run complete." });
-    render(<WindowsSourceWorkbench profile={profile} wait={instantWait} />);
+    const completed = { workflow_token: "run", stage: "complete" as const, source_profile_id: profile.source_id, source_label: profile.source_label, started_at: "2026-09-30T00:00:00Z", finished_at: "2026-09-30T00:01:00Z", files_total: 5, files_completed: 5, inventory_candidates: 6, predictable_rejections: 1, chunks_completed: 1, chunks_total: 1, files_remaining: 0, expected_bytes: 4_970_248, transferred_bytes: 4_970_248, new_library_items: 0, already_represented: 5, failed_items: 0, safe_message: "Run complete." };
+    const onComplete = vi.fn();
+    vi.mocked(api.confirmWindowsSourceUiRun).mockResolvedValue(completed);
+    render(<WindowsSourceWorkbench profile={profile} wait={instantWait} onComplete={onComplete} />);
     expect((await screen.findAllByText("Ready")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Run Ingestion" }));
     expect(await screen.findByRole("button", { name: "Start Ingestion" })).toBeInTheDocument();
@@ -81,6 +86,7 @@ describe("Windows Source workbench", () => {
     expect(await screen.findByText("Run complete.")).toBeInTheDocument();
     expect(screen.getByText(/New library items:/).parentElement).toHaveTextContent("0");
     expect(screen.getByText(/Already represented:/).parentElement).toHaveTextContent("5");
+    expect(onComplete).toHaveBeenCalledWith(completed);
     expect(screen.queryByText(/credential|token|sha256|opaque/i)).not.toBeInTheDocument();
   });
 
@@ -149,5 +155,42 @@ describe("Windows Source workbench", () => {
     fireEvent.click(view.getByRole("button", { name: "Family Laptop" }));
     expect(await view.findByRole("button", { name: "Start Ingestion" })).toBeInTheDocument();
     expect(api.resolveWindowsSourceUiRoute).toHaveBeenLastCalledWith(portable.source_id, ["one", "two"], "node-two");
+  });
+
+  it("restores and polls a durable parent after returning to the Source", async () => {
+    const running = {
+      workflow_token: "durable-parent",
+      stage: "transferring_files" as const,
+      files_total: 267,
+      files_completed: 100,
+      inventory_candidates: 270,
+      predictable_rejections: 3,
+      chunks_completed: 1,
+      chunks_total: 3,
+      files_remaining: 167,
+      expected_bytes: 10_000,
+      transferred_bytes: 4_000,
+      new_library_items: 90,
+      already_represented: 10,
+      failed_items: 0,
+      safe_message: "Transferred chunk 1 of 3.",
+    };
+    vi.mocked(api.getLatestWindowsSourceUiRun).mockResolvedValue(running);
+    vi.mocked(api.getWindowsSourceUiRun).mockResolvedValue({
+      ...running,
+      stage: "complete",
+      files_completed: 267,
+      chunks_completed: 3,
+      files_remaining: 0,
+      transferred_bytes: 10_000,
+      new_library_items: 257,
+      safe_message: "Run complete.",
+    });
+    const onComplete = vi.fn();
+    render(<WindowsSourceWorkbench profile={profile} wait={instantWait} onComplete={onComplete} />);
+    expect(await screen.findByText("Run complete.")).toBeInTheDocument();
+    expect(screen.getByText(/Chunks:/).parentElement).toHaveTextContent("3 / 3");
+    expect(api.getWindowsSourceUiRun).toHaveBeenCalledWith("durable-parent");
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ workflow_token: "durable-parent", stage: "complete" }));
   });
 });

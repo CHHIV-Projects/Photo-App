@@ -53,6 +53,7 @@ services:
       STORAGE_MODE: local
       STORAGE_ROOT: /app/storage
       ACQUISITION_RECEIVING_PATH: /app/storage/acquisition/windows
+      WINDOWS_INVENTORY_MAX_ENTRIES: ${WINDOWS_INVENTORY_MAX_ENTRIES:-100000}
       DROP_ZONE_PATH: /app/storage/drop_zone
       VAULT_PATH: /app/storage/vault
       QUARANTINE_PATH: /app/storage/quarantine
