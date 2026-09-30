@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -104,6 +105,7 @@ class SourceCreationPlanRequest(BaseModel):
     duplicate_source_ids_to_inactivate: list[int] = Field(default_factory=list)
     use_registered_source_type: bool = False
     operator_review_acknowledged: bool = False
+    helper_probe_operation_id: UUID | None = None
 
 
 class SourceCreationPlanResponse(BaseModel):

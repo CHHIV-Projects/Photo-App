@@ -105,6 +105,17 @@ class Settings:
 		(os.getenv("MODEL_CACHE_PATH") or os.getenv("DEEPFACE_HOME") or "").strip()
 		or _join_config_path(_STORAGE_ROOT, "models")
 	)
+	acquisition_receiving_path: str = _configured_path(
+		"ACQUISITION_RECEIVING_PATH",
+		_STORAGE_ROOT,
+		"acquisition/windows",
+	)
+	acquisition_disk_reserve_bytes: int = int(
+		os.getenv("ACQUISITION_DISK_RESERVE_BYTES", str(1024 * 1024 * 1024))
+	)
+	windows_inventory_max_entries: int = int(
+		os.getenv("WINDOWS_INVENTORY_MAX_ENTRIES", "100000")
+	)
 	nas_mount_path: str = (os.getenv("NAS_MOUNT_PATH") or "").strip()
 	nas_environment_marker: str = (
 		os.getenv("NAS_ENVIRONMENT_MARKER") or ".photo-organizer-environment"
@@ -125,6 +136,12 @@ class Settings:
 	icloudpd_run_timeout_seconds: int = int(os.getenv("ICLOUDPD_RUN_TIMEOUT_SECONDS", "7200"))
 	icloudpd_probe_timeout_seconds: int = int(os.getenv("ICLOUDPD_PROBE_TIMEOUT_SECONDS", "30"))
 	icloudpd_min_version: str = os.getenv("ICLOUDPD_MIN_VERSION", "1.32.0").strip()
+	icloud_auth_state_path: str = os.getenv("ICLOUD_AUTH_STATE_PATH", "/app/icloud-auth").strip()
+	icloud_auth_session_ttl_seconds: int = int(os.getenv("ICLOUD_AUTH_SESSION_TTL_SECONDS", "600"))
+	icloud_provider_python_path: str = os.getenv(
+		"ICLOUD_PROVIDER_PYTHON_PATH",
+		"/opt/photo-organizer-icloud/bin/python",
+	).strip()
 	icloud_exact_helper_env_root: str = os.getenv(
 		"ICLOUD_EXACT_HELPER_ENV_ROOT",
 		"../.tools/icloud_exact_helper",

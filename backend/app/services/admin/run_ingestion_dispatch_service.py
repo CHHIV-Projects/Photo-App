@@ -1,7 +1,7 @@
 """Selected-source Run Ingestion dispatch service.
 
 This is the thin Step 3 integration seam. It revalidates Source Selection,
-then routes to the existing filesystem Source Intake or iCloud Intake
+then routes to the existing filesystem, iCloud, or Windows Helper Intake
 authorities without creating new selected-source persistence.
 """
 
@@ -26,14 +26,16 @@ from app.services.admin.source_intake_execution_service import (
     SourceIntakeReadinessBlockedError,
     start_source_intake,
 )
+from app.services.admin.source_intake_service import create_source_profile_staging_folder
 from app.services.icloud_historical_routine_service import (
     IcloudHistoricalRoutineError,
-    advance_icloud_intake_import,
     get_icloud_intake_import_status,
     refresh_historical_inventory,
     resume_icloud_intake_import,
+    start_icloud_intake_import_background,
     start_icloud_intake_import,
 )
+from app.services.icloud_acquisition.exact_selection_adapter import ExactSelectionPrototypeError
 from app.services.source_identity import SourceIdentityProbeService, SourceSelectionRequest, SourceSelectionService
 from app.services.source_identity.identity_fingerprint import (
     CURRENT_OPTICAL_MEDIA_FINGERPRINT_VERSION,
@@ -47,7 +49,10 @@ from app.services.source_identity.stored_linux_location import (
     StoredLinuxLocationError,
     load_stored_linux_location,
 )
+from app.schemas.windows_helper import CreateWindowsHelperInventoryOperationRequest
 from app.services.source_identity.source_selection_schema import SourceSelectionResponse
+from app.services.windows_helper.operations import create_inventory_operation
+from app.services.windows_helper.service import WindowsHelperServiceError
 
 
 DEFAULT_FILESYSTEM_BATCH_SIZE = 500
@@ -87,7 +92,14 @@ class RunIngestionDispatchService:
             filesystem_options.acknowledge_legacy_or_review
         ) if filesystem_options is not None else False
         selection = self._source_selection_service.select_source(
-            SourceSelectionRequest(source_profile_id=request.source_profile_id),
+            SourceSelectionRequest(
+                source_profile_id=request.source_profile_id,
+                helper_probe_operation_id=(
+                    request.windows_helper_options.helper_probe_operation_id
+                    if request.windows_helper_options is not None
+                    else None
+                ),
+            ),
             operator_acknowledged=acknowledged,
         )
         blocked = self._blocked_for_unselected(request.source_profile_id, selection)
@@ -120,6 +132,11 @@ class RunIngestionDispatchService:
             )
 
         if selection.workflow_kind == "filesystem_source_intake":
+            if request.windows_helper_options is not None:
+                raise RunIngestionDispatchError(
+                    "Windows Helper options are not valid for filesystem Source Intake.",
+                    code="WINDOWS_OPTIONS_FOR_FILESYSTEM_WORKFLOW",
+                )
             if request.icloud_options is not None:
                 raise RunIngestionDispatchError(
                     "iCloud options are not valid for filesystem Source Intake.",
@@ -128,12 +145,58 @@ class RunIngestionDispatchService:
             return self._dispatch_filesystem(request, selection)
 
         if selection.workflow_kind == "icloud_intake":
+            if request.windows_helper_options is not None:
+                raise RunIngestionDispatchError(
+                    "Windows Helper options are not valid for iCloud Intake.",
+                    code="WINDOWS_OPTIONS_FOR_ICLOUD_WORKFLOW",
+                )
             if request.filesystem_options is not None:
                 raise RunIngestionDispatchError(
                     "Filesystem options are not valid for iCloud Intake.",
                     code="FILESYSTEM_OPTIONS_FOR_ICLOUD_WORKFLOW",
                 )
             return self._dispatch_icloud(request, selection)
+
+        if selection.workflow_kind == "windows_helper_intake":
+            if request.filesystem_options is not None or request.icloud_options is not None:
+                raise RunIngestionDispatchError(
+                    "Filesystem and iCloud options are not valid for Windows Helper Intake.",
+                    code="OTHER_OPTIONS_FOR_WINDOWS_WORKFLOW",
+                )
+            options = request.windows_helper_options
+            if options is None:
+                raise RunIngestionDispatchError(
+                    "A completed Helper readiness probe is required for Windows Helper Intake.",
+                    code="WINDOWS_HELPER_OPTIONS_REQUIRED",
+                )
+            try:
+                operation = create_inventory_operation(
+                    self._db,
+                    CreateWindowsHelperInventoryOperationRequest(
+                        source_profile_id=request.source_profile_id,
+                        probe_operation_id=options.helper_probe_operation_id,
+                        page_size=options.inventory_page_size,
+                    ),
+                )
+            except WindowsHelperServiceError as exc:
+                raise RunIngestionDispatchError(exc.message, code=exc.code.upper()) from exc
+            return RunIngestionDispatchResponse(
+                result="started",
+                workflow_kind="windows_helper_intake",
+                action="windows_helper_inventory_started",
+                message="Windows Helper inventory was authorized for the selected Source.",
+                next_action="Wait for the Helper operation, then review the bounded candidate set.",
+                source_profile_id=request.source_profile_id,
+                status="awaiting_helper_inventory",
+                workflow_payload={
+                    "selection": _safe_payload(selection),
+                    "operation_id": str(operation.operation_id),
+                    "operation_type": operation.operation_type,
+                    "operation_state": operation.state,
+                    "request_digest": operation.request_digest,
+                    "expires_at": operation.expires_at.isoformat(),
+                },
+            )
 
         return RunIngestionDispatchResponse(
             result="blocked",
@@ -649,6 +712,22 @@ class RunIngestionDispatchService:
         request: RunIngestionDispatchRequest,
         selection: SourceSelectionResponse,
     ) -> RunIngestionDispatchResponse:
+        try:
+            create_source_profile_staging_folder(
+                self._db,
+                source_id=request.source_profile_id,
+            )
+        except (LookupError, ValueError, OSError):
+            return RunIngestionDispatchResponse(
+                result="blocked",
+                workflow_kind="icloud_intake",
+                action="none",
+                message="The managed iCloud staging folder is unavailable or unsafe.",
+                next_action="Review iCloud staging readiness before continuing.",
+                source_profile_id=request.source_profile_id,
+                status="staging_path_unavailable",
+            )
+
         guardrail = get_ingestion_operation_guardrail_snapshot(self._db, source_id=request.source_profile_id)
         if guardrail.blocked:
             return RunIngestionDispatchResponse(
@@ -671,15 +750,24 @@ class RunIngestionDispatchService:
                     source_id=request.source_profile_id,
                     import_run_id=current.import_run_id,
                 )
+                started = start_icloud_intake_import_background(
+                    self._db,
+                    source_id=request.source_profile_id,
+                    import_run_id=next_status.import_run_id,
+                )
                 return _icloud_response(
                     request.source_profile_id,
                     action="icloud_import_resumed",
-                    message=next_status.import_operator_message,
-                    status=next_status.import_status or "resumed",
+                    message=(
+                        "The interrupted iCloud import resumed in the background."
+                        if started
+                        else next_status.import_operator_message
+                    ),
+                    status="running" if started else (next_status.import_status or "resumed"),
                     payload=next_status,
                 )
             if current.can_advance_import:
-                next_status = advance_icloud_intake_import(
+                started = start_icloud_intake_import_background(
                     self._db,
                     source_id=request.source_profile_id,
                     import_run_id=current.import_run_id,
@@ -687,9 +775,13 @@ class RunIngestionDispatchService:
                 return _icloud_response(
                     request.source_profile_id,
                     action="icloud_import_advanced",
-                    message=next_status.import_operator_message,
-                    status=next_status.import_status or "advanced",
-                    payload=next_status,
+                    message=(
+                        "The remaining iCloud import chunks started in the background."
+                        if started
+                        else "The iCloud import is already starting or running."
+                    ),
+                    status="running",
+                    payload=current,
                 )
             if current.can_start_import:
                 next_status = start_icloud_intake_import(
@@ -698,11 +790,20 @@ class RunIngestionDispatchService:
                     target_logical_assets=target or current.target_logical_candidates,
                     internal_batch_size=DEFAULT_ICLOUD_INTERNAL_BATCH_SIZE,
                 )
+                started = start_icloud_intake_import_background(
+                    self._db,
+                    source_id=request.source_profile_id,
+                    import_run_id=next_status.import_run_id,
+                )
                 return _icloud_response(
                     request.source_profile_id,
                     action="icloud_import_started",
-                    message=next_status.import_operator_message,
-                    status=next_status.import_status or "created",
+                    message=(
+                        "The prepared iCloud import started in the background."
+                        if started
+                        else next_status.import_operator_message
+                    ),
+                    status="running" if started else (next_status.import_status or "created"),
                     payload=next_status,
                 )
             if current.logical_candidates_ready <= 0 and current.available_inventory != "no":
@@ -722,7 +823,7 @@ class RunIngestionDispatchService:
                     status=refresh.status,
                     workflow_payload={"current": _safe_payload(refresh), "selection": _safe_payload(selection)},
                 )
-        except IcloudHistoricalRoutineError as exc:
+        except (IcloudHistoricalRoutineError, ExactSelectionPrototypeError) as exc:
             return RunIngestionDispatchResponse(
                 result="blocked",
                 workflow_kind="icloud_intake",

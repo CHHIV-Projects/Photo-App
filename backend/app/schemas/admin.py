@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -280,6 +281,7 @@ class SourceProfileSummary(BaseModel):
     source_id: int
     source_label: str
     source_type: str
+    provider_kind: Literal["mounted", "windows_helper", "icloud", "cloud", "legacy"] = "legacy"
     source_root_path: str | None = None
     endpoint_relative_root: str | None = None
     endpoint_id: int | None = None
@@ -368,7 +370,15 @@ class IcloudSourceReadinessResponse(BaseModel):
     source_root_alignment_status: Literal["matched", "mismatch", "unknown"] = "unknown"
     source_registration_status: Literal["matched", "mismatch", "unknown"] = "unknown"
 
-    auth_status: Literal["unknown", "action_required"] = "unknown"
+    auth_status: Literal[
+        "authenticated",
+        "authentication_required",
+        "session_expired",
+        "authentication_failed",
+        "provider_unavailable",
+        "action_required",
+        "unknown",
+    ] = "unknown"
     last_auth_error_code: str | None = None
 
     operation_conflicts: IcloudReadinessOperationConflicts
@@ -377,6 +387,46 @@ class IcloudSourceReadinessResponse(BaseModel):
     blocking_reasons: list[IcloudReadinessReason] = Field(default_factory=list)
     warnings: list[IcloudReadinessReason] = Field(default_factory=list)
     recommended_action: str
+
+
+class IcloudAuthenticationStartRequest(BaseModel):
+    """Start one bounded interactive sign-in session."""
+
+    source_profile_id: int = Field(gt=0)
+
+
+class IcloudAuthenticationSecretRequest(BaseModel):
+    """Submit one ephemeral sign-in secret for a Source-bound session."""
+
+    source_profile_id: int = Field(gt=0)
+    value: str = Field(min_length=1, max_length=1024)
+
+
+class IcloudAuthenticationCancelRequest(BaseModel):
+    """Cancel one Source-bound interactive sign-in session."""
+
+    source_profile_id: int = Field(gt=0)
+
+
+class IcloudAuthenticationResponse(BaseModel):
+    """Browser-safe interactive iCloud sign-in state."""
+
+    session_id: UUID | None = None
+    source_profile_id: int
+    provider: Literal["icloud"] = "icloud"
+    account_hint: str
+    state: Literal[
+        "password_required",
+        "mfa_required",
+        "authenticating",
+        "authenticated",
+        "authentication_failed",
+        "expired",
+        "cancelled",
+    ]
+    message: str
+    retryable: bool
+    expires_at: datetime | None = None
 
 
 class SourceProfilePathCheckResponse(BaseModel):
@@ -565,6 +615,13 @@ class RunIngestionIcloudOptions(BaseModel):
     target_logical_items: int | None = Field(default=None, ge=1, le=1000)
 
 
+class RunIngestionWindowsHelperOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    helper_probe_operation_id: UUID
+    inventory_page_size: int = Field(default=25, ge=1, le=100)
+
+
 class RunIngestionDispatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -572,17 +629,21 @@ class RunIngestionDispatchRequest(BaseModel):
     selection_fingerprint: str | None = None
     filesystem_options: RunIngestionFilesystemOptions | None = None
     icloud_options: RunIngestionIcloudOptions | None = None
+    windows_helper_options: RunIngestionWindowsHelperOptions | None = None
 
 
 class RunIngestionDispatchResponse(BaseModel):
     result: Literal["started", "action_completed", "blocked", "stale_selection", "no_action_available"]
-    workflow_kind: Literal["filesystem_source_intake", "icloud_intake"] | None = None
+    workflow_kind: Literal[
+        "filesystem_source_intake", "icloud_intake", "windows_helper_intake"
+    ] | None = None
     action: Literal[
         "source_intake_started",
         "icloud_prepare_started",
         "icloud_import_started",
         "icloud_import_resumed",
         "icloud_import_advanced",
+        "windows_helper_inventory_started",
         "none",
     ]
     message: str

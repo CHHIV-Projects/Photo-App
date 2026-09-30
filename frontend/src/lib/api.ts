@@ -38,6 +38,10 @@ import type {
   SourceIdentityProbeRequest,
   SourceIdentityProbeResponse,
   LinuxSourceLocationsResponse,
+  NasDiscoveryResponse,
+  NasPendingRegistrationRequest,
+  NasPendingRegistrationResponse,
+  NasRegistrationListResponse,
   SourceIntakeReportDetail,
   SourceIntakeReportsResponse,
   SourceIntakeSourcesResponse,
@@ -84,8 +88,21 @@ import type {
   IcloudAcquisitionStatusResponse,
   IcloudAcquisitionRunStatus,
   IcloudAcquisitionRunRequest,
+  IcloudAuthenticationResponse,
   IcloudAcquisitionRunResponse,
   IcloudAcquisitionStopResponse,
+  WindowsSourceUiCandidateReview,
+  WindowsSourceUiComputerList,
+  WindowsSourceUiCreateFields,
+  WindowsSourceUiCreatePlan,
+  WindowsSourceUiCreateResult,
+  WindowsSourceUiOperation,
+  WindowsSourceUiPortableDiscovery,
+  WindowsSourceUiProfileStatus,
+  WindowsSourceUiRouteCheck,
+  WindowsSourceUiWorkflowStatus,
+  WindowsHelperPairingAuthorization,
+  WindowsHelperStatusList,
   AlbumDetail,
   AlbumMembershipSummary,
   AlbumSummary,
@@ -233,9 +250,16 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `Request failed with status ${response.status}`;
 
     try {
-      const errorPayload = (await response.json()) as { detail?: string };
-      if (errorPayload.detail) {
+      const errorPayload = (await response.json()) as {
+        detail?: string | { message?: string } | Array<{ msg?: string }>;
+      };
+      if (typeof errorPayload.detail === "string") {
         message = errorPayload.detail;
+      } else if (Array.isArray(errorPayload.detail)) {
+        const validationMessage = errorPayload.detail.find((item) => item.msg)?.msg;
+        if (validationMessage) message = validationMessage.replace(/^Value error,\s*/i, "");
+      } else if (errorPayload.detail?.message) {
+        message = errorPayload.detail.message;
       }
     } catch {
       // Fall back to generic message when no JSON payload is returned.
@@ -245,6 +269,116 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+export function getWindowsSourceUiProfile(sourceProfileId: number): Promise<WindowsSourceUiProfileStatus> {
+  return apiRequest<WindowsSourceUiProfileStatus>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}`);
+}
+
+export function getWindowsSourceUiComputers(): Promise<WindowsSourceUiComputerList> {
+  return apiRequest<WindowsSourceUiComputerList>("/api/admin/windows-source-ui/computers");
+}
+
+export function createWindowsHelperPairing(computerAlias: string): Promise<WindowsHelperPairingAuthorization> {
+  return apiRequest<WindowsHelperPairingAuthorization>("/api/admin/windows-source-ui/computers/pairing", {
+    method: "POST",
+    body: JSON.stringify({ computer_alias: computerAlias }),
+  });
+}
+
+export function getWindowsHelperStatuses(): Promise<WindowsHelperStatusList> {
+  return apiRequest<WindowsHelperStatusList>("/api/admin/windows-helper/status");
+}
+
+export function startWindowsSourceUiProbe(sourceProfileId: number): Promise<WindowsSourceUiOperation> {
+  return apiRequest<WindowsSourceUiOperation>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/probe`, { method: "POST" });
+}
+
+export function startWindowsSourceUiRouteCheck(sourceProfileId: number): Promise<WindowsSourceUiRouteCheck> {
+  return apiRequest<WindowsSourceUiRouteCheck>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/routes`, { method: "POST" });
+}
+
+export function resolveWindowsSourceUiRoute(
+  sourceProfileId: number,
+  observationTokens: string[],
+  selectedAccessNodeId?: string,
+): Promise<WindowsSourceUiRouteCheck> {
+  return apiRequest<WindowsSourceUiRouteCheck>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/routes/resolve`, {
+    method: "POST",
+    body: JSON.stringify({
+      observation_tokens: observationTokens,
+      selected_access_node_id: selectedAccessNodeId ?? null,
+    }),
+  });
+}
+
+export function getWindowsSourceUiOperation(operationToken: string): Promise<WindowsSourceUiOperation> {
+  return apiRequest<WindowsSourceUiOperation>(`/api/admin/windows-source-ui/operations/${operationToken}`);
+}
+
+export function prepareWindowsSourceUiInventory(sourceProfileId: number, probeOperationToken: string): Promise<WindowsSourceUiOperation> {
+  return apiRequest<WindowsSourceUiOperation>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/prepare`, {
+    method: "POST",
+    body: JSON.stringify({ probe_operation_token: probeOperationToken }),
+  });
+}
+
+export function reviewWindowsSourceUiCandidates(sourceProfileId: number, inventoryOperationToken: string): Promise<WindowsSourceUiCandidateReview> {
+  return apiRequest<WindowsSourceUiCandidateReview>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/inventory/${inventoryOperationToken}/review`, { method: "POST" });
+}
+
+export function confirmWindowsSourceUiRun(workflowToken: string): Promise<WindowsSourceUiWorkflowStatus> {
+  return apiRequest<WindowsSourceUiWorkflowStatus>(`/api/admin/windows-source-ui/runs/${workflowToken}/confirm`, { method: "POST" });
+}
+
+export function advanceWindowsSourceUiRun(workflowToken: string): Promise<WindowsSourceUiWorkflowStatus> {
+  return apiRequest<WindowsSourceUiWorkflowStatus>(`/api/admin/windows-source-ui/runs/${workflowToken}/advance`, { method: "POST" });
+}
+
+export function getWindowsSourceUiRun(workflowToken: string): Promise<WindowsSourceUiWorkflowStatus> {
+  return apiRequest<WindowsSourceUiWorkflowStatus>(`/api/admin/windows-source-ui/runs/${workflowToken}`);
+}
+
+export function getLatestWindowsSourceUiRun(sourceProfileId: number): Promise<WindowsSourceUiWorkflowStatus | null> {
+  return apiRequest<WindowsSourceUiWorkflowStatus | null>(`/api/admin/windows-source-ui/profiles/${sourceProfileId}/workflow/latest`);
+}
+
+export function startWindowsSourceUiCreationProbe(fields: WindowsSourceUiCreateFields): Promise<WindowsSourceUiOperation> {
+  return apiRequest<WindowsSourceUiOperation>("/api/admin/windows-source-ui/creation/probe", {
+    method: "POST",
+    body: JSON.stringify(fields),
+  });
+}
+
+export function startWindowsPortableDiscovery(sourceType: "external" | "removable"): Promise<WindowsSourceUiPortableDiscovery> {
+  return apiRequest<WindowsSourceUiPortableDiscovery>("/api/admin/windows-source-ui/creation/devices", {
+    method: "POST",
+    body: JSON.stringify({ source_type: sourceType }),
+  });
+}
+
+export function resolveWindowsPortableDiscovery(
+  sourceType: "external" | "removable",
+  observationTokens: string[],
+): Promise<WindowsSourceUiPortableDiscovery> {
+  return apiRequest<WindowsSourceUiPortableDiscovery>("/api/admin/windows-source-ui/creation/devices/resolve", {
+    method: "POST",
+    body: JSON.stringify({ source_type: sourceType, observation_tokens: observationTokens }),
+  });
+}
+
+export function planWindowsSourceUiCreation(fields: WindowsSourceUiCreateFields, probeOperationToken: string): Promise<WindowsSourceUiCreatePlan> {
+  return apiRequest<WindowsSourceUiCreatePlan>("/api/admin/windows-source-ui/creation/plan", {
+    method: "POST",
+    body: JSON.stringify({ ...fields, probe_operation_token: probeOperationToken }),
+  });
+}
+
+export function confirmWindowsSourceUiCreation(fields: WindowsSourceUiCreateFields, probeOperationToken: string): Promise<WindowsSourceUiCreateResult> {
+  return apiRequest<WindowsSourceUiCreateResult>("/api/admin/windows-source-ui/creation/confirm", {
+    method: "POST",
+    body: JSON.stringify({ ...fields, probe_operation_token: probeOperationToken, operator_confirmed: true }),
+  });
 }
 
 export function getClusters(options: ClusterQueryOptions = {}): Promise<ClusterListResponse> {
@@ -1044,6 +1178,25 @@ export function getLinuxSourceLocations(): Promise<LinuxSourceLocationsResponse>
   return apiRequest<LinuxSourceLocationsResponse>("/api/admin/source-identity/locations");
 }
 
+export function getNasRegistrations(): Promise<NasRegistrationListResponse> {
+  return apiRequest<NasRegistrationListResponse>("/api/admin/nas-registrations");
+}
+
+export function discoverNasAppliances(): Promise<NasDiscoveryResponse> {
+  return apiRequest<NasDiscoveryResponse>("/api/admin/nas-registrations/discover", {
+    method: "POST",
+  });
+}
+
+export function createNasPendingRegistration(
+  payload: NasPendingRegistrationRequest,
+): Promise<NasPendingRegistrationResponse> {
+  return apiRequest<NasPendingRegistrationResponse>("/api/admin/nas-registrations/pending", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function probeSourceIdentity(
   payload: SourceIdentityProbeRequest,
 ): Promise<SourceIdentityProbeResponse> {
@@ -1095,6 +1248,42 @@ export function selectSourceProfile(
   return apiRequest<SourceSelectionResponse>("/api/admin/source-selection/select", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export function startIcloudAuthentication(sourceProfileId: number): Promise<IcloudAuthenticationResponse> {
+  return apiRequest<IcloudAuthenticationResponse>("/api/admin/icloud-auth/sessions", {
+    method: "POST",
+    body: JSON.stringify({ source_profile_id: sourceProfileId }),
+  });
+}
+
+export function submitIcloudAuthenticationPassword(
+  sessionId: string,
+  sourceProfileId: number,
+  value: string,
+): Promise<IcloudAuthenticationResponse> {
+  return apiRequest<IcloudAuthenticationResponse>(`/api/admin/icloud-auth/sessions/${sessionId}/password`, {
+    method: "POST",
+    body: JSON.stringify({ source_profile_id: sourceProfileId, value }),
+  });
+}
+
+export function submitIcloudAuthenticationMfa(
+  sessionId: string,
+  sourceProfileId: number,
+  value: string,
+): Promise<IcloudAuthenticationResponse> {
+  return apiRequest<IcloudAuthenticationResponse>(`/api/admin/icloud-auth/sessions/${sessionId}/mfa`, {
+    method: "POST",
+    body: JSON.stringify({ source_profile_id: sourceProfileId, value }),
+  });
+}
+
+export function cancelIcloudAuthentication(sessionId: string, sourceProfileId: number): Promise<IcloudAuthenticationResponse> {
+  return apiRequest<IcloudAuthenticationResponse>(`/api/admin/icloud-auth/sessions/${sessionId}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ source_profile_id: sourceProfileId }),
   });
 }
 

@@ -12,6 +12,7 @@ Restart=on-failure
 RestartSec=3s
 RuntimeDirectory=photo-organizer-source-access
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=restart
 StateDirectory=photo-organizer-source-access
 StateDirectoryMode=0750
 UMask=0007
@@ -33,7 +34,7 @@ RestrictRealtime=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-ReadOnlyPaths=/etc/photo-organizer/source-access.json /mnt/photo-organizer-sources -/mnt/nas/photo-organizer
+ReadOnlyPaths=/etc/photo-organizer/source-access.json /mnt/photo-organizer-sources -/mnt/nas
 ReadWritePaths=/run/photo-organizer-source-access /var/lib/photo-organizer-source-access
 
 [Install]

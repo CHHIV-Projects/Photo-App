@@ -68,7 +68,7 @@ def _build_asset(copied_file: CopiedFile) -> Asset:
         sha256=copied_file.hashed_file.sha256,
         vault_path=copied_file.destination_path,
         original_filename=record.original_filename,
-        original_source_path=record.original_source_path,
+        original_source_path=record.asset_original_source_path or record.original_source_path,
         extension=record.extension,
         size_bytes=record.size_bytes,
         modified_timestamp_utc=modified_timestamp,

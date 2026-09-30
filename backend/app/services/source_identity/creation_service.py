@@ -16,6 +16,7 @@ from sqlalchemy import func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.models.ingestion_source import IngestionSource
+from app.models.nas_registration import NasShareRegistration
 from app.models.source_endpoint import (
     AccessNode,
     SourceEndpoint,
@@ -51,6 +52,9 @@ from app.services.source_identity.posix_source_paths import (
     require_exact_mapping,
 )
 from app.services.source_identity.probe_service import SourceIdentityProbeService
+from app.services.windows_helper.operations import completed_probe
+from app.services.windows_helper.service import WindowsHelperServiceError
+from app.windows_helper_shared.protocol import HelperProbeRequest
 
 
 _ALIAS_MAX_LENGTH = 255
@@ -178,6 +182,7 @@ class SourceCreationService:
             duplicate_source_ids_to_inactivate=request.duplicate_source_ids_to_inactivate,
             use_registered_source_type=request.use_registered_source_type,
             operator_review_acknowledged=request.operator_review_acknowledged,
+            helper_probe_operation_id=request.helper_probe_operation_id,
         )
         plan, context = self._build_plan(plan_request)
         blockers = list(plan.blockers)
@@ -223,6 +228,13 @@ class SourceCreationService:
         requested_device_name = _normalize_device_name(request.device_name)
         observed_path = (request.observed_path or "").strip()
         linux_location_request = request.location_id is not None
+        if linux_location_request and request.helper_probe_operation_id is not None:
+            blockers.append(
+                _message(
+                    "source_provider_conflict",
+                    "A Linux mounted location and Windows Helper probe cannot be used together.",
+                )
+            )
         if linux_location_request:
             if request.source_type not in {"local", "nas"}:
                 blockers.append(
@@ -244,6 +256,7 @@ class SourceCreationService:
                 blockers.append(shape_blocker)
 
         probe: SourceIdentityProbeResponse | None = None
+        helper_probe_operation = None
         technical_source_type = request.source_type
         if not blockers:
             if linux_location_request:
@@ -254,6 +267,35 @@ class SourceCreationService:
                     "stable_mount_source_creation",
                 )
                 observed_path = probe.observed_path or ""
+            elif request.helper_probe_operation_id is not None:
+                helper_probe_operation, probe = completed_probe(
+                    self._db,
+                    request.helper_probe_operation_id,
+                    require_fresh=False,
+                )
+                wire_request = HelperProbeRequest.model_validate_json(
+                    helper_probe_operation.request_json
+                )
+                if helper_probe_operation.source_profile_id is not None:
+                    raise WindowsHelperServiceError(
+                        "probe_operation_already_bound",
+                        "The Source creation probe is already bound to a saved Profile.",
+                        http_status=409,
+                    )
+                if (
+                    ntpath.normcase(wire_request.provider_native_path.provider_native_full_path)
+                    != ntpath.normcase(observed_path)
+                    or _operator_source_type_from_probe(probe, request.source_type)
+                    != request.source_type
+                ):
+                    raise WindowsHelperServiceError(
+                        "probe_operation_request_mismatch",
+                        "The completed probe does not match the Source creation request.",
+                        http_status=409,
+                    )
+                technical_source_type = _operator_source_type_from_probe(
+                    probe, request.source_type
+                )
             else:
                 probe_type = _initial_probe_source_type(request.source_type, observed_path)
                 probe = self._run_probe(probe_type, observed_path, "drive_agnostic_source_creation")
@@ -449,8 +491,41 @@ class SourceCreationService:
         canonical_device_name = ""
         name_decision_required = False
         will_rename_endpoint = False
+        registered_nas_location_name: str | None = None
+        if (
+            selected_endpoint is None
+            and recognized_source_type == "nas"
+            and probe is not None
+            and probe.location_id
+            and inspect(self._db.connection()).has_table("nas_share_registrations")
+        ):
+            registered_nas_share = self._db.scalar(
+                select(NasShareRegistration).where(
+                    NasShareRegistration.location_id == probe.location_id,
+                    NasShareRegistration.status == "registered",
+                )
+            )
+            if (
+                registered_nas_share is not None
+                and registered_nas_share.identity_fingerprint_hash == fingerprint.hash_value
+                and registered_nas_share.identity_fingerprint_version == fingerprint.version
+            ):
+                registered_nas_location_name = registered_nas_share.display_name
         if selected_endpoint is None and possible_matches:
             name_decision_required = True
+        elif selected_endpoint is None and registered_nas_location_name is not None:
+            naming_action = "create_new"
+            canonical_device_name = registered_nas_location_name
+            name_error = _validate_device_name(canonical_device_name)
+            if name_error is not None:
+                blockers.append(name_error)
+            elif self._alias_conflict(canonical_device_name, exclude_endpoint_id=None) is not None:
+                blockers.append(
+                    _message(
+                        "device_name_conflict",
+                        "The registered NAS Location Name is already used by a different durable device identity.",
+                    )
+                )
         elif selected_endpoint is None:
             if naming_action is None and requested_device_name:
                 naming_action = "create_new"
@@ -743,6 +818,16 @@ class SourceCreationService:
                 ),
                 "fingerprint_hash": fingerprint.hash_value,
                 "fingerprint_version": fingerprint.version,
+                "helper_probe_operation_id": (
+                    helper_probe_operation.operation_uuid
+                    if helper_probe_operation is not None
+                    else None
+                ),
+                "helper_probe_result_digest": (
+                    helper_probe_operation.result_digest
+                    if helper_probe_operation is not None
+                    else None
+                ),
                 "selected_endpoint": (
                     {
                         "id": selected_endpoint.id,
@@ -825,6 +910,16 @@ class SourceCreationService:
                 "revalidated_legacy_match_count": len(revalidated_legacy_matches),
                 "probe_status": probe.probe_status if probe is not None else None,
                 "probe_provider": probe.provider_name if probe is not None else None,
+                "helper_probe_operation_id": (
+                    helper_probe_operation.operation_uuid
+                    if helper_probe_operation is not None
+                    else None
+                ),
+                "helper_probe_result_digest": (
+                    helper_probe_operation.result_digest
+                    if helper_probe_operation is not None
+                    else None
+                ),
                 "filesystem_boundary_type": (
                     probe.source_root_candidate.filesystem_boundary_type if probe is not None else None
                 ),
@@ -1347,6 +1442,35 @@ class SourceCreationService:
             )
 
         endpoint = context.selected_endpoint
+        nas_share_registration: NasShareRegistration | None = None
+        if (
+            plan.recognized_source_type == "nas"
+            and probe.location_id
+            and inspect(self._db.connection()).has_table("nas_share_registrations")
+        ):
+            nas_share_registration = self._db.scalar(
+                select(NasShareRegistration).where(
+                    NasShareRegistration.location_id == probe.location_id,
+                    NasShareRegistration.status == "registered",
+                )
+            )
+            if nas_share_registration is not None and (
+                nas_share_registration.identity_fingerprint_hash != context.fingerprint.hash_value
+                or nas_share_registration.identity_fingerprint_version != context.fingerprint.version
+            ):
+                return self._blocked_confirm_response(
+                    plan,
+                    [_message("nas_registration_identity_mismatch", "Registered NAS identity changed before Source creation.")],
+                )
+            if (
+                nas_share_registration is not None
+                and nas_share_registration.source_endpoint_id is not None
+                and (endpoint is None or endpoint.id != nas_share_registration.source_endpoint_id)
+            ):
+                return self._blocked_confirm_response(
+                    plan,
+                    [_message("nas_registration_endpoint_conflict", "Registered NAS location is linked to a different Source device.")],
+                )
         created_endpoint = False
         reused_endpoint = endpoint is not None
         upgraded_legacy_endpoint = False
@@ -1514,6 +1638,11 @@ class SourceCreationService:
             self._db.add(duplicate_source)
             inactivated_duplicate_source_ids.append(duplicate_source.id)
         if inactivated_duplicate_source_ids:
+            self._db.flush()
+
+        if nas_share_registration is not None and nas_share_registration.source_endpoint_id is None:
+            nas_share_registration.source_endpoint_id = endpoint.id
+            self._db.add(nas_share_registration)
             self._db.flush()
 
         self._db.commit()

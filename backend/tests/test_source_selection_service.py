@@ -34,6 +34,7 @@ from app.services.source_identity.source_selection_service import (
     SourceSelectionService,
     enumerate_windows_mounted_volume_candidates,
 )
+from app.windows_helper_shared.identity.models import CommandResult
 
 
 class _FakeProbeService:
@@ -114,6 +115,43 @@ class SourceSelectionServiceTests(unittest.TestCase):
             ],
         ).select_source(SourceSelectionRequest(source_profile_id=source.id))
         self.assertEqual(result.selected_source_context.selection_fingerprint, repeat.selected_source_context.selection_fingerprint)
+        self.assertEqual(before, self._counts())
+
+    def test_external_duplicate_current_volume_matches_fail_closed(self) -> None:
+        fingerprint_hash, fingerprint_version = volume_guid_fingerprint(
+            "11111111-1111-1111-1111-111111111111"
+        )
+        endpoint = self._endpoint(
+            "external_device",
+            "External 10",
+            fingerprint_hash,
+            fingerprint_version,
+        )
+        source = self._source(
+            "Family Photos",
+            "external_drive",
+            "F:\\Pictures",
+            endpoint_id=endpoint.id,
+            endpoint_relative_root="Pictures",
+        )
+        fake = _FakeProbeService({})
+        before = self._counts()
+
+        result = SourceSelectionService(
+            self.db,
+            fake,
+            mounted_volume_resolver=lambda: [
+                MountedVolumeCandidate(
+                    root_path=root,
+                    identity_fingerprint_hash=fingerprint_hash,
+                    identity_fingerprint_version=fingerprint_version,
+                )
+                for root in ["E:\\", "G:\\"]
+            ],
+        ).select_source(SourceSelectionRequest(source_profile_id=source.id))
+
+        self.assertEqual(result.result, "not_selected")
+        self.assertIsNone(result.selected_source_context)
         self.assertEqual(before, self._counts())
 
     def test_request_rejects_frontend_supplied_identity_fields(self) -> None:
@@ -253,33 +291,58 @@ class SourceSelectionServiceTests(unittest.TestCase):
 
     def test_windows_mounted_volume_enumeration_is_bounded_and_read_only(self) -> None:
         fingerprint_hash, fingerprint_version = volume_guid_fingerprint("55555555-5555-5555-5555-555555555555")
-        completed = Mock(
-            returncode=0,
-            stdout=(
-                '{"DriveLetter":"E","DriveType":"Fixed",'
-                '"UniqueId":"\\\\\\\\?\\\\Volume{55555555-5555-5555-5555-555555555555}\\\\",'
-                '"Path":"\\\\\\\\?\\\\Volume{55555555-5555-5555-5555-555555555555}\\\\",'
-                '"FileSystemType":"NTFS","FileSystemLabel":"Photos"}'
+        runner = Mock()
+        runner.run.side_effect = [
+            CommandResult(
+                args=("cmd", "/c", "mountvol", "E:", "/L"),
+                returncode=0,
+                stdout="\\\\?\\Volume{55555555-5555-5555-5555-555555555555}\\\n",
             ),
-        )
+            CommandResult(
+                args=("powershell",),
+                returncode=0,
+                stdout=(
+                    '{"QueryError":false,"PartitionCount":1,"DiskCount":1,'
+                    '"BusType":7,"IsBoot":false,"IsSystem":false,'
+                    '"IsOffline":false,"RemovalPolicy":3}'
+                ),
+            ),
+        ]
 
-        with patch("app.services.source_identity.source_selection_service.platform.system", return_value="Windows"), patch(
-            "app.services.source_identity.source_selection_service.subprocess.run",
-            return_value=completed,
-        ) as run:
-            candidates = enumerate_windows_mounted_volume_candidates()
+        with patch("app.windows_helper_shared.identity.windows.platform.system", return_value="Windows"):
+            candidates = enumerate_windows_mounted_volume_candidates(
+                command_runner=runner,
+                mounted_drive_provider=lambda: [("E:\\", "Fixed")],
+            )
 
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].root_path, "E:\\")
         self.assertEqual(candidates[0].identity_fingerprint_hash, fingerprint_hash)
         self.assertEqual(candidates[0].identity_fingerprint_version, fingerprint_version)
         self.assertEqual(candidates[0].identity_identifier_masked, "{...5555}")
-        run.assert_called_once()
-        command = run.call_args.args[0]
-        script = command[-1]
-        self.assertIn("Get-Volume", script)
-        self.assertIn("Where-Object DriveLetter", script)
-        self.assertNotIn("Get-ChildItem", script)
+        self.assertEqual(candidates[0].storage_evidence.backing_association, "exact")
+        self.assertEqual(candidates[0].storage_evidence.storage_bus_type, "usb")
+        self.assertEqual(candidates[0].storage_evidence.removal_policy, "surprise")
+        self.assertEqual(runner.run.call_count, 2)
+        runner.run.assert_any_call(
+            ["cmd", "/c", "mountvol", "E:", "/L"],
+            timeout_seconds=10.0,
+        )
+
+    def test_windows_mounted_volume_enumeration_rejects_excess_roots_before_commands(self) -> None:
+        runner = Mock()
+
+        with patch("app.windows_helper_shared.identity.windows.platform.system", return_value="Windows"):
+            with self.assertRaisesRegex(RuntimeError, "bounded result count"):
+                enumerate_windows_mounted_volume_candidates(
+                    command_runner=runner,
+                    mounted_drive_provider=lambda: [
+                        (f"{chr(ord('A') + (index % 26))}:\\", "fixed")
+                        for index in range(65)
+                    ],
+                )
+
+        runner.run.assert_not_called()
 
     def test_optical_complete_fingerprint_selects(self) -> None:
         probe = _optical_probe("E:\\")

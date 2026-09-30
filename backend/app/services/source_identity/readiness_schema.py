@@ -53,6 +53,7 @@ class SourceProfileReadinessResponse(BaseModel):
     readiness_status: ReadinessStatus
     identity_match_status: IdentityMatchStatus
     can_run_source_intake: bool
+    provider_operation_ready: bool = False
     requires_operator_acknowledgment: bool = False
     hard_block: bool = False
 

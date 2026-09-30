@@ -1,0 +1,4 @@
+# Development-only Linux iCloud provider runtime (accepted 12.66.9.4 baseline).
+# The PyPI wheel is a frozen CLI bundle and omits the programmatic pyicloud_ipd
+# modules needed for bounded in-app authentication, so pin the reviewed source.
+icloudpd @ https://github.com/icloud-photos-downloader/icloud_photos_downloader/archive/879c561240d993d748ddb4546f935090502b16d3.zip#sha256=9b2df95f8286827dd142c396f3b82cb64cb542cd5bb41adf222a954ad27ea74d

@@ -6,12 +6,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
+import threading
 import time
 
 from sqlalchemy import func, inspect, select, update
 from sqlalchemy.orm import Session
 
 from app.core.runtime_paths import reports_directory
+from app.db.session import SessionLocal
 from app.models.icloud_acquisition_run import IcloudAcquisitionBatch, IcloudAcquisitionItem, IcloudAcquisitionResource
 from app.models.icloud_acquisition_run import IcloudAcquisitionRun
 from app.models.icloud_backfill import IcloudRemoteAssetInventory
@@ -63,6 +65,9 @@ DEFAULT_CLEANUP_WAIT_SECONDS = 120.0
 DEFAULT_CLEANUP_POLL_SECONDS = 0.2
 DEFAULT_IMPORT_STALE_SECONDS = 30.0
 INTAKE_IMPORT_REPORT_DIR = reports_directory("icloud_intake_import_reports")
+
+_import_worker_lock = threading.Lock()
+_active_import_workers: dict[int, threading.Thread] = {}
 
 AVAILABLE_YES = "yes"
 AVAILABLE_NO = "no"
@@ -712,15 +717,19 @@ def _recover_stale_import_runs(db_session: Session, *, source_id: int, now: date
         return
     if _active_child_operation_exists(db_session):
         return
-    last_progress = _as_utc(run.last_progress_at or run.started_at or run.created_at)
-    if last_progress is not None and (now - last_progress).total_seconds() < DEFAULT_IMPORT_STALE_SECONDS:
-        return
-
     running_chunks = [
         chunk
         for chunk in _import_chunks(db_session, import_run_id=run.id)
         if chunk.status == CHUNK_STATUS_RUNNING
     ]
+    # A run that is merely waiting between completed chunks is healthy and can
+    # be advanced later.  Only an abandoned running chunk needs stale recovery.
+    if not running_chunks or is_icloud_intake_import_worker_active(run.id):
+        return
+
+    last_progress = _as_utc(run.last_progress_at or run.started_at or run.created_at)
+    if last_progress is not None and (now - last_progress).total_seconds() < DEFAULT_IMPORT_STALE_SECONDS:
+        return
     needs_review = False
     for chunk in running_chunks:
         if int(chunk.files_resources_imported or 0) > int(chunk.local_staging_files_cleaned or 0):
@@ -1003,14 +1012,18 @@ def get_icloud_intake_import_status(
             IMPORT_STATUS_PAUSED_INTERRUPTED,
         }
         can_resume = resume_available and pending_chunk_count > 0
+        worker_active = is_icloud_intake_import_worker_active(import_run.id)
         can_advance = (
             import_run.status in {IMPORT_STATUS_CREATED, IMPORT_STATUS_RUNNING}
             and pending_chunk_count > 0
             and running_chunk is None
+            and not worker_active
             and not active_child_exists
             and base.local_staging_file_count == 0
         )
-        if running_chunk is not None:
+        if worker_active and running_chunk is None:
+            current_phase = "chunk_starting"
+        elif running_chunk is not None:
             current_phase = f"chunk_{running_chunk.chunk_index}_running"
         elif can_advance:
             current_phase = "waiting_for_next_chunk"
@@ -2211,6 +2224,112 @@ def advance_icloud_intake_import(
     _write_import_report(db_session, import_run)
     db_session.commit()
     return get_icloud_intake_import_status(db_session, source_id=source_id)
+
+
+def is_icloud_intake_import_worker_active(import_run_id: int) -> bool:
+    """Return whether this backend process owns an active worker for the run."""
+
+    with _import_worker_lock:
+        worker = _active_import_workers.get(import_run_id)
+        return worker is not None and worker.is_alive()
+
+
+def run_icloud_intake_import_to_boundary(
+    db_session: Session,
+    *,
+    source_id: int,
+    import_run_id: int,
+) -> IcloudIntakeImportStatus:
+    """Advance all remaining chunks until completion or a fail-closed boundary."""
+
+    current = get_icloud_intake_import_status(db_session, source_id=source_id)
+    maximum_advances = max(1, int(current.total_chunks or 0) + 1)
+    for _ in range(maximum_advances):
+        if current.import_run_id != import_run_id:
+            return current
+        if current.import_status not in {IMPORT_STATUS_CREATED, IMPORT_STATUS_RUNNING}:
+            return current
+        if current.pending_chunk_count <= 0:
+            return current
+
+        completed_before = current.completed_chunk_count
+        pending_before = current.pending_chunk_count
+        advanced = advance_icloud_intake_import(
+            db_session,
+            source_id=source_id,
+            import_run_id=import_run_id,
+        )
+        if advanced.import_status not in {IMPORT_STATUS_CREATED, IMPORT_STATUS_RUNNING}:
+            return advanced
+        if advanced.pending_chunk_count <= 0:
+            return advanced
+        if (
+            advanced.completed_chunk_count <= completed_before
+            and advanced.pending_chunk_count >= pending_before
+        ):
+            # A guardrail, active child operation, staging residue, or another
+            # bounded condition prevented progress. Stop rather than spin.
+            return advanced
+        current = advanced
+    return current
+
+
+def _run_icloud_intake_import_background(*, source_id: int, import_run_id: int) -> None:
+    try:
+        with SessionLocal() as db_session:
+            run_icloud_intake_import_to_boundary(
+                db_session,
+                source_id=source_id,
+                import_run_id=import_run_id,
+            )
+    finally:
+        with _import_worker_lock:
+            _active_import_workers.pop(import_run_id, None)
+
+
+def start_icloud_intake_import_background(
+    db_session: Session,
+    *,
+    source_id: int,
+    import_run_id: int,
+) -> bool:
+    """Launch the remaining durable import run without holding HTTP open."""
+
+    run = db_session.get(IcloudIntakeImportRun, import_run_id)
+    if run is None or run.source_profile_id != source_id:
+        return False
+    with _import_worker_lock:
+        existing = _active_import_workers.get(import_run_id)
+        if existing is not None and existing.is_alive():
+            return False
+        worker = threading.Thread(
+            target=_run_icloud_intake_import_background,
+            kwargs={"source_id": source_id, "import_run_id": import_run_id},
+            daemon=True,
+            name=f"icloud-intake-chunk-{import_run_id}",
+        )
+        _active_import_workers[import_run_id] = worker
+        try:
+            worker.start()
+        except Exception:
+            _active_import_workers.pop(import_run_id, None)
+            raise
+    return True
+
+
+def start_icloud_intake_chunk_background(
+    db_session: Session,
+    *,
+    source_id: int,
+    import_run_id: int,
+) -> bool:
+    """Compatibility alias for the run-level background orchestrator."""
+
+    return start_icloud_intake_import_background(
+        db_session,
+        source_id=source_id,
+        import_run_id=import_run_id,
+    )
 
 
 def recover_icloud_intake_import_cleanup(

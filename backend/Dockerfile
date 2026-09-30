@@ -25,12 +25,16 @@ FROM system AS dependencies-gpu
 RUN python -m pip install --requirement requirements-linux-gpu.txt
 
 FROM dependencies-cpu AS development-cpu
+RUN python -m venv /opt/photo-organizer-icloud \
+    && /opt/photo-organizer-icloud/bin/python -m pip install --requirement requirements-icloud-development.txt \
+    && /opt/photo-organizer-icloud/bin/python -c "import importlib.metadata as m; from pyicloud_ipd.base import PyiCloudService; assert m.version('icloudpd') == '1.32.3'"
 COPY app ./app
 COPY scripts ./scripts
 RUN python scripts/provision_yunet_model.py \
     && groupadd --system photo-organizer \
     && useradd --system --gid photo-organizer --home-dir /app photo-organizer \
-    && mkdir -p /app/storage \
+    && mkdir -p /app/storage/acquisition/windows /app/icloud-auth \
+    && chmod 0700 /app/icloud-auth \
     && chown -R photo-organizer:photo-organizer /app
 USER photo-organizer
 EXPOSE 8001
@@ -39,12 +43,16 @@ HEALTHCHECK --interval=15s --timeout=8s --start-period=90s --retries=5 \
 CMD ["python", "scripts/container_entrypoint.py"]
 
 FROM dependencies-gpu AS development-gpu
+RUN python -m venv /opt/photo-organizer-icloud \
+    && /opt/photo-organizer-icloud/bin/python -m pip install --requirement requirements-icloud-development.txt \
+    && /opt/photo-organizer-icloud/bin/python -c "import importlib.metadata as m; from pyicloud_ipd.base import PyiCloudService; assert m.version('icloudpd') == '1.32.3'"
 COPY app ./app
 COPY scripts ./scripts
 RUN python scripts/provision_yunet_model.py \
     && groupadd --system photo-organizer \
     && useradd --system --gid photo-organizer --home-dir /app photo-organizer \
-    && mkdir -p /app/storage \
+    && mkdir -p /app/storage/acquisition/windows /app/icloud-auth \
+    && chmod 0700 /app/icloud-auth \
     && chown -R photo-organizer:photo-organizer /app
 USER photo-organizer
 EXPOSE 8001

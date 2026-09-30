@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import ntpath
-import json
-import platform
-import re
-import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from uuid import UUID
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,6 +21,11 @@ from app.services.source_identity.identity_fingerprint import (
     fingerprint_from_probe,
     parse_unc_server_share,
     stable_hash,
+)
+from app.services.windows_helper.mounted_volume_resolution import (
+    join_endpoint_root as _join_endpoint_root,
+    normalize_drive_root_path as _normalize_drive_root_path,
+    resolve_mounted_volume_runtime_root,
 )
 from app.services.source_identity.probe_schema import SourceIdentityProbeRequest, SourceIdentityProbeResponse
 from app.services.source_identity.posix_source_paths import PosixSourcePathError, require_exact_mapping
@@ -43,6 +44,13 @@ from app.services.source_identity.source_selection_schema import (
     SourceSelectionRequest,
     SourceSelectionResponse,
 )
+from app.services.source_identity.readiness_service import SourceProfileReadinessService
+from app.services.windows_helper.operations import is_windows_helper_profile
+from app.services.windows_helper.service import HELPER_PROVIDER_NAME
+from app.windows_helper_shared.identity.windows import (
+    MountedVolumeCandidate,
+    enumerate_windows_mounted_volume_candidates,
+)
 
 
 _ACTIVE_PROFILE_STATUS = "active"
@@ -57,21 +65,6 @@ _PATH_UNAVAILABLE_CODES = {
 }
 _COMPLETED_PROBE_STATUSES = {"completed", "completed_with_warnings"}
 _BENIGN_ICLOUD_WARNING_CODES = {"AUTH_UNKNOWN", "NO_RECENT_ACQUISITION", "STAGING_FOLDER_MISSING", "SOURCE_REGISTRATION_UNKNOWN"}
-_VOLUME_GUID_RE = re.compile(r"Volume\{([^}]+)\}", re.IGNORECASE)
-_MOUNTED_VOLUME_ENUMERATION_TIMEOUT_SECONDS = 5.0
-
-
-@dataclass(frozen=True)
-class MountedVolumeCandidate:
-    """Read-only mounted-volume evidence used to find a current endpoint path."""
-
-    root_path: str
-    identity_fingerprint_hash: str | None = None
-    identity_fingerprint_version: str | None = None
-    drive_type: str | None = None
-    identity_identifier_masked: str | None = None
-
-
 class SourceSelectionService:
     """Select and verify one Source Profile without mutating metadata."""
 
@@ -146,7 +139,84 @@ class SourceSelectionService:
                 },
             )
 
+        if is_windows_helper_profile(self._db, source, endpoint):
+            return self._select_windows_helper(
+                source,
+                endpoint,
+                friendly_type,
+                request.helper_probe_operation_id,
+            )
+
         return self._select_modern_filesystem(source, endpoint, friendly_type)
+
+    def _select_windows_helper(
+        self,
+        source: IngestionSource,
+        endpoint: SourceEndpoint,
+        friendly_type: str,
+        operation_id: UUID | None,
+    ) -> SourceSelectionResponse:
+        readiness = SourceProfileReadinessService(self._db).check_readiness(
+            source.id,
+            operation_id,  # type: ignore[arg-type]
+        )
+        advanced_details = {
+            **_base_advanced_details(source, endpoint, friendly_type),
+            "windows_helper_readiness": readiness.model_dump(mode="json"),
+        }
+        if (
+            readiness.readiness_status != "ready"
+            or readiness.identity_match_status != "matched"
+            or not readiness.provider_operation_ready
+            or readiness.can_run_source_intake
+        ):
+            return self._not_selected(
+                availability=(
+                    "unavailable"
+                    if readiness.identity_match_status == "unavailable"
+                    else "needs_attention"
+                ),
+                message=readiness.operator_message,
+                retry_guidance=readiness.recommended_next_action,
+                advanced_details=advanced_details,
+            )
+
+        provider_root = readiness.observed_path_summary.get("observed_path")
+        if not isinstance(provider_root, str) or not provider_root:
+            return self._not_selected(
+                availability="needs_attention",
+                message="The Windows Helper did not return an exact provider-native root.",
+                retry_guidance="Issue a new exact-root readiness probe.",
+                advanced_details=advanced_details,
+            )
+        context = self._context(
+            source=source,
+            endpoint=endpoint,
+            friendly_type=friendly_type,
+            device_label=endpoint.alias,
+            resolved_source_root=None,
+            resolved_endpoint_path=None,
+            durable_identity_status=readiness.durable_identity_status,
+            identity_match_status="matched",
+            workflow_kind="windows_helper_intake",
+            configured_source_root_override=provider_root,
+            provider_context={
+                "provider_name": HELPER_PROVIDER_NAME,
+                "provider_operation_ready": True,
+                "can_run_source_intake": False,
+                "access_node": readiness.access_node_summary,
+            },
+            root_display=provider_root,
+        )
+        return SourceSelectionResponse(
+            result="selected",
+            availability="available",
+            workflow_kind="windows_helper_intake",
+            selected_source_context=context,
+            message=f"{source.source_label} is available through the Windows Helper.",
+            retry_guidance=None,
+            advanced_details=advanced_details,
+        )
 
     def _select_modern_filesystem(
         self,
@@ -653,17 +723,14 @@ class SourceSelectionService:
     ) -> list[str]:
         if friendly_type not in {"Local", "External", "Removable"}:
             return []
-        if not endpoint.identity_fingerprint_hash:
-            return []
-        paths: list[str] = []
-        for mounted in self._mounted_volume_resolver():
-            if mounted.identity_fingerprint_hash != endpoint.identity_fingerprint_hash:
-                continue
-            endpoint_root = _normalize_drive_root_path(mounted.root_path)
-            if endpoint_root is None:
-                continue
-            paths.append(_join_endpoint_root(endpoint_root, source.endpoint_relative_root or ""))
-        return paths
+        resolution = resolve_mounted_volume_runtime_root(
+            expected_fingerprint_hash=endpoint.identity_fingerprint_hash,
+            expected_fingerprint_version=endpoint.identity_fingerprint_version,
+            endpoint_relative_root=source.endpoint_relative_root or "",
+            configured_source_root=source.source_root_path,
+            candidates=self._mounted_volume_resolver(),
+        )
+        return [resolution.runtime_root] if resolution.status == "matched" and resolution.runtime_root else []
 
     def _probe(
         self,
@@ -725,6 +792,7 @@ class SourceSelectionService:
         workflow_kind: str,
         provider_context: dict[str, Any] | None = None,
         root_display: str | None = None,
+        configured_source_root_override: str | None = None,
     ) -> SelectedSourceContext:
         selected_at = datetime.now(timezone.utc)
         safe_fingerprint_payload = {
@@ -746,7 +814,11 @@ class SourceSelectionService:
             profile_status=source.profile_status,
             endpoint_status=endpoint.status if endpoint is not None else None,
             endpoint_relative_root=source.endpoint_relative_root,
-            configured_source_root=source.source_root_path,
+            configured_source_root=(
+                configured_source_root_override
+                if configured_source_root_override is not None
+                else source.source_root_path
+            ),
             resolved_source_root=resolved_source_root,
             resolved_endpoint_path=resolved_endpoint_path,
             root_display=root_display or resolved_source_root or source.source_root_path or "Provider managed",
@@ -835,69 +907,6 @@ def _probe_source_type_for_friendly(friendly_type: str) -> str | None:
     }.get(friendly_type)
 
 
-def enumerate_windows_mounted_volume_candidates() -> list[MountedVolumeCandidate]:
-    """Return currently mounted Windows drive roots with durable identity evidence when available.
-
-    This is deliberately bounded and read-only. It asks Windows for actual mounted
-    logical volumes and never probes an A-Z drive-letter range.
-    """
-
-    if platform.system().strip().casefold() != "windows":
-        return []
-    script = (
-        "Get-Volume -ErrorAction SilentlyContinue | "
-        "Where-Object DriveLetter | "
-        "Select-Object DriveLetter,DriveType,UniqueId,Path,FileSystemType,FileSystemLabel | "
-        "ConvertTo-Json -Compress -Depth 3"
-    )
-    try:
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", script],
-            capture_output=True,
-            text=True,
-            timeout=_MOUNTED_VOLUME_ENUMERATION_TIMEOUT_SECONDS,
-            shell=False,
-            check=False,
-        )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return []
-    if completed.returncode != 0 or not (completed.stdout or "").strip():
-        return []
-    try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError:
-        return []
-    rows = payload if isinstance(payload, list) else [payload]
-    candidates: list[MountedVolumeCandidate] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        drive_letter = str(row.get("DriveLetter") or "").strip().rstrip(":\\/")
-        if len(drive_letter) != 1:
-            continue
-        root_path = f"{drive_letter.upper()}:\\"
-        unique_id = str(row.get("UniqueId") or row.get("Path") or "").strip()
-        fingerprint_hash: str | None = None
-        fingerprint_version: str | None = None
-        masked_identifier: str | None = None
-        match = _VOLUME_GUID_RE.search(unique_id)
-        if match:
-            from app.services.source_identity.identity_fingerprint import volume_guid_fingerprint
-
-            fingerprint_hash, fingerprint_version = volume_guid_fingerprint(match.group(1))
-            masked_identifier = f"{{...{match.group(1)[-4:].casefold()}}}"
-        candidates.append(
-            MountedVolumeCandidate(
-                root_path=root_path,
-                identity_fingerprint_hash=fingerprint_hash,
-                identity_fingerprint_version=fingerprint_version,
-                drive_type=str(row.get("DriveType") or "").strip() or None,
-                identity_identifier_masked=masked_identifier,
-            )
-        )
-    return candidates
-
-
 def _identity_match_status(endpoint: SourceEndpoint, probe: SourceIdentityProbeResponse) -> str:
     fingerprint = fingerprint_from_probe(probe)
     if endpoint.source_type == "optical_media" and endpoint.identity_fingerprint_version == OPTICAL_MEDIA_FINGERPRINT_VERSION:
@@ -949,23 +958,6 @@ def _endpoint_path_from_path(path: str | None, friendly_type: str) -> str | None
     if drive:
         return f"{drive}\\"
     return None
-
-
-def _normalize_drive_root_path(path: str | None) -> str | None:
-    if not path:
-        return None
-    drive, _tail = ntpath.splitdrive(path.replace("/", "\\"))
-    if not drive:
-        return None
-    return f"{drive.upper()}\\"
-
-
-def _join_endpoint_root(endpoint_path: str, endpoint_relative_root: str) -> str:
-    if not endpoint_relative_root:
-        return endpoint_path
-    cleaned_endpoint_path = endpoint_path.rstrip("\\/")
-    cleaned_relative_root = endpoint_relative_root.strip("\\/")
-    return f"{cleaned_endpoint_path}\\{cleaned_relative_root}"
 
 
 def _same_path(left: str, right: str) -> bool:

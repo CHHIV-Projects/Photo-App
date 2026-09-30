@@ -1254,6 +1254,7 @@ export interface SourceProfileSummary {
   source_id: number;
   source_label: string;
   source_type: SourceProfileType;
+  provider_kind: "mounted" | "windows_helper" | "icloud" | "cloud" | "legacy";
   source_root_path: string | null;
   endpoint_relative_root: string | null;
   endpoint_id: number | null;
@@ -1328,7 +1329,7 @@ export interface IcloudSourceReadiness {
   path_alignment_status: "matched" | "mismatch" | "unknown";
   source_root_alignment_status: "matched" | "mismatch" | "unknown";
   source_registration_status: "matched" | "mismatch" | "unknown";
-  auth_status: "unknown" | "action_required";
+  auth_status: "authenticated" | "authentication_required" | "session_expired" | "authentication_failed" | "provider_unavailable" | "action_required" | "unknown";
   last_auth_error_code: string | null;
   operation_conflicts: IcloudReadinessOperationConflicts;
   last_acquisition: IcloudReadinessLastAcquisition | null;
@@ -1418,10 +1419,165 @@ export interface SourceProfileReadinessResponse {
 
 export type SourceSelectionResult = "selected" | "not_selected";
 export type SourceSelectionAvailability = "available" | "unavailable" | "needs_attention";
-export type SourceSelectionWorkflowKind = "filesystem_source_intake" | "icloud_intake";
+export type SourceSelectionWorkflowKind = "filesystem_source_intake" | "icloud_intake" | "windows_helper_intake";
 
 export interface SourceSelectionRequest {
   source_profile_id: number;
+  helper_probe_operation_id?: string | null;
+}
+
+export interface WindowsSourceUiProfileStatus {
+  provider_kind: "windows_helper";
+  source_profile_id: number;
+  profile_name: string;
+  device_alias: string;
+  windows_root: string;
+  windows_access: "ready" | "not_available" | "setup_required";
+  paired: boolean;
+  online: boolean;
+  helper_version: string | null;
+  source_readiness: "ready" | "not_ready";
+}
+
+export interface WindowsSourceUiOperation {
+  operation_token: string;
+  stage: "checking_source" | "preparing_files" | "ready" | "failed";
+  source_ready: boolean;
+  safe_message: string;
+}
+
+export interface WindowsSourceUiRoute {
+  access_node_id: string;
+  computer_alias: string;
+}
+
+export interface WindowsSourceUiRouteCheck {
+  stage: "checking_routes" | "checking_source" | "unavailable" | "ambiguous" | "failed";
+  safe_message: string;
+  observation_tokens: string[];
+  probe_operation_token: string | null;
+  routes: WindowsSourceUiRoute[];
+}
+
+export interface WindowsSourceUiCandidateReview {
+  workflow_token: string;
+  stage: "awaiting_confirmation";
+  files_to_process: number;
+  inventory_candidates: number;
+  predictable_rejections: number;
+  expected_chunks: number;
+  total_bytes: number;
+  profile_name: string;
+  windows_root: string;
+  safe_message: string;
+}
+
+export interface WindowsSourceUiWorkflowStatus {
+  workflow_token: string;
+  source_profile_id?: number | null;
+  source_label?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  stage: "inventorying" | "awaiting_confirmation" | "transferring_files" | "processing_library" | "paused" | "complete" | "failed";
+  files_total: number;
+  files_completed: number;
+  inventory_candidates: number;
+  predictable_rejections: number;
+  chunks_completed: number;
+  chunks_total: number;
+  files_remaining: number;
+  expected_bytes: number;
+  transferred_bytes: number;
+  new_library_items: number;
+  already_represented: number;
+  failed_items: number;
+  safe_message: string;
+}
+
+export interface WindowsSourceUiComputer {
+  access_node_id: string;
+  computer_alias: string;
+  paired: boolean;
+  online: boolean;
+  helper_version: string | null;
+  source_device_aliases: string[];
+}
+
+export interface WindowsSourceUiComputerList {
+  computers: WindowsSourceUiComputer[];
+}
+
+export interface WindowsHelperPairingAuthorization {
+  access_node_id: string;
+  access_node_label: string;
+  pairing_id: string;
+  pairing_code: string;
+  expires_at: string;
+  status: "pending";
+}
+
+export interface WindowsHelperStatus {
+  access_node_id: string;
+  access_node_label: string;
+  access_node_status: string;
+  credential_status: string | null;
+  last_seen_at: string | null;
+}
+
+export interface WindowsHelperStatusList {
+  helpers: WindowsHelperStatus[];
+}
+
+export type WindowsSourceUiCreateFields = {
+  access_node_id: string | null;
+  device_alias: string;
+  profile_name: string;
+} & ({
+  source_type: "local";
+  discovery_candidate_token?: null;
+  windows_root: string;
+  endpoint_relative_root?: null;
+} | {
+  source_type: "external" | "removable";
+  discovery_candidate_token: string | null;
+  windows_root?: null;
+  endpoint_relative_root: string;
+});
+
+export interface WindowsSourceUiPortableCandidate {
+  candidate_token: string;
+  device_alias: string | null;
+  known_device: boolean;
+  current_root: string;
+  drive_type: string;
+  current_route_count: number;
+}
+
+export interface WindowsSourceUiPortableDiscovery {
+  stage: "checking_devices" | "ready" | "unavailable" | "failed";
+  safe_message: string;
+  observation_tokens: string[];
+  candidates: WindowsSourceUiPortableCandidate[];
+}
+
+export interface WindowsSourceUiCreatePlan {
+  plan_status: "ready" | "source_exists" | "needs_review" | "blocked";
+  device_alias: string;
+  windows_root: string;
+  profile_name: string;
+  device_action: string;
+  profile_action: string;
+  blockers: string[];
+  warnings: string[];
+}
+
+export interface WindowsSourceUiCreateResult {
+  status: "completed" | "blocked";
+  source_profile_id: number | null;
+  source_endpoint_id: number | null;
+  created_profile: boolean;
+  reused_profile: boolean;
+  safe_message: string;
 }
 
 export interface SelectedSourceContext {
@@ -1456,6 +1612,26 @@ export interface SourceSelectionResponse {
   message: string;
   retry_guidance: string | null;
   advanced_details: Record<string, unknown>;
+}
+
+export type IcloudAuthenticationState =
+  | "password_required"
+  | "mfa_required"
+  | "authenticating"
+  | "authenticated"
+  | "authentication_failed"
+  | "expired"
+  | "cancelled";
+
+export interface IcloudAuthenticationResponse {
+  session_id: string | null;
+  source_profile_id: number;
+  provider: "icloud";
+  account_hint: string;
+  state: IcloudAuthenticationState;
+  message: string;
+  retryable: boolean;
+  expires_at: string | null;
 }
 
 export interface RunIngestionFilesystemOptions {
@@ -1556,6 +1732,58 @@ export interface LinuxSourceLocationsResponse {
   provider_version: string;
   locations: LinuxSourceLocationSummary[];
   blockers: Array<{ code: string; message: string }>;
+}
+
+export interface NasRegistrationSummary {
+  appliance_id: string;
+  share_id: string;
+  appliance_name: string;
+  location_name: string;
+  share_name: string;
+  location_id: string;
+  registration_status: "registered" | "retired";
+  availability: "available" | "unavailable" | "identity_conflict" | "blocked";
+  status_message: string;
+  source_endpoint_id: number | null;
+}
+
+export interface NasRegistrationListResponse {
+  registrations: NasRegistrationSummary[];
+}
+
+export interface NasDiscoveryCandidate {
+  candidate_id: string;
+  suggested_name: string;
+  network_host: string;
+  address_hint: string;
+}
+
+export interface NasDiscoveryResponse {
+  status: "completed" | "unavailable";
+  candidates: NasDiscoveryCandidate[];
+  manual_entry_available: boolean;
+  messages: Array<{ code: string; message: string }>;
+}
+
+export interface NasPendingRegistrationRequest {
+  network_host: string;
+  share_name: string;
+  appliance_name: string;
+  location_name: string;
+}
+
+export interface NasPendingRegistrationResponse {
+  registration_id: string;
+  state: "pending" | "completed" | "cancelled" | "expired";
+  appliance_name: string;
+  location_name: string;
+  share_name: string;
+  server_guid_masked: string;
+  reuses_registered_appliance: boolean;
+  operation: "create_share" | "update_network_host";
+  expires_at: string;
+  operator_command: string;
+  messages: Array<{ code: string; message: string }>;
 }
 
 export interface SourceIdentityProbeEvidenceItem {

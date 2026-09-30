@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Literal
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -36,6 +37,15 @@ from app.services.source_identity.readiness_schema import (
     SourceProfileReadinessMessage,
     SourceProfileReadinessResponse,
 )
+from app.services.windows_helper.operations import (
+    completed_probe,
+    helper_is_online,
+    is_windows_helper_profile,
+    windows_helper_profile_binding,
+)
+from app.services.windows_helper.service import (
+    WindowsHelperServiceError,
+)
 
 
 _ProbeMapping = Literal["provider_specific", "unsupported"]
@@ -66,11 +76,23 @@ class SourceProfileReadinessService:
         self._runtime_source_root_overrides = runtime_source_root_overrides or {}
         self._operator_acknowledged = operator_acknowledged
 
-    def check_readiness(self, source_profile_id: int) -> SourceProfileReadinessResponse:
+    def check_readiness(
+        self,
+        source_profile_id: int,
+        helper_probe_operation_id: UUID | None = None,
+    ) -> SourceProfileReadinessResponse:
         """Return a read-only readiness result for one Source Profile."""
         source = self._db.get(IngestionSource, source_profile_id)
         if source is None:
             raise LookupError("Source profile not found.")
+
+        endpoint = self._load_endpoint(source)
+        if endpoint is not None and is_windows_helper_profile(self._db, source, endpoint):
+            return self._windows_helper_readiness(
+                source,
+                endpoint,
+                helper_probe_operation_id,
+            )
 
         effective_path, path_kind = _effective_path(
             source,
@@ -406,6 +428,130 @@ class SourceProfileReadinessService:
             fingerprint_match=fingerprint_match,
         )
 
+    def _windows_helper_readiness(
+        self,
+        source: IngestionSource,
+        endpoint: SourceEndpoint,
+        operation_id: UUID | None,
+    ) -> SourceProfileReadinessResponse:
+        if source.profile_status != "active":
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="unknown",
+                code="profile_not_active",
+                message="Only active Source Profiles can be checked for provider readiness.",
+                recommended_next_action="Set the Source Profile active before checking readiness.",
+            )
+        try:
+            _, _, node = windows_helper_profile_binding(self._db, source.id)
+        except WindowsHelperServiceError as exc:
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="unavailable",
+                code=exc.code,
+                message=exc.message,
+                recommended_next_action="Restore the exact paired Helper binding.",
+            )
+        if not helper_is_online(node):
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="unavailable",
+                code="windows_helper_offline",
+                message="The expected Windows Helper is offline.",
+                recommended_next_action="Start the paired foreground Helper and try again.",
+            )
+        if operation_id is None:
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="unavailable",
+                code="windows_helper_probe_required",
+                message="A fresh exact-root Windows Helper probe is required.",
+                recommended_next_action="Issue and complete a readiness probe for this Profile.",
+            )
+        try:
+            operation, probe = completed_probe(
+                self._db,
+                operation_id,
+                require_fresh=True,
+                expected_source_profile_id=source.id,
+            )
+        except WindowsHelperServiceError as exc:
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="unavailable",
+                code=exc.code,
+                message=exc.message,
+                recommended_next_action="Issue a new exact-root readiness probe.",
+            )
+        if operation.access_node_id != node.id:
+            return self._blocked_without_probe(
+                source,
+                identity_match_status="mismatch",
+                code="windows_helper_access_node_mismatch",
+                message="The readiness probe came from a different Access Node.",
+                recommended_next_action="Use the Helper enrolled for this Source.",
+            )
+        probe_block = _probe_blocker(probe)
+        if probe_block is not None:
+            _, identity_status, blocker = probe_block
+            return self._response(
+                source,
+                endpoint=endpoint,
+                probe=probe,
+                readiness_status="blocked",
+                identity_match_status=identity_status,
+                can_run_source_intake=False,
+                hard_block=True,
+                operator_message=blocker.message,
+                recommended_next_action=_blocked_next_action(identity_status),
+                blockers=[blocker],
+                warnings=_probe_warning_messages(probe),
+            )
+        fingerprint = fingerprint_from_probe(probe)
+        if (
+            not endpoint.identity_fingerprint_hash
+            or fingerprint.strength != "strong"
+            or fingerprint.hash_value != endpoint.identity_fingerprint_hash
+            or probe.safe_to_run is not True
+            or not probe.source_root_candidate.is_valid_source_root_candidate
+        ):
+            return self._response(
+                source,
+                endpoint=endpoint,
+                probe=probe,
+                readiness_status="blocked",
+                identity_match_status="mismatch",
+                can_run_source_intake=False,
+                hard_block=True,
+                operator_message="Current Windows Source identity or root does not match the enrolled Profile.",
+                recommended_next_action="Reconnect the correct Source and issue a new exact-root probe.",
+                blockers=[
+                    _message(
+                        "endpoint_identity_mismatch",
+                        "Current Windows Source identity or root does not match the enrolled Profile.",
+                    )
+                ],
+                warnings=_probe_warning_messages(probe),
+                current_fingerprint_strength=fingerprint.strength,
+                fingerprint_match=False,
+            )
+        return self._response(
+            source,
+            endpoint=endpoint,
+            probe=probe,
+            readiness_status="ready",
+            identity_match_status="matched",
+            can_run_source_intake=False,
+            provider_operation_ready=True,
+            hard_block=False,
+            operator_message="Source is ready for the Windows Helper provider.",
+            recommended_next_action="Continue with bounded Windows Helper inventory.",
+            warnings=_probe_warning_messages(probe),
+            current_fingerprint_strength=fingerprint.strength,
+            fingerprint_match=True,
+        )
+
+
     def _path_only_response(
         self,
         source: IngestionSource,
@@ -529,6 +675,7 @@ class SourceProfileReadinessService:
         can_run_source_intake: bool,
         operator_message: str,
         recommended_next_action: str,
+        provider_operation_ready: bool = False,
         requires_operator_acknowledgment: bool = False,
         hard_block: bool = False,
         warnings: list[SourceProfileReadinessMessage] | None = None,
@@ -554,6 +701,7 @@ class SourceProfileReadinessService:
             readiness_status=readiness_status,
             identity_match_status=identity_match_status,
             can_run_source_intake=can_run_source_intake,
+            provider_operation_ready=provider_operation_ready,
             requires_operator_acknowledgment=requires_operator_acknowledgment,
             hard_block=hard_block,
             operator_message=operator_message,

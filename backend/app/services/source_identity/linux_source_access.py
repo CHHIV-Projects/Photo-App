@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 LINUX_SOURCE_BROKER_PROTOCOL_VERSION = 1
 LINUX_SOURCE_PROVIDER_NAME = "linux_stable_mount_v1"
-LINUX_SOURCE_PROVIDER_VERSION = "1"
+LINUX_SOURCE_PROVIDER_VERSION = "2"
 DEFAULT_LINUX_SOURCE_BROKER_SOCKET = "/run/photo-organizer-source-access/broker.sock"
 DEFAULT_LINUX_SOURCE_BROKER_TIMEOUT_SECONDS = 4.0
 MAX_BROKER_MESSAGE_BYTES = 256 * 1024
@@ -103,6 +103,30 @@ class LinuxSourceBrokerResponse(BaseModel):
     blockers: list[LinuxSourceBrokerMessage] = Field(default_factory=list)
 
 
+class LinuxNasDiscoveryCandidate(BaseModel):
+    """One untrusted, browser-safe advisory SMB discovery candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_id: str
+    suggested_name: str
+    network_host: str
+    address_hint: str
+
+
+class LinuxNasDiscoveryBrokerResponse(BaseModel):
+    """Bounded broker discovery response; discovery creates no authority."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    protocol_version: Literal[1] = LINUX_SOURCE_BROKER_PROTOCOL_VERSION
+    action: Literal["discover_nas"] = "discover_nas"
+    provider_name: Literal["linux_stable_mount_v1"] = LINUX_SOURCE_PROVIDER_NAME
+    provider_version: str = LINUX_SOURCE_PROVIDER_VERSION
+    candidates: list[LinuxNasDiscoveryCandidate] = Field(default_factory=list, max_length=16)
+    blockers: list[LinuxSourceBrokerMessage] = Field(default_factory=list)
+
+
 class LinuxSourceLocationSummary(BaseModel):
     """Browser-safe server-discovered Linux location."""
 
@@ -139,6 +163,9 @@ class LinuxSourceBrokerClientProtocol(Protocol):
     ) -> LinuxSourceBrokerResponse:
         """Probe one configured location and contained relative root."""
 
+    def discover_nas(self) -> LinuxNasDiscoveryBrokerResponse:
+        """Return bounded advisory NAS candidates without registration."""
+
 
 class LinuxSourceBrokerClient:
     """Small JSON-lines Unix-socket client with strict size and time bounds."""
@@ -153,7 +180,7 @@ class LinuxSourceBrokerClient:
         self._timeout_seconds = timeout_seconds
 
     def list_locations(self) -> LinuxSourceBrokerResponse:
-        return self._request({"action": "list_locations"})
+        return self._request({"action": "list_locations"}, LinuxSourceBrokerResponse)
 
     def probe(
         self,
@@ -168,10 +195,14 @@ class LinuxSourceBrokerClient:
                 "location_id": location_id,
                 "source_type": source_type,
                 "relative_root": relative_root,
-            }
+            },
+            LinuxSourceBrokerResponse,
         )
 
-    def _request(self, payload: dict[str, Any]) -> LinuxSourceBrokerResponse:
+    def discover_nas(self) -> LinuxNasDiscoveryBrokerResponse:
+        return self._request({"action": "discover_nas"}, LinuxNasDiscoveryBrokerResponse)
+
+    def _request(self, payload: dict[str, Any], response_model: type[BaseModel]):
         request = {
             "protocol_version": LINUX_SOURCE_BROKER_PROTOCOL_VERSION,
             **payload,
@@ -193,7 +224,7 @@ class LinuxSourceBrokerClient:
 
         try:
             decoded = json.loads(raw.decode("utf-8"))
-            return LinuxSourceBrokerResponse.model_validate(decoded)
+            return response_model.model_validate(decoded)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
             raise LinuxSourceAccessError("Linux Source broker returned a malformed response.") from exc
 

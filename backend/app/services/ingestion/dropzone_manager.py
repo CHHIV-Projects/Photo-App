@@ -150,6 +150,8 @@ def build_dropzone_processing_records(
                 modified_timestamp_utc=dropzone_record.modified_timestamp_utc,
                 original_source_path=source_record.original_source_path,
                 original_filename=source_record.original_filename,
+                asset_original_source_path=source_record.asset_original_source_path,
+                explicit_order=source_record.explicit_order,
             )
         )
 

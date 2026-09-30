@@ -20,6 +20,15 @@ class FileScanRecord:
     modified_timestamp_utc: str
     original_source_path: str
     original_filename: str
+    asset_original_source_path: str | None = None
+    explicit_order: int | None = None
+
+
+def processing_order_sort_key(record: FileScanRecord) -> tuple[int, int, str]:
+    """Preserve trusted explicit-record order without changing scan ordering."""
+    if record.explicit_order is not None:
+        return (0, record.explicit_order, record.full_path.lower())
+    return (1, 0, record.full_path.lower())
 
 
 @dataclass(frozen=True)

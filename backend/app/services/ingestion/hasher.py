@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from app.services.ingestion.scanner import FileScanRecord
+from app.services.ingestion.scanner import FileScanRecord, processing_order_sort_key
 
 DEFAULT_CHUNK_SIZE_BYTES: int = 1024 * 1024
 
@@ -70,7 +70,7 @@ def hash_records(
         except OSError as error:
             errors.append(HashError(record=record, reason=str(error)))
 
-    hashed_files.sort(key=lambda item: item.record.full_path.lower())
+    hashed_files.sort(key=lambda item: processing_order_sort_key(item.record))
     errors.sort(key=lambda item: item.record.full_path.lower())
 
     return HashResult(hashed_files=hashed_files, errors=errors)

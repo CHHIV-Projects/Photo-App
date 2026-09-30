@@ -3,14 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
-  advanceIcloudIntakeImport,
   dispatchRunIngestion,
   getIcloudIntakeImportStatus,
   getSourceProfileDeferredAssets,
   getSourceProfiles,
   refreshIcloudHistoricalInventory,
-  resumeIcloudIntakeImport,
-  startIcloudIntakeImport,
 } from "@/lib/api";
 import type {
   IcloudIntakeImportStatus,
@@ -31,6 +28,7 @@ interface IcloudRunWorkflowPanelProps {
   selectedSourceLabel?: string | null;
   selectedSourceContext?: SelectedSourceContext | null;
   onActionComplete?: () => void;
+  actionsEnabled?: boolean;
 }
 
 function isIcloudProfile(profile: SourceProfileSummary): boolean {
@@ -70,6 +68,13 @@ function resultTitle(result: IcloudIntakeImportStatus): string {
   return "iCloud Intake Complete";
 }
 
+export function isIcloudChunkActive(result: IcloudIntakeImportStatus | null): boolean {
+  if (!result || result.import_status !== "running") {
+    return false;
+  }
+  return result.current_phase === "chunk_starting" || Boolean(result.current_phase?.match(/^chunk_\d+_running$/));
+}
+
 function Metric({ label, value }: { label: string; value: string | number | null | undefined }): JSX.Element {
   return (
     <div className={styles.metric}>
@@ -84,6 +89,7 @@ export default function IcloudRunWorkflowPanel({
   selectedSourceLabel = null,
   selectedSourceContext = null,
   onActionComplete,
+  actionsEnabled = true,
 }: IcloudRunWorkflowPanelProps = {}): JSX.Element {
   const [profiles, setProfiles] = useState<SourceProfileSummary[]>([]);
   const [internalSelectedSourceId, setInternalSelectedSourceId] = useState<number | null>(null);
@@ -105,7 +111,8 @@ export default function IcloudRunWorkflowPanel({
     [icloudProfiles, selectedSourceId],
   );
   const selectedDisplayLabel = selectedProfile?.source_label ?? selectedSourceLabel ?? selectedSourceContext?.source_name ?? "Selected iCloud Source";
-  const isBusy = phase === "refreshing" || phase === "running";
+  const durableChunkActive = isIcloudChunkActive(status);
+  const isBusy = phase === "refreshing" || phase === "running" || durableChunkActive;
   const displayedResult = runResult ?? (status?.import_run_id ? status : null);
   const hasPreparedCandidates = Boolean(status && (status.can_start_import || status.can_resume_import || status.can_advance_import || status.logical_candidates_ready > 0));
   const canImportOrResume = Boolean(status && (status.can_start_import || status.can_resume_import || status.can_advance_import));
@@ -125,6 +132,7 @@ export default function IcloudRunWorkflowPanel({
           : null;
   const canRunBackfill = Boolean(
     selectedSourceId
+      && actionsEnabled
       && !isBusy
       && canImportOrResume
       && (status?.local_staging_file_count === 0 || canResumePartialAcquisition),
@@ -148,6 +156,7 @@ export default function IcloudRunWorkflowPanel({
   const refreshStatus = useCallback(async (sourceId: number) => {
     const response = await getIcloudIntakeImportStatus(sourceId);
     setStatus(response.current);
+    return response.current;
   }, []);
 
   const loadDeferredRows = useCallback(async (sourceId: number) => {
@@ -182,8 +191,42 @@ export default function IcloudRunWorkflowPanel({
     void loadDeferredRows(selectedSourceId);
   }, [loadDeferredRows, refreshStatus, selectedSourceId]);
 
+  useEffect(() => {
+    if (!selectedSourceId || !durableChunkActive) {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const current = await refreshStatus(selectedSourceId);
+        if (cancelled) {
+          return;
+        }
+        setRunResult(current);
+        setMessage(current.import_operator_message);
+        if (!isIcloudChunkActive(current)) {
+          setPhase("idle");
+          await loadDeferredRows(selectedSourceId);
+          onActionComplete?.();
+        }
+      } catch {
+        // A transient polling failure does not override durable import state.
+        // The next poll reconciles against the backend ledger.
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [durableChunkActive, loadDeferredRows, onActionComplete, refreshStatus, selectedSourceId]);
+
   async function handleSelectedSourceDispatch(): Promise<void> {
-    if (!selectedSourceId) {
+    if (!selectedSourceId || !actionsEnabled) {
       return;
     }
     setPhase("running");
@@ -199,11 +242,24 @@ export default function IcloudRunWorkflowPanel({
         },
       });
       setMessage(response.next_action ? `${response.message} ${response.next_action}` : response.message);
-      await refreshStatus(selectedSourceId);
+      const current = await refreshStatus(selectedSourceId);
+      setRunResult(current);
       await loadDeferredRows(selectedSourceId);
       onActionComplete?.();
-      setPhase("idle");
+      setPhase(isIcloudChunkActive(current) ? "running" : "idle");
     } catch (err) {
+      try {
+        const current = await refreshStatus(selectedSourceId);
+        setRunResult(current);
+        if (isIcloudChunkActive(current)) {
+          setMessage("The iCloud import is continuing. Status was recovered from the durable import record.");
+          setPhase("running");
+          return;
+        }
+      } catch {
+        // Preserve the original action failure below when status reconciliation
+        // is also unavailable.
+      }
       setPhase("failed");
       setError(err instanceof Error ? err.message : "iCloud action failed.");
     }
@@ -242,35 +298,28 @@ export default function IcloudRunWorkflowPanel({
     setMessage(null);
     setRunResult(null);
     try {
-      let current = status?.can_resume_import
-        ? (await resumeIcloudIntakeImport({ source_id: selectedSourceId, import_run_id: status.import_run_id })).current
-        : status?.can_advance_import
-          ? status
-          : (await startIcloudIntakeImport({
-              source_id: selectedSourceId,
-              internal_batch_size: 100,
-            })).current;
-
-      setStatus(current);
+      const response = await dispatchRunIngestion({
+        source_profile_id: selectedSourceId,
+        selection_fingerprint: null,
+        icloud_options: { target_logical_items: null },
+      });
+      setMessage(response.next_action ? `${response.message} ${response.next_action}` : response.message);
+      const current = await refreshStatus(selectedSourceId);
       setRunResult(current);
-      setMessage(current.import_operator_message);
-
-      let advances = 0;
-      while (current.can_advance_import && advances < 100) {
-        const response = await advanceIcloudIntakeImport({
-          source_id: selectedSourceId,
-          import_run_id: current.import_run_id,
-        });
-        current = response.current;
-        setStatus(current);
-        setRunResult(current);
-        setMessage(current.import_operator_message);
-        advances += 1;
-      }
-      await refreshStatus(selectedSourceId);
       await loadDeferredRows(selectedSourceId);
-      setPhase("idle");
+      setPhase(isIcloudChunkActive(current) ? "running" : "idle");
     } catch (err) {
+      try {
+        const current = await refreshStatus(selectedSourceId);
+        setRunResult(current);
+        if (isIcloudChunkActive(current)) {
+          setMessage("The iCloud import is continuing. Status was recovered from the durable import record.");
+          setPhase("running");
+          return;
+        }
+      } catch {
+        // Preserve the original action failure below.
+      }
       setPhase("failed");
       setError(err instanceof Error ? err.message : "iCloud import failed.");
     }
@@ -323,8 +372,8 @@ export default function IcloudRunWorkflowPanel({
 
       <div className={styles.actionRow}>
         {isControlledSource ? (
-          <button className={styles.primaryButton} type="button" disabled={!selectedSourceId || isBusy || status?.available_inventory === "no"} onClick={handleSelectedSourceDispatch}>
-            {phase === "running" ? "Working..." : status?.can_resume_import ? "Resume Interrupted Import" : status?.can_advance_import ? "Continue Import" : status?.can_start_import ? "Import Next 1000" : "Prepare Next 1000"}
+          <button className={styles.primaryButton} type="button" disabled={!selectedSourceId || !actionsEnabled || isBusy || status?.available_inventory === "no"} onClick={handleSelectedSourceDispatch}>
+            {phase === "running" || durableChunkActive ? "Working..." : status?.can_resume_import ? "Resume Interrupted Import" : status?.can_advance_import ? "Continue Import" : status?.can_start_import ? "Import Next 1000" : "Prepare Next 1000"}
           </button>
         ) : (
           <>
@@ -332,10 +381,11 @@ export default function IcloudRunWorkflowPanel({
               {phase === "refreshing" ? "Preparing..." : "Refresh / Prepare Next 1000"}
             </button>
             <button className={styles.primaryButton} type="button" disabled={!canRunBackfill} onClick={handleRunBackfill}>
-              {phase === "running" ? "Importing..." : status?.can_resume_import ? "Resume Interrupted Import" : "Import Next 1000"}
+              {phase === "running" || durableChunkActive ? "Importing..." : status?.can_resume_import ? "Resume Interrupted Import" : "Import Next 1000"}
             </button>
           </>
         )}
+        {!actionsEnabled && <span className={styles.metaLine}>Select Source to enable iCloud workflow actions. Durable status remains visible.</span>}
         {unavailableReason && <span className={styles.metaLine}>{unavailableReason}</span>}
         {canResumePartialAcquisition && <span className={styles.metaLine}>Resume will first discard verified partial-acquisition staging files.</span>}
       </div>

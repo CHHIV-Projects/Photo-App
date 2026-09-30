@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from register_nas_location import smb_server_guid_hash
+
 EXPECTED_REPOSITORY = Path("/home/chuck/projects/photo-organizer-dev")
 TEMPLATE = EXPECTED_REPOSITORY / "scripts/operator/linux/source-access.example.json"
 TARGET = Path("/etc/photo-organizer/source-access.json")
@@ -97,6 +99,15 @@ def main() -> None:
         fail("Fixed Local slot is not a directory.")
     local[0]["slot_device"] = local_slot_stat.st_dev
     local[0]["slot_inode"] = local_slot_stat.st_ino
+    nas = [item for item in config["locations"] if item["location_id"] == "linux-nas-photo-organizer"]
+    if len(nas) != 1:
+        fail("Tracked existing NAS template is missing or ambiguous.")
+    try:
+        server_guid_hash, server_guid_masked = smb_server_guid_hash("192.168.1.171")
+    except Exception:
+        fail("Existing NAS did not provide stable bounded SMB identity evidence.")
+    nas[0]["server_guid_hash"] = server_guid_hash
+    nas[0]["server_guid_masked"] = server_guid_masked
     ensure_fixed_directory(TARGET.parent, mode=0o755, gid=0)
     descriptor, temporary_name = tempfile.mkstemp(prefix=".source-access.", dir=TARGET.parent, text=True)
     try:

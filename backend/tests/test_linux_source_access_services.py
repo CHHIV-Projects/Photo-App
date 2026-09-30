@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
+from app.models.nas_registration import NasApplianceRegistration, NasPendingRegistration, NasShareRegistration
 from app.models.source_endpoint import AccessNode, SourceEndpoint, SourceEndpointAliasEvent, SourceEndpointObservedPath
 from app.schemas.admin import RunIngestionDispatchRequest, RunIngestionFilesystemOptions
 from app.services.admin.run_ingestion_dispatch_service import RunIngestionDispatchService
@@ -116,6 +117,9 @@ class LinuxSourceAccessServiceTests(unittest.TestCase):
         IngestionSource.__table__.create(self.engine)
         IngestionRun.__table__.create(self.engine)
         SourceEndpointObservedPath.__table__.create(self.engine)
+        NasApplianceRegistration.__table__.create(self.engine)
+        NasShareRegistration.__table__.create(self.engine)
+        NasPendingRegistration.__table__.create(self.engine)
         self.db = Session(self.engine)
         self.probes = LinuxProbeService()
 
@@ -159,6 +163,108 @@ class LinuxSourceAccessServiceTests(unittest.TestCase):
         self.assertIn('"location_id":"linux-local-server-photos"', observed.evidence_summary_json or "")
         self.assertEqual(node.access_node_uuid, "linux-access-node:12345678901234567890123456789012345678901234")
         self.assertEqual(node.host_fingerprint_hash, "sha256:host")
+
+    def test_registered_nas_share_binds_to_created_endpoint_without_identity_rewrite(self) -> None:
+        appliance = NasApplianceRegistration(
+            registration_uuid="11111111-1111-4111-8111-111111111111",
+            friendly_name="Registered NAS",
+            server_guid_hash="sha256:" + "1" * 64,
+            server_guid_masked="sha256:…111111111111",
+            network_host="nas.example.test",
+            network_host_normalized="nas.example.test",
+        )
+        self.db.add(appliance)
+        self.db.flush()
+        share = NasShareRegistration(
+            registration_uuid="22222222-2222-4222-8222-222222222222",
+            nas_appliance_id=appliance.id,
+            location_id="linux-nas-photo-organizer",
+            display_name="Registered Photos",
+            share_name="PhotoOrganizer",
+            share_name_normalized="photoorganizer",
+            identity_fingerprint_hash="sha256:nas",
+            identity_fingerprint_version="source_endpoint_identity_v1",
+        )
+        self.db.add(share)
+        self.db.commit()
+        service = SourceCreationService(self.db, self.probes)
+        request = SourceCreationPlanRequest(
+            source_type="nas",
+            location_id="linux-nas-photo-organizer",
+            relative_root="family",
+        )
+        plan = service.plan(request)
+        self.assertEqual(plan.plan_status, "ready")
+        self.assertEqual(plan.device_name, "Registered Photos")
+        self.assertEqual(plan.naming_action, "create_new")
+        self.assertFalse(plan.name_decision_required)
+        conflicting_plan = service.plan(
+            request.model_copy(update={"device_name": "Operator-supplied conflicting label"})
+        )
+        self.assertEqual(conflicting_plan.device_name, "Registered Photos")
+        self.assertEqual(conflicting_plan.plan_fingerprint, plan.plan_fingerprint)
+        result = service.confirm(
+            SourceCreationConfirmRequest(
+                **request.model_dump(),
+                plan_fingerprint=plan.plan_fingerprint,
+                operator_confirmed=True,
+            )
+        )
+        source = self.db.get(IngestionSource, result.source_profile_id)
+        endpoint = self.db.get(SourceEndpoint, result.source_endpoint_id)
+        assert source and endpoint
+        self.db.refresh(share)
+        self.assertEqual(share.source_endpoint_id, endpoint.id)
+        self.assertEqual(endpoint.identity_fingerprint_hash, "sha256:nas")
+        self.assertEqual(endpoint.alias, "Registered Photos")
+        self.assertEqual(source.endpoint_id, endpoint.id)
+
+    def test_registered_nas_share_preserves_existing_endpoint_alias(self) -> None:
+        appliance = NasApplianceRegistration(
+            registration_uuid="33333333-3333-4333-8333-333333333333",
+            friendly_name="Registered NAS",
+            server_guid_hash="sha256:" + "3" * 64,
+            server_guid_masked="sha256:…333333333333",
+            network_host="nas.example.test",
+            network_host_normalized="nas.example.test",
+        )
+        endpoint = SourceEndpoint(
+            source_type="nas",
+            alias="Historical Accepted Name",
+            alias_normalized="historical accepted name",
+            status="active",
+            identity_fingerprint_hash="sha256:nas",
+            identity_fingerprint_version="source_endpoint_identity_v1",
+            identity_confidence="strong_match",
+        )
+        self.db.add_all([appliance, endpoint])
+        self.db.flush()
+        share = NasShareRegistration(
+            registration_uuid="44444444-4444-4444-8444-444444444444",
+            nas_appliance_id=appliance.id,
+            location_id="linux-nas-photo-organizer",
+            display_name="Newer Location Display",
+            share_name="PhotoOrganizer",
+            share_name_normalized="photoorganizer",
+            identity_fingerprint_hash="sha256:nas",
+            identity_fingerprint_version="source_endpoint_identity_v1",
+            source_endpoint_id=endpoint.id,
+        )
+        self.db.add(share)
+        self.db.commit()
+
+        plan = SourceCreationService(self.db, self.probes).plan(
+            SourceCreationPlanRequest(
+                source_type="nas",
+                location_id="linux-nas-photo-organizer",
+                relative_root="another-family",
+                naming_action="use_existing",
+            )
+        )
+
+        self.assertEqual(plan.plan_status, "ready")
+        self.assertEqual(plan.device_name, "Historical Accepted Name")
+        self.assertEqual(plan.selected_existing_endpoint_id, endpoint.id)
 
     def test_mounted_creation_does_not_adopt_or_relink_legacy_profile(self) -> None:
         legacy = IngestionSource(

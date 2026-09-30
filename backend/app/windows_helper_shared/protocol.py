@@ -1,0 +1,720 @@
+"""Transport-neutral Windows Helper protocol v1 foundation."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import ntpath
+from enum import StrEnum
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .identity.models import (
+    IdentityCollectionResult,
+    IdentityFingerprintCandidate,
+    NormalizedIdentityEvidence,
+    ProviderNativeRootEvidence,
+)
+from .paths import validate_provider_native_path
+
+
+PROTOCOL_VERSION = 1
+CANONICAL_DIGEST_DOMAIN = "photo-organizer-windows-helper-protocol-v1"
+NORMAL_ACQUISITION_CHUNK_BYTES = 1024 * 1024
+MAX_ACQUISITION_CHUNK_BYTES = 4 * 1024 * 1024
+MAX_PATH_LENGTH = 4096
+MAX_EVIDENCE_ITEMS = 256
+DEFAULT_INVENTORY_PAGE_SIZE = 50
+MAX_INVENTORY_PAGE_SIZE = 100
+MAX_INVENTORY_RESULT_BYTES = 1024 * 1024
+MAX_MOUNTED_VOLUME_OBSERVATIONS = 64
+
+
+class ProtocolCompatibilityError(ValueError):
+    """The peer requested an unsupported protocol/capability version."""
+
+
+class SourceType(StrEnum):
+    LOCAL = "local"
+    EXTERNAL = "external_device"
+    REMOVABLE = "removable_media"
+    NAS = "nas"
+    OPTICAL = "optical_media"
+
+
+class ProbeMode(StrEnum):
+    SETUP = "setup_probe"
+    READINESS = "readiness_probe"
+    RUN_LAUNCH = "run_launch_verification"
+    DIAGNOSTIC = "diagnostic_probe"
+
+
+class ProbeResultStatus(StrEnum):
+    SUCCESS = "success"
+    UNAVAILABLE = "unavailable"
+    IDENTITY_AMBIGUOUS = "identity_ambiguous"
+    IDENTITY_MISMATCH = "identity_mismatch"
+    INVALID_ROOT = "invalid_root"
+    UNSUPPORTED = "unsupported"
+    PROBE_FAILED = "probe_failed"
+
+
+class ErrorCode(StrEnum):
+    UNAVAILABLE = "unavailable"
+    IDENTITY_AMBIGUOUS = "identity_ambiguous"
+    IDENTITY_MISMATCH = "identity_mismatch"
+    INVALID_ROOT = "invalid_root"
+    UNSUPPORTED = "unsupported"
+    PROBE_FAILED = "probe_failed"
+    PROTOCOL_UNSUPPORTED = "protocol_unsupported"
+    CAPABILITY_UNSUPPORTED = "capability_unsupported"
+
+
+class _StrictProtocolModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CapabilityVersion(_StrictProtocolModel):
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    version: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+class CollectorCapability(CapabilityVersion):
+    supported_source_types: list[SourceType] = Field(min_length=1, max_length=5)
+
+    @field_validator("supported_source_types")
+    @classmethod
+    def _unique_source_types(cls, value: list[SourceType]) -> list[SourceType]:
+        if len(value) != len(set(value)):
+            raise ValueError("supported_source_types must be unique")
+        return value
+
+
+class HelperCapabilityIdentity(_StrictProtocolModel):
+    """Unauthenticated capability identity; authentication begins in 12.66.2."""
+
+    protocol_version: int = PROTOCOL_VERSION
+    helper_version: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    intended_access_node_id: UUID | None = None
+    os_platform: Literal["windows"] = "windows"
+    os_version: str | None = Field(default=None, max_length=128)
+    supported_source_types: list[SourceType] = Field(min_length=1, max_length=5)
+    collectors: list[CollectorCapability] = Field(min_length=1, max_length=16)
+    capabilities: list[CapabilityVersion] = Field(default_factory=list, max_length=32)
+
+    @model_validator(mode="after")
+    def _validate_identity(self) -> "HelperCapabilityIdentity":
+        require_protocol_version(self.protocol_version)
+        _require_unique(self.supported_source_types, "supported_source_types")
+        _require_unique([item.name for item in self.collectors], "collector names")
+        _require_unique([item.name for item in self.capabilities], "capability names")
+        advertised = set(self.supported_source_types)
+        collected = {source_type for collector in self.collectors for source_type in collector.supported_source_types}
+        if not advertised.issubset(collected):
+            raise ValueError("every supported Source type requires a collector capability")
+        return self
+
+
+class ProviderNativePath(_StrictProtocolModel):
+    """Exact Windows-native root/relative/full path triple."""
+
+    provider_native_root: str = Field(min_length=3, max_length=MAX_PATH_LENGTH)
+    provider_native_relative_path: str = Field(default="", max_length=MAX_PATH_LENGTH)
+    provider_native_full_path: str = Field(min_length=3, max_length=MAX_PATH_LENGTH)
+
+    @model_validator(mode="after")
+    def _validate_windows_path(self) -> "ProviderNativePath":
+        root, relative_path, full_path = validate_provider_native_path(
+            self.provider_native_root,
+            self.provider_native_relative_path,
+            self.provider_native_full_path,
+        )
+        object.__setattr__(self, "provider_native_root", root)
+        object.__setattr__(self, "provider_native_relative_path", relative_path)
+        object.__setattr__(self, "provider_native_full_path", full_path)
+        return self
+
+
+class HelperProbeRequest(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID | None = None
+    source_type: SourceType
+    probe_mode: ProbeMode = ProbeMode.SETUP
+    provider_native_path: ProviderNativePath
+    expected_collector_name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    expected_collector_version: str = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def _validate_version(self) -> "HelperProbeRequest":
+        require_protocol_version(self.protocol_version)
+        return self
+
+
+class MachineIssue(_StrictProtocolModel):
+    code: ErrorCode
+    evidence_code: str | None = Field(default=None, max_length=128, pattern=r"^[a-z0-9_]+$")
+    redacted_detail: str | None = Field(default=None, max_length=512)
+    next_action: str | None = Field(default=None, max_length=512)
+
+
+class HelperProbeResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    result_status: ProbeResultStatus
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    collector_name: str = Field(min_length=1, max_length=64)
+    collector_version: str = Field(min_length=1, max_length=32)
+    source_root_evidence: ProviderNativeRootEvidence
+    evidence_items: list[NormalizedIdentityEvidence] = Field(default_factory=list, max_length=MAX_EVIDENCE_ITEMS)
+    identity_fingerprint: IdentityFingerprintCandidate = Field(default_factory=IdentityFingerprintCandidate)
+    blockers: list[MachineIssue] = Field(default_factory=list, max_length=64)
+    warnings: list[MachineIssue] = Field(default_factory=list, max_length=64)
+
+    @model_validator(mode="after")
+    def _validate_response(self) -> "HelperProbeResponse":
+        require_protocol_version(self.protocol_version)
+        if self.result_status == ProbeResultStatus.SUCCESS and self.blockers:
+            raise ValueError("successful probe response must not contain blockers")
+        if self.result_status != ProbeResultStatus.SUCCESS and not self.blockers:
+            raise ValueError("non-success probe response requires a machine-readable blocker")
+        return self
+
+
+class HelperObserveVolumesRequest(_StrictProtocolModel):
+    """Authorize one metadata-only observation of currently mounted drive roots."""
+
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    expected_collector_name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
+    expected_collector_version: str = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def _validate_version(self) -> "HelperObserveVolumesRequest":
+        require_protocol_version(self.protocol_version)
+        return self
+
+
+class MountedVolumeStorageEvidence(_StrictProtocolModel):
+    """Normalized classification evidence; never durable Source identity."""
+
+    storage_evidence_version: Literal["windows-storage-v1"] = "windows-storage-v1"
+    backing_association: Literal["exact", "none", "multiple", "error"]
+    storage_bus_type: Literal[
+        "unknown",
+        "scsi",
+        "atapi",
+        "ata",
+        "ieee1394",
+        "ssa",
+        "fibre_channel",
+        "usb",
+        "raid",
+        "iscsi",
+        "sas",
+        "sata",
+        "sd",
+        "mmc",
+        "virtual",
+        "file_backed_virtual",
+        "spaces",
+        "nvme",
+        "scm",
+        "ufs",
+        "nvme_of",
+    ] = "unknown"
+    storage_media_type: Literal["hdd", "ssd", "scm", "unspecified"] = "unspecified"
+    device_class: Literal["disk", "optical", "network", "virtual", "unknown"] = "unknown"
+    removal_policy: Literal["no_removal", "orderly", "surprise", "unknown"] = "unknown"
+    external_connection: Literal[
+        "usb", "ieee1394", "usb4_thunderbolt", "none", "unknown"
+    ] = "unknown"
+    operational_state: Literal["online", "offline", "unknown"] = "unknown"
+    is_boot: bool | None = None
+    is_system: bool | None = None
+
+
+class MountedVolumeObservation(_StrictProtocolModel):
+    """Safe identity metadata for one current Windows drive root."""
+
+    provider_native_root: str = Field(min_length=3, max_length=3)
+    identity_fingerprint_hash: str | None = Field(
+        default=None,
+        min_length=71,
+        max_length=71,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    identity_fingerprint_version: str | None = Field(default=None, max_length=64)
+    drive_type: str | None = Field(default=None, max_length=32)
+    identity_identifier_masked: str | None = Field(default=None, max_length=128)
+    storage_evidence: MountedVolumeStorageEvidence | None = None
+
+    @model_validator(mode="after")
+    def _validate_observation(self) -> "MountedVolumeObservation":
+        normalized = self.provider_native_root.replace("/", "\\")
+        drive, tail = ntpath.splitdrive(normalized)
+        if (
+            len(drive) != 2
+            or drive[1] != ":"
+            or not drive[0].isalpha()
+            or tail not in {"", "\\"}
+        ):
+            raise ValueError("provider_native_root must be one Windows drive root")
+        if (self.identity_fingerprint_hash is None) != (self.identity_fingerprint_version is None):
+            raise ValueError("fingerprint hash and version must be supplied together")
+        object.__setattr__(self, "provider_native_root", f"{drive[0].upper()}:\\")
+        if self.drive_type is not None:
+            object.__setattr__(self, "drive_type", self.drive_type.strip().casefold() or None)
+        return self
+
+
+class HelperObserveVolumesResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    collector_name: str = Field(min_length=1, max_length=64)
+    collector_version: str = Field(min_length=1, max_length=32)
+    volumes: list[MountedVolumeObservation] = Field(
+        default_factory=list,
+        max_length=MAX_MOUNTED_VOLUME_OBSERVATIONS,
+    )
+
+    @model_validator(mode="after")
+    def _validate_response(self) -> "HelperObserveVolumesResponse":
+        require_protocol_version(self.protocol_version)
+        roots = [ntpath.normcase(item.provider_native_root) for item in self.volumes]
+        if len(roots) != len(set(roots)):
+            raise ValueError("mounted-volume observations must have unique roots")
+        if roots != sorted(roots):
+            raise ValueError("mounted-volume observations must be ordered by drive root")
+        return self
+
+
+class InventoryEntryKind(StrEnum):
+    REGULAR_FILE = "regular_file"
+    REPARSE_POINT = "reparse_point"
+    SPECIAL = "special"
+    INACCESSIBLE = "inaccessible"
+
+
+class InventoryResultStatus(StrEnum):
+    SUCCESS = "success"
+    INVALID_CURSOR = "invalid_cursor"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    IDENTITY_CHANGED = "identity_changed"
+    INVENTORY_FAILED = "inventory_failed"
+
+
+class HelperInventoryItem(_StrictProtocolModel):
+    """Metadata-only observation for one entry beneath the authorized root."""
+
+    candidate_reference: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    provider_native_path: ProviderNativePath
+    filename: str = Field(min_length=1, max_length=255)
+    size_bytes: int | None = Field(default=None, ge=0)
+    modified_time_ns: int | None = Field(default=None, ge=0)
+    entry_kind: InventoryEntryKind
+    stable_file_id_digest: str | None = Field(
+        default=None,
+        min_length=71,
+        max_length=71,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    windows_file_attributes: int | None = Field(default=None, ge=0)
+    local_residency: Literal[
+        "resident", "offline", "recall_required", "unsupported_placeholder", "unknown"
+    ] = "unknown"
+
+
+    @model_validator(mode="after")
+    def _validate_inventory_item(self) -> "HelperInventoryItem":
+        relative = self.provider_native_path.provider_native_relative_path
+        if not relative:
+            raise ValueError("inventory items must be beneath the authorized root")
+        if self.filename != ntpath.basename(self.provider_native_path.provider_native_full_path):
+            raise ValueError("inventory filename must match the provider-native full path")
+        if self.entry_kind == InventoryEntryKind.REGULAR_FILE and (
+            self.size_bytes is None or self.modified_time_ns is None
+        ):
+            raise ValueError("regular inventory files require size and modified-time evidence")
+        return self
+
+
+class HelperInventoryPageRequest(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
+    inventory_generation: UUID | None = None
+    cursor: str | None = Field(default=None, min_length=1, max_length=256)
+    page_size: int = Field(default=DEFAULT_INVENTORY_PAGE_SIZE, ge=1, le=MAX_INVENTORY_PAGE_SIZE)
+
+    @model_validator(mode="after")
+    def _validate_inventory_request(self) -> "HelperInventoryPageRequest":
+        require_protocol_version(self.protocol_version)
+        if (self.inventory_generation is None) != (self.cursor is None):
+            raise ValueError("inventory generation and cursor must be supplied together")
+        return self
+
+
+class HelperInventoryPageResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    result_status: InventoryResultStatus
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    inventory_generation: UUID
+    identity_probe: HelperProbeResponse
+    items: list[HelperInventoryItem] = Field(default_factory=list, max_length=MAX_INVENTORY_PAGE_SIZE)
+    next_cursor: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def _validate_inventory_response(self) -> "HelperInventoryPageResponse":
+        require_protocol_version(self.protocol_version)
+        if self.identity_probe.request_id != self.request_id:
+            raise ValueError("inventory identity evidence must match the request")
+        if self.identity_probe.provider_native_path != self.provider_native_path:
+            raise ValueError("inventory identity evidence must target the authorized root")
+        if self.identity_probe.source_type != self.source_type:
+            raise ValueError("inventory identity evidence must match the Source type")
+        if (
+            self.result_status == InventoryResultStatus.SUCCESS
+            and self.identity_probe.result_status != ProbeResultStatus.SUCCESS
+        ):
+            raise ValueError("successful inventory requires successful identity evidence")
+        if self.result_status != InventoryResultStatus.SUCCESS and (self.items or self.next_cursor):
+            raise ValueError("failed inventory responses must not contain items or a cursor")
+        return self
+
+
+
+class SourceFileEvidence(_StrictProtocolModel):
+    size_bytes: int = Field(ge=0)
+    modified_time_ns: int = Field(ge=0)
+    stable_file_id_digest: str | None = Field(
+        default=None, min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    windows_file_attributes: int | None = Field(default=None, ge=0)
+    local_residency: Literal[
+        "resident", "offline", "recall_required", "unsupported_placeholder", "unknown"
+    ]
+
+
+class AcquireResultStatus(StrEnum):
+    SUCCESS = "success"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    SOURCE_CHANGED = "source_changed"
+    PLACEHOLDER_UNAVAILABLE = "placeholder_unavailable"
+    TRANSFER_FAILED = "transfer_failed"
+
+
+class HelperAcquireItemRequest(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    acquisition_run_id: UUID
+    acquisition_item_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    inventory_generation: UUID
+    candidate_reference: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
+    expected_size_bytes: int = Field(ge=1)
+    expected_modified_time_ns: int = Field(ge=0)
+    expected_file_id_digest: str | None = Field(
+        default=None, min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    expected_windows_file_attributes: int | None = Field(default=None, ge=0)
+    expected_local_residency: Literal["resident"] = "resident"
+    normal_chunk_bytes: int = Field(default=NORMAL_ACQUISITION_CHUNK_BYTES, ge=1, le=MAX_ACQUISITION_CHUNK_BYTES)
+    maximum_chunk_bytes: int = Field(default=MAX_ACQUISITION_CHUNK_BYTES, ge=1, le=MAX_ACQUISITION_CHUNK_BYTES)
+
+    @model_validator(mode="after")
+    def _validate_acquire_request(self) -> "HelperAcquireItemRequest":
+        require_protocol_version(self.protocol_version)
+        if self.normal_chunk_bytes > self.maximum_chunk_bytes:
+            raise ValueError("normal chunk size exceeds maximum chunk size")
+        if not self.provider_native_path.provider_native_relative_path:
+            raise ValueError("acquisition item must be beneath the authorized root")
+        return self
+
+
+class HelperAcquireItemResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    result_status: AcquireResultStatus
+    acquisition_run_id: UUID
+    acquisition_item_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    pre_read_evidence: SourceFileEvidence | None = None
+    post_read_evidence: SourceFileEvidence | None = None
+    bytes_read: int = Field(default=0, ge=0)
+    helper_source_sha256: str | None = Field(
+        default=None, min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    error_code: str | None = Field(default=None, max_length=64, pattern=r"^[a-z0-9_]+$")
+
+    @model_validator(mode="after")
+    def _validate_acquire_response(self) -> "HelperAcquireItemResponse":
+        require_protocol_version(self.protocol_version)
+        if self.result_status == AcquireResultStatus.SUCCESS:
+            if self.pre_read_evidence is None or self.post_read_evidence is None or self.helper_source_sha256 is None:
+                raise ValueError("successful acquisition requires complete Source evidence and SHA-256")
+        elif not self.error_code:
+            raise ValueError("failed acquisition requires an error code")
+        return self
+
+
+def require_protocol_version(version: int) -> None:
+    if version != PROTOCOL_VERSION:
+        raise ProtocolCompatibilityError(
+            f"Unsupported Windows Helper protocol version {version}; required version is {PROTOCOL_VERSION}."
+        )
+
+
+def require_capability(capabilities: list[CapabilityVersion], name: str, version: str) -> None:
+    matches = [item for item in capabilities if item.name == name]
+    if len(matches) != 1 or matches[0].version != version:
+        raise ProtocolCompatibilityError(f"Required capability is unavailable: {name} version {version}.")
+
+
+def capability_version(capabilities: list[CapabilityVersion], name: str) -> str | None:
+    """Return the one advertised version for a uniquely named capability."""
+
+    matches = [item.version for item in capabilities if item.name == name]
+    return matches[0] if len(matches) == 1 else None
+
+
+def require_capability_versions(
+    capabilities: list[CapabilityVersion],
+    name: str,
+    versions: set[str],
+) -> str:
+    """Require one capability whose version is in the explicitly accepted set."""
+
+    version = capability_version(capabilities, name)
+    if version not in versions:
+        accepted = ", ".join(sorted(versions))
+        raise ProtocolCompatibilityError(
+            f"Required capability is unavailable: {name} accepted versions {accepted}."
+        )
+    return version
+
+
+def canonical_protocol_json(message: _StrictProtocolModel) -> str:
+    """Serialize machine-authority fields deterministically with a versioned domain."""
+    payload = {
+        "domain": CANONICAL_DIGEST_DOMAIN,
+        "message_type": type(message).__name__,
+        "payload": _canonical_message_payload(message),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def canonical_protocol_digest(message: _StrictProtocolModel) -> str:
+    return "sha256:" + hashlib.sha256(canonical_protocol_json(message).encode("utf-8")).hexdigest()
+
+
+def probe_response_from_collection(
+    *,
+    request: HelperProbeRequest,
+    result: IdentityCollectionResult,
+) -> HelperProbeResponse:
+    """Create the safe wire view of a normalized observational collector result."""
+    blockers = [_issue_from_evidence(item) for item in result.blockers]
+    warnings = [_issue_from_evidence(item) for item in result.warnings]
+    status = _wire_status(result)
+    if status != ProbeResultStatus.SUCCESS and not blockers:
+        blockers = [MachineIssue(code=ErrorCode.PROBE_FAILED)]
+    return HelperProbeResponse(
+        request_id=request.request_id,
+        result_status=status,
+        source_type=request.source_type,
+        provider_native_path=request.provider_native_path,
+        collector_name=result.provider_name,
+        collector_version=result.provider_version,
+        source_root_evidence=result.source_root_candidate,
+        evidence_items=result.evidence_items,
+        identity_fingerprint=result.identity_fingerprint_candidate,
+        blockers=blockers,
+        warnings=warnings,
+    )
+
+
+def _wire_status(result: IdentityCollectionResult) -> ProbeResultStatus:
+    if result.probe_status in {"completed", "completed_with_warnings"}:
+        return ProbeResultStatus.SUCCESS
+    blocker_codes = {item.code for item in result.blockers}
+    if blocker_codes & {"path_not_found", "path_not_readable", "access_denied", "source_root_invalid"}:
+        return ProbeResultStatus.INVALID_ROOT
+    if result.match_status == "mismatch":
+        return ProbeResultStatus.IDENTITY_MISMATCH
+    if result.match_status == "ambiguous":
+        return ProbeResultStatus.IDENTITY_AMBIGUOUS
+    if result.probe_status == "unavailable":
+        return ProbeResultStatus.UNAVAILABLE
+    if result.probe_status == "unsupported_provider":
+        return ProbeResultStatus.UNSUPPORTED
+    return ProbeResultStatus.PROBE_FAILED
+
+
+def _issue_from_evidence(item: NormalizedIdentityEvidence) -> MachineIssue:
+    code = {
+        "path_not_found": ErrorCode.INVALID_ROOT,
+        "path_not_readable": ErrorCode.INVALID_ROOT,
+        "access_denied": ErrorCode.UNAVAILABLE,
+        "source_root_invalid": ErrorCode.INVALID_ROOT,
+        "unsupported_source_type": ErrorCode.UNSUPPORTED,
+    }.get(item.code, ErrorCode.PROBE_FAILED)
+    return MachineIssue(code=code, evidence_code=item.code, redacted_detail=item.message)
+
+
+def _canonical_message_payload(message: _StrictProtocolModel) -> Any:
+    if isinstance(message, HelperCapabilityIdentity):
+        return {
+            "protocol_version": message.protocol_version,
+            "helper_version": message.helper_version,
+            "intended_access_node_id": (
+                str(message.intended_access_node_id) if message.intended_access_node_id else None
+            ),
+            "os_platform": message.os_platform,
+            "os_version": message.os_version,
+            "supported_source_types": sorted(item.value for item in message.supported_source_types),
+            "collectors": sorted(
+                (
+                    {
+                        "name": item.name,
+                        "version": item.version,
+                        "supported_source_types": sorted(
+                            source_type.value for source_type in item.supported_source_types
+                        ),
+                    }
+                    for item in message.collectors
+                ),
+                key=lambda item: (item["name"], item["version"]),
+            ),
+            "capabilities": sorted(
+                ((item.name, item.version) for item in message.capabilities),
+                key=lambda item: (item[0], item[1]),
+            ),
+        }
+    if isinstance(message, HelperProbeRequest):
+        return {
+            "protocol_version": message.protocol_version,
+            "request_id": str(message.request_id),
+            "intended_access_node_id": (
+                str(message.intended_access_node_id) if message.intended_access_node_id else None
+            ),
+            "source_type": message.source_type.value,
+            "probe_mode": message.probe_mode.value,
+            "provider_native_path": _canonical_path_payload(message.provider_native_path),
+            "expected_collector_name": message.expected_collector_name,
+            "expected_collector_version": message.expected_collector_version,
+        }
+    if isinstance(message, HelperProbeResponse):
+        return {
+            "protocol_version": message.protocol_version,
+            "request_id": str(message.request_id),
+            "result_status": message.result_status.value,
+            "source_type": message.source_type.value,
+            "provider_native_path": _canonical_path_payload(message.provider_native_path),
+            "collector_name": message.collector_name,
+            "collector_version": message.collector_version,
+            "source_root_evidence": {
+                "path": (
+                    ntpath.normcase(message.source_root_evidence.path)
+                    if message.source_root_evidence.path
+                    else None
+                ),
+                "is_valid_source_root_candidate": message.source_root_evidence.is_valid_source_root_candidate,
+                "filesystem_boundary_type": message.source_root_evidence.filesystem_boundary_type,
+            },
+            "evidence_items": sorted(
+                (
+                    {
+                        "category": item.category,
+                        "code": item.code,
+                        "status": item.status,
+                        "durability": item.durability,
+                        "source_types": sorted(item.source_types),
+                        "fingerprint_hash": item.fingerprint_hash,
+                        "fingerprint_version": item.fingerprint_version,
+                    }
+                    for item in message.evidence_items
+                ),
+                key=lambda item: (item["category"], item["code"], item["status"]),
+            ),
+            "identity_fingerprint": message.identity_fingerprint.model_dump(mode="json"),
+            "blockers": sorted((item.code.value, item.evidence_code) for item in message.blockers),
+            "warnings": sorted((item.code.value, item.evidence_code) for item in message.warnings),
+        }
+    return message.model_dump(mode="json")
+
+
+def _canonical_path_payload(path: ProviderNativePath) -> dict[str, str]:
+    return {
+        "provider_native_root": ntpath.normcase(path.provider_native_root),
+        "provider_native_relative_path": ntpath.normcase(path.provider_native_relative_path),
+        "provider_native_full_path": ntpath.normcase(path.provider_native_full_path),
+    }
+
+
+def _require_unique(values: list[Any], label: str) -> None:
+    if len(values) != len(set(values)):
+        raise ValueError(f"{label} must be unique")
+
+
+__all__ = [
+    "CANONICAL_DIGEST_DOMAIN",
+    "DEFAULT_INVENTORY_PAGE_SIZE",
+    "MAX_INVENTORY_PAGE_SIZE",
+    "MAX_INVENTORY_RESULT_BYTES",
+    "MAX_MOUNTED_VOLUME_OBSERVATIONS",
+    "PROTOCOL_VERSION",
+    "CapabilityVersion",
+    "CollectorCapability",
+    "ErrorCode",
+    "HelperCapabilityIdentity",
+    "HelperInventoryItem",
+    "HelperInventoryPageRequest",
+    "HelperInventoryPageResponse",
+    "HelperObserveVolumesRequest",
+    "HelperObserveVolumesResponse",
+    "HelperProbeRequest",
+    "HelperProbeResponse",
+    "InventoryEntryKind",
+    "InventoryResultStatus",
+    "MachineIssue",
+    "MountedVolumeObservation",
+    "MountedVolumeStorageEvidence",
+    "ProbeMode",
+    "ProbeResultStatus",
+    "ProtocolCompatibilityError",
+    "ProviderNativePath",
+    "SourceType",
+    "canonical_protocol_digest",
+    "canonical_protocol_json",
+    "capability_version",
+    "probe_response_from_collection",
+    "require_capability",
+    "require_capability_versions",
+    "require_protocol_version",
+]

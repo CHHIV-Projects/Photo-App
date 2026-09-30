@@ -16,6 +16,7 @@ from app.services.source_identity.linux_source_access import (
 from app.services.source_identity.identity_fingerprint import (
     FINGERPRINT_VERSION,
     LINUX_FILESYSTEM_UUID_FINGERPRINT_VERSION,
+    REGISTERED_NAS_SHARE_FINGERPRINT_VERSION,
 )
 from app.services.source_identity.posix_source_paths import PosixSourcePathError, require_exact_mapping
 from app.services.source_identity.probe_schema import (
@@ -311,10 +312,13 @@ def _location_invariant_error(location: LinuxSourceLocationEvidence) -> str | No
             return "Linux Local broker evidence does not contain one strong server-local filesystem identity."
     elif (
         mount.filesystem_type.casefold() != "cifs"
-        or mount.canonical_nas_source != "//192.168.1.171/PhotoOrganizer"
-        or location.identity_fingerprint_version != FINGERPRINT_VERSION
+        or not mount.canonical_nas_source
+        or location.identity_fingerprint_version not in {
+            FINGERPRINT_VERSION,
+            REGISTERED_NAS_SHARE_FINGERPRINT_VERSION,
+        }
     ):
-        return "Linux NAS broker evidence does not match the exact approved canonical CIFS identity."
+        return "Linux NAS broker evidence does not match one registered canonical CIFS identity."
     return None
 
 

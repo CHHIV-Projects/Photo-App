@@ -16,6 +16,7 @@ from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_source import IngestionSource
 from app.models.provenance import Provenance
 from app.models.source_intake_run import SourceIntakeRun
+from app.models.source_endpoint import AccessNode, SourceEndpointObservedPath
 from app.schemas.admin import (
     SourceProfileDetail,
     SourceProfileCreateRequest,
@@ -29,7 +30,10 @@ from app.schemas.admin import (
     SourceIntakeReportSummary,
     SourceIntakeSourceSummary,
 )
-from app.services.icloud_path_service import resolve_icloud_staging_path
+from app.services.icloud_path_service import (
+    require_canonical_icloud_staging_path,
+    resolve_icloud_staging_path,
+)
 from app.services.ingestion.ingestion_context_schema import ensure_ingestion_context_schema
 from app.services.ingestion.ingestion_context_service import (
     KNOWN_SOURCE_TYPES,
@@ -182,6 +186,7 @@ def _build_profile_reference_maps(
 def _to_source_profile_summary(
     source: IngestionSource,
     *,
+    provider_kind: str,
     include_username: bool,
     last_run_at: datetime | None,
     provenance_count: int | None,
@@ -193,6 +198,7 @@ def _to_source_profile_summary(
         source_id=source.id,
         source_label=source.source_label,
         source_type=source.source_type,
+        provider_kind=provider_kind,
         source_root_path=source.source_root_path,
         endpoint_relative_root=source.endpoint_relative_root,
         endpoint_id=source.endpoint_id,
@@ -231,6 +237,7 @@ def _build_single_source_profile_summary(
 
     return _to_source_profile_summary(
         source,
+        provider_kind=_source_provider_kind(db_session, source),
         include_username=include_username,
         last_run_at=latest_run_at,
         provenance_count=provenance_counts.get(source.id, 0),
@@ -238,6 +245,25 @@ def _build_single_source_profile_summary(
         source_intake_runs_count=source_intake_runs_counts.get(source.id, 0),
         icloud_acquisition_runs_count=icloud_runs_counts.get(source.id, 0),
     )
+
+
+def _source_provider_kind(db_session: Session, source: IngestionSource) -> str:
+    """Derive browser routing from durable bindings, never labels or path text."""
+    if source.source_type == "cloud_export":
+        return "icloud" if source.cloud_provider == "icloud" else "cloud"
+    if source.endpoint_id is None:
+        return "legacy"
+    helper_observation = db_session.scalar(
+        select(SourceEndpointObservedPath.id)
+        .join(AccessNode, SourceEndpointObservedPath.access_node_id == AccessNode.id)
+        .where(
+            SourceEndpointObservedPath.source_endpoint_id == source.endpoint_id,
+            AccessNode.provider_name == "windows_helper_v1",
+            AccessNode.os_family == "windows",
+        )
+        .limit(1)
+    )
+    return "windows_helper" if helper_observation is not None else "mounted"
 
 
 def _is_referenced_summary(summary: SourceProfileSummary) -> bool:
@@ -594,6 +620,7 @@ def list_source_profiles(
         results.append(
             _to_source_profile_summary(
                 source,
+                provider_kind=_source_provider_kind(db_session, source),
                 include_username=include_username,
                 last_run_at=latest_run_by_source.get(source.id),
                 provenance_count=provenance_counts.get(source.id, 0),
@@ -666,7 +693,13 @@ def create_source_profile(
             raise ValueError("account_username is required for iCloud source profiles.")
         if resolved_acquisition_method is None:
             resolved_acquisition_method = "icloudpd"
-        managed_staging_path = managed_staging_input or str(resolve_icloud_staging_path(resolved_label))
+        canonical_path = require_canonical_icloud_staging_path(
+            resolved_label,
+            managed_staging_input or root_path_input or None,
+        )
+        if managed_staging_input and root_path_input:
+            require_canonical_icloud_staging_path(resolved_label, root_path_input)
+        managed_staging_path = str(canonical_path)
         effective_root_path = managed_staging_path
     else:
         managed_staging_path = managed_staging_input or None
@@ -688,6 +721,13 @@ def create_source_profile(
         )
     )
     if existing is not None:
+        if resolved_type == "cloud_export" and resolved_cloud_provider == "icloud":
+            existing_account = (existing.account_username or "").strip().casefold()
+            if existing_account != account_username.casefold():
+                raise ValueError(
+                    "The canonical iCloud staging path is already registered to a different account."
+                )
+            create_source_profile_staging_folder(db_session, source_id=existing.id)
         return SourceProfileCreateResponse(
             already_exists=True,
             profile=_build_single_source_profile_summary(
@@ -696,6 +736,18 @@ def create_source_profile(
                 include_username=include_username,
             ),
         )
+
+    if resolved_type == "cloud_export" and resolved_cloud_provider == "icloud":
+        collision = db_session.scalar(
+            select(IngestionSource).where(
+                IngestionSource.source_type == "cloud_export",
+                IngestionSource.source_root_path_normalized == normalized_root,
+            )
+        )
+        if collision is not None:
+            raise ValueError(
+                "The canonical iCloud staging path is already registered to another Source Profile."
+            )
 
     resolved_root = _to_absolute_path(effective_root_path)
     source = IngestionSource(
@@ -711,6 +763,9 @@ def create_source_profile(
         account_username=account_username,
     )
     db_session.add(source)
+    db_session.flush()
+    if resolved_type == "cloud_export" and resolved_cloud_provider == "icloud":
+        create_source_profile_staging_folder(db_session, source_id=source.id)
     db_session.commit()
     db_session.refresh(source)
 
@@ -741,6 +796,12 @@ def update_source_profile_metadata(
         new_label = payload.source_label.strip()
         if not new_label:
             raise ValueError("source_label cannot be empty.")
+        if (
+            source.source_type == "cloud_export"
+            and source.cloud_provider == "icloud"
+            and normalize_source_label(new_label) != source.source_label_normalized
+        ):
+            raise ValueError("The iCloud Source name is immutable after creation.")
         source.source_label = new_label
         source.source_label_normalized = normalize_source_label(new_label)
 
@@ -751,7 +812,14 @@ def update_source_profile_metadata(
         source.cloud_provider = _normalize_cloud_provider(payload.cloud_provider)
 
     if payload.account_username is not None:
-        source.account_username = payload.account_username.strip() or None
+        cleaned_username = payload.account_username.strip() or None
+        if (
+            source.source_type == "cloud_export"
+            and source.cloud_provider == "icloud"
+            and (cleaned_username or "").casefold() != (source.account_username or "").casefold()
+        ):
+            raise ValueError("The iCloud account identity is immutable after creation.")
+        source.account_username = cleaned_username
 
     resolved_cloud_provider = source.cloud_provider
     if payload.acquisition_method is not None:
@@ -765,6 +833,10 @@ def update_source_profile_metadata(
         if source.source_type != "cloud_export":
             raise ValueError("managed_staging_path can only be edited for cloud_export source profiles.")
         if resolved_cloud_provider == "icloud":
+            canonical_path = require_canonical_icloud_staging_path(
+                source.source_label,
+                payload.managed_staging_path,
+            )
             current_summary = _build_single_source_profile_summary(
                 db_session,
                 source,
@@ -773,7 +845,11 @@ def update_source_profile_metadata(
             if _is_referenced_summary(current_summary):
                 raise ValueError("managed_staging_path cannot be edited for referenced iCloud source profiles.")
         cleaned_path = payload.managed_staging_path.strip()
-        source.managed_staging_path = _to_absolute_path(cleaned_path) if cleaned_path else None
+        source.managed_staging_path = (
+            str(canonical_path)
+            if resolved_cloud_provider == "icloud"
+            else (_to_absolute_path(cleaned_path) if cleaned_path else None)
+        )
 
     # Source root path and source type remain locked in 12.61.4.
     db_session.add(source)

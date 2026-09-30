@@ -51,7 +51,12 @@ from app.services.ingestion.dropzone_manager import (
 from app.services.ingestion.failure_manager import move_record_to_ingest_failures
 from app.services.ingestion.filter import FilterResult, filter_records
 from app.services.ingestion.hasher import HashResult, HashedFile, hash_records
-from app.services.ingestion.scanner import FileScanRecord, ScanResult, scan_folder
+from app.services.ingestion.scanner import (
+    FileScanRecord,
+    ScanResult,
+    processing_order_sort_key,
+    scan_folder,
+)
 from app.services.ingestion.source_readiness import classify_source_readiness
 from app.services.ingestion.storage_manager import (
     ExistingAssetVaultState,
@@ -233,6 +238,7 @@ def _collect_input(ctx: PipelineContext) -> dict[str, Any]:
                 dropzone_scan_result.files,
                 stage_result.staged_files,
             )
+            processing_records.sort(key=processing_order_sort_key)
 
             ctx.source_scan_result = source_scan_result
             ctx.source_selected_records = selected_source_records

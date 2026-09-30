@@ -1,0 +1,116 @@
+{
+  "fixture_version": 1,
+  "cases": [
+    {
+      "name": "local_volume",
+      "source_type": "local",
+      "provider_native_root": "C:\\Photos",
+      "identity_kind": "volume_guid",
+      "identity_input": "11111111-2222-3333-4444-555555555555",
+      "expected_hash": "sha256:84ca5958be6a1923bda67a902e5e5046b41c6ce5786620aa4a9d4a7cbda993a7",
+      "expected_version": "source_endpoint_volume_guid_v2"
+    },
+    {
+      "name": "external_volume",
+      "source_type": "external_device",
+      "provider_native_root": "E:\\Archive",
+      "identity_kind": "volume_guid",
+      "identity_input": "11111111-2222-3333-4444-555555555555",
+      "expected_hash": "sha256:84ca5958be6a1923bda67a902e5e5046b41c6ce5786620aa4a9d4a7cbda993a7",
+      "expected_version": "source_endpoint_volume_guid_v2"
+    },
+    {
+      "name": "removable_volume",
+      "source_type": "removable_media",
+      "provider_native_root": "R:\\DCIM",
+      "identity_kind": "volume_guid",
+      "identity_input": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "expected_hash": "sha256:e07b80e8a68565a959d5c350b9b324d7c36ecaf7d02f0097ff346a88691a3a5b",
+      "expected_version": "source_endpoint_volume_guid_v2"
+    },
+    {
+      "name": "same_volume_changed_drive_letter",
+      "source_type": "external_device",
+      "provider_native_root": "Q:\\Archive",
+      "identity_kind": "volume_guid",
+      "identity_input": "11111111-2222-3333-4444-555555555555",
+      "expected_hash": "sha256:84ca5958be6a1923bda67a902e5e5046b41c6ce5786620aa4a9d4a7cbda993a7",
+      "expected_version": "source_endpoint_volume_guid_v2"
+    },
+    {
+      "name": "different_volume_same_drive_letter",
+      "source_type": "external_device",
+      "provider_native_root": "E:\\Archive",
+      "identity_kind": "volume_guid",
+      "identity_input": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "expected_hash": "sha256:e07b80e8a68565a959d5c350b9b324d7c36ecaf7d02f0097ff346a88691a3a5b",
+      "expected_version": "source_endpoint_volume_guid_v2"
+    },
+    {
+      "name": "windows_mapped_nas",
+      "source_type": "nas",
+      "provider_native_root": "Z:\\Family",
+      "identity_kind": "nas_server_share",
+      "identity_input": {"server": "synthetic-nas", "share": "photos"},
+      "expected_hash": "sha256:889954c9a19bf0dcd168be8e96b02848ef81343e2ab8ac8fa1273fe4fc6a7b1a",
+      "expected_version": "source_endpoint_identity_v1"
+    },
+    {
+      "name": "optical_stable_media",
+      "source_type": "optical_media",
+      "provider_native_root": "D:\\",
+      "identity_kind": "optical_v2",
+      "identity_input": {
+        "algorithm": "optical_media_fingerprint_v2",
+        "disc_metadata": {
+          "filesystem_type": "udf",
+          "volume_label": "archive disc",
+          "volume_serial": "abcd1234",
+          "total_size": 734003200
+        },
+        "manifest": {
+          "entries": [
+            {"relative_path": "album", "entry_type": "directory"},
+            {"relative_path": "album\\image01.jpg", "entry_type": "file", "file_size": 12345}
+          ],
+          "file_count": 1,
+          "directory_count": 1
+        }
+      },
+      "expected_hash": "sha256:bedff89abc5dca52760663a22d4f814c96dc5b3e1f6769121c09ceeb74a64d2c",
+      "expected_version": "optical_media_fingerprint_v2"
+    },
+    {
+      "name": "optical_changed_media",
+      "source_type": "optical_media",
+      "provider_native_root": "D:\\",
+      "identity_kind": "optical_v2",
+      "identity_input": {
+        "algorithm": "optical_media_fingerprint_v2",
+        "disc_metadata": {
+          "filesystem_type": "udf",
+          "volume_label": "archive disc",
+          "volume_serial": "abcd1234",
+          "total_size": 734003200
+        },
+        "manifest": {
+          "entries": [
+            {"relative_path": "album", "entry_type": "directory"},
+            {"relative_path": "album\\image01.jpg", "entry_type": "file", "file_size": 12346}
+          ],
+          "file_count": 1,
+          "directory_count": 1
+        }
+      },
+      "expected_hash": "sha256:869b8b2a2c9329be7d5d79b2539308447e3abfc1514fbfe8e4ca5f80ead251a2",
+      "expected_version": "optical_media_fingerprint_v2"
+    },
+    {
+      "name": "invalid_ambiguous_drive_relative_root",
+      "source_type": "local",
+      "provider_native_root": "C:Photos",
+      "identity_kind": "invalid_path",
+      "expected_error": "absolute Windows drive or UNC path"
+    }
+  ]
+}

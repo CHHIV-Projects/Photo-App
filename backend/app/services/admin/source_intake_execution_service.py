@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.ingestion_source import IngestionSource
 from app.models.source_intake_run import SourceIntakeRun
+from app.services.ingestion.scanner import FileScanRecord
 from app.services.ingestion.pipeline_orchestrator import (
     PipelineContext,
     RuntimeArgs,
@@ -294,6 +295,99 @@ def start_source_intake(
     return _to_snapshot(run)
 
 
+def start_explicit_source_intake(
+    db_session: Session,
+    *,
+    ingestion_source_id: int,
+    runtime_source_root_path: str,
+    explicit_source_records: list[FileScanRecord],
+    ingest_batch_size: int,
+    created_by: str,
+    on_created: Callable[[int], None] | None = None,
+    on_finished: Callable[[int], None] | None = None,
+) -> SourceIntakeStatusSnapshot:
+    """Launch one trusted explicit-record run through the ordinary Source Intake pipeline."""
+    ensure_source_intake_schema(db_session)
+    active = db_session.scalar(_active_run_stmt())
+    if active is not None:
+        raise SourceIntakeAlreadyRunningError(_to_snapshot(active))
+
+    source = db_session.get(IngestionSource, ingestion_source_id)
+    if source is None:
+        raise ValueError(f"Ingestion source {ingestion_source_id} not found.")
+    if not explicit_source_records:
+        raise ValueError("Explicit Source Intake requires at least one record.")
+
+    root = Path(runtime_source_root_path).expanduser().resolve()
+    if not root.exists() or not root.is_dir() or root.is_symlink():
+        raise ValueError("Explicit Source Intake runtime root is unavailable or unsafe.")
+
+    seen_paths: set[Path] = set()
+    for record in explicit_source_records:
+        candidate = Path(record.full_path).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("Explicit Source Intake candidate escapes runtime root.") from exc
+        if candidate in seen_paths:
+            raise ValueError("Explicit Source Intake candidate paths must be unique.")
+        seen_paths.add(candidate)
+
+    drop_zone = resolve_runtime_path(settings.drop_zone_path)
+    if drop_zone.exists() and any(drop_zone.iterdir()):
+        raise ValueError("Drop zone is not empty. Clear or process existing files before launching intake.")
+
+    batch_size = max(1, min(ingest_batch_size, len(explicit_source_records)))
+    run = SourceIntakeRun(
+        status=STATUS_RUNNING,
+        ingestion_source_id=ingestion_source_id,
+        ingestion_run_id=None,
+        source_label=source.source_label,
+        source_type=source.source_type,
+        source_root_path=str(root),
+        intake_mode="acquisition_bridge",
+        source_intake_limit=len(explicit_source_records),
+        ingest_batch_size=batch_size,
+        started_at=_utc_now(),
+        created_by=created_by,
+    )
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+    if on_created is not None:
+        try:
+            on_created(run.id)
+        except Exception:
+            run.status = STATUS_FAILED
+            run.finished_at = _utc_now()
+            run.error_message = "Explicit Source Intake launch binding failed."
+            db_session.commit()
+            raise
+
+    global _runner_thread
+    with _runner_lock:
+        thread = threading.Thread(
+            target=_run_background_job,
+            args=(
+                run.id,
+                str(root),
+                source.source_label,
+                source.source_type,
+                len(explicit_source_records),
+                batch_size,
+                source.id,
+                list(explicit_source_records),
+                on_finished,
+            ),
+            daemon=True,
+            name=f"source-intake-{run.id}",
+        )
+        _runner_thread = thread
+        thread.start()
+
+    return _to_snapshot(run)
+
+
 def _enforce_readiness_for_launch(
     readiness: SourceProfileReadinessResponse,
     *,
@@ -364,6 +458,8 @@ def _run_background_job(
     limit: int | None,
     batch_size: int,
     ingestion_source_id: int | None = None,
+    explicit_source_records: list[FileScanRecord] | None = None,
+    on_finished: Callable[[int], None] | None = None,
 ) -> None:
     started_at = time.perf_counter()
     final_status = STATUS_FAILED
@@ -381,6 +477,7 @@ def _run_background_job(
             source_label=source_label,
             source_type=source_type,
             ingestion_source_id=ingestion_source_id,
+            explicit_source_records=list(explicit_source_records or []),
         )
         args = RuntimeArgs(
             from_path=ctx.from_path,
@@ -448,6 +545,12 @@ def _run_background_job(
                 run.elapsed_seconds = elapsed
                 run.error_message = str(exc)[:2000]
                 db.commit()
+    finally:
+        if on_finished is not None:
+            try:
+                on_finished(run_id)
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _reset_stale_runs(db_session: Session) -> None:
