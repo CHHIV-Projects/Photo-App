@@ -38,7 +38,10 @@ from app.services.source_identity.readiness_schema import (
     SourceProfileReadinessResponse,
 )
 from app.services.windows_helper.operations import (
+    adapt_inventory_attestation_result,
+    completed_inventory_attestation,
     completed_probe,
+    get_operation_status,
     helper_is_online,
     is_windows_helper_profile,
     windows_helper_profile_binding,
@@ -469,12 +472,22 @@ class SourceProfileReadinessService:
                 recommended_next_action="Issue and complete a readiness probe for this Profile.",
             )
         try:
-            operation, probe = completed_probe(
-                self._db,
-                operation_id,
-                require_fresh=True,
-                expected_source_profile_id=source.id,
-            )
+            status = get_operation_status(self._db, operation_id)
+            if status.operation_type == "attest_inventory":
+                operation, attestation = completed_inventory_attestation(
+                    self._db,
+                    operation_id,
+                    require_fresh=True,
+                    expected_source_profile_id=source.id,
+                )
+                probe = adapt_inventory_attestation_result(operation.access_node, attestation)
+            else:
+                operation, probe = completed_probe(
+                    self._db,
+                    operation_id,
+                    require_fresh=True,
+                    expected_source_profile_id=source.id,
+                )
         except WindowsHelperServiceError as exc:
             return self._blocked_without_probe(
                 source,

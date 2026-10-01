@@ -95,7 +95,7 @@ describe("Windows Source creation", () => {
     expect(api.startWindowsSourceUiCreationProbe).not.toHaveBeenCalled();
   });
 
-  it("visibly proposes exact existing Profile reuse without confirming it", async () => {
+  it("stops exact existing Profile reuse and explains that the entered name is unused", async () => {
     const launch = vi.fn();
     render(
       <WindowsSourceCreation
@@ -110,12 +110,17 @@ describe("Windows Source creation", () => {
       target: { value: exactRoot },
     });
     fireEvent.change(screen.getByLabelText("Source Profile name"), {
-      target: { value: profileName },
+      target: { value: "Replacement profile name" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Review Source" }));
 
+    expect(await screen.findByRole("heading", { name: "Source Profile already exists" })).toBeInTheDocument();
     expect(await screen.findByText("Reuse existing Profile")).toBeInTheDocument();
     expect(screen.getByText("Existing device")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(`already registered as ${profileName}`);
+    expect(screen.getByRole("alert")).toHaveTextContent("entered name Replacement profile name will not be used");
+    expect(screen.getByRole("alert")).toHaveTextContent("Select the existing Profile in Source Selector");
+    expect(screen.queryByRole("button", { name: "Create Source" })).not.toBeInTheDocument();
     expect(launch).toHaveBeenCalledTimes(1);
     expect(api.confirmWindowsSourceUiCreation).not.toHaveBeenCalled();
   });

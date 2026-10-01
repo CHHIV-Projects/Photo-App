@@ -41,6 +41,7 @@ from app.windows_helper_shared.channel import (
     ClaimedAcquireOperation,
     ClaimedChildAttestationOperation,
     ClaimedInventoryOperation,
+    ClaimedInventoryAttestationOperation,
     ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
     HelperOperationClaimResponse,
@@ -57,6 +58,8 @@ from app.windows_helper_shared.protocol import (
     ErrorCode,
     HelperInventoryPageRequest,
     HelperInventoryPageResponse,
+    HelperKnownSourceAttestationRequest,
+    HelperKnownSourceAttestationResponse,
     HelperObserveVolumesRequest,
     HelperObserveVolumesResponse,
     HelperProbeRequest,
@@ -207,7 +210,7 @@ def _create_operation(
     operation_id: UUID,
     access_node: AccessNode,
     operation_type: str,
-    request: HelperProbeRequest | HelperInventoryPageRequest | HelperAcquireItemRequest | HelperChildAttestationRequest,
+    request: HelperProbeRequest | HelperInventoryPageRequest | HelperKnownSourceAttestationRequest | HelperAcquireItemRequest | HelperChildAttestationRequest,
     source_endpoint_id: int | None = None,
     source_profile_id: int | None = None,
 ) -> WindowsHelperOperationCreatedResponse:
@@ -491,12 +494,27 @@ def create_inventory_operation(
     db: Session,
     body: CreateWindowsHelperInventoryOperationRequest,
 ) -> WindowsHelperOperationCreatedResponse:
-    probe_operation, probe = completed_probe(
-        db,
-        body.probe_operation_id,
-        require_fresh=True,
-        expected_source_profile_id=body.source_profile_id,
+    authority_operation = db.scalar(
+        select(WindowsHelperOperation).where(
+            WindowsHelperOperation.operation_uuid == str(body.probe_operation_id)
+        )
     )
+    optimized = authority_operation is not None and authority_operation.operation_type == "attest_inventory"
+    if optimized:
+        probe_operation, attestation = completed_inventory_attestation(
+            db,
+            body.probe_operation_id,
+            require_fresh=True,
+            expected_source_profile_id=body.source_profile_id,
+        )
+        probe = None
+    else:
+        probe_operation, probe = completed_probe(
+            db,
+            body.probe_operation_id,
+            require_fresh=True,
+            expected_source_profile_id=body.source_profile_id,
+        )
     access_node = db.get(AccessNode, probe_operation.access_node_id)
     if access_node is None:
         raise WindowsHelperServiceError(
@@ -525,27 +543,38 @@ def create_inventory_operation(
             "The probe was completed by a different Access Node.",
             http_status=409,
         )
-    from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
+    if optimized:
+        if (
+            attestation.expected_identity_fingerprint != endpoint.identity_fingerprint_hash
+            or attestation.expected_identity_fingerprint_version != endpoint.identity_fingerprint_version
+        ):
+            raise WindowsHelperServiceError(
+                "source_identity_mismatch",
+                "Current Source identity does not match the enrolled Endpoint.",
+                http_status=409,
+            )
+    else:
+        from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
 
-    fingerprint = fingerprint_from_probe(probe)
-    if (
-        not endpoint.identity_fingerprint_hash
-        or fingerprint.hash_value != endpoint.identity_fingerprint_hash
-        or fingerprint.strength != "strong"
-    ):
-        raise WindowsHelperServiceError(
-            "source_identity_mismatch",
-            "Current Source identity does not match the enrolled Endpoint.",
-            http_status=409,
-        )
+        fingerprint = fingerprint_from_probe(probe)
+        if (
+            not endpoint.identity_fingerprint_hash
+            or fingerprint.hash_value != endpoint.identity_fingerprint_hash
+            or fingerprint.strength != "strong"
+        ):
+            raise WindowsHelperServiceError(
+                "source_identity_mismatch",
+                "Current Source identity does not match the enrolled Endpoint.",
+                http_status=409,
+            )
 
-    if (body.inventory_generation is None) != (body.cursor is None):
+    if not optimized and (body.inventory_generation is None) != (body.cursor is None):
         raise WindowsHelperServiceError(
             "invalid_cursor",
             "Inventory generation and cursor must be supplied together.",
             http_status=400,
         )
-    if body.cursor is not None:
+    if body.cursor is not None and not optimized:
         _validate_inventory_continuation(
             db,
             source_profile_id=source.id,
@@ -562,15 +591,17 @@ def create_inventory_operation(
         intended_access_node_id=UUID(node.access_node_uuid),
         source_endpoint_id=endpoint.id,
         source_profile_id=source.id,
-        source_type=probe.source_type,
+        source_type=attestation.source_type if optimized else probe.source_type,
         provider_native_path=ProviderNativePath(
-            provider_native_root=probe.observed_path or "",
+            provider_native_root=attestation.runtime_source_root if optimized else probe.observed_path or "",
             provider_native_relative_path="",
-            provider_native_full_path=probe.observed_path or "",
+            provider_native_full_path=attestation.runtime_source_root if optimized else probe.observed_path or "",
         ),
         expected_identity_fingerprint=endpoint.identity_fingerprint_hash,
-        inventory_generation=body.inventory_generation,
+        inventory_generation=attestation.inventory_generation if optimized else body.inventory_generation,
         cursor=body.cursor,
+        parent_workflow_id=attestation.parent_workflow_id if optimized else None,
+        inventory_attestation_token=attestation.inventory_attestation_token if optimized else None,
         page_size=body.page_size,
     )
     return _create_operation(
@@ -584,6 +615,81 @@ def create_inventory_operation(
     )
 
 
+def create_known_source_attestation_operation(
+    db: Session,
+    source_profile_id: int,
+    access_node: AccessNode,
+    *,
+    parent_workflow_id: UUID | None = None,
+    inventory_generation: UUID | None = None,
+    continuation_cursor: str | None = None,
+) -> WindowsHelperOperationCreatedResponse:
+    source = db.get(IngestionSource, source_profile_id)
+    endpoint = db.get(SourceEndpoint, source.endpoint_id) if source is not None and source.endpoint_id else None
+    node = _load_access_node(db, UUID(access_node.access_node_uuid))
+    if not helper_is_online(node):
+        raise WindowsHelperServiceError(
+            "helper_offline",
+            "The Windows Helper is not currently online.",
+            http_status=409,
+        )
+    if (
+        source is None
+        or endpoint is None
+        or source.profile_status != "active"
+        or endpoint.identity_fingerprint_version != "source_endpoint_volume_guid_v2"
+        or not endpoint.identity_fingerprint_hash
+        or not source.source_root_path
+    ):
+        raise WindowsHelperServiceError(
+            "known_source_attestation_unavailable",
+            "This Source cannot use targeted inventory attestation.",
+            http_status=409,
+        )
+    observed = db.scalar(
+        select(SourceEndpointObservedPath.id).where(
+            SourceEndpointObservedPath.source_endpoint_id == endpoint.id,
+            SourceEndpointObservedPath.access_node_id == node.id,
+        )
+    )
+    if observed is None:
+        raise WindowsHelperServiceError(
+            "known_source_route_unregistered",
+            "This computer is not registered for the selected Source.",
+            http_status=409,
+        )
+    try:
+        capabilities = HelperCapabilityIdentity.model_validate_json(node.capabilities_json or "")
+        require_capability(capabilities.capabilities, "known_source_inventory_attestation", "1")
+    except (TypeError, ValueError) as exc:
+        raise WindowsHelperServiceError(
+            "known_source_attestation_capability_unavailable",
+            "This Helper requires the legacy Source-checking path.",
+            http_status=409,
+        ) from exc
+    operation_id = uuid4()
+    request = HelperKnownSourceAttestationRequest(
+        request_id=operation_id,
+        intended_access_node_id=UUID(node.access_node_uuid),
+        source_endpoint_id=endpoint.id,
+        source_profile_id=source.id,
+        source_type=endpoint.source_type,
+        configured_source_root=source.source_root_path,
+        endpoint_relative_root=source.endpoint_relative_root or "",
+        expected_identity_fingerprint=endpoint.identity_fingerprint_hash,
+        parent_workflow_id=parent_workflow_id or uuid4(),
+        inventory_generation=inventory_generation or uuid4(),
+        continuation_cursor=continuation_cursor,
+    )
+    return _create_operation(
+        db,
+        operation_id=operation_id,
+        access_node=node,
+        operation_type="attest_inventory",
+        request=request,
+        source_endpoint_id=endpoint.id,
+        source_profile_id=source.id,
+    )
 def create_acquire_operation(
     db: Session,
     acquisition_item_id: UUID,
@@ -881,6 +987,7 @@ def claim_operation(
     if operation.operation_type not in {
         "probe_source",
         "observe_volumes",
+        "attest_inventory",
         "inventory_page",
         "attest_child",
         "acquire_item",
@@ -913,6 +1020,13 @@ def claim_operation(
         elif operation.operation_type == "inventory_page":
             request = HelperInventoryPageRequest.model_validate_json(operation.request_json)
             claimed = ClaimedInventoryOperation(
+                operation_id=operation_id,
+                lease_expires_at=operation.lease_expires_at,
+                request=request,
+            )
+        elif operation.operation_type == "attest_inventory":
+            request = HelperKnownSourceAttestationRequest.model_validate_json(operation.request_json)
+            claimed = ClaimedInventoryAttestationOperation(
                 operation_id=operation_id,
                 lease_expires_at=operation.lease_expires_at,
                 request=request,
@@ -1123,14 +1237,26 @@ def complete_inventory_operation(
                 "An inventory item is outside the authorized root.",
                 http_status=409,
             )
-    observed = adapt_probe_result(operation.access_node, result.identity_probe)
-    from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
+    if result.root_continuity is not None:
+        identity_matches = (
+            result.root_continuity.identity_fingerprint_hash
+            == request.expected_identity_fingerprint
+            and result.root_continuity.identity_fingerprint_version
+            == "source_endpoint_volume_guid_v2"
+            and result.root_continuity.root_handle_verified
+            and result.root_continuity.containment_verified
+        )
+    elif result.identity_probe is not None:
+        observed = adapt_probe_result(operation.access_node, result.identity_probe)
+        from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
 
-    observed_fingerprint = fingerprint_from_probe(observed)
-    identity_matches = (
-        observed_fingerprint.strength == "strong"
-        and observed_fingerprint.hash_value == request.expected_identity_fingerprint
-    )
+        observed_fingerprint = fingerprint_from_probe(observed)
+        identity_matches = (
+            observed_fingerprint.strength == "strong"
+            and observed_fingerprint.hash_value == request.expected_identity_fingerprint
+        )
+    else:
+        identity_matches = False
     if result.result_status == InventoryResultStatus.SUCCESS and not identity_matches:
         raise WindowsHelperServiceError(
             "source_identity_mismatch",
@@ -1143,6 +1269,43 @@ def complete_inventory_operation(
             "inventory_result_too_large",
             "The inventory result exceeds the authorized size limit.",
             http_status=413,
+        )
+    return _complete(db, operation, result)
+
+
+def complete_inventory_attestation_operation(
+    db: Session,
+    credential: WindowsHelperCredential,
+    operation_id: UUID,
+    result: HelperKnownSourceAttestationResponse,
+) -> HelperOperationCompletionResponse:
+    operation = _load_owned_operation(db, credential, operation_id)
+    if operation.operation_type != "attest_inventory":
+        raise WindowsHelperServiceError("operation_type_mismatch", "Operation type mismatch.", http_status=409)
+    request = HelperKnownSourceAttestationRequest.model_validate_json(operation.request_json)
+    if (
+        result.request_id != operation_id
+        or request.request_id != operation_id
+        or result.intended_access_node_id != request.intended_access_node_id
+        or result.source_endpoint_id != request.source_endpoint_id
+        or result.source_profile_id != request.source_profile_id
+        or result.source_type != request.source_type
+        or result.expected_identity_fingerprint != request.expected_identity_fingerprint
+        or result.expected_identity_fingerprint_version != request.expected_identity_fingerprint_version
+        or result.parent_workflow_id != request.parent_workflow_id
+        or result.inventory_generation != request.inventory_generation
+        or result.continuation_cursor != request.continuation_cursor
+        or (
+            result.expires_at is not None
+            and result.issued_at is not None
+            and (_aware(result.expires_at) - _aware(result.issued_at)).total_seconds()
+            > request.attestation_lifetime_seconds
+        )
+    ):
+        raise WindowsHelperServiceError(
+            "operation_result_mismatch",
+            "The inventory attestation result does not match the authorized operation.",
+            http_status=409,
         )
     return _complete(db, operation, result)
 
@@ -1216,6 +1379,7 @@ def _complete(
     result: (
         HelperProbeResponse
         | HelperObserveVolumesResponse
+        | HelperKnownSourceAttestationResponse
         | HelperInventoryPageResponse
         | HelperChildAttestationResponse
         | HelperAcquireItemResponse
@@ -1366,6 +1530,60 @@ def completed_probe(
             http_status=409,
         )
     return operation, adapt_probe_result(operation.access_node, result)
+
+
+def completed_inventory_attestation(
+    db: Session,
+    operation_id: UUID,
+    *,
+    require_fresh: bool,
+    expected_source_profile_id: int | None = None,
+) -> tuple[WindowsHelperOperation, HelperKnownSourceAttestationResponse]:
+    _expire_stale(db)
+    operation = db.scalar(
+        select(WindowsHelperOperation).where(
+            WindowsHelperOperation.operation_uuid == str(operation_id)
+        )
+    )
+    if (
+        operation is None
+        or operation.operation_type != "attest_inventory"
+        or operation.state != "completed"
+        or not operation.result_json
+        or not operation.result_digest
+        or operation.completed_at is None
+    ):
+        raise WindowsHelperServiceError(
+            "inventory_attestation_not_completed",
+            "The known-Source inventory attestation is not completed.",
+            http_status=409,
+        )
+    if expected_source_profile_id is not None and operation.source_profile_id != expected_source_profile_id:
+        raise WindowsHelperServiceError(
+            "inventory_attestation_profile_mismatch",
+            "The inventory attestation is bound to a different Profile.",
+            http_status=409,
+        )
+    result = HelperKnownSourceAttestationResponse.model_validate_json(operation.result_json)
+    if canonical_protocol_digest(result) != operation.result_digest:
+        raise WindowsHelperServiceError(
+            "inventory_attestation_integrity_error",
+            "The inventory attestation failed integrity validation.",
+            http_status=409,
+        )
+    if result.result_status.value != "success":
+        raise WindowsHelperServiceError(
+            "known_source_unavailable",
+            "The known Windows Source is not available on this route.",
+            http_status=409,
+        )
+    if require_fresh and (result.expires_at is None or _aware(result.expires_at) <= _now()):
+        raise WindowsHelperServiceError(
+            "inventory_attestation_expired",
+            "The inventory attestation expired.",
+            http_status=409,
+        )
+    return operation, result
 
 
 def _validate_inventory_continuation(
@@ -1597,5 +1815,84 @@ def adapt_probe_result(
             network_mapping=result.source_type.value == "nas",
             network_share_check=result.source_type.value == "nas",
             limitations=["Remote observation through the authenticated Windows Helper."],
+        ),
+    )
+
+
+def adapt_inventory_attestation_result(
+    node: AccessNode,
+    result: HelperKnownSourceAttestationResponse,
+) -> Any:
+    """Project targeted handle verification into the established readiness contract."""
+    from app.services.source_identity.probe_schema import (
+        AccessNodeSummary,
+        IdentityFingerprintCandidate,
+        SourceIdentityEvidenceItem,
+        SourceIdentityProbeResponse,
+        SourceIdentityProviderCapabilities,
+        SourceRootCandidate,
+    )
+
+    root = result.runtime_source_root or ""
+    boundary = {
+        "local": "local_folder",
+        "external_device": "external_folder",
+        "removable_media": "removable_media_folder",
+    }.get(result.source_type.value, "unknown")
+    success = result.result_status.value == "success" and bool(root)
+    evidence = SourceIdentityEvidenceItem(
+        category="volume_evidence",
+        code="volume_guid_present",
+        status="present" if success else "blocked",
+        durability="durable",
+        privacy_level="hash_before_storage",
+        source_types=[result.source_type.value],
+        fingerprint_hash=result.expected_identity_fingerprint if success else None,
+        fingerprint_version=result.expected_identity_fingerprint_version if success else None,
+        message="The exact Source directory handle matched the enrolled Volume GUID.",
+        provider_name=HELPER_PROVIDER_NAME,
+    )
+    return SourceIdentityProbeResponse(
+        probe_status="completed" if success else "unavailable",
+        source_type=result.source_type.value,
+        os_family="windows",
+        provider_name=HELPER_PROVIDER_NAME,
+        provider_version="known_source_inventory_attestation_v1",
+        access_node_summary=AccessNodeSummary(
+            access_node_id=node.access_node_uuid,
+            label=node.label,
+            os_family="windows",
+            capabilities={
+                "authenticated_helper": True,
+                "targeted_known_source_verification": True,
+                "bounded_inventory": True,
+            },
+        ),
+        observed_path=root or None,
+        normalized_observed_path=ntpath.normcase(root) if root else None,
+        source_root_candidate=SourceRootCandidate(
+            path=root or None,
+            is_valid_source_root_candidate=success,
+            filesystem_boundary_type=boundary,
+            root_reason="Exact handle-bound known-Source verification.",
+        ),
+        evidence_summary={"identity": "targeted_volume_guid_handle"},
+        evidence_items=[evidence],
+        identity_fingerprint_candidate=IdentityFingerprintCandidate(
+            algorithm=result.expected_identity_fingerprint_version,
+            available=success,
+            display="verified-volume" if success else "identity-evidence-unavailable",
+        ),
+        confidence_tier="strong_match" if success else "unavailable_not_connected",
+        match_status="not_compared",
+        safe_to_run=success,
+        blockers=[] if success else [evidence],
+        privacy_redaction_applied=True,
+        capabilities=SourceIdentityProviderCapabilities(
+            path_exists_check=True,
+            path_readable_check=True,
+            volume_identity=True,
+            volume_guid=True,
+            limitations=["Targeted verification for an already enrolled Source only."],
         ),
     )

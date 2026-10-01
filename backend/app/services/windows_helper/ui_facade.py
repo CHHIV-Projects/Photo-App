@@ -51,9 +51,11 @@ from app.services.source_identity.creation_schema import (
 from app.services.source_identity.creation_service import SourceCreationService
 from app.services.source_identity.identity_fingerprint import fingerprint_from_probe
 from app.services.windows_helper.operations import (
+    completed_inventory_attestation,
     completed_probe,
     completed_volume_observation,
     create_probe_operation,
+    create_known_source_attestation_operation,
     create_resolved_profile_probe_operation,
     create_volume_observation_for_access_node,
     create_volume_observation_operation,
@@ -486,6 +488,41 @@ def begin_profile_route_check(db: Session, source_profile_id: int) -> WindowsSou
         raise WindowsHelperServiceError(
             "portable_route_not_required", "This Source does not use portable route discovery.", http_status=409
         )
+    registered_nodes = list(
+        db.scalars(
+            select(AccessNode)
+            .join(SourceEndpointObservedPath, SourceEndpointObservedPath.access_node_id == AccessNode.id)
+            .where(
+                SourceEndpointObservedPath.source_endpoint_id == endpoint.id,
+                AccessNode.provider_name == HELPER_PROVIDER_NAME,
+                AccessNode.os_family == "windows",
+                AccessNode.status == "active",
+            )
+            .distinct()
+            .order_by(AccessNode.id)
+        )
+    )
+    tokens: list[UUID] = []
+    for node in registered_nodes:
+        try:
+            operation = create_known_source_attestation_operation(db, source.id, node)
+        except WindowsHelperServiceError as exc:
+            if exc.code in {
+                "access_node_unavailable",
+                "helper_offline",
+                "helper_credential_unavailable",
+                "known_source_attestation_capability_unavailable",
+            }:
+                continue
+            raise
+        tokens.append(operation.operation_id)
+    if tokens:
+        return WindowsSourceUiRouteCheck(
+            stage="checking_routes",
+            observation_tokens=tokens,
+            safe_message="Verifying registered routes for this device.",
+        )
+
     nodes = list(
         db.scalars(
             select(AccessNode).where(
@@ -496,7 +533,7 @@ def begin_profile_route_check(db: Session, source_profile_id: int) -> WindowsSou
             .order_by(AccessNode.id)
         )
     )
-    tokens: list[UUID] = []
+    tokens = []
     for node in nodes:
         try:
             operation = create_volume_observation_for_access_node(
@@ -539,6 +576,7 @@ def resolve_profile_route(
         )
     matching: list[tuple[UUID, AccessNode]] = []
     pending = False
+    optimized_routes = False
     for token in request.observation_tokens:
         status = get_operation_status(db, token)
         if status.source_profile_id != source.id or status.source_endpoint_id != endpoint.id:
@@ -547,10 +585,20 @@ def resolve_profile_route(
                 "A route observation is not bound to the selected Source.",
                 http_status=409,
             )
+        optimized_routes = optimized_routes or status.operation_type == "attest_inventory"
         if status.state in {"pending", "claimed"}:
             pending = True
             continue
         if status.state != "completed":
+            continue
+        if status.operation_type == "attest_inventory":
+            try:
+                operation, result = completed_inventory_attestation(db, token, require_fresh=True)
+            except WindowsHelperServiceError:
+                continue
+            node = db.get(AccessNode, operation.access_node_id)
+            if result.result_status.value == "success" and node is not None and helper_is_online(node):
+                matching.append((token, node))
             continue
         operation, result = completed_volume_observation(db, token, require_fresh=True)
         mounted_capability = mounted_volume_capability_version(operation.access_node)
@@ -583,6 +631,10 @@ def resolve_profile_route(
     by_node = {node.id: (token, node) for token, node in matching}
     candidates = list(by_node.values())
     if not candidates:
+        if optimized_routes:
+            fallback = begin_legacy_profile_route_check(db, source, endpoint)
+            if fallback.observation_tokens:
+                return fallback
         return WindowsSourceUiRouteCheck(
             stage="unavailable",
             observation_tokens=request.observation_tokens,
@@ -619,7 +671,12 @@ def resolve_profile_route(
             routes=routes,
             safe_message="This device is available through more than one computer. Choose one for this run.",
         )
-    probe_token = create_resolved_profile_probe_operation(db, selected[0])
+    selected_status = get_operation_status(db, selected[0])
+    probe_token = (
+        selected[0]
+        if selected_status.operation_type == "attest_inventory"
+        else create_resolved_profile_probe_operation(db, selected[0])
+    )
     return WindowsSourceUiRouteCheck(
         stage="checking_source",
         observation_tokens=request.observation_tokens,
@@ -629,16 +686,64 @@ def resolve_profile_route(
     )
 
 
+def begin_legacy_profile_route_check(
+    db: Session,
+    source: IngestionSource,
+    endpoint: SourceEndpoint,
+) -> WindowsSourceUiRouteCheck:
+    nodes = list(
+        db.scalars(
+            select(AccessNode).where(
+                AccessNode.provider_name == HELPER_PROVIDER_NAME,
+                AccessNode.os_family == "windows",
+                AccessNode.status == "active",
+            ).order_by(AccessNode.id)
+        )
+    )
+    tokens: list[UUID] = []
+    for node in nodes:
+        try:
+            operation = create_volume_observation_for_access_node(
+                db,
+                node,
+                source_endpoint_id=endpoint.id,
+                source_profile_id=source.id,
+            )
+        except WindowsHelperServiceError as exc:
+            if exc.code in {
+                "helper_offline",
+                "helper_credential_unavailable",
+                "volume_observation_capability_unavailable",
+            }:
+                continue
+            raise
+        tokens.append(operation.operation_id)
+    return WindowsSourceUiRouteCheck(
+        stage="checking_routes" if tokens else "unavailable",
+        observation_tokens=tokens,
+        safe_message=(
+            "Checking available computers using the compatibility route."
+            if tokens
+            else "Device not connected."
+        ),
+    )
+
+
 def create_profile_probe(db: Session, source_profile_id: int) -> WindowsSourceUiOperation:
     source, endpoint, node = windows_helper_profile_binding(db, source_profile_id)
     if not helper_is_online(node):
         raise WindowsHelperServiceError(
             "helper_offline", "Windows access is not currently available.", http_status=409
         )
-    operation = (
-        create_volume_observation_operation(db, source.id)
-        if endpoint.source_type in {"external_device", "removable_media"}
-        else create_probe_operation(
+    try:
+        operation = create_known_source_attestation_operation(db, source.id, node)
+    except WindowsHelperServiceError as exc:
+        if exc.code != "known_source_attestation_capability_unavailable":
+            raise
+        operation = (
+            create_volume_observation_operation(db, source.id)
+            if endpoint.source_type in {"external_device", "removable_media"}
+            else create_probe_operation(
             db,
             CreateWindowsHelperProbeOperationRequest(
                 access_node_id=UUID(node.access_node_uuid),
@@ -648,7 +753,7 @@ def create_profile_probe(db: Session, source_profile_id: int) -> WindowsSourceUi
                 source_profile_id=source.id,
             ),
         )
-    )
+        )
     return WindowsSourceUiOperation(
         operation_token=operation.operation_id,
         stage="checking_source",
@@ -672,12 +777,12 @@ def operation_status(db: Session, operation_id: UUID) -> WindowsSourceUiOperatio
             operation_token=operation_id,
             stage=(
                 "checking_source"
-                if status.operation_type in {"probe_source", "observe_volumes"}
+                if status.operation_type in {"probe_source", "observe_volumes", "attest_inventory"}
                 else "preparing_files"
             ),
             safe_message=(
                 "Checking the selected Windows Source."
-                if status.operation_type in {"probe_source", "observe_volumes"}
+                if status.operation_type in {"probe_source", "observe_volumes", "attest_inventory"}
                 else "Preparing the bounded file list."
             ),
         )
@@ -702,6 +807,18 @@ def operation_status(db: Session, operation_id: UUID) -> WindowsSourceUiOperatio
         )
     if status.operation_type == "probe_source":
         ready = bool(status.probe_result and status.probe_result.result_status.value == "success")
+        return WindowsSourceUiOperation(
+            operation_token=operation_id,
+            stage="ready" if ready else "failed",
+            source_ready=ready,
+            safe_message="Source is ready." if ready else "The selected Source is not ready.",
+        )
+    if status.operation_type == "attest_inventory":
+        try:
+            _, result = completed_inventory_attestation(db, operation_id, require_fresh=True)
+            ready = result.result_status.value == "success"
+        except WindowsHelperServiceError:
+            ready = False
         return WindowsSourceUiOperation(
             operation_token=operation_id,
             stage="ready" if ready else "failed",

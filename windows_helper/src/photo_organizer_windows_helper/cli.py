@@ -15,6 +15,7 @@ from windows_helper_shared.channel import (
     ClaimedAcquireOperation,
     ClaimedChildAttestationOperation,
     ClaimedInventoryOperation,
+    ClaimedInventoryAttestationOperation,
     ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
     HelperHeartbeatRequest,
@@ -22,13 +23,14 @@ from windows_helper_shared.channel import (
 )
 from windows_helper_shared.protocol import (
     HelperInventoryPageResponse,
+    HelperKnownSourceAttestationResponse,
     HelperChildAttestationResponse,
     HelperObserveVolumesResponse,
     HelperProbeResponse,
 )
 
 from .acquisition import execute_acquisition
-from .attestation import ChildAttestationAuthority, ChildIdentityMismatch
+from .attestation import ChildAttestationAuthority, ChildIdentityMismatch, InventoryAttestationAuthority
 from . import HELPER_VERSION
 from .capabilities import capability_identity
 from .client import HelperApiClient, HelperClientError
@@ -76,7 +78,8 @@ def _serve(
     idle_timeout_seconds: float | None = None,
 ) -> int:
     executor = HelperOperationExecutor()
-    attestation_authority = ChildAttestationAuthority()
+    child_attestation_authority = ChildAttestationAuthority()
+    inventory_attestation_authority = InventoryAttestationAuthority()
     active_child_until = 0.0
     active_poll_delay = 0.05
     last_heartbeat = 0.0
@@ -106,7 +109,7 @@ def _serve(
                             operation,
                             client,
                             credential,
-                            attestation_authority=attestation_authority,
+                            attestation_authority=child_attestation_authority,
                         )
                         client.complete_acquire(credential, operation.operation_id, result)
                         active_child_until = time.monotonic() + 2.0
@@ -115,7 +118,11 @@ def _serve(
                         continue
                     result = executor.execute(
                         operation,
-                        attestation_authority=attestation_authority,
+                        attestation_authority=(
+                            inventory_attestation_authority
+                            if isinstance(operation, (ClaimedInventoryOperation, ClaimedInventoryAttestationOperation))
+                            else child_attestation_authority
+                        ),
                     )
                     if (
                         isinstance(operation, ClaimedProbeOperation)
@@ -127,6 +134,15 @@ def _serve(
                         and isinstance(result, HelperObserveVolumesResponse)
                     ):
                         client.complete_volume_observation(
+                            credential,
+                            operation.operation_id,
+                            result,
+                        )
+                    elif (
+                        isinstance(operation, ClaimedInventoryAttestationOperation)
+                        and isinstance(result, HelperKnownSourceAttestationResponse)
+                    ):
+                        client.complete_inventory_attestation(
                             credential,
                             operation.operation_id,
                             result,

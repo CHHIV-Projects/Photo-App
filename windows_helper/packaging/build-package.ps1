@@ -6,7 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$version = "0.5.3"
+$version = "0.5.4"
 $source = (Resolve-Path -LiteralPath $SourceRoot).Path
 $output = [System.IO.Path]::GetFullPath($OutputRoot)
 $helperRoot = Join-Path $source "windows_helper"

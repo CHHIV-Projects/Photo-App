@@ -16,6 +16,7 @@ from app.services.windows_helper.operations import (
     complete_child_attestation_operation,
     claim_operation,
     complete_inventory_operation,
+    complete_inventory_attestation_operation,
     complete_probe_operation,
     complete_volume_observation_operation,
     fail_operation,
@@ -44,6 +45,7 @@ from app.windows_helper_shared.protocol import (
     HelperAcquireItemResponse,
     HelperChildAttestationResponse,
     HelperInventoryPageResponse,
+    HelperKnownSourceAttestationResponse,
     HelperObserveVolumesResponse,
     HelperProbeResponse,
     MAX_ACQUISITION_CHUNK_BYTES,
@@ -154,6 +156,22 @@ def complete_inventory(
 ) -> HelperOperationCompletionResponse:
     try:
         return complete_inventory_operation(db, credential, operation_id, body)
+    except WindowsHelperServiceError as exc:
+        _raise_http(exc)
+
+
+@router.post(
+    "/operations/{operation_id}/complete-inventory-attestation",
+    response_model=HelperOperationCompletionResponse,
+)
+def complete_inventory_attestation(
+    operation_id: UUID,
+    body: HelperKnownSourceAttestationResponse,
+    credential: WindowsHelperCredential = Depends(get_authenticated_helper),
+    db: Session = Depends(get_db_session),
+) -> HelperOperationCompletionResponse:
+    try:
+        return complete_inventory_attestation_operation(db, credential, operation_id, body)
     except WindowsHelperServiceError as exc:
         _raise_http(exc)
 

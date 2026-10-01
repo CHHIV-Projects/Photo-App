@@ -11,15 +11,22 @@ import ntpath
 import secrets
 from typing import Literal
 
-from windows_helper_shared.channel import ClaimedChildAttestationOperation
+from windows_helper_shared.channel import (
+    ClaimedChildAttestationOperation,
+    ClaimedInventoryAttestationOperation,
+)
 from windows_helper_shared.protocol import (
     HelperAcquireItemRequest,
     HelperChildAttestationResponse,
     HelperProbeRequest,
+    HelperInventoryPageRequest,
+    HelperKnownSourceAttestationResponse,
+    KnownSourceAttestationResultStatus,
 )
 
 from .operations import execute_probe
 from windows_helper_shared.identity.windows import WindowsIdentityCollector
+from .known_source import KnownSourceVerification, verify_known_source
 
 
 AttestationValidation = Literal["valid", "refresh_required", "binding_mismatch"]
@@ -27,6 +34,110 @@ AttestationValidation = Literal["valid", "refresh_required", "binding_mismatch"]
 
 class ChildIdentityMismatch(RuntimeError):
     """The full child probe did not prove the approved physical Source."""
+
+
+class InventoryAttestationAuthority:
+    """Signs distinct, process-local authority for one inventory generation."""
+
+    def __init__(self, signing_key: bytes | None = None) -> None:
+        self._key = signing_key or secrets.token_bytes(32)
+
+    def attest(
+        self,
+        operation: ClaimedInventoryAttestationOperation,
+        *,
+        verifier: object = verify_known_source,
+        now: datetime | None = None,
+    ) -> HelperKnownSourceAttestationResponse:
+        request = operation.request
+        evidence: KnownSourceVerification = verifier(request)  # type: ignore[operator]
+        status = KnownSourceAttestationResultStatus(evidence.status)
+        common = dict(
+            request_id=operation.operation_id,
+            result_status=status,
+            intended_access_node_id=request.intended_access_node_id,
+            source_endpoint_id=request.source_endpoint_id,
+            source_profile_id=request.source_profile_id,
+            source_type=request.source_type,
+            expected_identity_fingerprint=request.expected_identity_fingerprint,
+            expected_identity_fingerprint_version=request.expected_identity_fingerprint_version,
+            parent_workflow_id=request.parent_workflow_id,
+            inventory_generation=request.inventory_generation,
+            continuation_cursor=request.continuation_cursor,
+        )
+        if status != KnownSourceAttestationResultStatus.SUCCESS:
+            return HelperKnownSourceAttestationResponse(**common)
+        issued_at = now or datetime.now(timezone.utc)
+        expires_at = issued_at + timedelta(seconds=request.attestation_lifetime_seconds)
+        root = evidence.runtime_source_root or ""
+        payload = self._payload(request=request, root=root, issued_at=issued_at, expires_at=expires_at)
+        encoded = _b64encode(payload)
+        signature = _b64encode(hmac.new(self._key, payload, hashlib.sha256).digest())
+        return HelperKnownSourceAttestationResponse(
+            **common,
+            runtime_source_root=root,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            inventory_attestation_token=f"iat1.{encoded}.{signature}",
+        )
+
+    def validate(
+        self,
+        request: HelperInventoryPageRequest,
+        *,
+        now: datetime | None = None,
+    ) -> AttestationValidation:
+        token = request.inventory_attestation_token
+        if not token or request.parent_workflow_id is None or request.inventory_generation is None:
+            return "refresh_required"
+        try:
+            prefix, encoded, supplied_signature = token.split(".", 2)
+            if prefix != "iat1":
+                return "refresh_required"
+            payload = _b64decode(encoded)
+            expected_signature = _b64encode(hmac.new(self._key, payload, hashlib.sha256).digest())
+            if not hmac.compare_digest(supplied_signature, expected_signature):
+                return "refresh_required"
+            values = json.loads(payload.decode("utf-8"))
+        except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+            return "refresh_required"
+        expected = {
+            "version": "inventory-attestation-v1",
+            "protocol_version": request.protocol_version,
+            "access_node_id": str(request.intended_access_node_id),
+            "source_endpoint_id": request.source_endpoint_id,
+            "source_profile_id": request.source_profile_id,
+            "source_type": request.source_type.value,
+            "fingerprint": request.expected_identity_fingerprint,
+            "root": ntpath.normcase(ntpath.normpath(request.provider_native_path.provider_native_root)),
+            "parent_workflow_id": str(request.parent_workflow_id),
+            "inventory_generation": str(request.inventory_generation),
+        }
+        if any(values.get(key) != value for key, value in expected.items()):
+            return "binding_mismatch"
+        try:
+            expires_at = datetime.fromisoformat(values["expires_at"])
+        except (KeyError, TypeError, ValueError):
+            return "refresh_required"
+        return "valid" if expires_at > (now or datetime.now(timezone.utc)) else "refresh_required"
+
+    @staticmethod
+    def _payload(*, request: object, root: str, issued_at: datetime, expires_at: datetime) -> bytes:
+        values = {
+            "version": "inventory-attestation-v1",
+            "protocol_version": request.protocol_version,
+            "access_node_id": str(request.intended_access_node_id),
+            "source_endpoint_id": request.source_endpoint_id,
+            "source_profile_id": request.source_profile_id,
+            "source_type": request.source_type.value,
+            "fingerprint": request.expected_identity_fingerprint,
+            "root": ntpath.normcase(ntpath.normpath(root)),
+            "parent_workflow_id": str(request.parent_workflow_id),
+            "inventory_generation": str(request.inventory_generation),
+            "issued_at": issued_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+        }
+        return json.dumps(values, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
 
 def _b64encode(value: bytes) -> str:

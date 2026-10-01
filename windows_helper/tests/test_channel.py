@@ -196,7 +196,7 @@ class ClientTests(unittest.TestCase):
             if item.name == "mounted_volume_observation"
         ]
         self.assertEqual([(item.name, item.version) for item in mounted], [("mounted_volume_observation", "2")])
-        self.assertEqual(capability.helper_version, "0.5.3")
+        self.assertEqual(capability.helper_version, "0.5.4")
         pairing_request = PairingCompleteRequest(
             pairing_code="p_" + "a" * 32 + "." + "b" * 43,
             access_node_id=node_id,

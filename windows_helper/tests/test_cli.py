@@ -97,7 +97,7 @@ class CliRedactionTests(unittest.TestCase):
         )
         response = HelperSessionResponse(
             access_node_id=node_id, credential_id="c_public", credential_version=1,
-            helper_version="0.5.3",
+            helper_version="0.5.4",
         )
         with tempfile.TemporaryDirectory() as directory, patch(
             "photo_organizer_windows_helper.cli.DpapiCredentialStore", return_value=store
@@ -109,7 +109,7 @@ class CliRedactionTests(unittest.TestCase):
             self.assertEqual(run(["status", "--output-file", str(output_path)]), 0)
             result = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(result["command"], "status")
-        self.assertEqual(result["helper_version"], "0.5.3")
+        self.assertEqual(result["helper_version"], "0.5.4")
         self.assertNotIn("raw-token-not-for-output", json.dumps(result))
 
     def test_active_child_uses_bounded_adaptive_short_polling(self) -> None:

@@ -47,6 +47,7 @@ from app.services.source_acquisition.schema import ensure_source_acquisition_sch
 from app.services.windows_helper.operations import (
     claim_operation,
     complete_inventory_operation,
+    complete_inventory_attestation_operation,
     complete_probe_operation,
     complete_volume_observation_operation,
     create_inventory_operation,
@@ -88,10 +89,12 @@ from app.windows_helper_shared.protocol import (
     HelperCapabilityIdentity,
     HelperInventoryItem,
     HelperInventoryPageResponse,
+    HelperKnownSourceAttestationResponse,
     HelperObserveVolumesResponse,
     HelperProbeResponse,
     InventoryEntryKind,
     InventoryResultStatus,
+    KnownSourceAttestationResultStatus,
     MachineIssue,
     MountedVolumeObservation,
     MountedVolumeStorageEvidence,
@@ -115,6 +118,7 @@ def _capability(
     access_node_id: UUID,
     *,
     mounted_volume_version: str = "1",
+    inventory_attestation: bool = False,
 ) -> HelperCapabilityIdentity:
     return HelperCapabilityIdentity(
         helper_version=(
@@ -137,7 +141,11 @@ def _capability(
                 name="mounted_volume_observation",
                 version=mounted_volume_version,
             ),
-        ],
+        ] + (
+            [CapabilityVersion(name="known_source_inventory_attestation", version="1")]
+            if inventory_attestation
+            else []
+        ),
     )
 
 
@@ -258,6 +266,19 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
         node.capabilities_json = _capability(
             self.node_id,
             mounted_volume_version=version,
+        ).model_dump_json()
+        node.last_seen_at = datetime.now(timezone.utc)
+        self.db.commit()
+        return node
+
+    def _enable_inventory_attestation(self) -> AccessNode:
+        node = self.db.scalar(
+            select(AccessNode).where(AccessNode.access_node_uuid == str(self.node_id))
+        )
+        node.capabilities_json = _capability(
+            self.node_id,
+            mounted_volume_version="2",
+            inventory_attestation=True,
         ).model_dump_json()
         node.last_seen_at = datetime.now(timezone.utc)
         self.db.commit()
@@ -589,6 +610,77 @@ class WindowsHelperSourceWorkflowTests(unittest.TestCase):
         self.db.commit()
         single = begin_profile_route_check(self.db, source.id)
         self.assertEqual(len(single.observation_tokens), 1)
+
+    def test_known_external_route_uses_targeted_inventory_attestation(self) -> None:
+        endpoint, source = self._create_external_profile()
+        self._enable_inventory_attestation()
+        started = begin_profile_route_check(self.db, source.id)
+        self.assertEqual(started.stage, "checking_routes")
+        self.assertEqual(len(started.observation_tokens), 1)
+
+        claimed = claim_operation(self.db, self.credential)
+        self.assertEqual(claimed.operation.operation_type, "attest_inventory")
+        request = claimed.operation.request
+        issued = datetime.now(timezone.utc)
+        complete_inventory_attestation_operation(
+            self.db,
+            self.credential,
+            claimed.operation.operation_id,
+            HelperKnownSourceAttestationResponse(
+                request_id=claimed.operation.operation_id,
+                result_status=KnownSourceAttestationResultStatus.SUCCESS,
+                intended_access_node_id=request.intended_access_node_id,
+                source_endpoint_id=endpoint.id,
+                source_profile_id=source.id,
+                source_type=SourceType.EXTERNAL,
+                expected_identity_fingerprint=FINGERPRINT,
+                parent_workflow_id=request.parent_workflow_id,
+                inventory_generation=request.inventory_generation,
+                runtime_source_root=request.configured_source_root,
+                issued_at=issued,
+                expires_at=issued + timedelta(minutes=5),
+                inventory_attestation_token="a" * 64,
+            ),
+        )
+        readiness = SourceProfileReadinessService(self.db, _ForbiddenLocalProbe()).check_readiness(
+            source.id,
+            claimed.operation.operation_id,
+        )
+        self.assertEqual(readiness.readiness_status, "ready")
+        self.assertEqual(readiness.identity_match_status, "matched")
+        selection = SourceSelectionService(self.db, _ForbiddenLocalProbe()).select_source(
+            SourceSelectionRequest(
+                source_profile_id=source.id,
+                helper_probe_operation_id=claimed.operation.operation_id,
+            )
+        )
+        self.assertEqual(selection.result, "selected")
+        resolved = resolve_profile_route(
+            self.db,
+            source.id,
+            WindowsSourceUiRouteResolveRequest(
+                observation_tokens=started.observation_tokens,
+            ),
+        )
+        self.assertEqual(resolved.probe_operation_token, claimed.operation.operation_id)
+        inventory = create_inventory_operation(
+            self.db,
+            CreateWindowsHelperInventoryOperationRequest(
+                source_profile_id=source.id,
+                probe_operation_id=claimed.operation.operation_id,
+                page_size=100,
+            ),
+        )
+        inventory_claim = claim_operation(self.db, self.credential)
+        self.assertEqual(inventory_claim.operation.operation_id, inventory.operation_id)
+        self.assertEqual(
+            inventory_claim.operation.request.inventory_attestation_token,
+            "a" * 64,
+        )
+        self.assertEqual(
+            inventory_claim.operation.request.inventory_generation,
+            request.inventory_generation,
+        )
 
     def test_portable_discovery_recognizes_known_fingerprint_without_exposing_it(self) -> None:
         endpoint, _source = self._create_external_profile()

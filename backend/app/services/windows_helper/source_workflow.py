@@ -19,7 +19,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.ingestion_source import IngestionSource
 from app.models.source_acquisition import SourceAcquisitionRun
-from app.models.source_endpoint import SourceEndpoint
+from app.models.source_endpoint import AccessNode, SourceEndpoint
 from app.models.source_intake_run import SourceIntakeRun
 from app.models.windows_helper import WindowsHelperOperation
 from app.models.windows_source_workflow import (
@@ -39,6 +39,8 @@ from app.services.source_acquisition.service import (
 )
 from app.services.source_acquisition.workflow import advance_source_acquisition_workflow
 from app.services.windows_helper.operations import (
+    completed_inventory_attestation,
+    create_known_source_attestation_operation,
     create_inventory_operation,
     get_operation_status,
 )
@@ -147,6 +149,11 @@ def create_inventory_workflow(
         )
     inventory_request = HelperInventoryPageRequest.model_validate_json(operation.request_json)
     row = WindowsSourceWorkflow(
+        workflow_uuid=(
+            str(inventory_request.parent_workflow_id)
+            if inventory_request.parent_workflow_id is not None
+            else str(uuid5(first_inventory_operation_id, "legacy-inventory-workflow-v1"))
+        ),
         source_profile_id=source.id,
         source_endpoint_id=endpoint.id,
         access_node_id=operation.access_node_id,
@@ -457,6 +464,33 @@ def _advance_inventory(db: Session, row: WindowsSourceWorkflow) -> bool:
     status = get_operation_status(db, UUID(page.operation_uuid))
     if status.state in {"pending", "claimed"}:
         return True
+    if status.operation_type == "attest_inventory":
+        if status.state != "completed":
+            raise WindowsHelperServiceError(
+                "inventory_chain_interrupted",
+                "The inventory attestation stopped. Prepare a fresh proposal.",
+                http_status=409,
+            )
+        operation, attestation = completed_inventory_attestation(
+            db,
+            UUID(page.operation_uuid),
+            require_fresh=True,
+            expected_source_profile_id=row.source_profile_id,
+        )
+        inventory = create_inventory_operation(
+            db,
+            CreateWindowsHelperInventoryOperationRequest(
+                source_profile_id=row.source_profile_id,
+                probe_operation_id=UUID(operation.operation_uuid),
+                page_size=100,
+                inventory_generation=attestation.inventory_generation,
+                cursor=attestation.continuation_cursor,
+            ),
+        )
+        page.operation_uuid = str(inventory.operation_id)
+        db.add(page)
+        db.commit()
+        return True
     if status.state != "completed" or status.inventory_result is None or not status.result_digest:
         raise WindowsHelperServiceError(
             "inventory_chain_interrupted",
@@ -464,6 +498,36 @@ def _advance_inventory(db: Session, row: WindowsSourceWorkflow) -> bool:
             http_status=409,
         )
     result = status.inventory_result
+    if result.result_status.value == "attestation_required":
+        inventory_operation = db.scalar(
+            select(WindowsHelperOperation).where(
+                WindowsHelperOperation.operation_uuid == page.operation_uuid
+            )
+        )
+        if inventory_operation is None:
+            raise WindowsHelperServiceError(
+                "inventory_chain_interrupted", "The inventory operation is unavailable.", http_status=409
+            )
+        inventory_request = HelperInventoryPageRequest.model_validate_json(
+            inventory_operation.request_json
+        )
+        node = db.get(AccessNode, row.access_node_id)
+        if node is None or inventory_request.parent_workflow_id is None:
+            raise WindowsHelperServiceError(
+                "inventory_chain_interrupted", "The inventory authority is unavailable.", http_status=409
+            )
+        refresh = create_known_source_attestation_operation(
+            db,
+            row.source_profile_id,
+            node,
+            parent_workflow_id=inventory_request.parent_workflow_id,
+            inventory_generation=result.inventory_generation,
+            continuation_cursor=inventory_request.cursor,
+        )
+        page.operation_uuid = str(refresh.operation_id)
+        db.add(page)
+        db.commit()
+        return True
     if result.result_status.value != "success":
         raise WindowsHelperServiceError(
             "inventory_chain_interrupted",
@@ -580,16 +644,31 @@ def _advance_inventory(db: Session, row: WindowsSourceWorkflow) -> bool:
             )
         )
         if existing_next is None:
-            operation = create_inventory_operation(
-                db,
-                CreateWindowsHelperInventoryOperationRequest(
-                    source_profile_id=row.source_profile_id,
-                    probe_operation_id=UUID(row.probe_operation_uuid),
-                    page_size=100,
+            try:
+                operation = create_inventory_operation(
+                    db,
+                    CreateWindowsHelperInventoryOperationRequest(
+                        source_profile_id=row.source_profile_id,
+                        probe_operation_id=UUID(row.probe_operation_uuid),
+                        page_size=100,
+                        inventory_generation=UUID(row.inventory_generation or ""),
+                        cursor=result.next_cursor,
+                    ),
+                )
+            except WindowsHelperServiceError as exc:
+                if exc.code != "inventory_attestation_expired":
+                    raise
+                node = db.get(AccessNode, row.access_node_id)
+                if node is None:
+                    raise
+                operation = create_known_source_attestation_operation(
+                    db,
+                    row.source_profile_id,
+                    node,
+                    parent_workflow_id=UUID(row.workflow_uuid),
                     inventory_generation=UUID(row.inventory_generation or ""),
-                    cursor=result.next_cursor,
-                ),
-            )
+                    continuation_cursor=result.next_cursor,
+                )
             db.add(
                 WindowsSourceWorkflowPage(
                     workflow_id=row.id,

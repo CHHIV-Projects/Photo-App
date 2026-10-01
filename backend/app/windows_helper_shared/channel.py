@@ -13,6 +13,7 @@ from .protocol import (
     HelperChildAttestationRequest,
     HelperCapabilityIdentity,
     HelperInventoryPageRequest,
+    HelperKnownSourceAttestationRequest,
     HelperObserveVolumesRequest,
     HelperProbeRequest,
     PROTOCOL_VERSION,
@@ -97,6 +98,13 @@ class ClaimedInventoryOperation(_StrictChannelModel):
     request: HelperInventoryPageRequest
 
 
+class ClaimedInventoryAttestationOperation(_StrictChannelModel):
+    operation_type: Literal["attest_inventory"] = "attest_inventory"
+    operation_id: UUID
+    lease_expires_at: datetime
+    request: HelperKnownSourceAttestationRequest
+
+
 class ClaimedAcquireOperation(_StrictChannelModel):
     operation_type: Literal["acquire_item"] = "acquire_item"
     operation_id: UUID
@@ -115,6 +123,7 @@ ClaimedHelperOperation = Annotated[
     ClaimedProbeOperation
     | ClaimedObserveVolumesOperation
     | ClaimedInventoryOperation
+    | ClaimedInventoryAttestationOperation
     | ClaimedChildAttestationOperation
     | ClaimedAcquireOperation,
     Field(discriminator="operation_type"),
@@ -128,7 +137,7 @@ class HelperOperationClaimResponse(_StrictChannelModel):
 
 class HelperOperationCompletionResponse(_StrictChannelModel):
     operation_id: UUID
-    operation_type: Literal["probe_source", "observe_volumes", "inventory_page", "attest_child", "acquire_item"]
+    operation_type: Literal["probe_source", "observe_volumes", "attest_inventory", "inventory_page", "attest_child", "acquire_item"]
     state: Literal["completed"] = "completed"
     result_digest: str = Field(min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$")
     idempotent_replay: bool = False
