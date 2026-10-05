@@ -138,6 +138,94 @@ class GeneralizedNamespaceTopologyTests(unittest.TestCase):
         self.assertNotIn("eval ", self.script)
         self.assertNotIn("bash -c", self.script)
 
+    def test_namespace_requires_a_shared_peer_group_distinct_from_root(self) -> None:
+        exact_identity = "/mnt/photo-organizer-sources 1111-2222 ext4"
+        cases = [
+            ("51 30 1 shared", False),
+            ("51 30 73 shared", True),
+            ("51 30 - private", False),
+            ("51 30 73 other", False),
+        ]
+        for source_record, expected in cases:
+            with self.subTest(source_record=source_record):
+                result = run_bash(
+                    f"""
+                    EXPECTED_NAMESPACE_UUID=1111-2222
+                    EXPECTED_NAMESPACE_FSTYPE=ext4
+                    query_mountpoint() {{ local -n result_ref="$3"; result_ref="{exact_identity}"; }}
+                    query_mountinfo_record() {{
+                      local -n result_ref="$2"
+                      if [[ "$1" == "/" ]]; then
+                        result_ref="30 1 1 shared"
+                      else
+                        result_ref="{source_record}"
+                      fi
+                    }}
+                    if require_namespace; then actual=true; else actual=false; fi
+                    [[ "$actual" == "{str(expected).lower()}" ]]
+                    """
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_namespace_topology_comes_from_exact_mountinfo_peer_ids(self) -> None:
+        self.assertIn('open("/proc/self/mountinfo", encoding="utf-8")', self.script)
+        self.assertIn('value.startswith(("shared:", "master:", "propagate_from:"))', self.script)
+        self.assertIn('query_mountinfo_record "/" root_rows', self.script)
+        self.assertIn('query_mountinfo_record "${SOURCE_NAMESPACE}" namespace_rows', self.script)
+
+    def test_safe_conversion_detaches_non_recursively_then_makes_shared(self) -> None:
+        result = run_bash(
+            """
+            source_namespace_child_mount_count() { local -n result_ref="$1"; result_ref=0; }
+            mount() { printf '%s\n' "$*"; }
+            establish_independent_namespace_topology
+            """
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                "--make-private /mnt/photo-organizer-sources",
+                "--make-shared /mnt/photo-organizer-sources",
+            ],
+        )
+        self.assertNotIn("--make-rprivate", self.script)
+
+    def test_conversion_refuses_active_child_source_mounts(self) -> None:
+        result = run_bash(
+            """
+            source_namespace_child_mount_count() { local -n result_ref="$1"; result_ref=1; }
+            mount() { printf 'unexpected-mount\n'; return 97; }
+            if establish_independent_namespace_topology; then exit 98; fi
+            [[ "$NAMESPACE_TRANSITION_ERROR" == *"unsafe while child Source mounts are active"* ]]
+            """
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("unexpected", result.stdout)
+
+    def test_already_correct_base_is_idempotent_without_mount_operations(self) -> None:
+        result = run_bash(
+            """
+            DATA_READ_GROUP=root
+            install() { :; }
+            query_mountpoint() { local -n result_ref="$3"; result_ref="present"; }
+            require_namespace_identity() { :; }
+            classify_namespace_topology() {
+              SOURCE_NAMESPACE_TOPOLOGY=independent_shared
+              ROOT_PEER_GROUP=1
+              SOURCE_NAMESPACE_PEER_GROUP=73
+            }
+            require_namespace() { :; }
+            validate_local_backing() { :; }
+            mount() { printf 'unexpected-mount\n'; return 97; }
+            umount() { printf 'unexpected-unmount\n'; return 98; }
+            prepare_base
+            """
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("unexpected", result.stdout)
+        self.assertIn("root peer 1; Source peer 73", result.stdout)
+
     def test_existing_exact_slot_returns_without_metadata_or_rebind(self) -> None:
         result = run_bash(
             """
