@@ -116,6 +116,9 @@ class Settings:
 	windows_inventory_max_entries: int = int(
 		os.getenv("WINDOWS_INVENTORY_MAX_ENTRIES", "100000")
 	)
+	windows_child_attestation_ttl_seconds: int = int(
+		os.getenv("WINDOWS_CHILD_ATTESTATION_TTL_SECONDS", "900")
+	)
 	nas_mount_path: str = (os.getenv("NAS_MOUNT_PATH") or "").strip()
 	nas_environment_marker: str = (
 		os.getenv("NAS_ENVIRONMENT_MARKER") or ".photo-organizer-environment"

@@ -7,12 +7,15 @@ import getpass
 import json
 import sys
 import time
+from pathlib import Path
 from typing import Sequence
 from uuid import UUID
 
 from windows_helper_shared.channel import (
     ClaimedAcquireOperation,
+    ClaimedChildAttestationOperation,
     ClaimedInventoryOperation,
+    ClaimedInventoryAttestationOperation,
     ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
     HelperHeartbeatRequest,
@@ -20,11 +23,14 @@ from windows_helper_shared.channel import (
 )
 from windows_helper_shared.protocol import (
     HelperInventoryPageResponse,
+    HelperKnownSourceAttestationResponse,
+    HelperChildAttestationResponse,
     HelperObserveVolumesResponse,
     HelperProbeResponse,
 )
 
 from .acquisition import execute_acquisition
+from .attestation import ChildAttestationAuthority, ChildIdentityMismatch, InventoryAttestationAuthority
 from . import HELPER_VERSION
 from .capabilities import capability_identity
 from .client import HelperApiClient, HelperClientError
@@ -41,15 +47,28 @@ def _parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command", required=True)
     pair = subcommands.add_parser("pair", help="Pair this Helper through the approved channel.")
     pair.add_argument("--access-node-id", required=True, type=UUID)
-    subcommands.add_parser("status", help="Check the authenticated Helper session.")
+    status = subcommands.add_parser("status", help="Check the authenticated Helper session.")
+    status.add_argument(
+        "--output-file",
+        help="Write the bounded redacted status JSON for a windowless packaged invocation.",
+    )
     subcommands.add_parser("heartbeat", help="Send one bounded presence heartbeat.")
     subcommands.add_parser("serve", help="Run the foreground bounded operation loop.")
     subcommands.add_parser("forget", help="Remove only the local protected credential/state.")
     return parser
 
 
-def _safe_output(**values: object) -> None:
-    print(json.dumps(values, sort_keys=True, separators=(",", ":")))
+def _safe_output(*, output_file: str | None = None, **values: object) -> None:
+    rendered = json.dumps(values, sort_keys=True, separators=(",", ":"))
+    if output_file is None:
+        print(rendered)
+        return
+    path = Path(output_file)
+    if not path.is_absolute() or path.suffix.casefold() != ".json" or not path.parent.is_dir():
+        raise ValueError("Status output file must be an absolute JSON path in an existing directory.")
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(rendered + "\n", encoding="utf-8")
+    temporary.replace(path)
 
 
 def _serve(
@@ -59,6 +78,10 @@ def _serve(
     idle_timeout_seconds: float | None = None,
 ) -> int:
     executor = HelperOperationExecutor()
+    child_attestation_authority = ChildAttestationAuthority()
+    inventory_attestation_authority = InventoryAttestationAuthority()
+    active_child_until = 0.0
+    active_poll_delay = 0.05
     last_heartbeat = 0.0
     idle = IdleDeadline(idle_timeout_seconds) if idle_timeout_seconds is not None else None
     try:
@@ -76,17 +99,31 @@ def _serve(
             claim = client.claim_operation(credential)
             operation = claim.operation
             if operation is not None:
+                active_poll_delay = 0.05
                 report_pending = False
                 if idle is not None:
                     idle.set_busy(True)
                 try:
                     if isinstance(operation, ClaimedAcquireOperation):
-                        result = execute_acquisition(operation, client, credential)
+                        result = execute_acquisition(
+                            operation,
+                            client,
+                            credential,
+                            attestation_authority=child_attestation_authority,
+                        )
                         client.complete_acquire(credential, operation.operation_id, result)
+                        active_child_until = time.monotonic() + 2.0
                         if idle is not None:
                             idle.set_busy(False)
                         continue
-                    result = executor.execute(operation)
+                    result = executor.execute(
+                        operation,
+                        attestation_authority=(
+                            inventory_attestation_authority
+                            if isinstance(operation, (ClaimedInventoryOperation, ClaimedInventoryAttestationOperation))
+                            else child_attestation_authority
+                        ),
+                    )
                     if (
                         isinstance(operation, ClaimedProbeOperation)
                         and isinstance(result, HelperProbeResponse)
@@ -102,16 +139,47 @@ def _serve(
                             result,
                         )
                     elif (
+                        isinstance(operation, ClaimedInventoryAttestationOperation)
+                        and isinstance(result, HelperKnownSourceAttestationResponse)
+                    ):
+                        client.complete_inventory_attestation(
+                            credential,
+                            operation.operation_id,
+                            result,
+                        )
+                    elif (
                         isinstance(operation, ClaimedInventoryOperation)
                         and isinstance(result, HelperInventoryPageResponse)
                     ):
                         client.complete_inventory(credential, operation.operation_id, result)
+                    elif (
+                        isinstance(operation, ClaimedChildAttestationOperation)
+                        and isinstance(result, HelperChildAttestationResponse)
+                    ):
+                        client.complete_child_attestation(
+                            credential,
+                            operation.operation_id,
+                            result,
+                        )
+                        active_child_until = time.monotonic() + 2.0
+                        if idle is not None:
+                            idle.set_busy(False)
+                        continue
                     else:
                         client.fail_operation(
                             credential,
                             operation.operation_id,
                             "operation_unsupported",
                         )
+                except ChildIdentityMismatch:
+                    try:
+                        client.fail_operation(
+                            credential,
+                            operation.operation_id,
+                            "identity_changed",
+                        )
+                    except HelperClientError:
+                        report_pending = True
                 except (OSError, RuntimeError, ValueError):
                     try:
                         client.fail_operation(
@@ -126,7 +194,11 @@ def _serve(
                         idle.set_busy(report_pending)
             if idle is not None and idle.should_exit():
                 return 0
-            time.sleep(claim.poll_after_seconds)
+            if operation is None and time.monotonic() < active_child_until:
+                time.sleep(active_poll_delay)
+                active_poll_delay = min(0.4, active_poll_delay * 2.0)
+            else:
+                time.sleep(claim.poll_after_seconds)
     except KeyboardInterrupt:
         _safe_output(command="serve", status="stopped")
         return 0
@@ -181,6 +253,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             if arguments.command == "status":
                 response = client.session(credential)
                 _safe_output(
+                    output_file=arguments.output_file,
                     command="status",
                     credential_status=response.credential_status,
                     access_node_id=str(response.access_node_id),
@@ -208,6 +281,20 @@ def run(argv: Sequence[str] | None = None) -> int:
                 )
         return 0
     except (HelperClientError, TunnelError, RuntimeError, ValueError):
+        if (
+            "arguments" in locals()
+            and arguments.command == "status"
+            and arguments.output_file is not None
+        ):
+            try:
+                _safe_output(
+                    output_file=arguments.output_file,
+                    command="status",
+                    status="failed",
+                    error_code="status_check_failed",
+                )
+            except (OSError, ValueError):
+                pass
         print("Windows Helper operation failed safely.", file=sys.stderr)
         return 1
 

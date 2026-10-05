@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import dataclass
 import hashlib
 import json
 import ntpath
@@ -58,6 +59,69 @@ from app.windows_helper_shared.protocol import (
 PROVIDER = "windows_helper"
 RUN_STATES = {"planned", "active", "completed", "failed", "cancelled"}
 ITEM_STATES = {"pending", "transferring", "verifying", "ready", "failed"}
+
+
+@dataclass(frozen=True)
+class _BridgeValidationSnapshot:
+    """Immutable evidence valid only for one in-process bridge state transition."""
+
+    run_id: int
+    state_digest: str
+    ready_root: Path
+    items: tuple[SourceAcquisitionItem, ...]
+    records: tuple[FileScanRecord, ...]
+    ready_file_evidence: tuple[tuple[int, int, int, int, int], ...]
+    reuses: tuple[tuple[SourceAcquisitionItem, Asset, Provenance] | None, ...]
+    plan: SourceAcquisitionBridgePlanResponse
+
+
+def _ready_snapshot_evidence(
+    records: list[FileScanRecord] | tuple[FileScanRecord, ...],
+) -> tuple[tuple[int, int, int, int, int], ...]:
+    evidence = []
+    for record in records:
+        try:
+            metadata = os.stat(record.full_path, follow_symlinks=False)
+        except OSError as exc:
+            raise WindowsHelperServiceError(
+                "bridge_snapshot_stale",
+                "A bridge ready object changed after validation.",
+                http_status=409,
+            ) from exc
+        evidence.append(
+            (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            )
+        )
+    return tuple(evidence)
+
+
+def _bridge_state_digest(run: SourceAcquisitionRun, items: list[SourceAcquisitionItem]) -> str:
+    return _digest(
+        {
+            "run": run.run_uuid,
+            "state": run.state,
+            "bridge_state": run.bridge_state,
+            "source_endpoint_id": run.source_endpoint_id,
+            "source_profile_id": run.source_profile_id,
+            "items": [
+                {
+                    "id": item.item_uuid,
+                    "state": item.state,
+                    "path": item.ready_relative_path,
+                    "size": item.expected_size_bytes,
+                    "sha256": item.linux_verified_sha256,
+                    "asset": item.bridged_asset_sha256,
+                    "provenance": item.bridged_provenance_id,
+                }
+                for item in items
+            ],
+        }
+    )
 
 
 def _now() -> datetime:
@@ -768,6 +832,7 @@ def _find_prior_observation_reuse(
     run: SourceAcquisitionRun,
     item: SourceAcquisitionItem,
     record: FileScanRecord,
+    verified_vault_assets: set[str] | None = None,
 ) -> tuple[SourceAcquisitionItem, Asset, Provenance] | None:
     candidates = db.execute(
         select(SourceAcquisitionItem, SourceAcquisitionRun)
@@ -787,6 +852,8 @@ def _find_prior_observation_reuse(
         )
         .order_by(SourceAcquisitionRun.id, SourceAcquisitionItem.ordinal)
     ).all()
+    # Resolve durable lineage authority before touching the canonical Vault. Multiple
+    # historical anchors for the same Asset/Provenance collapse to one authority.
     valid: dict[tuple[str, int], tuple[SourceAcquisitionItem, Asset, Provenance]] = {}
     for prior_item, prior_run in candidates:
         if not _same_provider_lineage(run, item, prior_run, prior_item):
@@ -801,23 +868,32 @@ def _find_prior_observation_reuse(
             or not _provenance_has_valid_acquisition_anchor(db, run, item, provenance)
         ):
             continue
-        _, conflict = _verify_existing_asset_vault_file(
-            HashedFile(record=record, sha256=asset.sha256),
-            ExistingAssetVaultState(
-                sha256=asset.sha256,
-                vault_path=asset.vault_path,
-                size_bytes=asset.size_bytes,
-            ),
-        )
-        if conflict is None:
-            valid[(asset.sha256, provenance.id)] = (prior_item, asset, provenance)
+        valid[(asset.sha256, provenance.id)] = (prior_item, asset, provenance)
     if len(valid) > 1:
         raise WindowsHelperServiceError(
             "bridge_prior_observation_ambiguous",
             "Prior Source-observation linkage is ambiguous.",
             http_status=409,
         )
-    return next(iter(valid.values()), None)
+    selected = next(iter(valid.values()), None)
+    if selected is None:
+        return None
+    _, asset, _ = selected
+    if verified_vault_assets is not None and asset.sha256 in verified_vault_assets:
+        return selected
+    _, conflict = _verify_existing_asset_vault_file(
+        HashedFile(record=record, sha256=asset.sha256),
+        ExistingAssetVaultState(
+            sha256=asset.sha256,
+            vault_path=asset.vault_path,
+            size_bytes=asset.size_bytes,
+        ),
+    )
+    if conflict is not None:
+        return None
+    if verified_vault_assets is not None:
+        verified_vault_assets.add(asset.sha256)
+    return selected
 
 
 def _bridge_observation_reuse(
@@ -825,9 +901,12 @@ def _bridge_observation_reuse(
     run: SourceAcquisitionRun,
     items: list[SourceAcquisitionItem],
     records: list[FileScanRecord],
+    verified_vault_assets: set[str] | None = None,
 ) -> list[tuple[SourceAcquisitionItem, Asset, Provenance] | None]:
     return [
-        _find_prior_observation_reuse(db, run, item, record)
+        _find_prior_observation_reuse(
+            db, run, item, record, verified_vault_assets=verified_vault_assets
+        )
         for item, record in zip(items, records, strict=True)
     ]
 
@@ -845,7 +924,12 @@ def _bridge_counts(db: Session) -> SourceAcquisitionBridgeCounts:
 
 
 def _validate_completed_bridge(
-    db: Session, run: SourceAcquisitionRun, items: list[SourceAcquisitionItem], ready_root: Path
+    db: Session,
+    run: SourceAcquisitionRun,
+    items: list[SourceAcquisitionItem],
+    ready_root: Path,
+    records: list[FileScanRecord],
+    reused: list[tuple[SourceAcquisitionItem, Asset, Provenance] | None],
 ) -> None:
     if (run.bridge_source_intake_run_id is None) != (run.bridge_ingestion_run_id is None):
         raise WindowsHelperServiceError(
@@ -875,8 +959,6 @@ def _validate_completed_bridge(
                 "bridge_linkage_inconsistent", "Completed bridge run linkage is inconsistent.", http_status=409
             )
 
-    _, records = _bridge_records(run, items)
-    reused = _bridge_observation_reuse(db, run, items, records)
     common_intake_links = 0
     for item, reuse in zip(items, reused, strict=True):
         if not item.bridged_asset_sha256 or item.bridged_provenance_id is None:
@@ -920,7 +1002,12 @@ def _validate_completed_bridge(
         )
 
 
-def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridgePlanResponse:
+def plan_acquisition_bridge(
+    db: Session,
+    run_id: UUID,
+    *,
+    _snapshot_out: list[_BridgeValidationSnapshot] | None = None,
+) -> SourceAcquisitionBridgePlanResponse:
     run, items = _load_bridge_run(db, run_id)
     ready_root, records = _bridge_records(run, items)
     bridge_state = run.bridge_state or "not_started"
@@ -928,10 +1015,8 @@ def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridg
         raise WindowsHelperServiceError(
             "bridge_state_invalid", "The bridge state is invalid.", http_status=409
         )
-    if bridge_state == "completed":
-        _validate_completed_bridge(db, run, items, ready_root)
-
     classifications: list[SourceAcquisitionBridgeHashClassification] = []
+    verified_vault_assets: set[str] = set()
     by_hash: dict[str, FileScanRecord] = {}
     for item, record in zip(items, records, strict=True):
         by_hash.setdefault(item.linux_verified_sha256 or "", record)
@@ -972,8 +1057,18 @@ def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridg
                 sha256=digest, classification="exact_known", canonical_vault_verified=True
             )
         )
+        verified_vault_assets.add(asset.sha256)
 
-    reuses = _bridge_observation_reuse(db, run, items, records)
+    reuses = _bridge_observation_reuse(
+        db,
+        run,
+        items,
+        records,
+        verified_vault_assets=verified_vault_assets,
+    )
+    if bridge_state == "completed":
+        _validate_completed_bridge(db, run, items, ready_root, records, reuses)
+
     if bridge_state == "not_started":
         for item, record in zip(items, records, strict=True):
             sha256 = _sha256_hex(item.linux_verified_sha256 or "")
@@ -1033,7 +1128,7 @@ def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridg
             "classifications": [item.model_dump() for item in classifications],
         }
     )
-    return SourceAcquisitionBridgePlanResponse(
+    response = SourceAcquisitionBridgePlanResponse(
         acquisition_run_id=run_id,
         bridge_state=bridge_state,
         source_profile_id=run.source_profile_id,
@@ -1075,6 +1170,20 @@ def plan_acquisition_bridge(db: Session, run_id: UUID) -> SourceAcquisitionBridg
             for item, reuse in zip(items, reuses, strict=True)
         ],
     )
+    if _snapshot_out is not None:
+        _snapshot_out.append(
+            _BridgeValidationSnapshot(
+                run_id=run.id,
+                state_digest=_bridge_state_digest(run, items),
+                ready_root=ready_root,
+                items=tuple(items),
+                records=tuple(records),
+                ready_file_evidence=_ready_snapshot_evidence(records),
+                reuses=tuple(reuses),
+                plan=response,
+            )
+        )
+    return response
 
 
 def _bind_bridge_intake(run_id: UUID, source_intake_run_id: int) -> None:
@@ -1177,9 +1286,18 @@ def _finalize_bridge_safely(run_id: UUID, source_intake_run_id: int) -> None:
 
 
 def execute_acquisition_bridge(
-    db: Session, run_id: UUID, bridge_plan_digest: str
+    db: Session,
+    run_id: UUID,
+    bridge_plan_digest: str,
+    *,
+    _snapshot: _BridgeValidationSnapshot | None = None,
 ) -> SourceAcquisitionBridgePlanResponse:
-    plan = plan_acquisition_bridge(db, run_id)
+    if _snapshot is None:
+        snapshots: list[_BridgeValidationSnapshot] = []
+        plan = plan_acquisition_bridge(db, run_id, _snapshot_out=snapshots)
+        _snapshot = snapshots[0]
+    else:
+        plan = _snapshot.plan
     if plan.bridge_state in {"completed", "running"}:
         return plan
     if plan.bridge_plan_digest != bridge_plan_digest:
@@ -1196,7 +1314,20 @@ def execute_acquisition_bridge(
         )
 
     run, items = _load_bridge_run(db, run_id, lock=True)
-    ready_root, records = _bridge_records(run, items)
+    if (
+        _snapshot.run_id != run.id
+        or _snapshot.state_digest != _bridge_state_digest(run, items)
+        or _snapshot.plan.bridge_plan_digest != bridge_plan_digest
+        or _snapshot.ready_file_evidence != _ready_snapshot_evidence(_snapshot.records)
+    ):
+        raise WindowsHelperServiceError(
+            "bridge_snapshot_stale",
+            "The bridge validation snapshot no longer matches durable state.",
+            http_status=409,
+        )
+    ready_root = _snapshot.ready_root
+    records = list(_snapshot.records)
+    reuses = list(_snapshot.reuses)
     if run.bridge_state != "not_started" or any(
         item.bridged_asset_sha256 is not None or item.bridged_provenance_id is not None
         for item in items
@@ -1204,7 +1335,6 @@ def execute_acquisition_bridge(
         raise WindowsHelperServiceError(
             "bridge_state_conflict", "The acquisition bridge state changed.", http_status=409
         )
-    reuses = _bridge_observation_reuse(db, run, items, records)
     reused_items: list[SourceAcquisitionItem] = []
     unmatched_records: list[FileScanRecord] = []
     for item, record, reuse in zip(items, records, reuses, strict=True):
@@ -1224,7 +1354,20 @@ def execute_acquisition_bridge(
         run.bridge_completed_at = now
         db.commit()
         db.expire_all()
-        return plan_acquisition_bridge(db, run_id)
+        return plan.model_copy(
+            update={
+                "bridge_state": "completed",
+                "items": [
+                    item_result.model_copy(
+                        update={
+                            "asset_sha256": item.bridged_asset_sha256,
+                            "provenance_id": item.bridged_provenance_id,
+                        }
+                    )
+                    for item_result, item in zip(plan.items, items, strict=True)
+                ],
+            }
+        )
 
     run.bridge_state = "running"
     db.commit()
@@ -1262,7 +1405,14 @@ def execute_acquisition_bridge(
         db.commit()
         raise
     db.expire_all()
-    return plan_acquisition_bridge(db, run_id)
+    refreshed, _ = _load_bridge_run(db, run_id)
+    return plan.model_copy(
+        update={
+            "bridge_state": refreshed.bridge_state,
+            "source_intake_run_id": refreshed.bridge_source_intake_run_id,
+            "ingestion_run_id": refreshed.bridge_ingestion_run_id,
+        }
+    )
 
 
 def reset_stale_acquisition_bridges(db: Session) -> None:

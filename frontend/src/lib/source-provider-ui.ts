@@ -12,6 +12,32 @@ export function conciseSourceDeviceLabel(profile: SourceProfileSummary): string 
   return profile.endpoint_alias?.trim() || profile.source_label;
 }
 
+export function sourceSelectorEndpointFieldLabel(sourceType: string): string {
+  return sourceType === "nas" ? "Registered NAS Share" : "Device";
+}
+
+export function sourceSelectorEndpointLabel(
+  profile: SourceProfileSummary,
+  registeredNasShareLabel?: string | null,
+): string {
+  if (sourcePresentationType(profile) === "nas") {
+    const registeredLabel = registeredNasShareLabel?.trim();
+    if (registeredLabel) return registeredLabel;
+
+    const normalized = (profile.source_root_path ?? "").trim().replace(/\//g, "\\");
+    if (normalized.startsWith("\\\\")) {
+      const [server, share] = normalized.split("\\").filter(Boolean);
+      if (server && share) return `\\\\${server}\\${share}`;
+    }
+    return profile.endpoint_alias?.trim() || `NAS share #${profile.endpoint_id ?? "unknown"}`;
+  }
+  if (profile.provider_kind === "icloud" || profile.provider_kind === "cloud") {
+    return profile.account_username_masked ? `iCloud ${profile.account_username_masked}` : "iCloud account";
+  }
+  if (profile.endpoint_id == null) return "Legacy source";
+  return profile.endpoint_alias?.trim() || `${sourcePresentationType(profile)} endpoint #${profile.endpoint_id}`;
+}
+
 export function sourcePresentationType(profile: SourceProfileSummary): string {
   if (profile.provider_kind === "icloud" || profile.cloud_provider === "icloud") return "icloud";
   if (profile.endpoint_source_type === "nas") return "nas";

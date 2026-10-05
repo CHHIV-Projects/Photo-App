@@ -24,7 +24,9 @@ from windows_helper_shared.channel import (
 )
 from windows_helper_shared.protocol import (
     HelperAcquireItemResponse,
+    HelperChildAttestationResponse,
     HelperInventoryPageResponse,
+    HelperKnownSourceAttestationResponse,
     HelperObserveVolumesResponse,
     HelperProbeResponse,
 )
@@ -111,6 +113,34 @@ class HelperApiClient:
         payload = self._request(
             "POST",
             f"/operations/{operation_id}/complete-inventory",
+            result.model_dump(mode="json"),
+            credential=credential,
+        )
+        return HelperOperationCompletionResponse.model_validate(payload)
+
+    def complete_inventory_attestation(
+        self,
+        credential: StoredCredential,
+        operation_id: UUID,
+        result: HelperKnownSourceAttestationResponse,
+    ) -> HelperOperationCompletionResponse:
+        payload = self._request(
+            "POST",
+            f"/operations/{operation_id}/complete-inventory-attestation",
+            result.model_dump(mode="json"),
+            credential=credential,
+        )
+        return HelperOperationCompletionResponse.model_validate(payload)
+
+    def complete_child_attestation(
+        self,
+        credential: StoredCredential,
+        operation_id: UUID,
+        result: HelperChildAttestationResponse,
+    ) -> HelperOperationCompletionResponse:
+        payload = self._request(
+            "POST",
+            f"/operations/{operation_id}/complete-child-attestation",
             result.model_dump(mode="json"),
             credential=credential,
         )
@@ -204,7 +234,7 @@ class HelperApiClient:
     ) -> dict[str, Any]:
         static_paths = {"/pair", "/session", "/heartbeat", "/operations/claim"}
         operation_path = re.fullmatch(
-            r"/operations/[0-9a-fA-F-]{36}/(complete-probe|complete-volume-observation|complete-inventory|complete-acquire|fail)",
+            r"/operations/[0-9a-fA-F-]{36}/(complete-probe|complete-volume-observation|complete-inventory-attestation|complete-inventory|complete-child-attestation|complete-acquire|fail)",
             path,
         )
         acquisition_path = re.fullmatch(

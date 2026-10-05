@@ -310,8 +310,11 @@ class LinuxSourceIdentityBrokerTests(unittest.TestCase):
                 if argv[0] == "/usr/bin/avahi-browse":
                     return broker_module.CommandResult(
                         0,
+                        "=;eth0;IPv6;Family NAS;_smb._tcp;local;family-nas.local;2001:db8::10;445;\n"
                         "=;eth0;IPv4;Family NAS;_smb._tcp;local;family-nas.local;192.0.2.10;445;\n"
                         "=;eth0;IPv4;Duplicate;_smb._tcp;local;family-nas.local;192.0.2.10;445;\n"
+                        "=;eth0;IPv4;Studio NAS;_smb._tcp;local;studio-nas.local;192.0.2.20;445;\n"
+                        "=;eth0;IPv4;Wrong Port;_smb._tcp;local;wrong-port.local;192.0.2.30;1445;\n"
                         "malformed advertisement\n",
                     )
                 return super().run(argv)
@@ -322,8 +325,12 @@ class LinuxSourceIdentityBrokerTests(unittest.TestCase):
             "action": "discover_nas",
         })
         self.assertEqual(result["action"], "discover_nas")
-        self.assertEqual(len(result["candidates"]), 1)
+        self.assertEqual(len(result["candidates"]), 2)
         self.assertEqual(result["candidates"][0]["network_host"], "family-nas.local")
+        self.assertEqual(result["candidates"][0]["suggested_name"], "Family NAS")
+        self.assertEqual(result["candidates"][0]["address_hint"], "192.0.2.10")
+        self.assertEqual(result["candidates"][1]["network_host"], "studio-nas.local")
+        self.assertEqual(result["candidates"][1]["address_hint"], "192.0.2.20")
         self.assertEqual(json.dumps(self.config, sort_keys=True), before)
 
     def test_conflicting_generalized_location_id_is_rejected(self) -> None:

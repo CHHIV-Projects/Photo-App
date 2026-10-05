@@ -174,6 +174,7 @@ class SourceCreationService:
             observed_path=request.observed_path,
             location_id=request.location_id,
             relative_root=request.relative_root,
+            entire_endpoint_acknowledged=request.entire_endpoint_acknowledged,
             source_name=request.source_name,
             device_name=request.device_name,
             naming_action=request.naming_action,
@@ -250,6 +251,22 @@ class SourceCreationService:
                         "Do not supply a path for a server-discovered Linux location.",
                     )
                 )
+            if request.source_type == "nas":
+                requested_relative_root = (request.relative_root or "").strip()
+                if not requested_relative_root and not request.entire_endpoint_acknowledged:
+                    blockers.append(
+                        _message(
+                            "nas_folder_or_entire_share_required",
+                            "Enter a folder within the SMB share or explicitly choose Use entire SMB share.",
+                        )
+                    )
+                elif requested_relative_root and request.entire_endpoint_acknowledged:
+                    blockers.append(
+                        _message(
+                            "nas_source_scope_conflict",
+                            "Choose either a folder within the SMB share or the entire SMB share, not both.",
+                        )
+                    )
         else:
             shape_blocker = _path_shape_blocker(request.source_type, observed_path)
             if shape_blocker is not None:

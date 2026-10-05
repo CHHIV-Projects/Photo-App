@@ -16,17 +16,17 @@ import type {
 import styles from "./ingestion-view.module.css";
 
 interface NasRegistrationProps {
-  onLocationsChanged: () => void | Promise<void>;
+  onLocationsChanged: (preferredLocationId?: string) => void | Promise<void>;
+  onInteraction?: () => void;
 }
 
-export default function NasRegistration({ onLocationsChanged }: NasRegistrationProps) {
+export default function NasRegistration({ onLocationsChanged, onInteraction }: NasRegistrationProps) {
   const [registrations, setRegistrations] = useState<NasRegistrationSummary[]>([]);
   const [candidates, setCandidates] = useState<NasDiscoveryCandidate[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [networkHost, setNetworkHost] = useState("");
   const [shareName, setShareName] = useState("");
   const [applianceName, setApplianceName] = useState("");
-  const [locationName, setLocationName] = useState("");
   const [pending, setPending] = useState<NasPendingRegistrationResponse | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -35,17 +35,25 @@ export default function NasRegistration({ onLocationsChanged }: NasRegistrationP
     try {
       const response = await getNasRegistrations();
       setRegistrations(response.registrations);
-      void onLocationsChanged();
+      const preferredLocationId = pending
+        ? response.registrations.find((item) => (
+          item.share_name.toLocaleLowerCase() === pending.share_name.toLocaleLowerCase()
+          && item.location_name === pending.location_name
+          && item.registration_status === "registered"
+        ))?.location_id
+        : undefined;
+      void onLocationsChanged(preferredLocationId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load registered NAS locations.");
     }
-  }, [onLocationsChanged]);
+  }, [onLocationsChanged, pending]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
   async function discover() {
+    onInteraction?.();
     setBusy(true);
     setMessage(null);
     try {
@@ -66,15 +74,17 @@ export default function NasRegistration({ onLocationsChanged }: NasRegistrationP
   }
 
   async function prepare() {
+    onInteraction?.();
     setBusy(true);
     setMessage(null);
     setPending(null);
+    const generatedLocationName = `${applianceName.trim()} — ${shareName.trim()}`;
     try {
       const response = await createNasPendingRegistration({
         network_host: networkHost.trim(),
         share_name: shareName.trim(),
         appliance_name: applianceName.trim(),
-        location_name: locationName.trim(),
+        location_name: generatedLocationName,
       });
       setPending(response);
       setMessage("Registration prepared. Run the exact command on the Photo Organizer Server; credentials are entered only in that terminal.");
@@ -99,14 +109,15 @@ export default function NasRegistration({ onLocationsChanged }: NasRegistrationP
 
       {registrations.map((item) => (
         <div key={item.share_id} className={styles.detailCard}>
-          <span>{item.appliance_name} — {item.location_name}</span>
+          <span>{item.appliance_name} — \\{item.share_name}</span>
+          <span className={styles.detailMeta}>Registered share: {item.location_name}</span>
           <span className={styles.detailMeta}>{item.availability.replace("_", " ")} · {item.status_message}</span>
         </div>
       ))}
       {registrations.length === 0 && <p className={styles.helperText}>No NAS location is registered yet.</p>}
 
       <div className={styles.workbenchControls}>
-        <button type="button" className={styles.button} disabled={busy} onClick={() => { setShowForm(true); setPending(null); }}>
+        <button type="button" className={styles.button} disabled={busy} onClick={() => { onInteraction?.(); setShowForm(true); setPending(null); }}>
           Register NAS manually
         </button>
         <button type="button" className={styles.button} disabled={busy} onClick={() => void discover()}>
@@ -125,7 +136,8 @@ export default function NasRegistration({ onLocationsChanged }: NasRegistrationP
                 onChange={(event) => {
                   const candidate = candidates.find((item) => item.candidate_id === event.target.value);
                   if (candidate) {
-                    setNetworkHost(candidate.network_host);
+                    onInteraction?.();
+                    setNetworkHost(candidate.address_hint);
                     setApplianceName(candidate.suggested_name);
                   }
                 }}
@@ -133,7 +145,7 @@ export default function NasRegistration({ onLocationsChanged }: NasRegistrationP
                 <option value="">Choose a discovery result</option>
                 {candidates.map((candidate) => (
                   <option key={candidate.candidate_id} value={candidate.candidate_id}>
-                    {candidate.suggested_name} — {candidate.address_hint}
+                    {candidate.suggested_name} — {candidate.network_host} — {candidate.address_hint}
                   </option>
                 ))}
               </select>
@@ -151,14 +163,17 @@ export default function NasRegistration({ onLocationsChanged }: NasRegistrationP
             SMB share name
             <input className={styles.formInput} autoComplete="off" value={shareName} onChange={(event) => setShareName(event.target.value)} />
           </label>
-          <label className={styles.formLabel}>
-            Photo location name
-            <input className={styles.formInput} autoComplete="off" value={locationName} onChange={(event) => setLocationName(event.target.value)} />
-          </label>
+          {applianceName.trim() && shareName.trim() && (
+            <div className={styles.detailCard}>
+              <span className={styles.detailLabel}>Registered share name</span>
+              <span>{applianceName.trim()} — {shareName.trim()}</span>
+              <span className={styles.helperText}>Generated automatically from the NAS and SMB share.</span>
+            </div>
+          )}
           <button
             type="button"
             className={styles.updateButton}
-            disabled={busy || !networkHost.trim() || !applianceName.trim() || !shareName.trim() || !locationName.trim()}
+            disabled={busy || !networkHost.trim() || !applianceName.trim() || !shareName.trim()}
             onClick={() => void prepare()}
           >
             Prepare registration

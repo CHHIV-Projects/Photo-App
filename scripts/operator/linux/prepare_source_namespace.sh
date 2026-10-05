@@ -19,6 +19,95 @@ query_mountpoint() {
   return 2
 }
 
+query_mountinfo_record() {
+  local target="$1"
+  local -n result_ref="$2"
+  local output status=0
+  output="$(python3 - "${target}" <<'PY'
+import re
+import sys
+
+target = sys.argv[1]
+
+
+def decode_mountinfo_path(value: str) -> str:
+    return re.sub(
+        r"\\([0-7]{3})",
+        lambda match: chr(int(match.group(1), 8)),
+        value,
+    )
+
+
+with open("/proc/self/mountinfo", encoding="utf-8") as handle:
+    for raw_line in handle:
+        left, separator, _right = raw_line.rstrip("\n").partition(" - ")
+        if not separator:
+            raise SystemExit(2)
+        fields = left.split()
+        if len(fields) < 6 or decode_mountinfo_path(fields[4]) != target:
+            continue
+        propagation = [
+            value
+            for value in fields[6:]
+            if value == "unbindable"
+            or value.startswith(("shared:", "master:", "propagate_from:"))
+        ]
+        shared = [value.split(":", 1)[1] for value in propagation if value.startswith("shared:")]
+        if len(shared) == 1 and len(propagation) == 1:
+            mode = "shared"
+            peer_group = shared[0]
+        elif not propagation:
+            mode = "private"
+            peer_group = "-"
+        else:
+            mode = "other"
+            peer_group = shared[0] if len(shared) == 1 else "-"
+        print(fields[0], fields[1], peer_group, mode)
+PY
+  )" || status=$?
+  result_ref="${output}"
+  ((status == 0)) || return 2
+  [[ -n "${output}" ]] || return 1
+}
+
+source_namespace_child_mount_count() {
+  local -n result_ref="$1"
+  local output status=0
+  output="$(python3 - "${SOURCE_NAMESPACE}" <<'PY'
+import re
+import sys
+
+namespace = sys.argv[1].rstrip("/")
+prefix = namespace + "/"
+
+
+def decode_mountinfo_path(value: str) -> str:
+    return re.sub(
+        r"\\([0-7]{3})",
+        lambda match: chr(int(match.group(1), 8)),
+        value,
+    )
+
+
+count = 0
+with open("/proc/self/mountinfo", encoding="utf-8") as handle:
+    for raw_line in handle:
+        left, separator, _right = raw_line.rstrip("\n").partition(" - ")
+        if not separator:
+            raise SystemExit(2)
+        fields = left.split()
+        if len(fields) < 6:
+            raise SystemExit(2)
+        if decode_mountinfo_path(fields[4]).startswith(prefix):
+            count += 1
+print(count)
+PY
+  )" || status=$?
+  ((status == 0)) || return 1
+  [[ "${output}" =~ ^[0-9]+$ ]] || return 1
+  result_ref="${output}"
+}
+
 load_base_identity() {
   local -a values=()
   mapfile -t values < <(python3 - "${CONFIG}" "${SOURCE_NAMESPACE}" "${LOCAL_SLOT}" <<'PY'
@@ -79,15 +168,76 @@ PY
   NAS_SOURCE="${values[3]}"
 }
 
-require_namespace() {
-  local rows row target uuid filesystem propagation extra
-  query_mountpoint "${SOURCE_NAMESPACE}" "TARGET,UUID,FSTYPE,PROPAGATION" rows || return 1
+require_namespace_identity() {
+  local rows row target uuid filesystem extra
+  query_mountpoint "${SOURCE_NAMESPACE}" "TARGET,UUID,FSTYPE" rows || return 1
   [[ "$(wc -l <<<"${rows}")" == 1 ]] || return 1
-  read -r target uuid filesystem propagation extra <<<"${rows}"
+  read -r target uuid filesystem extra <<<"${rows}"
   [[ "${target}" == "${SOURCE_NAMESPACE}" && -z "${extra:-}" ]] || return 1
   [[ "${uuid,,}" == "${EXPECTED_NAMESPACE_UUID,,}" ]] || return 1
-  [[ "${filesystem,,}" == "${EXPECTED_NAMESPACE_FSTYPE,,}" ]] || return 1
-  [[ "${propagation}" == "shared" ]]
+  [[ "${filesystem,,}" == "${EXPECTED_NAMESPACE_FSTYPE,,}" ]]
+}
+
+classify_namespace_topology() {
+  local root_rows namespace_rows
+  local root_mount_id root_parent_id root_peer_group root_mode root_extra
+  local namespace_mount_id namespace_parent_id namespace_peer_group namespace_mode namespace_extra
+  query_mountinfo_record "/" root_rows || return 1
+  query_mountinfo_record "${SOURCE_NAMESPACE}" namespace_rows || return 1
+  [[ "$(wc -l <<<"${root_rows}")" == 1 && "$(wc -l <<<"${namespace_rows}")" == 1 ]] || return 1
+  read -r root_mount_id root_parent_id root_peer_group root_mode root_extra <<<"${root_rows}"
+  read -r namespace_mount_id namespace_parent_id namespace_peer_group namespace_mode namespace_extra <<<"${namespace_rows}"
+  [[ -z "${root_extra:-}" && -z "${namespace_extra:-}" ]] || return 1
+  [[ "${root_mount_id}" =~ ^[0-9]+$ && "${root_parent_id}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${namespace_mount_id}" =~ ^[0-9]+$ && "${namespace_parent_id}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${root_mode}" == "shared" && "${root_peer_group}" =~ ^[0-9]+$ ]] || return 1
+
+  ROOT_MOUNT_ID="${root_mount_id}"
+  ROOT_PEER_GROUP="${root_peer_group}"
+  SOURCE_NAMESPACE_MOUNT_ID="${namespace_mount_id}"
+  SOURCE_NAMESPACE_PEER_GROUP="${namespace_peer_group}"
+  case "${namespace_mode}" in
+    shared)
+      [[ "${namespace_peer_group}" =~ ^[0-9]+$ ]] || return 1
+      if [[ "${namespace_peer_group}" == "${root_peer_group}" ]]; then
+        SOURCE_NAMESPACE_TOPOLOGY="inherited_shared"
+      else
+        SOURCE_NAMESPACE_TOPOLOGY="independent_shared"
+      fi
+      ;;
+    private)
+      [[ "${namespace_peer_group}" == "-" ]] || return 1
+      SOURCE_NAMESPACE_TOPOLOGY="private"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+require_namespace() {
+  require_namespace_identity || return 1
+  classify_namespace_topology || return 1
+  [[ "${SOURCE_NAMESPACE_TOPOLOGY}" == "independent_shared" ]]
+}
+
+establish_independent_namespace_topology() {
+  local child_mount_count
+  NAMESPACE_TRANSITION_ERROR=""
+  source_namespace_child_mount_count child_mount_count || {
+    NAMESPACE_TRANSITION_ERROR="Source namespace child mount evidence is unavailable."
+    return 1
+  }
+  if ((child_mount_count != 0)); then
+    NAMESPACE_TRANSITION_ERROR="Source namespace propagation conversion is unsafe while child Source mounts are active."
+    return 1
+  fi
+  mount --make-private "${SOURCE_NAMESPACE}" || {
+    NAMESPACE_TRANSITION_ERROR="Source namespace detachment from inherited propagation failed."
+    return 1
+  }
+  mount --make-shared "${SOURCE_NAMESPACE}" || {
+    NAMESPACE_TRANSITION_ERROR="Source namespace independent shared propagation setup failed."
+    return 1
+  }
 }
 
 validate_local_backing() {
@@ -100,29 +250,46 @@ validate_local_backing() {
 }
 
 prepare_base() {
-  local rows status fixed_path
+  local rows status fixed_path created_namespace=false
   for fixed_path in "${SOURCE_NAMESPACE}" "${SOURCE_NAMESPACE}/local" "${SOURCE_NAMESPACE}/nas" "${LOCAL_SLOT}"; do
     [[ ! -L "${fixed_path}" ]] || fail "Fixed Source namespace path is a symbolic link."
   done
   install -d -o root -g root -m 0755 "${SOURCE_NAMESPACE}" "${SOURCE_NAMESPACE}/local" "${SOURCE_NAMESPACE}/nas"
   install -d -o root -g "${DATA_READ_GROUP}" -m 0750 "${LOCAL_SLOT}"
-  if query_mountpoint "${SOURCE_NAMESPACE}" "TARGET,UUID,FSTYPE,PROPAGATION" rows; then
-    require_namespace || fail "Pre-existing Source namespace identity or propagation is invalid."
+  if query_mountpoint "${SOURCE_NAMESPACE}" "TARGET,UUID,FSTYPE" rows; then
+    require_namespace_identity || fail "Pre-existing Source namespace identity is invalid."
+    classify_namespace_topology || fail "Pre-existing Source namespace propagation evidence is invalid."
   else
     status=$?
     ((status == 1)) || fail "Source namespace mount evidence is unavailable."
     mount --bind "${SOURCE_NAMESPACE}" "${SOURCE_NAMESPACE}" || fail "Source namespace self-bind failed."
-    mount --make-rshared "${SOURCE_NAMESPACE}" || {
+    created_namespace=true
+    require_namespace_identity || {
       umount -- "${SOURCE_NAMESPACE}" || true
-      fail "Source namespace propagation setup failed."
+      fail "Created Source namespace identity failed validation."
     }
-    require_namespace || {
+    classify_namespace_topology || {
       umount -- "${SOURCE_NAMESPACE}" || true
-      fail "Created Source namespace failed validation."
+      fail "Created Source namespace propagation evidence is invalid."
     }
   fi
+  if [[ "${SOURCE_NAMESPACE_TOPOLOGY}" != "independent_shared" ]]; then
+    establish_independent_namespace_topology || {
+      if [[ "${created_namespace}" == "true" ]]; then
+        umount -- "${SOURCE_NAMESPACE}" || true
+      fi
+      fail "${NAMESPACE_TRANSITION_ERROR}"
+    }
+  fi
+  require_namespace || {
+    if [[ "${created_namespace}" == "true" ]]; then
+      umount -- "${SOURCE_NAMESPACE}" || true
+    fi
+    fail "Source namespace independent propagation validation failed."
+  }
   validate_local_backing || fail "Local Source namespace identity is invalid."
-  printf 'PASS: base Source namespace is exact and shared.\n'
+  printf 'PASS: base Source namespace is exact and independently shared (root peer %s; Source peer %s).\n' \
+    "${ROOT_PEER_GROUP}" "${SOURCE_NAMESPACE_PEER_GROUP}"
 }
 
 require_authority() {

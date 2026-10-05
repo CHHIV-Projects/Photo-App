@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$version = "0.5.2"
+$version = "0.5.4"
 $artifact = (Resolve-Path -LiteralPath $ArtifactPath).Path
 $actualHash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualHash -ne $ExpectedSha256.ToLowerInvariant()) {

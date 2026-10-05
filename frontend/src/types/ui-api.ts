@@ -1971,6 +1971,7 @@ export interface SourceCreationPlanRequest {
   observed_path?: string | null;
   location_id?: string | null;
   relative_root?: string | null;
+  entire_endpoint_acknowledged?: boolean;
   source_name?: string | null;
   device_name?: string | null;
   naming_action?: SourceCreationNameAction | null;

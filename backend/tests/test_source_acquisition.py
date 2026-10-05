@@ -1282,6 +1282,55 @@ class SourceAcquisitionTests(unittest.TestCase):
             [(item.bridged_asset_sha256, item.bridged_provenance_id) for item in prior_items],
         )
 
+    def test_bridge_transition_reuses_one_validation_snapshot(self) -> None:
+        prior_run, prior_items, _ = self._completed_bridge_run()
+        self._establish_completed_bridge_links(prior_run, prior_items)
+        repeat_run, _, _ = self._completed_bridge_run()
+        snapshots = []
+        from app.services.source_acquisition import service as acquisition_service
+
+        with patch(
+            "app.services.source_acquisition.service.verified_ready_path",
+            wraps=acquisition_service.verified_ready_path,
+        ) as verify_ready, patch(
+            "app.services.source_acquisition.service._verify_existing_asset_vault_file",
+            wraps=acquisition_service._verify_existing_asset_vault_file,
+        ) as verify_vault, patch(
+            "app.services.source_acquisition.service.start_explicit_source_intake",
+            side_effect=AssertionError("Fully reused bridge must not launch intake."),
+        ):
+            plan = plan_acquisition_bridge(
+                self.db, UUID(repeat_run.run_uuid), _snapshot_out=snapshots
+            )
+            ready_calls = verify_ready.call_count
+            vault_calls = verify_vault.call_count
+            completed = execute_acquisition_bridge(
+                self.db,
+                UUID(repeat_run.run_uuid),
+                plan.bridge_plan_digest,
+                _snapshot=snapshots[0],
+            )
+        self.assertEqual(completed.bridge_state, "completed")
+        self.assertEqual(verify_ready.call_count, ready_calls)
+        self.assertEqual(verify_vault.call_count, vault_calls)
+
+    def test_bridge_snapshot_invalidates_on_ready_object_change(self) -> None:
+        run, items, _ = self._completed_bridge_run()
+        snapshots = []
+        plan = plan_acquisition_bridge(
+            self.db, UUID(run.run_uuid), _snapshot_out=snapshots
+        )
+        ready_path = Path(run.receiving_root) / items[0].ready_relative_path
+        ready_path.write_bytes(ready_path.read_bytes() + b"changed")
+        with self.assertRaises(WindowsHelperServiceError) as raised:
+            execute_acquisition_bridge(
+                self.db,
+                UUID(run.run_uuid),
+                plan.bridge_plan_digest,
+                _snapshot=snapshots[0],
+            )
+        self.assertEqual(raised.exception.code, "bridge_snapshot_stale")
+
     def test_cross_acquisition_drive_letter_change_reuses_durable_observations(self) -> None:
         prior_run, prior_items, _ = self._completed_bridge_run()
         self._establish_completed_bridge_links(prior_run, prior_items)

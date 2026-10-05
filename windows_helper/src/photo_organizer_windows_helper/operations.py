@@ -12,6 +12,8 @@ from collections.abc import Callable, Iterator
 from uuid import UUID, uuid4
 
 from windows_helper_shared.channel import (
+    ClaimedChildAttestationOperation,
+    ClaimedInventoryAttestationOperation,
     ClaimedInventoryOperation,
     ClaimedObserveVolumesOperation,
     ClaimedProbeOperation,
@@ -26,6 +28,7 @@ from windows_helper_shared.identity.windows import (
 )
 from windows_helper_shared.protocol import (
     HelperInventoryItem,
+    HelperChildAttestationResponse,
     HelperInventoryPageRequest,
     HelperInventoryPageResponse,
     HelperObserveVolumesRequest,
@@ -34,11 +37,13 @@ from windows_helper_shared.protocol import (
     HelperProbeResponse,
     InventoryEntryKind,
     InventoryResultStatus,
+    InventoryRootContinuityEvidence,
     MAX_INVENTORY_RESULT_BYTES,
     MountedVolumeObservation,
     ProviderNativePath,
     probe_response_from_collection,
 )
+from .known_source import verify_runtime_root
 
 
 _REPARSE_ATTRIBUTE = 0x400
@@ -80,43 +85,61 @@ class WindowsInventoryCollector:
     def inventory_page(
         self,
         request: HelperInventoryPageRequest,
+        *,
+        attestation_authority: object | None = None,
     ) -> HelperInventoryPageResponse:
-        probe_request = HelperProbeRequest(
-            request_id=request.request_id,
-            intended_access_node_id=request.intended_access_node_id,
-            source_type=request.source_type,
-            probe_mode="readiness_probe",
-            provider_native_path=request.provider_native_path,
-            expected_collector_name="windows_non_admin_probe_v1",
-            expected_collector_version="1",
-        )
-        identity_probe = execute_probe(self._identity_collector, probe_request)
-        observed_fingerprint = _strong_fingerprint_hash(identity_probe)
-        if identity_probe.result_status.value != "success":
-            return HelperInventoryPageResponse(
-                request_id=request.request_id,
-                result_status=InventoryResultStatus.SOURCE_UNAVAILABLE,
-                source_endpoint_id=request.source_endpoint_id,
-                source_profile_id=request.source_profile_id,
-                source_type=request.source_type,
-                provider_native_path=request.provider_native_path,
-                inventory_generation=request.inventory_generation or uuid4(),
-                identity_probe=identity_probe,
+        optimized = request.inventory_attestation_token is not None
+        root_continuity = None
+        if optimized:
+            validation = (
+                attestation_authority.validate(request)  # type: ignore[union-attr]
+                if attestation_authority is not None
+                else "refresh_required"
             )
-        if observed_fingerprint != request.expected_identity_fingerprint:
-            return HelperInventoryPageResponse(
-                request_id=request.request_id,
-                result_status=InventoryResultStatus.IDENTITY_CHANGED,
-                source_endpoint_id=request.source_endpoint_id,
-                source_profile_id=request.source_profile_id,
-                source_type=request.source_type,
-                provider_native_path=request.provider_native_path,
-                inventory_generation=request.inventory_generation or uuid4(),
-                identity_probe=identity_probe,
+            if validation != "valid":
+                return self._failed(request, InventoryResultStatus.ATTESTATION_REQUIRED)
+            continuity = verify_runtime_root(
+                request.provider_native_path.provider_native_root,
+                request.expected_identity_fingerprint,
             )
+            if continuity.status != "success":
+                return self._failed(
+                    request,
+                    InventoryResultStatus.SOURCE_UNAVAILABLE
+                    if continuity.status == "source_unavailable"
+                    else InventoryResultStatus.IDENTITY_CHANGED,
+                )
+            identity_probe = None
+            root_continuity = InventoryRootContinuityEvidence(
+                identity_fingerprint_hash=request.expected_identity_fingerprint,
+            )
+        else:
+            probe_request = HelperProbeRequest(
+                request_id=request.request_id,
+                intended_access_node_id=request.intended_access_node_id,
+                source_type=request.source_type,
+                probe_mode="readiness_probe",
+                provider_native_path=request.provider_native_path,
+                expected_collector_name="windows_non_admin_probe_v1",
+                expected_collector_version="1",
+            )
+            identity_probe = execute_probe(self._identity_collector, probe_request)
+            observed_fingerprint = _strong_fingerprint_hash(identity_probe)
+            if identity_probe.result_status.value != "success":
+                return self._failed(
+                    request,
+                    InventoryResultStatus.SOURCE_UNAVAILABLE,
+                    identity_probe=identity_probe,
+                )
+            if observed_fingerprint != request.expected_identity_fingerprint:
+                return self._failed(
+                    request,
+                    InventoryResultStatus.IDENTITY_CHANGED,
+                    identity_probe=identity_probe,
+                )
 
-        if request.inventory_generation is None:
-            generation = uuid4()
+        if request.inventory_generation is None or (optimized and request.cursor is None):
+            generation = request.inventory_generation or uuid4()
             cursor = _new_cursor()
             state = _GenerationState(
                 root=request.provider_native_path.provider_native_root,
@@ -148,6 +171,7 @@ class WindowsInventoryCollector:
                     provider_native_path=request.provider_native_path,
                     inventory_generation=generation,
                     identity_probe=identity_probe,
+                    root_continuity=root_continuity,
                 )
 
         items: list[HelperInventoryItem] = []
@@ -163,6 +187,7 @@ class WindowsInventoryCollector:
                 request=request,
                 generation=generation,
                 identity_probe=identity_probe,
+                root_continuity=root_continuity,
                 items=[*items, item],
                 next_cursor="x" * 32,
             )
@@ -188,16 +213,49 @@ class WindowsInventoryCollector:
             next_cursor = None
             self._generations.pop(generation, None)
 
+        if optimized:
+            final_continuity = verify_runtime_root(
+                request.provider_native_path.provider_native_root,
+                request.expected_identity_fingerprint,
+            )
+            if final_continuity.status != "success":
+                self._generations.pop(generation, None)
+                return self._failed(
+                    request,
+                    InventoryResultStatus.SOURCE_UNAVAILABLE
+                    if final_continuity.status == "source_unavailable"
+                    else InventoryResultStatus.IDENTITY_CHANGED,
+                )
+
         result = _response(
             request=request,
             generation=generation,
             identity_probe=identity_probe,
+            root_continuity=root_continuity,
             items=items,
             next_cursor=next_cursor,
         )
         if len(_serialized(result)) > MAX_INVENTORY_RESULT_BYTES:
             raise RuntimeError("Inventory response exceeds the bounded result size.")
         return result
+
+    @staticmethod
+    def _failed(
+        request: HelperInventoryPageRequest,
+        status: InventoryResultStatus,
+        *,
+        identity_probe: HelperProbeResponse | None = None,
+    ) -> HelperInventoryPageResponse:
+        return HelperInventoryPageResponse(
+            request_id=request.request_id,
+            result_status=status,
+            source_endpoint_id=request.source_endpoint_id,
+            source_profile_id=request.source_profile_id,
+            source_type=request.source_type,
+            provider_native_path=request.provider_native_path,
+            inventory_generation=request.inventory_generation or uuid4(),
+            identity_probe=identity_probe,
+        )
 
     def _walk(self, root: str, generation: UUID) -> Iterator[HelperInventoryItem]:
         def walk_directory(directory: str) -> Iterator[HelperInventoryItem]:
@@ -281,9 +339,13 @@ class HelperOperationExecutor:
         operation: (
             ClaimedProbeOperation
             | ClaimedObserveVolumesOperation
+            | ClaimedInventoryAttestationOperation
             | ClaimedInventoryOperation
+            | ClaimedChildAttestationOperation
         ),
-    ) -> HelperProbeResponse | HelperObserveVolumesResponse | HelperInventoryPageResponse:
+        *,
+        attestation_authority: object | None = None,
+    ) -> object:
         if isinstance(operation, ClaimedProbeOperation):
             return execute_probe(self._identity_collector, operation.request)
         if isinstance(operation, ClaimedObserveVolumesOperation):
@@ -292,7 +354,18 @@ class HelperOperationExecutor:
                 self._mounted_volume_observer(),
             )
         if isinstance(operation, ClaimedInventoryOperation):
-            return self._inventory_collector.inventory_page(operation.request)
+            return self._inventory_collector.inventory_page(
+                operation.request,
+                attestation_authority=attestation_authority,
+            )
+        if isinstance(operation, ClaimedInventoryAttestationOperation):
+            if attestation_authority is None:
+                raise ValueError("Inventory attestation authority is unavailable.")
+            return attestation_authority.attest(operation)  # type: ignore[no-any-return,union-attr]
+        if isinstance(operation, ClaimedChildAttestationOperation):
+            if attestation_authority is None:
+                raise ValueError("Child attestation authority is unavailable.")
+            return attestation_authority.attest(operation, self._identity_collector)  # type: ignore[no-any-return,union-attr]
         raise ValueError("Unsupported Helper operation type.")
 
 
@@ -392,7 +465,8 @@ def _response(
     *,
     request: HelperInventoryPageRequest,
     generation: UUID,
-    identity_probe: HelperProbeResponse,
+    identity_probe: HelperProbeResponse | None,
+    root_continuity: InventoryRootContinuityEvidence | None,
     items: list[HelperInventoryItem],
     next_cursor: str | None,
 ) -> HelperInventoryPageResponse:
@@ -405,6 +479,7 @@ def _response(
         provider_native_path=request.provider_native_path,
         inventory_generation=generation,
         identity_probe=identity_probe,
+        root_continuity=root_continuity,
         items=items,
         next_cursor=next_cursor,
     )

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
@@ -282,6 +282,67 @@ class WindowsAcquisitionTests(unittest.TestCase):
         payload["destination_path"] = "/tmp/arbitrary"
         with self.assertRaises(ValidationError):
             HelperAcquireItemRequest.model_validate(payload)
+
+    def test_attested_acquire_skips_full_probe_but_requires_open_handle_volume(self) -> None:
+        request = self.operation.request.model_copy(
+            update={
+                "parent_workflow_id": uuid4(),
+                "child_attestation_token": "t" * 64,
+            }
+        )
+        operation = self.operation.model_copy(update={"request": request})
+        client = _Client(operation)
+        authority = MagicMock()
+        authority.validate.return_value = "valid"
+        with patch(
+            "photo_organizer_windows_helper.acquisition.execute_probe"
+        ) as full_probe:
+            result = execute_acquisition(
+                operation,
+                client,
+                self.credential,
+                stat_path=lambda _: os.stat(self.path, follow_symlinks=False),
+                open_file=lambda _: self.path.open("rb", buffering=0),
+                handle_path=lambda _: ntpath.normcase(request.provider_native_path.provider_native_full_path),
+                handle_volume_fingerprint=lambda _: FINGERPRINT,
+                attestation_authority=authority,
+            )
+        self.assertEqual(result.result_status, AcquireResultStatus.SUCCESS)
+        full_probe.assert_not_called()
+
+        client = _Client(operation)
+        result = execute_acquisition(
+            operation,
+            client,
+            self.credential,
+            stat_path=lambda _: os.stat(self.path, follow_symlinks=False),
+            open_file=lambda _: self.path.open("rb", buffering=0),
+            handle_path=lambda _: ntpath.normcase(request.provider_native_path.provider_native_full_path),
+            handle_volume_fingerprint=lambda _: "sha256:" + "b" * 64,
+            attestation_authority=authority,
+        )
+        self.assertEqual(result.result_status, AcquireResultStatus.SOURCE_CHANGED)
+        self.assertEqual(result.error_code, "source_handle_volume_changed")
+        self.assertEqual(client.uploads, [])
+
+    def test_process_invalid_attestation_requests_refresh_before_open(self) -> None:
+        request = self.operation.request.model_copy(
+            update={
+                "parent_workflow_id": uuid4(),
+                "child_attestation_token": "t" * 64,
+            }
+        )
+        operation = self.operation.model_copy(update={"request": request})
+        authority = MagicMock()
+        authority.validate.return_value = "refresh_required"
+        result = execute_acquisition(
+            operation,
+            _Client(operation),
+            self.credential,
+            open_file=lambda _: (_ for _ in ()).throw(AssertionError("must not open")),
+            attestation_authority=authority,
+        )
+        self.assertEqual(result.result_status, AcquireResultStatus.ATTESTATION_REQUIRED)
 
 
 if __name__ == "__main__":

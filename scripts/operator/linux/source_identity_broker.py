@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import posixpath
@@ -360,16 +361,29 @@ class LinuxSourceIdentityBroker:
             fields = line.split(";")
             if len(fields) < 9 or fields[0] != "=":
                 continue
-            service_name, host, address = fields[3], fields[6], fields[7]
+            service_name, host, address, port = fields[3], fields[6], fields[7], fields[8]
             if not service_name or not host or not address:
+                continue
+            try:
+                parsed_address = ipaddress.ip_address(address)
+            except ValueError:
+                continue
+            # Registration currently uses an IPv4 SMB UNC/mount target. Avahi can
+            # report the same service over IPv4 and IPv6; retain the usable IPv4
+            # address instead of allowing a later IPv6 row to replace it.
+            if parsed_address.version != 4 or parsed_address.is_unspecified or parsed_address.is_loopback:
+                continue
+            if port != "445":
                 continue
             normalized_host = host.rstrip(".").casefold()
             candidate_id = versioned_hash("nas_discovery_candidate_v1", [normalized_host])
+            if candidate_id in candidates:
+                continue
             candidates[candidate_id] = {
                 "candidate_id": candidate_id,
                 "suggested_name": service_name[:255],
                 "network_host": normalized_host,
-                "address_hint": address,
+                "address_hint": parsed_address.compressed,
             }
             if len(candidates) >= 16:
                 break
@@ -378,7 +392,10 @@ class LinuxSourceIdentityBroker:
             "action": "discover_nas",
             "provider_name": PROVIDER_NAME,
             "provider_version": PROVIDER_VERSION,
-            "candidates": list(candidates.values()),
+            "candidates": sorted(
+                candidates.values(),
+                key=lambda item: (item["suggested_name"].casefold(), item["network_host"]),
+            ),
             "blockers": [],
         }
 

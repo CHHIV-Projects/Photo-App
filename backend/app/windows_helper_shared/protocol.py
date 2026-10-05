@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import ntpath
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
@@ -306,6 +307,25 @@ class InventoryResultStatus(StrEnum):
     SOURCE_UNAVAILABLE = "source_unavailable"
     IDENTITY_CHANGED = "identity_changed"
     INVENTORY_FAILED = "inventory_failed"
+    ATTESTATION_REQUIRED = "attestation_required"
+
+
+class KnownSourceAttestationResultStatus(StrEnum):
+    SUCCESS = "success"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    IDENTITY_CHANGED = "identity_changed"
+    AMBIGUOUS = "ambiguous"
+
+
+class InventoryRootContinuityEvidence(_StrictProtocolModel):
+    identity_fingerprint_hash: str = Field(
+        min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    identity_fingerprint_version: Literal["source_endpoint_volume_guid_v2"] = (
+        "source_endpoint_volume_guid_v2"
+    )
+    root_handle_verified: bool = True
+    containment_verified: bool = True
 
 
 class HelperInventoryItem(_StrictProtocolModel):
@@ -358,13 +378,21 @@ class HelperInventoryPageRequest(_StrictProtocolModel):
     expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
     inventory_generation: UUID | None = None
     cursor: str | None = Field(default=None, min_length=1, max_length=256)
+    parent_workflow_id: UUID | None = None
+    inventory_attestation_token: str | None = Field(default=None, min_length=64, max_length=4096)
     page_size: int = Field(default=DEFAULT_INVENTORY_PAGE_SIZE, ge=1, le=MAX_INVENTORY_PAGE_SIZE)
 
     @model_validator(mode="after")
     def _validate_inventory_request(self) -> "HelperInventoryPageRequest":
         require_protocol_version(self.protocol_version)
-        if (self.inventory_generation is None) != (self.cursor is None):
-            raise ValueError("inventory generation and cursor must be supplied together")
+        optimized = self.inventory_attestation_token is not None or self.parent_workflow_id is not None
+        if optimized:
+            if self.inventory_attestation_token is None or self.parent_workflow_id is None:
+                raise ValueError("optimized inventory requires workflow and attestation")
+            if self.inventory_generation is None:
+                raise ValueError("optimized inventory requires a pre-bound generation")
+        elif (self.inventory_generation is None) != (self.cursor is None):
+            raise ValueError("legacy inventory generation and cursor must be supplied together")
         return self
 
 
@@ -377,26 +405,109 @@ class HelperInventoryPageResponse(_StrictProtocolModel):
     source_type: SourceType
     provider_native_path: ProviderNativePath
     inventory_generation: UUID
-    identity_probe: HelperProbeResponse
+    identity_probe: HelperProbeResponse | None = None
+    root_continuity: InventoryRootContinuityEvidence | None = None
     items: list[HelperInventoryItem] = Field(default_factory=list, max_length=MAX_INVENTORY_PAGE_SIZE)
     next_cursor: str | None = Field(default=None, min_length=1, max_length=256)
 
     @model_validator(mode="after")
     def _validate_inventory_response(self) -> "HelperInventoryPageResponse":
         require_protocol_version(self.protocol_version)
-        if self.identity_probe.request_id != self.request_id:
-            raise ValueError("inventory identity evidence must match the request")
-        if self.identity_probe.provider_native_path != self.provider_native_path:
-            raise ValueError("inventory identity evidence must target the authorized root")
-        if self.identity_probe.source_type != self.source_type:
-            raise ValueError("inventory identity evidence must match the Source type")
-        if (
-            self.result_status == InventoryResultStatus.SUCCESS
-            and self.identity_probe.result_status != ProbeResultStatus.SUCCESS
-        ):
-            raise ValueError("successful inventory requires successful identity evidence")
+        if self.identity_probe is not None:
+            if self.identity_probe.request_id != self.request_id:
+                raise ValueError("inventory identity evidence must match the request")
+            if self.identity_probe.provider_native_path != self.provider_native_path:
+                raise ValueError("inventory identity evidence must target the authorized root")
+            if self.identity_probe.source_type != self.source_type:
+                raise ValueError("inventory identity evidence must match the Source type")
+        if self.result_status == InventoryResultStatus.SUCCESS:
+            legacy_valid = self.identity_probe is not None and self.identity_probe.result_status == ProbeResultStatus.SUCCESS
+            optimized_valid = self.root_continuity is not None
+            if legacy_valid == optimized_valid:
+                raise ValueError("successful inventory requires exactly one identity proof mode")
         if self.result_status != InventoryResultStatus.SUCCESS and (self.items or self.next_cursor):
             raise ValueError("failed inventory responses must not contain items or a cursor")
+        return self
+
+
+class HelperKnownSourceAttestationRequest(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    configured_source_root: str = Field(min_length=3, max_length=4096)
+    endpoint_relative_root: str = Field(default="", max_length=4096)
+    expected_identity_fingerprint: str = Field(
+        min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    expected_identity_fingerprint_version: Literal["source_endpoint_volume_guid_v2"] = (
+        "source_endpoint_volume_guid_v2"
+    )
+    parent_workflow_id: UUID
+    inventory_generation: UUID
+    continuation_cursor: str | None = Field(default=None, min_length=1, max_length=256)
+    attestation_lifetime_seconds: int = Field(default=900, ge=60, le=3600)
+
+    @model_validator(mode="after")
+    def _validate_known_source_request(self) -> "HelperKnownSourceAttestationRequest":
+        require_protocol_version(self.protocol_version)
+        relative = self.endpoint_relative_root.replace("/", "\\")
+        if ntpath.isabs(relative) or relative == ".." or relative.startswith("..\\"):
+            raise ValueError("Endpoint-relative root must remain relative")
+        object.__setattr__(self, "endpoint_relative_root", ntpath.normpath(relative) if relative else "")
+        return self
+
+
+class HelperKnownSourceAttestationResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    result_status: KnownSourceAttestationResultStatus
+    intended_access_node_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    expected_identity_fingerprint: str = Field(
+        min_length=71, max_length=71, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    expected_identity_fingerprint_version: Literal["source_endpoint_volume_guid_v2"] = (
+        "source_endpoint_volume_guid_v2"
+    )
+    parent_workflow_id: UUID
+    inventory_generation: UUID
+    continuation_cursor: str | None = Field(default=None, min_length=1, max_length=256)
+    runtime_source_root: str | None = Field(default=None, min_length=3, max_length=4096)
+    issued_at: datetime | None = None
+    expires_at: datetime | None = None
+    inventory_attestation_token: str | None = Field(default=None, min_length=64, max_length=4096)
+    token_version: Literal["inventory-attestation-v1"] = "inventory-attestation-v1"
+
+    @model_validator(mode="after")
+    def _validate_known_source_response(self) -> "HelperKnownSourceAttestationResponse":
+        require_protocol_version(self.protocol_version)
+        success = self.result_status == KnownSourceAttestationResultStatus.SUCCESS
+        complete = all(
+            value is not None
+            for value in (
+                self.runtime_source_root,
+                self.issued_at,
+                self.expires_at,
+                self.inventory_attestation_token,
+            )
+        )
+        authority_values = (
+            self.runtime_source_root,
+            self.issued_at,
+            self.expires_at,
+            self.inventory_attestation_token,
+        )
+        if success and not complete:
+            raise ValueError("Successful known-Source attestation requires complete authority")
+        if not success and any(value is not None for value in authority_values):
+            raise ValueError("Failed known-Source attestation must not carry authority")
+        if success and self.expires_at <= self.issued_at:  # type: ignore[operator]
+            raise ValueError("inventory attestation expiry must follow issuance")
         return self
 
 
@@ -419,6 +530,54 @@ class AcquireResultStatus(StrEnum):
     SOURCE_CHANGED = "source_changed"
     PLACEHOLDER_UNAVAILABLE = "placeholder_unavailable"
     TRANSFER_FAILED = "transfer_failed"
+    ATTESTATION_REQUIRED = "attestation_required"
+
+
+class HelperChildAttestationRequest(_StrictProtocolModel):
+    """Authorize one process-local physical identity attestation for one child."""
+
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
+    parent_workflow_id: UUID
+    acquisition_run_id: UUID
+    attestation_lifetime_seconds: int = Field(default=900, ge=60, le=3600)
+
+    @model_validator(mode="after")
+    def _validate_attestation_request(self) -> "HelperChildAttestationRequest":
+        require_protocol_version(self.protocol_version)
+        if self.provider_native_path.provider_native_relative_path:
+            raise ValueError("child attestation must target the authoritative Source root")
+        return self
+
+
+class HelperChildAttestationResponse(_StrictProtocolModel):
+    protocol_version: int = PROTOCOL_VERSION
+    request_id: UUID
+    intended_access_node_id: UUID
+    source_endpoint_id: int = Field(ge=1)
+    source_profile_id: int = Field(ge=1)
+    source_type: SourceType
+    provider_native_path: ProviderNativePath
+    expected_identity_fingerprint: str = Field(min_length=1, max_length=128)
+    parent_workflow_id: UUID
+    acquisition_run_id: UUID
+    issued_at: datetime
+    expires_at: datetime
+    attestation_token: str = Field(min_length=64, max_length=4096)
+    token_version: Literal["child-attestation-v1"] = "child-attestation-v1"
+
+    @model_validator(mode="after")
+    def _validate_attestation_response(self) -> "HelperChildAttestationResponse":
+        require_protocol_version(self.protocol_version)
+        if self.expires_at <= self.issued_at:
+            raise ValueError("child attestation expiry must follow issuance")
+        return self
 
 
 class HelperAcquireItemRequest(_StrictProtocolModel):
@@ -443,6 +602,8 @@ class HelperAcquireItemRequest(_StrictProtocolModel):
     expected_local_residency: Literal["resident"] = "resident"
     normal_chunk_bytes: int = Field(default=NORMAL_ACQUISITION_CHUNK_BYTES, ge=1, le=MAX_ACQUISITION_CHUNK_BYTES)
     maximum_chunk_bytes: int = Field(default=MAX_ACQUISITION_CHUNK_BYTES, ge=1, le=MAX_ACQUISITION_CHUNK_BYTES)
+    parent_workflow_id: UUID | None = None
+    child_attestation_token: str | None = Field(default=None, min_length=64, max_length=4096)
 
     @model_validator(mode="after")
     def _validate_acquire_request(self) -> "HelperAcquireItemRequest":
@@ -451,6 +612,8 @@ class HelperAcquireItemRequest(_StrictProtocolModel):
             raise ValueError("normal chunk size exceeds maximum chunk size")
         if not self.provider_native_path.provider_native_relative_path:
             raise ValueError("acquisition item must be beneath the authorized root")
+        if (self.parent_workflow_id is None) != (self.child_attestation_token is None):
+            raise ValueError("optimized acquisition requires both parent workflow and child attestation")
         return self
 
 

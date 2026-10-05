@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import ntpath
 import os
+import re
 import stat
 from typing import BinaryIO, Callable
 
 from windows_helper_shared.channel import ClaimedAcquireOperation
 from windows_helper_shared.identity.models import IdentityCollectionRequest
 from windows_helper_shared.identity.windows import WindowsIdentityCollector
+from windows_helper_shared.identity.fingerprints import volume_guid_fingerprint
 from windows_helper_shared.protocol import (
     AcquireResultStatus,
     HelperAcquireItemResponse,
@@ -21,6 +23,7 @@ from windows_helper_shared.protocol import (
 from .client import HelperApiClient, HelperClientError
 from .credential_store import StoredCredential
 from .operations import execute_probe, local_residency
+from .attestation import ChildAttestationAuthority
 
 
 _REPARSE_ATTRIBUTE = 0x400
@@ -128,6 +131,32 @@ def _opened_handle_path(source: BinaryIO) -> str | None:
     return ntpath.normcase(ntpath.normpath(path))
 
 
+def _opened_handle_volume_fingerprint(source: BinaryIO) -> str | None:
+    """Hash the native Volume GUID for the exact already-open file handle."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    get_path = ctypes.windll.kernel32.GetFinalPathNameByHandleW
+    get_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+    get_path.restype = wintypes.DWORD
+    handle = msvcrt.get_osfhandle(source.fileno())
+    volume_name_guid = 0x1
+    required = get_path(handle, None, 0, volume_name_guid)
+    if required <= 0 or required > 32768:
+        raise OSError("Windows Source handle volume could not be verified.")
+    buffer = ctypes.create_unicode_buffer(required + 1)
+    written = get_path(handle, buffer, len(buffer), volume_name_guid)
+    if written <= 0 or written >= len(buffer):
+        raise OSError("Windows Source handle volume could not be verified.")
+    match = re.match(r"^\\\\\?\\Volume\{([0-9A-Fa-f-]{36})\}(?:\\|$)", buffer.value)
+    if match is None:
+        raise OSError("Windows Source handle did not expose a Volume GUID.")
+    return volume_guid_fingerprint(match.group(1))[0]
+
+
 def _failed(operation: ClaimedAcquireOperation, status: AcquireResultStatus, code: str) -> HelperAcquireItemResponse:
     request = operation.request
     return HelperAcquireItemResponse(
@@ -150,34 +179,51 @@ def execute_acquisition(
     identity_collector: WindowsIdentityCollector | None = None,
     open_file: Callable[[str], BinaryIO] = _open_exact_readonly,
     handle_path: Callable[[BinaryIO], str | None] = _opened_handle_path,
+    handle_volume_fingerprint: Callable[[BinaryIO], str | None] = _opened_handle_volume_fingerprint,
     stat_path: Callable[[str], os.stat_result] = lambda path: os.stat(path, follow_symlinks=False),
+    attestation_authority: ChildAttestationAuthority | None = None,
 ) -> HelperAcquireItemResponse:
     request = operation.request
-    collector = identity_collector or WindowsIdentityCollector()
-    probe = execute_probe(
-        collector,
-        HelperProbeRequest(
-            request_id=operation.operation_id,
-            intended_access_node_id=request.intended_access_node_id,
-            source_type=request.source_type,
-            probe_mode="run_launch_verification",
-            provider_native_path=request.provider_native_path.model_copy(
-                update={
-                    "provider_native_relative_path": "",
-                    "provider_native_full_path": request.provider_native_path.provider_native_root,
-                }
+    if request.child_attestation_token is not None:
+        validation = (
+            attestation_authority.validate(request)
+            if attestation_authority is not None
+            else "refresh_required"
+        )
+        if validation == "refresh_required":
+            return _failed(
+                operation,
+                AcquireResultStatus.ATTESTATION_REQUIRED,
+                "child_attestation_required",
+            )
+        if validation != "valid":
+            return _failed(operation, AcquireResultStatus.SOURCE_CHANGED, "child_attestation_mismatch")
+    else:
+        collector = identity_collector or WindowsIdentityCollector()
+        probe = execute_probe(
+            collector,
+            HelperProbeRequest(
+                request_id=operation.operation_id,
+                intended_access_node_id=request.intended_access_node_id,
+                source_type=request.source_type,
+                probe_mode="run_launch_verification",
+                provider_native_path=request.provider_native_path.model_copy(
+                    update={
+                        "provider_native_relative_path": "",
+                        "provider_native_full_path": request.provider_native_path.provider_native_root,
+                    }
+                ),
+                expected_collector_name="windows_non_admin_probe_v1",
+                expected_collector_version="1",
             ),
-            expected_collector_name="windows_non_admin_probe_v1",
-            expected_collector_version="1",
-        ),
-    )
-    observed_hashes = {
-        evidence.fingerprint_hash
-        for evidence in probe.evidence_items
-        if evidence.fingerprint_hash and evidence.fingerprint_version
-    }
-    if probe.result_status.value != "success" or observed_hashes != {request.expected_identity_fingerprint}:
-        return _failed(operation, AcquireResultStatus.SOURCE_CHANGED, "source_identity_changed")
+        )
+        observed_hashes = {
+            evidence.fingerprint_hash
+            for evidence in probe.evidence_items
+            if evidence.fingerprint_hash and evidence.fingerprint_version
+        }
+        if probe.result_status.value != "success" or observed_hashes != {request.expected_identity_fingerprint}:
+            return _failed(operation, AcquireResultStatus.SOURCE_CHANGED, "source_identity_changed")
     path = request.provider_native_path.provider_native_full_path
     try:
         pre_path_metadata = stat_path(path)
@@ -211,6 +257,13 @@ def execute_acquisition(
             return _failed(operation, AcquireResultStatus.SOURCE_CHANGED, "source_handle_unverified")
         if observed_handle_path is not None and observed_handle_path != ntpath.normcase(ntpath.normpath(path)):
             return _failed(operation, AcquireResultStatus.SOURCE_CHANGED, "source_path_changed")
+        if request.child_attestation_token is not None:
+            try:
+                observed_volume_fingerprint = handle_volume_fingerprint(source)
+            except OSError:
+                return _failed(operation, AcquireResultStatus.SOURCE_CHANGED, "source_handle_volume_unverified")
+            if observed_volume_fingerprint != request.expected_identity_fingerprint:
+                return _failed(operation, AcquireResultStatus.SOURCE_CHANGED, "source_handle_volume_changed")
 
         try:
             pre_evidence = _evidence(os.fstat(source.fileno()))

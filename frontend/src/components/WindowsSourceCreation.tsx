@@ -224,9 +224,14 @@ export default function WindowsSourceCreation({
 
   const selectedComputer = computers.find((item) => item.access_node_id === fields.access_node_id);
   const sourceTypeLabel = sourceType === "external" ? "External" : sourceType === "removable" ? "Removable" : "Local";
+  const reusesExistingProfile = plan?.profile_action === "reuse_existing_source";
 
   const confirm = useCallback(async () => {
     if (!probeToken || !plan) return;
+    if (plan.profile_action === "reuse_existing_source") {
+      setError(`This folder is already registered as ${plan.profile_name}. No new Source Profile was created.`);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -307,7 +312,20 @@ export default function WindowsSourceCreation({
       {pathError && <p className={styles.helperText}>{pathError}</p>}
       {plan && !result && (
         <section className={styles.creationReview} aria-label={`Windows ${sourceTypeLabel} Source review`}>
-          <h4 className={styles.detailHeading}>{`Review Windows ${sourceTypeLabel} Source`}</h4>
+          <h4 className={styles.detailHeading}>
+            {reusesExistingProfile
+              ? "Source Profile already exists"
+              : `Review Windows ${sourceTypeLabel} Source`}
+          </h4>
+          {reusesExistingProfile && (
+            <p className={styles.inlineWarning} role="alert">
+              This device and folder are already registered as <strong>{plan.profile_name}</strong>.
+              {fields.profile_name.trim() !== plan.profile_name.trim() && (
+                <> The entered name <strong>{fields.profile_name.trim()}</strong> will not be used.</>
+              )}
+              {" "}No new Source Profile can be created for the same exact location. Select the existing Profile in Source Selector.
+            </p>
+          )}
           <div className={styles.creationResultGrid}>
             {sourceType === "local" && <div><span className={styles.detailLabel}>Computer</span><span>{selectedComputer?.computer_alias ?? "-"}</span></div>}
             <div><span className={styles.detailLabel}>Source device</span><span>{plan.device_alias}</span></div>
@@ -319,7 +337,9 @@ export default function WindowsSourceCreation({
           </div>
           {plan.warnings.map((warning) => <p key={warning} className={styles.inlineWarning}>{warning}</p>)}
           {plan.blockers.map((blocker) => <p key={blocker} className={styles.bannerError}>{blocker}</p>)}
-          <button type="button" className={styles.runButton} onClick={() => void confirm()} disabled={busy || plan.blockers.length > 0 || !["ready", "source_exists"].includes(plan.plan_status)}>Create Source</button>
+          {!reusesExistingProfile && (
+            <button type="button" className={styles.runButton} onClick={() => void confirm()} disabled={busy || plan.blockers.length > 0 || !["ready", "source_exists"].includes(plan.plan_status)}>Create Source</button>
+          )}
         </section>
       )}
       {result && <p className={result.status === "completed" ? styles.bannerSuccess : styles.bannerError}>{result.safe_message}</p>}

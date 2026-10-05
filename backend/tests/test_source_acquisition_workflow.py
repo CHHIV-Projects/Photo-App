@@ -40,6 +40,9 @@ class SourceAcquisitionWorkflowTests(unittest.TestCase):
             "app.services.source_acquisition.workflow._active_acquire_operation",
             return_value=None,
         ), patch(
+            "app.services.source_acquisition.workflow.child_attestation_for_run",
+            return_value=("legacy", None, None, None),
+        ), patch(
             "app.services.source_acquisition.workflow.create_acquire_operation",
             return_value=SimpleNamespace(operation_id=operation_id, state="pending"),
         ) as create:
@@ -52,7 +55,12 @@ class SourceAcquisitionWorkflowTests(unittest.TestCase):
         self.assertEqual(result.stage, "awaiting_helper")
         self.assertEqual(result.helper_operation_id, operation_id)
         activate.assert_called_once_with(db, run_id, planned.proposal_digest)
-        create.assert_called_once_with(db, item_id)
+        create.assert_called_once_with(
+            db,
+            item_id,
+            parent_workflow_id=None,
+            child_attestation_token=None,
+        )
 
     def test_completed_acquisition_plans_and_executes_bridge(self) -> None:
         run_id = uuid4()
@@ -84,6 +92,50 @@ class SourceAcquisitionWorkflowTests(unittest.TestCase):
         self.assertEqual(result.stage, "completed")
         self.assertIs(result.bridge, completed_bridge)
         execute.assert_called_once_with(db, run_id, planned_bridge.bridge_plan_digest)
+
+    def test_attested_child_waits_once_then_passes_token_to_each_acquire(self) -> None:
+        run_id = uuid4()
+        active = self._acquisition(state="active")
+        item_id = uuid4()
+        parent_id = uuid4()
+        attestation_operation_id = uuid4()
+        acquire_operation_id = uuid4()
+        db = Mock()
+        db.scalar.return_value = SimpleNamespace(id=7)
+        db.scalars.return_value = [SimpleNamespace(item_uuid=str(item_id), state="pending")]
+        with patch(
+            "app.services.source_acquisition.workflow.get_run", return_value=active
+        ), patch(
+            "app.services.source_acquisition.workflow._active_acquire_operation", return_value=None
+        ), patch(
+            "app.services.source_acquisition.workflow.child_attestation_for_run",
+            return_value=("awaiting", attestation_operation_id, None, parent_id),
+        ), patch(
+            "app.services.source_acquisition.workflow.create_acquire_operation"
+        ) as create:
+            waiting = advance_source_acquisition_workflow(db, run_id, proposal_digest=None)
+        self.assertEqual(waiting.helper_operation_id, attestation_operation_id)
+        create.assert_not_called()
+
+        with patch(
+            "app.services.source_acquisition.workflow.get_run", return_value=active
+        ), patch(
+            "app.services.source_acquisition.workflow._active_acquire_operation", return_value=None
+        ), patch(
+            "app.services.source_acquisition.workflow.child_attestation_for_run",
+            return_value=("ready", attestation_operation_id, "t" * 64, parent_id),
+        ), patch(
+            "app.services.source_acquisition.workflow.create_acquire_operation",
+            return_value=SimpleNamespace(operation_id=acquire_operation_id, state="pending"),
+        ) as create:
+            ready = advance_source_acquisition_workflow(db, run_id, proposal_digest=None)
+        self.assertEqual(ready.helper_operation_id, acquire_operation_id)
+        create.assert_called_once_with(
+            db,
+            item_id,
+            parent_workflow_id=parent_id,
+            child_attestation_token="t" * 64,
+        )
 
 
 if __name__ == "__main__":
