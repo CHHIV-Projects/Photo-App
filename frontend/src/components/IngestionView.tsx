@@ -17,6 +17,7 @@ import {
   getSourceProfileIcloudReadiness,
   getSourceProfileDetail,
   getLinuxSourceLocations,
+  getNasRegistrations,
   getSourceIntakeReportDetail,
   getSourceIntakeReports,
   getSourceIntakeRunStatus,
@@ -1358,6 +1359,20 @@ function calculateExactDuplicateCount(
   return Math.max(0, selectedForSession - processedNewUnique - failedOrRejected);
 }
 
+function normalizeMountedRelativeRoot(value: string): string {
+  return value.trim().replaceAll("/", "\\").replace(/^\\+|\\+$/g, "").toLocaleLowerCase();
+}
+
+function nasPlanMatchesRequestedScope(
+  plan: SourceCreationPlanResponse,
+  requestedRelativeRoot: string,
+  useEntireShare: boolean,
+): boolean {
+  const requested = useEntireShare ? "" : normalizeMountedRelativeRoot(requestedRelativeRoot);
+  const reviewed = normalizeMountedRelativeRoot(plan.endpoint_relative_root);
+  return reviewed === requested && (useEntireShare ? plan.entire_endpoint : requested.length > 0);
+}
+
 export default function IngestionView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [profiles, setProfiles] = useState<SourceProfileSummary[]>([]);
@@ -1397,6 +1412,7 @@ export default function IngestionView() {
   const [mountedSourceRuntime, setMountedSourceRuntime] = useState<"checking" | "available" | "unavailable">("checking");
   const [linuxSourceLocationId, setLinuxSourceLocationId] = useState("");
   const [linuxSourceRelativeRoot, setLinuxSourceRelativeRoot] = useState("");
+  const [linuxUseEntireNasShare, setLinuxUseEntireNasShare] = useState(false);
 
   useEffect(() => {
     const restored = readWorkbenchSelection(typeof window === "undefined" ? null : window.sessionStorage);
@@ -1410,8 +1426,28 @@ export default function IngestionView() {
 
   const loadLinuxSourceLocations = useCallback(async () => {
     try {
-      const response = await getLinuxSourceLocations();
-      setLinuxSourceLocations(response);
+      const [response, nasRegistrations] = await Promise.all([
+        getLinuxSourceLocations(),
+        getNasRegistrations().catch(() => null),
+      ]);
+      const registeredNasLabels = new Map(
+        (nasRegistrations?.registrations ?? [])
+          .filter((registration) => registration.registration_status === "registered")
+          .map((registration) => [
+            registration.location_id,
+            `${registration.appliance_name} — \\\\${registration.share_name}`,
+          ]),
+      );
+      const labeledResponse = {
+        ...response,
+        locations: response.locations.map((location) => ({
+          ...location,
+          display_name: location.source_type === "nas"
+            ? registeredNasLabels.get(location.location_id) ?? location.display_name
+            : location.display_name,
+        })),
+      };
+      setLinuxSourceLocations(labeledResponse);
       setMountedSourceRuntime(
         response.os_family === "linux" && response.provider_name === "linux_stable_mount_v1"
           ? "available"
@@ -2388,6 +2424,14 @@ export default function IngestionView() {
     setSourceCreationDuplicateIdsToInactivate([]);
   }, []);
 
+  const handleNasLocationsChanged = useCallback(async (preferredLocationId?: string) => {
+    await loadLinuxSourceLocations();
+    if (preferredLocationId) {
+      resetSourceCreationOutcome();
+      setLinuxSourceLocationId(preferredLocationId);
+    }
+  }, [loadLinuxSourceLocations, resetSourceCreationOutcome]);
+
   const clearSourceCreationInputsAfterSuccess = useCallback(() => {
     setCreateSourceForm((current) => ({
       ...initialFormState(),
@@ -2406,6 +2450,7 @@ export default function IngestionView() {
     setSourceCreationDuplicateIdsToInactivate([]);
     setLinuxSourceLocationId("");
     setLinuxSourceRelativeRoot("");
+    setLinuxUseEntireNasShare(false);
   }, []);
 
   const handleIdentifySourceLocation = useCallback(async (selectedEndpointId: number | null = null) => {
@@ -2424,6 +2469,15 @@ export default function IngestionView() {
       setSourceCreationError("Choose an available server Source location.");
       return;
     }
+    if (
+      usesMountedLocation
+      && sourceType === "nas"
+      && !linuxSourceRelativeRoot.trim()
+      && !linuxUseEntireNasShare
+    ) {
+      setSourceCreationError("Enter a folder within the SMB share or explicitly choose Use entire SMB share.");
+      return;
+    }
     if (!usesMountedLocation && !observedPath) {
       setSourceCreationError("Root Path or Mount Point is required.");
       return;
@@ -2436,6 +2490,7 @@ export default function IngestionView() {
         observed_path: usesMountedLocation ? null : observedPath,
         location_id: usesMountedLocation ? linuxSourceLocationId : null,
         relative_root: usesMountedLocation ? linuxSourceRelativeRoot.trim() : null,
+        entire_endpoint_acknowledged: usesMountedLocation && sourceType === "nas" && linuxUseEntireNasShare,
         selected_existing_endpoint_id: selectedEndpointId,
       });
       setSourceCreationPlan(plan);
@@ -2456,6 +2511,15 @@ export default function IngestionView() {
       }));
       setSourceCreationPhase("review");
 
+      if (
+        sourceType === "nas"
+        && usesMountedLocation
+        && !nasPlanMatchesRequestedScope(plan, linuxSourceRelativeRoot, linuxUseEntireNasShare)
+      ) {
+        setSourceCreationError("The reviewed NAS folder differs from the requested folder. Correct the scope before creating the Source.");
+        return;
+      }
+
       if (plan.plan_status === "blocked") {
         setSourceCreationError(null);
       }
@@ -2468,6 +2532,7 @@ export default function IngestionView() {
     createSourceForm.sourceRootPath,
     linuxSourceLocationId,
     linuxSourceRelativeRoot,
+    linuxUseEntireNasShare,
     mountedSourceRuntime,
   ]);
 
@@ -2535,6 +2600,23 @@ export default function IngestionView() {
       setSourceCreationError("Identify the location before completing Create Source.");
       return;
     }
+    if (
+      usesMountedLocation
+      && sourceType === "nas"
+      && !linuxSourceRelativeRoot.trim()
+      && !linuxUseEntireNasShare
+    ) {
+      setSourceCreationError("Enter a folder within the SMB share or explicitly choose Use entire SMB share.");
+      return;
+    }
+    if (
+      usesMountedLocation
+      && sourceType === "nas"
+      && !nasPlanMatchesRequestedScope(sourceCreationPlan, linuxSourceRelativeRoot, linuxUseEntireNasShare)
+    ) {
+      setSourceCreationError("The reviewed NAS folder differs from the requested folder. Identify the location again.");
+      return;
+    }
     const hasExistingEndpoint = sourceCreationPlan.selected_existing_endpoint_id != null;
     if (!sourceCreationNamingAction) {
       setSourceCreationError(
@@ -2566,6 +2648,7 @@ export default function IngestionView() {
       observed_path: usesMountedLocation ? null : observedPath,
       location_id: usesMountedLocation ? linuxSourceLocationId : null,
       relative_root: usesMountedLocation ? linuxSourceRelativeRoot.trim() : null,
+      entire_endpoint_acknowledged: usesMountedLocation && sourceType === "nas" && linuxUseEntireNasShare,
       source_name: sourceCreationAllowsEditableSourceName(sourceCreationPlan)
         ? sourceCreationSourceName.trim()
         : null,
@@ -2630,6 +2713,7 @@ export default function IngestionView() {
     loadProfiles,
     linuxSourceLocationId,
     linuxSourceRelativeRoot,
+    linuxUseEntireNasShare,
     mountedSourceRuntime,
     sourceCreationDuplicateIdsToInactivate,
     sourceCreationNamingAction,
@@ -4459,6 +4543,7 @@ export default function IngestionView() {
                       resetSourceCreationOutcome();
                       setLinuxSourceLocationId("");
                       setLinuxSourceRelativeRoot("");
+                      setLinuxUseEntireNasShare(false);
                       setCreateSourceForm((current) => ({
                         ...current,
                         operatorSourceType: option.value,
@@ -4542,14 +4627,17 @@ export default function IngestionView() {
               )}
 
               {createSourceForm.operatorSourceType === "nas" && (
-                <NasRegistration onLocationsChanged={loadLinuxSourceLocations} />
+                <NasRegistration
+                  onLocationsChanged={handleNasLocationsChanged}
+                  onInteraction={() => setSourceCreationError(null)}
+                />
               )}
 
               {mountedSourceRuntime === "available" && linuxSourceLocations !== null
                 && (createSourceForm.operatorSourceType === "server" || createSourceForm.operatorSourceType === "nas") ? (
                 <>
                   <label className={styles.formLabel}>
-                    {createSourceForm.operatorSourceType === "server" ? "Approved Server location" : "NAS location"}
+                    {createSourceForm.operatorSourceType === "server" ? "Approved Server location" : "Registered NAS share"}
                     <select
                       className={styles.formInput}
                       value={linuxSourceLocationId}
@@ -4563,7 +4651,7 @@ export default function IngestionView() {
                         setLinuxSourceLocationId(event.target.value);
                       }}
                     >
-                      <option value="">{createSourceForm.operatorSourceType === "server" ? "Choose an approved Server location" : "Choose the registered NAS location"}</option>
+                      <option value="">{createSourceForm.operatorSourceType === "server" ? "Choose an approved Server location" : "Choose a registered NAS share"}</option>
                       {linuxSourceLocations.locations
                         .filter((location) => location.source_type === (createSourceForm.operatorSourceType === "server" ? "local" : "nas"))
                         .map((location) => (
@@ -4574,18 +4662,39 @@ export default function IngestionView() {
                     </select>
                   </label>
                   <label className={styles.formLabel}>
-                    Folder within location (optional)
+                    {createSourceForm.operatorSourceType === "nas" ? "Folder within SMB share" : "Folder within location (optional)"}
                     <input
                       className={styles.formInput}
                       value={linuxSourceRelativeRoot}
-                      disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
-                      placeholder="family/photos"
+                      disabled={
+                        sourceCreationPhase === "planning"
+                        || sourceCreationPhase === "confirming"
+                        || sourceCreationPhase === "selecting_existing"
+                        || (createSourceForm.operatorSourceType === "nas" && linuxUseEntireNasShare)
+                      }
+                      placeholder={createSourceForm.operatorSourceType === "nas" ? "Camera imports" : "family/photos"}
                       onChange={(event) => {
                         resetSourceCreationOutcome();
                         setLinuxSourceRelativeRoot(event.target.value);
+                        if (event.target.value.trim()) setLinuxUseEntireNasShare(false);
                       }}
                     />
                   </label>
+                  {createSourceForm.operatorSourceType === "nas" && (
+                    <label className={styles.checkboxLabel}>
+                      <input
+                        type="checkbox"
+                        checked={linuxUseEntireNasShare}
+                        disabled={sourceCreationPhase === "planning" || sourceCreationPhase === "confirming" || sourceCreationPhase === "selecting_existing"}
+                        onChange={(event) => {
+                          resetSourceCreationOutcome();
+                          setLinuxUseEntireNasShare(event.target.checked);
+                          if (event.target.checked) setLinuxSourceRelativeRoot("");
+                        }}
+                      />
+                      Use entire SMB share
+                    </label>
+                  )}
                   {linuxSourceLocations.blockers.map((blocker) => (
                     <p className={styles.helperText} key={blocker.code}>{blocker.message}</p>
                   ))}
@@ -4754,9 +4863,21 @@ export default function IngestionView() {
                   )}
                   {(createSourceForm.operatorSourceType === "server" || createSourceForm.operatorSourceType === "nas") && (
                     <div>
-                      <span className={styles.detailLabel}>Approved Location</span>
+                      <span className={styles.detailLabel}>{createSourceForm.operatorSourceType === "nas" ? "Registered NAS share" : "Approved Location"}</span>
                       <span>{linuxSourceLocations?.locations.find((location) => location.location_id === linuxSourceLocationId)?.display_name ?? "Registered location"}</span>
                     </div>
+                  )}
+                  {createSourceForm.operatorSourceType === "nas" && (
+                    <>
+                      <div>
+                        <span className={styles.detailLabel}>Source scope</span>
+                        <span>{linuxUseEntireNasShare ? "Entire SMB share (explicitly selected)" : linuxSourceRelativeRoot}</span>
+                      </div>
+                      <div>
+                        <span className={styles.detailLabel}>Effective source path</span>
+                        <span>{sourceCreationPlan.observed_path}</span>
+                      </div>
+                    </>
                   )}
                   {createSourceForm.operatorSourceType !== "server" && createSourceForm.operatorSourceType !== "nas" && (
                     <>
@@ -4993,6 +5114,8 @@ export default function IngestionView() {
                         || sourceCreationPhase === "confirming"
                         || (sourceCreationPlan.possible_matches.length > 1 && sourceCreationSelectedEndpointId == null)
                         || sourceCreationNamingAction == null
+                        || (createSourceForm.operatorSourceType === "nas"
+                          && !nasPlanMatchesRequestedScope(sourceCreationPlan, linuxSourceRelativeRoot, linuxUseEntireNasShare))
                         || (sourceCreationAllowsEditableSourceName(sourceCreationPlan) && !sourceCreationSourceName.trim())
                         || ((sourceCreationNamingAction === "create_new" || sourceCreationNamingAction === "rename_existing")
                           && !(createSourceForm.operatorSourceType === "nas"

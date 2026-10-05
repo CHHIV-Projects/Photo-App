@@ -97,6 +97,7 @@ class SourceCreationPlanRequest(BaseModel):
     observed_path: str | None = None
     location_id: str | None = None
     relative_root: str | None = None
+    entire_endpoint_acknowledged: bool = False
     source_name: str | None = None
     device_name: str | None = None
     naming_action: SourceCreationNameAction | None = None

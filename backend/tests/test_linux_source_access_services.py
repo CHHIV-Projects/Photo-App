@@ -219,6 +219,44 @@ class LinuxSourceAccessServiceTests(unittest.TestCase):
         self.assertEqual(endpoint.alias, "Registered Photos")
         self.assertEqual(source.endpoint_id, endpoint.id)
 
+    def test_registered_nas_share_root_requires_explicit_acknowledgment(self) -> None:
+        service = SourceCreationService(self.db, self.probes)
+        unacknowledged = service.plan(
+            SourceCreationPlanRequest(
+                source_type="nas",
+                location_id="linux-nas-photo-organizer",
+                relative_root="",
+            )
+        )
+        self.assertEqual(unacknowledged.plan_status, "blocked")
+        self.assertIn(
+            "nas_folder_or_entire_share_required",
+            {item.code for item in unacknowledged.blockers},
+        )
+
+        acknowledged = service.plan(
+            SourceCreationPlanRequest(
+                source_type="nas",
+                location_id="linux-nas-photo-organizer",
+                relative_root="",
+                entire_endpoint_acknowledged=True,
+            )
+        )
+        self.assertEqual(acknowledged.plan_status, "needs_review")
+        self.assertTrue(acknowledged.entire_endpoint)
+        self.assertEqual(acknowledged.entire_endpoint_label, "Entire share")
+
+        conflicting = service.plan(
+            SourceCreationPlanRequest(
+                source_type="nas",
+                location_id="linux-nas-photo-organizer",
+                relative_root="family",
+                entire_endpoint_acknowledged=True,
+            )
+        )
+        self.assertEqual(conflicting.plan_status, "blocked")
+        self.assertIn("nas_source_scope_conflict", {item.code for item in conflicting.blockers})
+
     def test_registered_nas_share_preserves_existing_endpoint_alias(self) -> None:
         appliance = NasApplianceRegistration(
             registration_uuid="33333333-3333-4333-8333-333333333333",

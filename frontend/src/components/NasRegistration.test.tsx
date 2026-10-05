@@ -42,7 +42,7 @@ beforeEach(() => {
     registration_id: "33333333-3333-4333-8333-333333333333",
     state: "pending",
     appliance_name: "Family NAS",
-    location_name: "Family Photos",
+    location_name: "Family NAS — Photos",
     share_name: "Photos",
     server_guid_masked: "sha256:…123456789abc",
     reuses_registered_appliance: false,
@@ -58,27 +58,33 @@ afterEach(cleanup);
 describe("NAS registration", () => {
   it("shows the current registration and keeps manual registration available", async () => {
     render(<NasRegistration onLocationsChanged={vi.fn()} />);
-    expect(await screen.findByText("Photo Organizer NAS — Photo Organizer NAS")).toBeInTheDocument();
+    expect(await screen.findByText("Photo Organizer NAS — \\\\PhotoOrganizer")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Register NAS manually" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Discover NAS" })).toBeInTheDocument();
   });
 
   it("uses discovery only to seed a secret-free pending registration", async () => {
-    render(<NasRegistration onLocationsChanged={vi.fn()} />);
+    const onInteraction = vi.fn();
+    render(<NasRegistration onLocationsChanged={vi.fn()} onInteraction={onInteraction} />);
     fireEvent.click(screen.getByRole("button", { name: "Discover NAS" }));
+    expect(await screen.findByRole("option", {
+      name: "Family NAS — family-nas.local — 192.0.2.10",
+    })).toBeInTheDocument();
     fireEvent.change(await screen.findByLabelText("Discovered NAS (optional)"), {
       target: { value: "sha256:candidate" },
     });
+    expect(screen.getByLabelText("NAS hostname or IP address")).toHaveValue("192.0.2.10");
     fireEvent.change(screen.getByLabelText("SMB share name"), { target: { value: "Photos" } });
-    fireEvent.change(screen.getByLabelText("Photo location name"), { target: { value: "Family Photos" } });
+    expect(screen.getByText("Family NAS — Photos")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Prepare registration" }));
     expect(await screen.findByText(/sudo \/usr\/local\/lib\/photo-organizer\/register-nas-location.py/)).toBeInTheDocument();
     expect(api.createNasPendingRegistration).toHaveBeenCalledWith({
-      network_host: "family-nas.local",
+      network_host: "192.0.2.10",
       appliance_name: "Family NAS",
       share_name: "Photos",
-      location_name: "Family Photos",
+      location_name: "Family NAS — Photos",
     });
+    expect(onInteraction).toHaveBeenCalled();
     const payload = JSON.stringify(vi.mocked(api.createNasPendingRegistration).mock.calls);
     expect(payload).not.toContain("password");
     expect(payload).not.toContain("credential");
@@ -127,8 +133,8 @@ describe("NAS registration", () => {
       ],
     });
     render(<NasRegistration onLocationsChanged={vi.fn()} />);
-    expect(await screen.findByText("Offline NAS — Archive")).toBeInTheDocument();
-    expect(screen.getByText("Conflict NAS — Photos")).toBeInTheDocument();
+    expect(await screen.findByText("Offline NAS — \\\\Archive")).toBeInTheDocument();
+    expect(screen.getByText("Conflict NAS — \\\\Photos")).toBeInTheDocument();
     expect(screen.getByText(/identity conflict/)).toBeInTheDocument();
   });
 });
