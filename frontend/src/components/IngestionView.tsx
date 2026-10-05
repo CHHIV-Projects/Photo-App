@@ -77,7 +77,13 @@ import type {
   WindowsSourceUiComputer,
   WindowsSourceUiWorkflowStatus,
 } from "@/types/ui-api";
-import { normalSelectorSourceTypes, sourcePresentationType, sourceWorkbenchKind } from "@/lib/source-provider-ui";
+import {
+  normalSelectorSourceTypes,
+  sourcePresentationType,
+  sourceSelectorEndpointFieldLabel,
+  sourceSelectorEndpointLabel,
+  sourceWorkbenchKind,
+} from "@/lib/source-provider-ui";
 
 import IcloudRunWorkflowPanel from "./IcloudRunWorkflowPanel";
 import {
@@ -493,18 +499,6 @@ function isLocalOrExternalSource(sourceType: SourceProfileType): boolean {
 function isUncPath(pathValue: string | null | undefined): boolean {
   const normalized = (pathValue ?? "").trim().replace(/\//g, "\\");
   return normalized.startsWith("\\\\");
-}
-
-function parseUncServerShareLabel(pathValue: string | null | undefined): string | null {
-  const normalized = (pathValue ?? "").trim().replace(/\//g, "\\");
-  if (!normalized.startsWith("\\\\")) {
-    return null;
-  }
-  const [server, share] = normalized.split("\\").filter(Boolean);
-  if (!server || !share) {
-    return null;
-  }
-  return `\\\\${server}\\${share}`;
 }
 
 function isDriveLetterPath(pathValue: string | null | undefined): boolean {
@@ -972,19 +966,22 @@ function getWorkbenchDeviceKey(profile: SourceProfileSummary): string {
   return `legacy:${getOperatorSourceType(profile)}`;
 }
 
-function getWorkbenchDeviceLabel(profile: SourceProfileSummary): string {
+function getWorkbenchDeviceLabel(
+  profile: SourceProfileSummary,
+  registeredNasShareLabel?: string | null,
+): string {
   if (isIcloudProfile(profile)) {
     return profile.account_username_masked ? `iCloud ${profile.account_username_masked}` : "iCloud account";
   }
   if (profile.endpoint_id == null) {
     return "Legacy source";
   }
-  if (profile.endpoint_alias) {
-    return profile.endpoint_alias;
-  }
   const operatorType = getOperatorSourceType(profile);
   if (operatorType === "nas") {
-    return parseUncServerShareLabel(profile.source_root_path) ?? `NAS share #${profile.endpoint_id}`;
+    return sourceSelectorEndpointLabel(profile, registeredNasShareLabel);
+  }
+  if (profile.endpoint_alias) {
+    return profile.endpoint_alias;
   }
   if (operatorType === "removable") {
     return `Removable media #${profile.endpoint_id}`;
@@ -1001,6 +998,9 @@ function getWorkbenchDeviceMeta(profile: SourceProfileSummary): string {
   }
   if (isIcloudProfile(profile)) {
     return profile.managed_staging_path ?? "Provider-managed staging";
+  }
+  if (getOperatorSourceType(profile) === "nas") {
+    return "Registered SMB share Source Endpoint";
   }
   return profile.source_root_path ?? profile.endpoint_source_type ?? "Registered endpoint";
 }
@@ -1409,6 +1409,7 @@ export default function IngestionView() {
   const [sourceCreationSelectedCanonicalSourceId, setSourceCreationSelectedCanonicalSourceId] = useState<number | null>(null);
   const [sourceCreationDuplicateIdsToInactivate, setSourceCreationDuplicateIdsToInactivate] = useState<number[]>([]);
   const [linuxSourceLocations, setLinuxSourceLocations] = useState<LinuxSourceLocationsResponse | null>(null);
+  const [nasSelectorLabelsByEndpoint, setNasSelectorLabelsByEndpoint] = useState<Record<number, string>>({});
   const [mountedSourceRuntime, setMountedSourceRuntime] = useState<"checking" | "available" | "unavailable">("checking");
   const [linuxSourceLocationId, setLinuxSourceLocationId] = useState("");
   const [linuxSourceRelativeRoot, setLinuxSourceRelativeRoot] = useState("");
@@ -1438,6 +1439,17 @@ export default function IngestionView() {
             `${registration.appliance_name} — \\\\${registration.share_name}`,
           ]),
       );
+      setNasSelectorLabelsByEndpoint(Object.fromEntries(
+        (nasRegistrations?.registrations ?? [])
+          .filter((registration) => (
+            registration.registration_status === "registered"
+            && registration.source_endpoint_id != null
+          ))
+          .map((registration) => [
+            registration.source_endpoint_id as number,
+            `${registration.appliance_name} — \\\\${registration.share_name}`,
+          ]),
+      ));
       const labeledResponse = {
         ...response,
         locations: response.locations.map((location) => ({
@@ -2078,13 +2090,16 @@ export default function IngestionView() {
       }
       deviceMap.set(key, {
         key,
-        label: getWorkbenchDeviceLabel(profile),
+        label: getWorkbenchDeviceLabel(
+          profile,
+          profile.endpoint_id == null ? null : nasSelectorLabelsByEndpoint[profile.endpoint_id],
+        ),
         meta: getWorkbenchDeviceMeta(profile),
         profiles: [profile],
       });
     }
     return Array.from(deviceMap.values()).sort((left, right) => left.label.localeCompare(right.label));
-  }, [workbenchProfiles]);
+  }, [nasSelectorLabelsByEndpoint, workbenchProfiles]);
 
   const selectedWorkbenchDevice = useMemo(() => {
     if (selectedWorkbenchDeviceKey == null) {
@@ -5234,7 +5249,7 @@ export default function IngestionView() {
           </div>
 
           <label className={styles.formLabel}>
-            Device
+            {sourceSelectorEndpointFieldLabel(workbenchSourceType)}
             <select
               className={styles.formInput}
               value={selectedWorkbenchDeviceKey ?? ""}
@@ -5316,7 +5331,7 @@ export default function IngestionView() {
 
             <div className={styles.detailGrid}>
               <div className={styles.detailCard}>
-                <span className={styles.detailLabel}>Device</span>
+                <span className={styles.detailLabel}>{sourceSelectorEndpointFieldLabel(workbenchSourceType)}</span>
                 <span>{selectedWorkbenchDevice?.label ?? "-"}</span>
                 <span className={styles.detailMeta}>{selectedWorkbenchDevice?.meta ?? "No device selected"}</span>
               </div>

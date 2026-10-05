@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { conciseSourceDeviceLabel, normalSelectorSourceTypes, sourcePresentationType, sourceWorkbenchKind } from "./source-provider-ui";
+import {
+  conciseSourceDeviceLabel,
+  normalSelectorSourceTypes,
+  sourcePresentationType,
+  sourceSelectorEndpointFieldLabel,
+  sourceSelectorEndpointLabel,
+  sourceWorkbenchKind,
+} from "./source-provider-ui";
 import type { SourceProfileSummary } from "@/types/ui-api";
 
 
@@ -51,5 +58,29 @@ describe("provider-derived Source routing", () => {
   it("uses concise device aliases and hides unvalidated Windows provider types", () => {
     expect(conciseSourceDeviceLabel(profile())).toBe("Chuck_Notebook");
     expect(normalSelectorSourceTypes(["local", "nas", "external", "removable", "optical", "icloud"])).toEqual(["local", "nas", "external", "removable", "icloud"]);
+  });
+
+  it("presents a NAS endpoint as a registered share rather than a generic device", () => {
+    const nasProfile = profile({
+      provider_kind: "mounted",
+      endpoint_source_type: "nas",
+      endpoint_alias: "Camera imports",
+      source_root_path: "/app/sources/nas/location/Camera imports",
+    });
+
+    expect(sourceSelectorEndpointFieldLabel("nas")).toBe("Registered NAS Share");
+    expect(sourceSelectorEndpointFieldLabel("external")).toBe("Device");
+    expect(sourceSelectorEndpointLabel(nasProfile, "Photo Organizer NAS — \\\\Photos")).toBe(
+      "Photo Organizer NAS — \\\\Photos",
+    );
+  });
+
+  it("falls back to a canonical UNC server/share instead of a legacy NAS alias", () => {
+    expect(sourceSelectorEndpointLabel(profile({
+      provider_kind: "mounted",
+      endpoint_source_type: "nas",
+      endpoint_alias: "Camera imports",
+      source_root_path: "\\\\HENDERSON-NAS\\Photos\\Camera imports",
+    }))).toBe("\\\\HENDERSON-NAS\\Photos");
   });
 });
