@@ -1,20 +1,22 @@
-# PROJECT_WORKFLOW_v7.md
+# PROJECT_WORKFLOW_v8.md
 
 ## Document Status
 
-**Version:** v7
-**Project phase:** v1.0 stabilization with Linux-server Development and isolated Test foundations operational
-**Current architecture:** Windows client/operator + Linux authoritative repository/runtime + Synology NAS durable-storage/backup infrastructure
-**Current deployment branch:** `integration/linux-runtime-clean`
-**Current workflow emphasis:** milestone discipline, reconnaissance as implementation roadmap, evidence-based validation, provenance protection, clean branch lifecycle, cost-aware coding-agent use, environment-aware operations, and reliable continuation between chats and tools.
+**Version:** v8
+**Document role:** Standing project workflow. Current milestone, branch, provider-validation, deployment, and runtime state is defined by the current Context, Architecture, active prompt, and accepted closeouts.
+**Operating model:** Windows Product Owner/client + Linux authoritative repository/runtime + Synology NAS durable-storage/backup infrastructure.
+**Authoritative repository:** `/home/chuck/projects/photo-organizer-dev` on `henderson-server1`
+**Current workflow emphasis:** milestone discipline, reconnaissance as implementation roadmap, Product Owner Git ownership, evidence-based validation, provenance protection, clean branch lifecycle, cost-aware coding-agent use, environment-aware operations, and reliable continuation between chats and tools.
 
 ### Update Scope
 
-This v7 revision preserves the established application and deployment workflow.
+This v8 revision preserves the established application and deployment workflow.
 
-It does not introduce a materially different deployment methodology.
+It does not introduce a materially different development methodology.
 
-Changes are limited to aligning the workflow with the current architecture:
+Changes remove transient branch/provider-status assumptions, lock Git mutations to the Product Owner, formalize the bug-fix documentation pattern, and align standing references with the v8 Context and Architecture.
+
+The durable operating model remains:
 
 ```text
 Windows workstation
@@ -30,7 +32,7 @@ Synology NAS
   not current live Development/Test application or database storage
 ```
 
-The provenance workflow remains unchanged pending the separate post-12.64 documentation reconciliation.
+Current provenance behavior and provider/runtime status are defined by `project_context_v8.md` and `project_architecture_v8.md`; this workflow defines process rather than milestone-state truth.
 
 ---
 
@@ -125,8 +127,8 @@ The User:
 - reports real-world behavior;
 - provides screenshots, logs, error output, and usability feedback;
 - confirms milestone completion before final commit;
-- usually manages Git commits and pushes;
-- explicitly authorizes Coder Git write commands when desired;
+- owns Git mutations, including branch creation/switching, staging, commit, push, tag, merge, rebase/reset decisions, and branch cleanup;
+- reviews exact-file staging before commit;
 - explicitly authorizes Docker, database, NAS, deployment, and other live mutations;
 - decides whether completed feature branches are retained or deleted;
 - maintains or approves project documentation organization;
@@ -212,7 +214,7 @@ ChatGPT should not rely on chat memory alone when current repository documents, 
 The Coder:
 
 - reads the milestone prompt;
-- follows `docs/context/coding_agent_rules_v7.md` once that document is active;
+- follows `docs/context/coding_agent_rules_v8.md` once that document is active;
 - performs Git preflight before coding;
 - confirms the authoritative repository and current branch;
 - performs reconnaissance when requested or required;
@@ -230,7 +232,7 @@ The Coder:
 - reports known limitations;
 - reports Git state;
 - stops before unsafe scope expansion;
-- does not run unauthorized Git write commands;
+- does not run Git mutation commands; Git mutation belongs to the Product Owner;
 - does not run unauthorized Docker, database, NAS, deployment, or destructive runtime commands;
 - does not read or print protected secrets or configuration without explicit scope and authorization.
 
@@ -250,9 +252,10 @@ The Coder should not:
 - rebuild, recreate, replace, or remove containers without authorization;
 - use ad hoc Docker commands to bypass missing Test promotion or rollback workflows.
 
-Coder Git write commands such as the following require explicit authorization:
+Coder Git mutation boundary:
 
 ```text
+stage / git add
 commit
 push
 reset
@@ -262,8 +265,12 @@ tag
 checkout
 switch
 stash
+clean
 branch creation or deletion
+remote branch deletion
 ```
+
+These are Product Owner actions. Coding agents do not perform them as part of the normal workflow.
 
 Read-only Git commands are expected during preflight and validation.
 
@@ -276,10 +283,10 @@ Read-only Git commands are expected during preflight and validation.
 The current system should remain understandable through:
 
 ```text
-project_context_v7.md
-project_architecture_v7.md
-project_workflow_v7.md
-coding_agent_rules_v7.md
+project_context_v8.md
+project_architecture_v8.md
+project_workflow_v8.md
+coding_agent_rules_v8.md
 canonical_parking_lot_v7.md
 MILESTONE_HISTORY.md
 v1.0 release roadmap
@@ -506,11 +513,11 @@ Milestone prompts should generally use:
 Standing instructions should include:
 
 ```text
-Read and obey docs/context/coding_agent_rules_v7.md.
+Read and obey docs/context/coding_agent_rules_v8.md.
 Create one closeout document only.
 Do not create a separate report file.
 Use the exact closeout filename.
-Do not run Git write commands unless explicitly authorized.
+Do not run Git mutation commands; the Product Owner owns staging, commit, push, tag, merge, and branch mutations.
 Do not mutate Docker, database, NAS, or deployment state unless authorized.
 Escalate before materially broadening scope.
 ```
@@ -619,7 +626,7 @@ updated prompt file
 one closeout file
 ```
 
-Documentation-only reconnaissance may commit the prompt and closeout as one logical evidence package when explicitly approved.
+The Product Owner may commit a documentation-only reconnaissance prompt and closeout as one logical evidence package when that grouping is explicitly approved.
 
 ---
 
@@ -788,7 +795,7 @@ The implementation prompt should identify the reconnaissance closeout as the pri
 Coder reading order:
 
 ```text
-1. coding_agent_rules_v7.md
+1. coding_agent_rules_v8.md
 2. implementation prompt
 3. approved reconnaissance closeout
 4. targeted implementation files
@@ -819,7 +826,7 @@ Use for low-risk, tightly bounded changes such as:
 
 Even small prompts should:
 
-- reference `coding_agent_rules_v7.md`;
+- reference `coding_agent_rules_v8.md`;
 - state scope and out of scope;
 - require validation;
 - require one closeout;
@@ -921,6 +928,27 @@ Choice depends on:
 - whether runtime state or release identity is affected.
 
 A bug fix should not be hidden inside unrelated later work.
+
+### Bug-fix documentation convention
+
+Use one of two patterns:
+
+```text
+Low-risk contained defect:
+docs/bug_fixes/bug_fix_NNN_<exact_snake_case_name>.md
+
+Safety-sensitive / architectural / runtime / deployment defect:
+docs/bug_fixes/bug_fix_NNN_<exact_snake_case_name>_prompt.md
+docs/bug_fixes/bug_fix_NNN_<exact_snake_case_name>_closeout.md
+```
+
+A single-record bug fix should contain the defect, correction, validation, files
+changed, and retained limitations.
+
+A prompt/closeout bug fix should be used when the repair needs explicit scope,
+safety gates, Product Owner decisions, or live mutation authorization.
+
+Do not create both structures for the same defect unless explicitly requested.
 
 ---
 
@@ -1027,25 +1055,31 @@ Normal Git and repository commands run in:
 VS Code Remote SSH / Linux terminal on henderson-server1
 ```
 
-Before a new implementation arc begins:
+Before a new implementation arc begins, the Product Owner establishes the branch from the intended baseline and ensures it is pushed/synchronized.
+
+The Coder then performs read-only preflight:
 
 ```bash
 cd /home/chuck/projects/photo-organizer-dev
 git branch --show-current
 git status --short
 git log --oneline --decorate -5
-git fetch origin
+git rev-parse HEAD
+git rev-parse '@{upstream}'
 ```
 
 Normal starting state:
 
 ```text
-expected branch
+expected branch already checked out
 working tree clean
-local branch synchronized with its upstream
+active prompt committed
+local HEAD matches the intended upstream when synchronization is required
 ```
 
-For a substantial new application arc, the normal lifecycle remains:
+If branch creation, switching, fetching, resetting, or other Git mutation is required, the Coder stops and reports it to the Product Owner.
+
+For a substantial new application arc, the normal Product Owner-managed lifecycle remains:
 
 ```text
 main
@@ -1152,7 +1186,7 @@ C. accidental/noise
 D. required current-milestone work
 ```
 
-The Coder must not revert, stage, commit, stash, discard, or move files without authorization.
+The Coder must not revert, discard, move, or edit unrelated dirty files without Product Owner direction. The Coder never stages, commits, stashes, or otherwise mutates Git state.
 
 ---
 
@@ -1299,7 +1333,7 @@ The Coder should:
 - add focused tests;
 - document unavoidable deviations;
 - keep generated artifacts out of milestone commits unless explicitly required;
-- avoid Git write commands unless authorized;
+- do not run Git mutation commands;
 - avoid runtime mutation unless authorized;
 - preserve Development/Test isolation;
 - preserve the Windows Source-provider boundary unless explicitly changing it.
@@ -1418,7 +1452,7 @@ A feature should not be marked complete merely because automated tests passed if
 
 ## 38. Step 14 — Final Staging and Commit
 
-ChatGPT provides exact-file Git commands for the **VS Code Remote SSH / Linux terminal** unless a Windows-specific operation is required.
+The Product Owner performs final staging, commit, and push. ChatGPT provides exact-file Git commands for the **VS Code Remote SSH / Linux terminal** unless a Windows-specific operation is required.
 
 Preferred sequence:
 
@@ -1461,7 +1495,7 @@ The staged file list must be compared against the expected milestone file list.
 
 Unexpected staged files must be removed or explained before commit.
 
-The Coder must not commit or push without explicit Product Owner authorization.
+The Coder does not stage, commit, push, tag, merge, rebase, reset, or mutate branches. The Product Owner performs Git mutations after reviewing the final change set.
 
 ---
 
@@ -1472,10 +1506,10 @@ Potential updates:
 - milestone prompt;
 - milestone closeout;
 - `MILESTONE_HISTORY.md`;
-- `project_context_v7.md`;
-- `project_architecture_v7.md`;
-- `project_workflow_v7.md`;
-- `coding_agent_rules_v7.md`;
+- `project_context_v8.md`;
+- `project_architecture_v8.md`;
+- `project_workflow_v8.md`;
+- `coding_agent_rules_v8.md`;
 - `canonical_parking_lot_v7.md`;
 - v1.0 roadmap;
 - new-chat intro;
@@ -1501,6 +1535,8 @@ Application milestone history does not need to absorb deployment milestone detai
 ---
 
 ## 40. Step 16 — Arc Completion and Merge
+
+Arc merge is a Product Owner Git action.
 
 A substantial feature branch should be merged only after:
 
@@ -1625,7 +1661,7 @@ Milestones involving provenance must explicitly define:
 
 Provenance must not be changed as an incidental side effect.
 
-This section remains unchanged in principle pending the separate post-12.64 documentation reconciliation.
+The current provenance contract is defined by the v8 Context/Architecture and accepted milestone evidence; the workflow rule remains that provenance changes require explicit scope and evidence.
 
 ---
 
@@ -1709,7 +1745,7 @@ Coder should raise these issues during reconnaissance or escalation.
 
 ## 48. Core Cost-Control Principles
 
-- Keep durable rules in `coding_agent_rules_v7.md`.
+- Keep durable rules in `coding_agent_rules_v8.md`.
 - Keep prompts focused on the milestone delta.
 - Use reconnaissance closeouts as roadmaps.
 - Avoid rereading all global documents for small work.
@@ -1729,7 +1765,7 @@ For most implementation prompts:
 
 ```text
 Before coding:
-1. Read docs/context/coding_agent_rules_v7.md.
+1. Read docs/context/coding_agent_rules_v8.md.
 2. Read this milestone prompt.
 3. Read the approved reconnaissance closeout, if listed.
 4. Inspect the targeted code paths.
@@ -1834,9 +1870,11 @@ git rev-parse '@{upstream}'
 
 ## 54. Exact Staging
 
-Specific-file staging is the default.
+Specific-file staging is the Product Owner default.
 
-Required verification:
+The Coder reports the exact intended change-set file list but does not stage it.
+
+Before commit, the Product Owner verifies:
 
 ```bash
 git diff --cached --name-only
@@ -2089,13 +2127,11 @@ Protected NAS credentials must not be printed or committed.
 
 ## 62. Production Boundary
 
-Current Linux Production is not implemented.
+Production status is defined by the current Context, Architecture, deployment guides, and active prompt.
 
-Legacy Windows Production scripts, examples, and generic Compose artifacts remain tracked.
+Legacy scripts, examples, generic Compose artifacts, Development behavior, and Test behavior do not establish an approved Production contract.
 
-They are not the current approved Linux Production contract.
-
-No milestone should infer that Production exists merely because Development and Test are operational.
+No milestone should infer that Production exists or is validated merely because another environment is operational.
 
 Production work requires explicit design and validation for:
 
@@ -2238,10 +2274,10 @@ A major documentation checkpoint is appropriate:
 Checkpoint documents may include:
 
 ```text
-project_context_v7.md
-project_architecture_v7.md
-project_workflow_v7.md
-coding_agent_rules_v7.md
+project_context_v8.md
+project_architecture_v8.md
+project_workflow_v8.md
+coding_agent_rules_v8.md
 MILESTONE_HISTORY.md
 canonical_parking_lot_v7.md
 v1.0 roadmap
@@ -2274,10 +2310,10 @@ Do not wait for severe degradation when a natural documentation boundary already
 A continuation chat should begin with current copies of:
 
 ```text
-project_context_v7.md
-project_architecture_v7.md
-project_workflow_v7.md
-coding_agent_rules_v7.md
+project_context_v8.md
+project_architecture_v8.md
+project_workflow_v8.md
+coding_agent_rules_v8.md
 MILESTONE_HISTORY.md
 canonical_parking_lot_v7.md
 v1.0 release roadmap

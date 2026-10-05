@@ -1,14 +1,24 @@
-# CODING_AGENT_RULES_v7.md — Photo Organizer
+# CODING_AGENT_RULES_v8.md — Photo Organizer
 
 ## Document Status
 
-**Version:** v7
-**Project phase:** v1.0 stabilization with Linux-server Development and isolated Test foundations operational
-**Current architecture:** Windows client/operator + Linux authoritative repository/runtime + Synology NAS durable-storage/backup infrastructure
+**Version:** v8
+**Document role:** Standing project-wide rules for coding agents; transient milestone, branch, provider-validation, and runtime status belongs in the current Context, Architecture, active prompt, and closeouts.
+**Operating model:** Product Owner on Windows + authoritative repository/runtime on Linux + Synology NAS durable-storage/backup infrastructure.
 **Authoritative repository:** `/home/chuck/projects/photo-organizer-dev` on `henderson-server1`
-**Current workflow baseline:** `project_workflow_v7.md`
-**Current architecture baseline:** `project_architecture_v7.md`
-**Current verification boundary:** Provenance rules remain in force, while the final post-12.64 provenance documentation reconciliation is handled separately.
+**Current workflow baseline:** `project_workflow_v8.md`
+**Current architecture baseline:** `project_architecture_v8.md`
+**Current context baseline:** `project_context_v8.md`
+
+### v8 Update Scope
+
+This revision preserves the established safety and milestone methodology while:
+
+- removing transient branch and obsolete provider-status assumptions;
+- aligning standing references with the v8 Context, Architecture, and Workflow;
+- making Product Owner ownership of Git mutations explicit;
+- formalizing the two approved bug-fix documentation patterns;
+- keeping current implementation/validation status in Context, Architecture, prompts, and closeouts rather than duplicating it here.
 
 ---
 
@@ -78,7 +88,9 @@ When two instructions conflict:
 - do not silently broaden scope;
 - do not silently change provenance, Source identity, persistence, runtime, or deployment semantics.
 
-A milestone prompt may explicitly override a standing rule.
+A milestone prompt may explicitly override a standing rule when the Product Owner approves the exception.
+
+The Product Owner Git-mutation boundary in Section 10 is not a routine milestone override. If an active prompt appears to delegate staging, commit, push, branch, merge, tag, rebase, reset, stash, or clean operations to the Coder, stop and report the conflict unless the Product Owner has explicitly changed this standing workflow.
 
 The closeout must document:
 
@@ -179,25 +191,29 @@ Do not treat these machine roles as interchangeable.
 
 ### Provider authority boundary
 
-Keep these provider scopes distinct:
+Keep provider authority distinct from runtime convenience.
+
+The standing provider classes are:
 
 ```text
 Mounted Source Provider
-- Linux server has direct, approved filesystem access
-- accepted architecture supports Mounted Local/NAS
-- Mounted NAS is live-validated
-- Mounted Local live validation remains deferred
+- Linux server directly accesses approved server-local or NAS-backed roots
+- host namespace, broker, identity, containment, and runtime-root rules remain authoritative
 
 Windows Source Helper Provider
-- future 12.66 work
-- owns Windows-connected Local/External/Removable/Optical access
-- Windows paths are not translated into artificial Linux paths
+- Windows-native Sources retain Windows-native identity and path semantics
+- Helper-mediated inventory/acquisition must not translate Windows paths into invented Linux paths
+- current supported Source types and validation status are defined by project_context_v8.md
+  and project_architecture_v8.md
 
 Cloud Provider
-- independent provider-specific acquisition such as iCloud
+- provider-specific remote acquisition such as iCloud
+- acquisition remains separate from canonical Source Intake authority
 ```
 
 Do not move Source authority across these boundaries as an implementation convenience.
+
+Do not infer provider support merely because a path is visible from another host. Current implementation and validation status belongs in the v8 Context/Architecture and the active milestone evidence.
 
 ---
 
@@ -242,7 +258,7 @@ For every task:
 13. Implement or validate only the approved scope.
 14. Run the most relevant validation.
 15. Create exactly one closeout using the required filename.
-16. Leave commit, push, merge, branch, tag, Docker mutation, database mutation, NAS mutation, and deployment actions to the User unless explicitly authorized.
+16. Leave all Git mutations to the Product Owner. Leave Docker, database, NAS, secret, mount, service, and deployment mutations to the Product Owner unless the active prompt explicitly authorizes the exact runtime action.
 
 Do not assume prior conversational context is complete or current.
 
@@ -335,7 +351,7 @@ Implementation should use a moderate, execution-focused reasoning posture:
 Recommended reading order:
 
 ```text
-1. coding_agent_rules_v7.md
+1. coding_agent_rules_v8.md
 2. active implementation prompt
 3. approved reconnaissance closeout
 4. named implementation files
@@ -489,6 +505,32 @@ Rules:
 - create one closeout.
 
 A bug fix should not be hidden inside unrelated later work.
+
+### Bug-fix documentation convention
+
+For a small, contained, low-risk defect, a single tracked record may be used:
+
+```text
+docs/bug_fixes/bug_fix_NNN_<exact_snake_case_name>.md
+```
+
+That record should contain the defect, correction, validation, files changed, and
+any retained limitation.
+
+For a bug that touches architecture, runtime/deployment, data integrity, Source
+identity, provenance, mounts, services, Docker, database state, NAS state, or
+other safety-sensitive boundaries, use a prompt/closeout pair:
+
+```text
+docs/bug_fixes/bug_fix_NNN_<exact_snake_case_name>_prompt.md
+docs/bug_fixes/bug_fix_NNN_<exact_snake_case_name>_closeout.md
+```
+
+High-risk bug fixes should use explicit mutation gates where live operations are
+required.
+
+Do not create both a single-record bug-fix document and a prompt/closeout pair
+for the same defect unless the Product Owner explicitly requests that structure.
 
 ---
 
@@ -706,7 +748,7 @@ Do not overbuild merely because the agent can.
 
 ## 8.1 Always Read
 
-- `docs/context/coding_agent_rules_v7.md`;
+- `docs/context/coding_agent_rules_v8.md`;
 - the active milestone prompt;
 - approved prompt addenda;
 - the immediately preceding reconnaissance closeout when implementing from reconnaissance.
@@ -716,9 +758,9 @@ Do not overbuild merely because the agent can.
 Use broader documents only when relevant:
 
 ```text
-docs/context/project_context_v7.md
-docs/context/project_architecture_v7.md
-docs/context/project_workflow_v7.md
+docs/context/project_context_v8.md
+docs/context/project_architecture_v8.md
+docs/context/project_workflow_v8.md
 docs/context/MILESTONE_HISTORY*.md
 docs/context/canonical_parking_lot_v7.md
 v1.0 release roadmap
@@ -867,7 +909,7 @@ If:
 
 stop and report the mismatch.
 
-Do not create or switch branches unless explicitly authorized.
+Do not create or switch branches. If the required branch is not already checked out, stop and report the exact branch action the Product Owner needs to perform.
 
 An explicitly approved long-running deployment/documentation branch may continue across related deployment milestones when:
 
@@ -897,13 +939,16 @@ Report:
 - brief diff summary;
 - recommended handling.
 
-Do not edit, revert, stage, stash, commit, delete, move, or clean unexpected files without authorization.
+Do not edit, revert, delete, move, or clean unexpected files without Product Owner direction. Never stage, stash, or commit them; Git mutations remain Product Owner actions.
 
-## 10.4 Git Write Commands
+## 10.4 Git Mutation Boundary
 
-Do not run these without explicit authorization:
+Coding agents do not mutate repository history, branches, the index, or remotes.
+
+Do not run:
 
 ```text
+git add
 git commit
 git push
 git reset
@@ -914,10 +959,13 @@ git checkout
 git switch
 git stash
 git clean
-git branch -d
-git branch -D
+git branch <creation/deletion>
 git push --delete
 ```
+
+This is a standing Product Owner workflow rule, not a normal milestone-level permission gate.
+
+The Coder stops after implementation, validation, closeout preparation, and final read-only Git status reporting. The Product Owner performs staging, commit, push, tag, merge, branch creation/switch/deletion, and other Git mutations separately after review.
 
 Read-only Git commands are expected:
 
@@ -932,17 +980,19 @@ git ls-files
 git rev-parse
 ```
 
-## 10.5 Specific-File Staging
+If the correct branch does not already exist or is not checked out, stop and report the mismatch rather than changing branches.
 
-Do not use:
+## 10.5 Exact-File Commit Guidance
+
+The Coder must report the exact files that belong to the logical change set so the Product Owner can stage them safely.
+
+The Product Owner/Architect should normally use specific-file staging rather than:
 
 ```bash
 git add .
 ```
 
-unless the User explicitly approves the full dirty tree.
-
-Preferred review and staging sequence:
+A normal Product Owner review sequence is:
 
 ```bash
 git status --short
@@ -959,11 +1009,9 @@ git diff --cached --check
 
 The staged file list must match the expected milestone file list.
 
-Do not commit unexplained files.
+Do not recommend committing unexplained files or mixing unrelated work in one commit.
 
-Do not mix unrelated work in one commit.
-
-When replacing a versioned global document:
+When replacing a versioned global document, the Product Owner should:
 
 ```text
 stage new version
@@ -1353,13 +1401,11 @@ Do not use ad hoc Docker commands to bypass those missing workflows.
 
 ## 14.3 Production Boundary
 
-Current Linux Production is not implemented.
+Production status is defined by the current Context, Architecture, deployment documentation, and active prompt.
 
-Legacy Windows Production scripts, examples, and a generic Compose artifact remain tracked.
+Do not infer Production capability from Development, Test, legacy scripts, examples, generic Compose artifacts, or historical deployment records.
 
-They are not the current approved Linux Production contract.
-
-Do not infer Production capability from Development or Test.
+Unless the current authoritative documents define an approved Production contract, treat Production mutation and validation as unavailable.
 
 Production work requires explicit design and validation for:
 
@@ -1635,13 +1681,12 @@ The backend must recompute or verify them.
 Local represents storage internal to the current Source-access host.
 
 Windows-local identity uses Windows volume/device evidence. Linux Mounted Local
-uses the accepted Mounted Source Provider for approved directly accessible
-roots.
+uses the Mounted Source Provider for approved directly accessible roots.
 
 Do not assume Windows volume evidence works unchanged on Linux or macOS.
 
-Mounted Local implementation exists, but its live Profile/readiness/selection
-proof remains deferred.
+Use the current Context/Architecture and active milestone evidence for the present
+implementation and live-validation status of each Local provider.
 
 The controlled Linux Development fixture is:
 
@@ -1665,7 +1710,7 @@ Rules:
 - reconnecting under another letter may still be the same endpoint;
 - alias is not identity;
 - one endpoint may support multiple intentional Source roots;
-- Windows-connected External access belongs to the future Windows Helper, not Mounted Linux access.
+- Windows-connected External access belongs to the Windows Source Helper provider when supported by the current architecture; it must not be reinterpreted as Mounted Linux access.
 
 ---
 
@@ -1677,7 +1722,7 @@ It uses the same endpoint-linked model but remains a separate Source Type.
 
 Do not collapse modern Removable Media into a legacy generic type.
 
-Windows-connected Removable access belongs to the future Windows Helper, not Mounted Linux access.
+Windows-connected Removable access belongs to the Windows Source Helper provider when supported by the current architecture; it must not be reinterpreted as Mounted Linux access.
 
 ---
 
@@ -1713,14 +1758,15 @@ Current validated share source:
 //192.168.1.171/PhotoOrganizer
 ```
 
-The accepted Mounted Source Provider maps canonical NAS authority through the
-protected namespace and non-root broker. Mounted NAS durable Endpoint/Profile
-identity, readiness, Source Selection, Runtime Root mapping, and bounded real
-ingestion are live-validated.
+The Mounted Source Provider maps canonical NAS authority through the protected
+namespace and non-root broker.
 
 Do not treat a POSIX path alone as identity, bypass the broker, grant the
 application mount authority, or extend Mounted Linux access to Windows-connected
-Sources. Mounted Local live Profile/readiness/selection proof remains deferred.
+Sources.
+
+Use the current Context/Architecture and active milestone evidence for current
+NAS registration, namespace, validation, and provider-support status.
 
 ---
 
@@ -1781,9 +1827,10 @@ For iCloud:
 
 iCloud uses provider-specific creation, readiness, selection, and dispatch rather than the generic filesystem provider.
 
-Provider-specific services are implemented and tested.
+Provider-specific services and their current validation status are documented in
+the current Context/Architecture and accepted milestone evidence.
 
-Complete live Linux iCloud acquisition/import execution remains a separate validation item.
+Do not downgrade or upgrade iCloud support based on older milestone assumptions.
 
 Established operator concepts may include:
 
@@ -1803,9 +1850,10 @@ Provenance is a first-class architectural system.
 
 Do not treat it as a report-only concern.
 
-The detailed post-12.64 documentation reconciliation is handled separately.
+The current provenance contract is documented in `project_architecture_v8.md` and
+`project_context_v8.md`.
 
-Until that reconciliation is complete, these rules remain mandatory and must not be weakened.
+These standing rules remain mandatory and must not be weakened by incidental implementation work.
 
 ---
 
@@ -2507,13 +2555,14 @@ Candidate replacement and rollback require later implementation.
 
 ## 27.3 Production
 
-Current Linux Production is not implemented.
+Use the current Context, Architecture, deployment guides, and active prompt to
+determine whether an approved Production contract exists.
 
-Do not claim Production validation.
+Do not claim Production validation, storage authority, backup, restore, promotion,
+rollback, or supervision unless that exact capability is currently documented and
+validated.
 
-Do not claim Production storage, backup, restore, promotion, or rollback.
-
-Legacy Windows artifacts are not the approved Linux Production contract.
+Legacy Windows artifacts are not sufficient evidence of a current Linux Production contract.
 
 ---
 
@@ -2534,25 +2583,25 @@ When changing runtime or operator scripts:
 
 ---
 
-## 27.5 Linux Source Provider Boundary
+## 27.5 Source Provider Boundary
 
-The application runtime is on Linux and has an accepted Mounted Source Provider
-for approved directly accessible Local/NAS roots.
+The application runtime host does not determine Source-provider authority.
 
-Current accepted evidence includes:
+Preserve the provider split defined by the current architecture:
 
-- Mounted Local provider implementation, with live validation deferred;
-- live-validated Mounted NAS canonical identity, readiness, Source Selection,
-  Runtime Root mapping, and bounded real ingestion.
+- Mounted Source Provider for approved roots the Linux server directly accesses;
+- Windows Source Helper Provider for Windows-native Sources supported by the current architecture;
+- provider-specific Cloud workflows such as iCloud.
 
-Windows-connected Local, External, Removable, and Optical access belongs to the
-future Windows Helper. Do not translate Windows paths into artificial Linux
-paths. iCloud remains an independent provider-specific Cloud workflow.
+Do not translate Windows paths into artificial Linux paths.
 
 Do not extend Mounted access beyond approved Linux-accessible locations merely
 to make another provider appear supported.
 
 Do not replace durable identity with arbitrary path trust.
+
+Use `project_context_v8.md` and `project_architecture_v8.md` for current provider
+coverage and live-validation status.
 
 ---
 
@@ -2798,8 +2847,8 @@ For documentation version changes:
 - report superseded global files;
 - do not overwrite unrelated files;
 - ensure new current documents agree;
-- use exact-file staging;
-- stage the new version and removal of the superseded active version together.
+- provide exact-file staging guidance;
+- tell the Product Owner to stage the new version and removal of the superseded active version together.
 
 Application milestone history remains focused on application functionality.
 
