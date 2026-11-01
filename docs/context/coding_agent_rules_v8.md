@@ -1,3 +1,20 @@
+# Repo Control Project Overlay
+
+<!-- repo-control-project-overlay:v1 -->
+
+This additive contract header does not replace the project-specific rules preserved below. The generated generic Coder bootstrap and workflow core are materialized separately; they do not supersede Product Owner authority or these project rules.
+
+## Repository-specific rules
+
+The existing project rules follow byte-for-byte. Consult the mapped project sources:
+
+- architecture: `docs/context/project_architecture_v8.md`
+- context: `docs/context/project_context_v8.md`
+- parking_lot: `docs/context/canonical_parking_lot_v8.md`
+- workflow: `docs/context/project_workflow_v8.md`
+
+---
+
 # CODING_AGENT_RULES_v8.md — Photo Organizer
 
 ## Document Status
