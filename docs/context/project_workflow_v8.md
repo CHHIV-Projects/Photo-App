@@ -6,15 +6,21 @@
 **Document role:** Standing project workflow. Current milestone, branch, provider-validation, deployment, and runtime state is defined by the current Context, Architecture, active prompt, and accepted closeouts.
 **Operating model:** Windows Product Owner/client + Linux authoritative repository/runtime + Synology NAS durable-storage/backup infrastructure.
 **Authoritative repository:** `/home/chuck/projects/photo-organizer-dev` on `henderson-server1`
+**Generic Coder procedure:** installed Repo Control bootstrap, `.repo-control/workflow_core.md`, and phase-specific Repo Control Skills
 **Current workflow emphasis:** milestone discipline, reconnaissance as implementation roadmap, Product Owner Git ownership, evidence-based validation, provenance protection, clean branch lifecycle, cost-aware coding-agent use, environment-aware operations, and reliable continuation between chats and tools.
 
 ### Update Scope
 
-This v8 revision preserves the established application and deployment workflow.
+This v8 document preserves the established application and deployment workflow.
 
 It does not introduce a materially different development methodology.
 
-Changes remove transient branch/provider-status assumptions, lock Git mutations to the Product Owner, formalize the bug-fix documentation pattern, and align standing references with the v8 Context and Architecture.
+Repo Control owns selected repository and milestone identity, lifecycle and
+authorization, approved Architect dispatches, durable questions/answers/bugs,
+test evidence, context verification, Skill selection, and closeout submission.
+This project workflow adds Photo Organizer-specific collaboration, branch,
+environment, validation, data-safety, release, and deployment constraints. It
+does not create authority independently of current Repo Control state.
 
 The durable operating model remains:
 
@@ -61,6 +67,14 @@ This workflow exists to keep development:
 - explicit about which machine, terminal, environment, and authority are involved.
 
 The project uses AI tools, but the User remains the final Product Owner and decision maker.
+
+For Repo Control-managed work, a handoff phrase, local prompt, historical
+milestone, branch, provider response, successful test, or this document is not
+authorization. The Coder must obtain current canonical context and the
+required `coder-verify` result through the installed shared procedure. Only
+matching live authorization permits work. A warm continuation in the same
+valid context follows the shared trigger policy rather than creating a
+duplicate verification record.
 
 The workflow also ensures that:
 
@@ -119,9 +133,12 @@ The User:
 - approves architecture and workflow decisions;
 - reviews proposed milestone scope;
 - approves milestone sequencing;
-- saves milestone prompts into the repository;
-- provides prompts to the Coder;
-- brings Coder questions back to ChatGPT;
+- reviews proposed prompts and uses Repo Control to approve, select, start,
+  accept, correct, or close managed milestones;
+- may provide a handoff phrase to the Coder, without that phrase granting
+  authority;
+- reviews durable Coder questions and approved Architect responses through
+  Repo Control;
 - tests completed work in the approved target environment;
 - performs or authorizes live validation;
 - reports real-world behavior;
@@ -155,12 +172,13 @@ ChatGPT:
 - defines validation evidence;
 - identifies the correct execution environment for commands;
 - anticipates likely Coder questions;
-- answers Coder questions clearly and decisively;
+- prepares clear responses to material Coder questions for Product Owner
+  approval and Repo Control dispatch;
 - keeps answers aligned with current repository facts;
 - distinguishes design assumptions from observed implementation facts;
 - interprets Coder closeouts;
 - interprets User testing feedback;
-- determines whether a milestone is complete;
+- recommends whether evidence supports acceptance, correction, or follow-up;
 - recommends fixes or follow-up milestones;
 - recommends Git staging and commit structure;
 - recommends branch creation and merge strategy;
@@ -213,25 +231,35 @@ ChatGPT should not rely on chat memory alone when current repository documents, 
 
 The Coder:
 
-- reads the milestone prompt;
-- follows `docs/context/coding_agent_rules_v8.md` once that document is active;
-- performs Git preflight before coding;
-- confirms the authoritative repository and current branch;
+- retrieves the selected repository, active prompt, lifecycle, authorization,
+  open conditions, approved dispatches, and procedure state through the
+  canonical Repo Control Coder interface;
+- follows the generated bootstrap/workflow core and explicitly loads the
+  applicable Repo Control Skill;
+- follows `docs/context/coding_agent_rules_v8.md` as the mapped project
+  overlay;
+- performs the required context verification and read-only Git preflight
+  before consequential work;
+- confirms the authoritative repository and current branch without treating
+  either as lifecycle authority;
 - performs reconnaissance when requested or required;
 - inspects targeted implementation paths;
 - uses approved reconnaissance closeouts as implementation roadmaps;
-- asks clarification questions before implementing uncertain behavior;
+- records material questions or blockers through the bounded Repo Control
+  workflow before implementing uncertain behavior;
 - escalates when the approved plan conflicts with code reality;
 - keeps changes tightly scoped;
 - avoids speculative refactoring;
 - avoids unrelated cleanup;
 - preserves existing behavior unless change is explicitly approved;
-- validates the implementation;
-- creates one closeout document;
+- validates the implementation and records meaningful test evidence through
+  Repo Control;
+- creates one closeout document and submits it through Repo Control;
 - reports deviations;
 - reports known limitations;
 - reports Git state;
-- stops before unsafe scope expansion;
+- stops before unsafe scope expansion and whenever Repo Control is not in an
+  authorized implementation state;
 - does not run Git mutation commands; Git mutation belongs to the Product Owner;
 - does not run unauthorized Docker, database, NAS, deployment, or destructive runtime commands;
 - does not read or print protected secrets or configuration without explicit scope and authorization.
@@ -287,7 +315,7 @@ project_context_v8.md
 project_architecture_v8.md
 project_workflow_v8.md
 coding_agent_rules_v8.md
-canonical_parking_lot_v7.md
+canonical_parking_lot_v8.md
 MILESTONE_HISTORY.md
 v1.0 release roadmap
 milestone prompt files
@@ -316,6 +344,12 @@ Deployment milestone prompts and closeouts preserve server, runtime, environment
 ---
 
 ## 7. Documentation Authority
+
+For current managed work, Repo Control is authoritative for selected
+repository/milestone identity, active prompt, lifecycle, authorization, open
+conditions, approved dispatches, and durable workflow events. Repository
+documents constrain authorized work and preserve project truth; they do not
+select or start a milestone.
 
 When current documents conflict with old chat recollection:
 
@@ -371,6 +405,47 @@ Application milestone history remains focused on application functionality.
 
 Deployment milestones do not need to be duplicated into the application milestone-history document.
 
+### Repo Control administrative milestones
+
+New Repo Control onboarding, governance, and administrative milestones use the
+`M001.xxx` series under `docs/milestones/`. They coexist with the historical
+12.xx application lineage and the independent deployment sequence. They do
+not rename, import, close, reopen, or assign inferred lifecycle state to those
+historical records. Any future product-numbering change requires an explicit
+Product Owner decision and a separately approved prompt.
+
+### Deferred canonical governing-document paths
+
+The five registered v8 paths remain current in this workflow:
+
+```text
+docs/context/project_context_v8.md
+docs/context/project_architecture_v8.md
+docs/context/project_workflow_v8.md
+docs/context/coding_agent_rules_v8.md
+docs/context/canonical_parking_lot_v8.md
+```
+
+Converting them to canonical non-versioned names is a separate Product
+Owner-controlled migration, not part of semantic harmonization. A future
+milestone must:
+
+1. verify clean Git and current Repo Control identity, lifecycle, procedure,
+   overlay, and registered role paths;
+2. define the exact canonical targets and resolve collisions before any move;
+3. preserve v8 content and archival provenance, with an explicit old-to-new
+   path map and history-discoverability check;
+4. update internal links, maintained guides, host references, and Repo Control
+   registry role paths as one bounded transaction;
+5. preview generated-procedure effects without adding permanent `*_v8.md`
+   exceptions to the shared generator;
+6. validate overlay integrity, procedure status, links, prompt discovery, and
+   fresh-session context resolution; and
+7. provide a Product Owner-reviewed rollback plan that restores the complete
+   path/registry mapping rather than partially reverting files.
+
+No canonical-path migration is implied or authorized by this document.
+
 ---
 
 # Part III — Prompt and Closeout Standards
@@ -397,6 +472,17 @@ Example:
 12.75.0_provenance_verification_recon_prompt.md
 12.75.0_provenance_verification_recon_closeout.md
 ```
+
+Repo Control-managed administrative milestones use the canonical managed
+pattern supplied by the active prompt, for example:
+
+```text
+M001.002_repo_control_overlay_and_local_workflow_harmonization_prompt.md
+M001.002_repo_control_overlay_and_local_workflow_harmonization_closeout.md
+```
+
+The active Repo Control prompt owns the exact managed artifact names. This new
+series does not alter historical 12.xx naming.
 
 ### Deployment milestone filename pattern
 
@@ -528,7 +614,11 @@ Safety-sensitive prompts should repeat the most important safety rules directly 
 
 ## 12. Prompt Handoff Formatting
 
-Coder handoff prompts should be delivered as one complete copyable block.
+For Repo Control-managed work, the selected prompt is retrieved through the
+canonical Coder interface. A handoff phrase such as `Prompt ready.` is only a
+notification and never authority. Copyable prompt blocks remain useful for
+planning or unmanaged historical workflows, but they do not supersede the
+selected prompt, approved dispatches, or live lifecycle.
 
 Rules:
 
@@ -547,7 +637,9 @@ Rules:
 
 ### Initial prompt commit
 
-The initial prompt should normally be committed before Coder handoff.
+The initial prompt should normally be committed before Product Owner
+Approve & Start. Repo Control selection and live authorization, not the commit
+or handoff alone, permit Coder work.
 
 Purpose:
 
@@ -564,7 +656,13 @@ Docs: add <milestone> <short name> prompt
 
 ### Prompt addenda and Coder Q&A
 
-Coder questions and approved answers should be appended to the same prompt file.
+For Repo Control-managed work, material Coder questions, approved Architect
+responses, lock-ins, corrections, and resumes are durable Repo Control events.
+The Coder must use the bounded question/bug workflow and obey the resulting
+`WAITING` or authorization state. Chat text or an unapproved local edit is not
+an answer or scope change.
+
+Historical or explicitly requested prompt-file Q&A may retain headings such as:
 
 Recommended headings:
 
@@ -578,7 +676,10 @@ Recommended headings:
 ## Final Lock-ins
 ```
 
-Minor clarifications do not require a separate commit each time.
+When a durable approved decision also needs to be reflected in a prompt file,
+that documentation change follows the Product Owner-approved event; the file
+edit does not create the decision. Minor clarifications do not require a
+separate commit each time.
 
 It is acceptable for the active prompt to remain modified during implementation when:
 
@@ -611,7 +712,8 @@ A prompt update should be committed before implementation continues when it mate
 
 ### Final prompt state
 
-At final milestone commit, the prompt should contain:
+At final milestone commit, the prompt and workflow evidence together should
+preserve:
 
 - original scope;
 - material Q&A;
@@ -633,6 +735,12 @@ The Product Owner may commit a documentation-only reconnaissance prompt and clos
 ## 14. Single Closeout File Standard
 
 The Coder should create exactly one human-authored closeout per milestone/action.
+
+Repo Control may also maintain one matching workflow sidecar. The sidecar is
+event history, not a second closeout, prompt, or source of authority. After
+focused validation, the Coder submits the human-authored closeout through
+`coder-closeout`; `REVIEW` ends implementation authority until the Product
+Owner accepts or requests a bounded correction.
 
 Do not create separate:
 
@@ -1016,9 +1124,17 @@ Lower reasoning should not be used merely to reduce cost when architecture, runt
 
 # Part VI — Standard Workflow Cycle
 
+The installed Repo Control bootstrap and workflow core own the generic
+lifecycle: selection, approval, authorization, context verification, durable
+questions/bugs/tests, correction, review, acceptance, and closure. Sections
+25–43 preserve Photo Organizer's product-planning, branch, environment,
+validation, documentation, and release conventions inside that lifecycle.
+Where older wording describes a chat or file handoff, the current Repo Control
+state always controls.
+
 ## 25. Step 1 — Milestone Definition
 
-ChatGPT drafts the milestone prompt.
+ChatGPT/Architect drafts the milestone prompt for Product Owner review.
 
 The milestone should state:
 
@@ -1037,7 +1153,9 @@ The milestone should state:
 - escalation;
 - definition of done.
 
-The User reviews and approves the prompt.
+For managed work, the Product Owner reviews the prompt, selects it, and uses
+Repo Control Approve & Start. Drafting, saving, or committing the prompt alone
+does not authorize implementation.
 
 ---
 
@@ -1136,12 +1254,16 @@ Windows CRLF line endings should be normalized to Linux LF before commit when th
 
 ## 28. Step 4 — Handoff to Coder
 
-The User provides the prompt to the Coder.
+The User may notify the Coder that a prompt is ready. The Coder independently
+retrieves canonical context; the notification itself grants no authority.
 
 The Coder:
 
-- reads standing rules;
-- reads the prompt;
+- reads the generated bootstrap/workflow core and mapped project overlay;
+- retrieves the selected prompt, lifecycle, authorization, open conditions,
+  approved dispatches, and procedure status;
+- performs `coder-verify` for NEW, HANDOFF, AUTHORITY TRANSITION, or RECOVERY
+  using the expected repository key, ID, root, and milestone;
 - reads approved reconnaissance when applicable;
 - performs Git preflight;
 - confirms the authoritative repository and environment;
@@ -1153,13 +1275,18 @@ The Coder:
 
 ## 29. Step 5 — Coder Git Preflight
 
-Before editing, in the authoritative Linux repository:
+After canonical context verification and before editing, inspect Git read-only
+in the authoritative Linux repository:
 
 ```bash
 git branch --show-current
 git status --short
 git log --oneline --decorate -5
 ```
+
+The active prompt defines the expected branch and allowed dirty state. A clean
+tree and committed prompt are normal project conventions, not substitutes for
+Repo Control authorization.
 
 Expected state:
 
@@ -1169,7 +1296,8 @@ clean working tree
 prompt committed
 ```
 
-Allowed exception:
+Possible historical/project convention, only when current Repo Control scope
+and the Product Owner confirm it:
 
 ```text
 only the active prompt is modified with expected Q&A/addenda
@@ -1223,11 +1351,13 @@ For safety-sensitive work, do not stop before confirming:
 
 ## 31. Step 7 — Clarification Loop
 
-Coder asks targeted questions.
+The Coder records a material question through `coder-question`, marking it
+blocking when safe work cannot continue. A blocking question moves the
+milestone to `WAITING`; implementation stops until Repo Control records an
+approved response and explicitly resumes work.
 
-The User brings questions to ChatGPT.
-
-ChatGPT responds with:
+The Architect prepares a bounded response for Product Owner approval. Approved
+responses may contain:
 
 - direct decisions;
 - product lock-ins;
@@ -1236,13 +1366,18 @@ ChatGPT responds with:
 - stopping conditions;
 - answers concise enough to paste back.
 
-Answers should be appended to the prompt when material.
-
-Questions that reveal material scope changes should trigger a prompt update and possibly a new commit.
+Repo Control events are the durable authority. When useful for human history,
+the approved decision may also be reflected in the prompt, but chat text or a
+local file edit is not authorization. Material scope changes require an
+approved prompt/correction transition, not an informal continuation.
 
 ---
 
 ## 32. Step 8 — Escalation Protocol
+
+Use the installed blocker/bug Skill and bounded Repo Control question or bug
+command for durable escalation. Do not rely on chat-only escalation. Preserve
+the project-specific triggers and evidence format below.
 
 Escalation is required when:
 
@@ -1317,10 +1452,9 @@ system boundary.
 
 The Coder implements according to:
 
-- approved prompt;
+- current authorized Repo Control context and approved prompt;
+- approved Architect dispatches and lock-ins applicable to the milestone;
 - approved reconnaissance;
-- Q&A;
-- final lock-ins;
 - standing rules.
 
 The Coder should:
@@ -1358,6 +1492,10 @@ Validation may include:
 - `git diff --check`.
 
 Validation should match milestone risk.
+
+Record meaningful executed checks with `coder-test`, including the actual
+source, result, failures, and limitations. A recorded result is agent-reported
+evidence, not independent verification.
 
 A small copy edit does not require a full live intake.
 
@@ -1398,6 +1536,11 @@ The closeout must not claim validation that was not performed.
 
 When evidence is reconstructed rather than directly captured, it must be labeled as reconstructed.
 
+After final read-only Git inspection, submit the closeout through
+`coder-closeout`. The resulting `REVIEW` state ends Coder implementation
+authority; only Product Owner acceptance or an explicit bounded correction may
+advance or resume the milestone.
+
 ---
 
 ## 36. Step 12 — User Testing
@@ -1436,7 +1579,7 @@ For live operations, approval boundaries in the prompt must be followed.
 
 The User reports results.
 
-ChatGPT determines whether:
+ChatGPT/Architect recommends whether evidence supports:
 
 - milestone passes;
 - closeout needs a live-validation addendum;
@@ -1445,6 +1588,10 @@ ChatGPT determines whether:
 - a deployment follow-up milestone is required;
 - a defect belongs in the Parking Lot;
 - the milestone should remain open.
+
+The Product Owner makes the acceptance/correction decision and records the
+corresponding Repo Control lifecycle action. Neither an Architect
+recommendation nor passing tests close the milestone.
 
 A feature should not be marked complete merely because automated tests passed if required manual behavior was not validated.
 
@@ -1510,7 +1657,7 @@ Potential updates:
 - `project_architecture_v8.md`;
 - `project_workflow_v8.md`;
 - `coding_agent_rules_v8.md`;
-- `canonical_parking_lot_v7.md`;
+- `canonical_parking_lot_v8.md`;
 - v1.0 roadmap;
 - new-chat intro;
 - deployment guides;
@@ -1634,6 +1781,9 @@ ChatGPT proposes the next milestone and identifies its category:
 - Parking Lot deferral.
 
 The recommendation should explain why the milestone is logically next.
+
+The recommendation does not select or authorize the next milestone. The
+Product Owner separately reviews, selects, and starts it through Repo Control.
 
 ---
 
@@ -1765,11 +1915,12 @@ For most implementation prompts:
 
 ```text
 Before coding:
-1. Read docs/context/coding_agent_rules_v8.md.
-2. Read this milestone prompt.
-3. Read the approved reconnaissance closeout, if listed.
-4. Inspect the targeted code paths.
-5. Read broader context or deployment documents only when affected behavior remains unclear.
+1. Retrieve canonical Repo Control context and complete required verification.
+2. Read the generated procedure, applicable Skill, and mapped project overlay.
+3. Read this milestone prompt and applicable approved dispatches/lock-ins.
+4. Read the approved reconnaissance closeout, if listed.
+5. Inspect the targeted code paths.
+6. Read broader context or deployment documents only when affected behavior remains unclear.
 ```
 
 ---
@@ -1843,6 +1994,11 @@ The Coder should continue investigation when:
 ---
 
 # Part IX — Git Discipline
+
+This part defines Photo Organizer's Product Owner review, branch, and commit
+conventions. It does not create lifecycle authority. The generated procedure's
+absolute Coder Git-mutation boundary always applies, while branch choice and
+Git disposition remain Product Owner decisions.
 
 ## 53. Read-Only Git Reconnaissance
 
@@ -2178,6 +2334,10 @@ ChatGPT should:
 - avoid agreeing merely because the User suggested an idea;
 - recommend against an approach when architecture or evidence indicates a better option;
 - avoid treating current Test or Production capabilities as more complete than they are.
+- distinguish advisory architecture/planning from Repo Control lifecycle
+  authority;
+- route material responses through Product Owner-approved Repo Control
+  dispatch rather than treating chat text as authorization.
 
 ---
 
@@ -2185,7 +2345,7 @@ ChatGPT should:
 
 Coder should:
 
-- ask focused questions;
+- record focused material questions through the bounded Repo Control workflow;
 - challenge incorrect assumptions;
 - report observed code reality;
 - state when evidence is incomplete;
@@ -2196,6 +2356,8 @@ Coder should:
 - avoid broad unsolicited proposals;
 - escalate before material scope expansion;
 - state whether evidence is direct, inferred, or reconstructed.
+- identify the current lifecycle/authorization boundary without claiming that
+  a handoff phrase, file, Skill, or test grants authority.
 
 ---
 
@@ -2205,8 +2367,9 @@ User should:
 
 - provide product intent;
 - validate real behavior;
-- bring questions back to ChatGPT;
-- save prompts exactly;
+- review material questions and Architect responses through Repo Control;
+- save prompts exactly and use Repo Control for selection, approval, start,
+  correction, acceptance, and closure;
 - approve live operations;
 - confirm completion;
 - share screenshots and output when useful;
@@ -2247,7 +2410,9 @@ User should:
 - Do not change Source identity without explicit scope.
 - Do not trust frontend execution values.
 - Do not silently migrate identity versions.
-- Do not perform destructive Git actions without authorization.
+- The Coder never stages, commits, pushes, tags, merges, rebases, resets,
+  stashes, cleans, switches/creates/deletes branches, or mutates remotes;
+  Product Owner Git ownership is absolute under the shared procedure.
 - Do not run live operations beyond approved limits.
 - Do not mutate Docker, database, NAS, secrets, mounts, services, or deployment state without authorization.
 - Do not expose application, PostgreSQL, or Redis publicly.
@@ -2279,7 +2444,7 @@ project_architecture_v8.md
 project_workflow_v8.md
 coding_agent_rules_v8.md
 MILESTONE_HISTORY.md
-canonical_parking_lot_v7.md
+canonical_parking_lot_v8.md
 v1.0 roadmap
 new-chat intro
 deployment guides
@@ -2315,7 +2480,7 @@ project_architecture_v8.md
 project_workflow_v8.md
 coding_agent_rules_v8.md
 MILESTONE_HISTORY.md
-canonical_parking_lot_v7.md
+canonical_parking_lot_v8.md
 v1.0 release roadmap
 latest relevant application milestone prompt
 latest relevant application milestone closeout
@@ -2325,7 +2490,10 @@ short current-branch and Git-state summary
 current Development/Test environment summary when relevant
 ```
 
-The new chat should treat these documents as primary context.
+The new chat should treat these documents as primary project context. For
+managed work it must still retrieve current canonical Repo Control context and
+complete the applicable NEW verification; the continuation package does not
+select or authorize a milestone.
 
 Old chat recollection is secondary.
 
@@ -2365,6 +2533,10 @@ Old chat recollection is secondary.
 - Immutable Test release identity
 - Product Owner authority over Git and live mutation
 - Separate application and deployment histories
+- Repo Control authority for selected repository/milestone lifecycle and
+  durable workflow events
+- Historical 12.xx, deployment, and new M001.xxx administrative records
+  coexist without retroactive conversion
 
 ---
 
@@ -2372,6 +2544,11 @@ Old chat recollection is secondary.
 
 This workflow is successful when:
 
+- the Coder acts only under matching live Repo Control authorization;
+- NEW/HANDOFF/AUTHORITY TRANSITION/RECOVERY verification is distinguished
+  from warm continuation;
+- questions, bugs, meaningful tests, closeout submission, correction, and
+  acceptance use durable Repo Control workflows;
 - milestones are delivered predictably;
 - the Coder knows exactly what to implement;
 - architecture and authority boundaries remain clear;

@@ -61,12 +61,12 @@ Detailed sequencing, commands, authority gates, and implementation requirements 
 The recommended near-term sequence is:
 
 ```text
-A. Complete the v8 documentation checkpoint
-   - project_context_v8.md
-   - project_architecture_v8.md
-   - project_workflow_v8.md
-   - coding_agent_rules_v8.md
-   - canonical_parking_lot_v8.md
+A. Decide and, if approved, perform a separate canonical governing-document
+   path migration
+   - keep the five registered `*_v8.md` paths current until then
+   - preserve v8 content, archival provenance, and history discoverability
+   - update internal links and Repo Control registry role paths atomically
+   - validate overlay/procedure integrity and a complete rollback plan
 
 B. Make Photo Organizer an always-on server application
    - automatic startup
@@ -113,7 +113,8 @@ Then continue broader product expansion.
 # 3. Updated Working Priority Stack
 
 ```text
-1. Complete v8 global-document alignment.
+1. REPO-GOV-001
+   Canonical Governing-Document Path Migration (separate approval required).
 
 2. OPS-RUNTIME-002
    Always-On Photo Organizer Service.
@@ -1696,6 +1697,26 @@ This work should coordinate with `PERF-GPU-001`, but the two are distinct:
 ---
 
 # 21. Repository and Workspace Housekeeping
+
+## REPO-GOV-001 — Canonical Governing-Document Path Migration
+
+### Status
+
+Deferred, Product Owner-controlled documentation/registry migration.
+
+### Scope boundary
+
+The registered v8 files remain authoritative until a separate approved
+milestone maps them to canonical non-versioned names. That milestone must
+preflight Repo Control identity and procedure state, preserve v8 content and
+archival provenance, resolve path collisions, update internal links and
+registry role paths as one bounded transaction, validate history
+discoverability and fresh-session resolution, and define a complete rollback.
+
+Do not add permanent `*_v8.md` exceptions to the shared generator or treat the
+current semantic harmonization as a completed path migration.
+
+---
 
 ## REPO-001 — Repository / Workspace Surface Audit
 

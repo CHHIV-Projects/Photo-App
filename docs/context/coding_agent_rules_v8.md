@@ -2,11 +2,15 @@
 
 <!-- repo-control-project-overlay:v1 -->
 
-This additive contract header does not replace the project-specific rules preserved below. The generated generic Coder bootstrap and workflow core are materialized separately; they do not supersede Product Owner authority or these project rules.
+This additive contract header does not replace the project-specific rules
+below. The generated generic Coder bootstrap and workflow core are
+materialized separately. They own Repo Control lifecycle and generic Coder
+procedure; this overlay adds Photo Organizer-specific constraints without
+superseding Product Owner authority or current Repo Control state.
 
 ## Repository-specific rules
 
-The existing project rules follow byte-for-byte. Consult the mapped project sources:
+The project-specific rules follow. Consult the mapped project sources:
 
 - architecture: `docs/context/project_architecture_v8.md`
 - context: `docs/context/project_context_v8.md`
@@ -26,6 +30,7 @@ The existing project rules follow byte-for-byte. Consult the mapped project sour
 **Current workflow baseline:** `project_workflow_v8.md`
 **Current architecture baseline:** `project_architecture_v8.md`
 **Current context baseline:** `project_context_v8.md`
+**Generic Coder procedure:** installed Repo Control bootstrap, `.repo-control/workflow_core.md`, and phase-specific Repo Control Skills
 
 ### v8 Update Scope
 
@@ -67,8 +72,11 @@ Milestone prompts may reference this file instead of repeating every standing pr
 
 This file is not a replacement for:
 
+- canonical Repo Control repository/milestone selection, lifecycle,
+  authorization, approved dispatches, or durable workflow events;
+- the generated bootstrap, workflow core, and applicable Repo Control Skill;
 - the active milestone prompt;
-- approved prompt addenda;
+- approved lock-ins and Architect dispatches;
 - current repository code;
 - feature-specific reconnaissance;
 - approved reconnaissance closeouts;
@@ -77,7 +85,8 @@ This file is not a replacement for:
 - milestone closeout documentation;
 - maintained deployment and operator guides.
 
-Use repository files and the active prompt as the source of truth.
+Use the canonical Repo Control Coder interface for current authority, then use
+the active prompt and repository evidence for authorized implementation.
 
 Do not rely on chat memory alone.
 
@@ -85,10 +94,21 @@ Do not rely on chat memory alone.
 
 # 1. Rule Priority
 
-Apply instructions in this order:
+For current managed work, first obtain canonical Repo Control context. It owns:
+
+- selected repository and milestone identity;
+- active prompt and approved lock-ins/Architect dispatches;
+- lifecycle, authorization, open questions and bugs;
+- required `coder-verify` trigger policy and observed verification result;
+- durable questions, answers, bug, test, correction, review, acceptance, and
+  closure events; and
+- installed shared-procedure integrity and mapped overlay identity.
+
+Within matching live authorization, apply instructions in this order:
 
 1. explicit current Product Owner direction;
-2. active milestone prompt and approved prompt addenda;
+2. active Repo Control prompt, approved lock-ins, and applicable approved
+   Architect dispatches;
 3. this rules document;
 4. current architecture, workflow, and context documents;
 5. approved reconnaissance closeout;
@@ -105,9 +125,16 @@ When two instructions conflict:
 - do not silently broaden scope;
 - do not silently change provenance, Source identity, persistence, runtime, or deployment semantics.
 
-A milestone prompt may explicitly override a standing rule when the Product Owner approves the exception.
+A milestone prompt or approved dispatch may explicitly override a standing
+project rule when the Product Owner approves the exception and Repo Control
+records matching current authority. A chat message, handoff phrase, historical
+file, provider response, successful test, or Skill does not create authority.
 
-The Product Owner Git-mutation boundary in Section 10 is not a routine milestone override. If an active prompt appears to delegate staging, commit, push, branch, merge, tag, rebase, reset, stash, or clean operations to the Coder, stop and report the conflict unless the Product Owner has explicitly changed this standing workflow.
+The Product Owner Git-mutation boundary in Section 10 is absolute for the
+Coder under the installed shared procedure. If an active prompt appears to
+delegate staging, commit, push, branch, merge, tag, rebase, reset, stash,
+clean, or remote mutation to the Coder, stop and report the conflict. A local
+prompt, overlay rule, or dispatch cannot override that boundary.
 
 The closeout must document:
 
@@ -258,24 +285,30 @@ Do not provide or execute an unlabeled command when the wrong environment could 
 
 # 3. Standard Agent Workflow
 
-For every task:
+For every task, follow the installed Repo Control bootstrap and workflow core
+rather than duplicating their complete procedure here. In particular:
 
-1. Read this file.
-2. Read the active milestone prompt and approved addenda.
-3. Read the approved reconnaissance closeout when the prompt identifies one.
-4. Confirm the authoritative repository.
-5. Perform Git preflight.
-6. Confirm the current branch and upstream.
-7. Determine the milestone mode.
-8. Confirm the target environment and command authority.
-9. Inspect the relevant current code or documentation.
-10. Confirm the milestone boundary.
-11. Ask only genuinely blocking questions.
-12. Escalate when the approved roadmap is materially insufficient.
-13. Implement or validate only the approved scope.
-14. Run the most relevant validation.
-15. Create exactly one closeout using the required filename.
-16. Leave all Git mutations to the Product Owner. Leave Docker, database, NAS, secret, mount, service, and deployment mutations to the Product Owner unless the active prompt explicitly authorizes the exact runtime action.
+1. retrieve canonical Coder context and confirm exact repository/milestone
+   identity, active prompt, lifecycle/authorization, open conditions, approved
+   dispatches, procedure state, and Git boundary;
+2. for NEW, HANDOFF, AUTHORITY TRANSITION, or RECOVERY, run the bounded
+   `coder-verify` command with the expected key, ID, root, and milestone;
+   ordinary warm continuations do not create duplicate verification records;
+3. continue only with a matching `VERIFIED` result and live authorization;
+4. load the applicable Repo Control Skill for implementation,
+   blocker/bug handling, or validation/closeout;
+5. read this overlay, the active prompt, approved reconnaissance, and relevant
+   Photo Organizer evidence;
+6. perform read-only Git preflight and classify unexpected dirty paths;
+7. confirm the target environment and any live-operation authority;
+8. implement or validate only the approved scope, using bounded Repo Control
+   questions/bugs when material uncertainty or defects arise;
+9. run proportionate validation and record meaningful executed test evidence;
+10. create one closeout, inspect final Git state, and submit the closeout to
+    Repo Control `REVIEW`; and
+11. leave all Git mutations to the Product Owner. Leave Docker, database, NAS,
+    secret, mount, service, and deployment mutations to the Product Owner
+    unless the active prompt explicitly authorizes the exact runtime action.
 
 Do not assume prior conversational context is complete or current.
 
@@ -304,6 +337,10 @@ deployment or operational validation
 ```
 
 Do not silently change milestone mode.
+
+Load the phase-appropriate Repo Control Skill explicitly. The Skill supplies
+generic procedure but does not select a milestone, grant authority, or replace
+the Photo Organizer constraints below.
 
 ---
 
@@ -658,6 +695,13 @@ High reasoning should produce a concrete roadmap, not endless exploration.
 
 Do not continue experimenting indefinitely when the roadmap is insufficient.
 
+Use the installed blocker/bug Skill and the bounded Repo Control workflow.
+Submit a material question with `coder-question`; mark it blocking when safe
+work cannot continue. Record discovered defects with `coder-bug` and do not
+self-approve classification or repair. A blocking condition moves work to
+`WAITING`; stop until an approved response and explicit Repo Control resume.
+Chat-only escalation is not durable authority.
+
 Stop and report:
 
 ```text
@@ -765,9 +809,11 @@ Do not overbuild merely because the agent can.
 
 ## 8.1 Always Read
 
+- current canonical `coder-context` and the applicable `coder-verify` result;
+- the generated bootstrap/workflow core and applicable Repo Control Skill;
 - `docs/context/coding_agent_rules_v8.md`;
 - the active milestone prompt;
-- approved prompt addenda;
+- applicable approved lock-ins and Architect dispatches;
 - the immediately preceding reconnaissance closeout when implementing from reconnaissance.
 
 ## 8.2 Read as Needed
@@ -779,7 +825,7 @@ docs/context/project_context_v8.md
 docs/context/project_architecture_v8.md
 docs/context/project_workflow_v8.md
 docs/context/MILESTONE_HISTORY*.md
-docs/context/canonical_parking_lot_v7.md
+docs/context/canonical_parking_lot_v8.md
 v1.0 release roadmap
 prior prompt and closeout files in the same feature area
 docs/server_deployment/ maintained guides
@@ -790,11 +836,13 @@ docs/server_deployment/deployment_milestones/ relevant closeouts
 
 For implementation after reconnaissance, begin with:
 
-1. this rules document;
-2. implementation prompt;
-3. approved reconnaissance closeout;
-4. named files;
-5. directly related tests.
+1. canonical Repo Control context and required verification;
+2. generated procedure and applicable Skill;
+3. this rules document;
+4. implementation prompt and approved dispatches/lock-ins;
+5. approved reconnaissance closeout;
+6. named files;
+7. directly related tests.
 
 Do not reread the entire repository unless required.
 
@@ -883,7 +931,8 @@ The objective is the smallest safe and validated change.
 
 ## 10.1 Git Preflight
 
-Before editing, from the **VS Code Remote SSH / Linux terminal**:
+After canonical context verification and before editing, inspect Git read-only
+from the **VS Code Remote SSH / Linux terminal**:
 
 ```bash
 cd /home/chuck/projects/photo-organizer-dev
@@ -899,7 +948,8 @@ git rev-parse HEAD
 git rev-parse '@{upstream}'
 ```
 
-Expected normal state:
+The active prompt defines the required branch and allowed working-tree state.
+The following are normal project conventions, not lifecycle authority:
 
 ```text
 correct branch
@@ -908,15 +958,16 @@ active prompt committed
 branch synchronized with upstream when required
 ```
 
-Allowed exception:
-
-```text
-only the active prompt contains expected Q&A or addenda
-```
+Any dirty path must be classified against current Repo Control scope; prompt
+Q&A in a local file is not self-authorizing.
 
 ## 10.2 Branch Correctness
 
 Substantial implementation should normally occur on the approved feature branch.
+
+Branch convention does not select or authorize a milestone. Repo Control may
+authorize bounded documentation/administrative work on `main`; product feature
+branch and deployment decisions remain Product Owner-owned.
 
 If:
 
@@ -1044,7 +1095,7 @@ Windows CRLF line endings should be normalized to Linux LF when they create whit
 
 # 11. Prompt and Closeout File Names
 
-The active milestone prompt is authoritative for:
+The active Repo Control prompt is authoritative for:
 
 - milestone number;
 - title;
@@ -1106,11 +1157,31 @@ Rules:
 - do not rename for convenience;
 - do not create additional human-authored report files unless requested.
 
+## 11.3 Repo Control Administrative Milestones
+
+New Repo Control onboarding and governance milestones coexist with historical
+12.xx application and independent deployment records. Use the exact canonical
+name from the selected prompt, for example:
+
+```text
+M001.002_repo_control_overlay_and_local_workflow_harmonization_prompt.md
+M001.002_repo_control_overlay_and_local_workflow_harmonization_closeout.md
+```
+
+Do not retroactively rename, import, or infer lifecycle state for historical
+milestones. Any future product-numbering change requires an explicit Product
+Owner decision and separately authorized prompt.
+
 ---
 
 # 12. Prompt Addenda and Q&A
 
-When requested, append Coder questions, Product Owner answers, and final lock-ins to the same prompt file.
+For Repo Control-managed work, material Coder questions, approved Architect
+responses, Product Owner lock-ins, corrections, and resumes are durable Repo
+Control events. Use `coder-question` (blocking when required) and obey the
+resulting lifecycle. Chat text and local prompt edits do not authorize work.
+
+Historical or explicitly requested prompt-file Q&A may use:
 
 Recommended structure:
 
@@ -1124,11 +1195,15 @@ Recommended structure:
 ## Final Lock-ins
 ```
 
-The active prompt may remain dirty during implementation when:
+When an approved durable decision also needs prompt-file documentation, the
+file may remain dirty during implementation when:
 
 - it was committed before handoff;
 - only expected Q&A or addenda changed;
 - the User confirms this is intentional.
+
+The file edit records the decision for human history; it does not create or
+supersede the approved Repo Control event.
 
 Stop and ask when an addendum materially changes:
 
@@ -2161,10 +2236,11 @@ When validation discovers a defect:
 1. preserve the evidence;
 2. do not modify test data unnecessarily;
 3. determine whether prior milestone conclusions are affected;
-4. classify severity;
-5. follow the prompt’s stop/continue rule;
-6. do not repair unless authorized;
-7. recommend the smallest scoped fix milestone.
+4. record discovery with `coder-bug` and concrete evidence;
+5. do not self-approve classification or repair;
+6. follow the active prompt and resulting Repo Control stop/continue state;
+7. do not repair unless current authority explicitly permits it; and
+8. recommend the smallest scoped fix milestone when repair is out of scope.
 
 The closeout should distinguish:
 
@@ -2725,6 +2801,9 @@ Do not claim a change was tested against the new code unless the build/apply ste
 
 Create exactly one human-authored closeout per milestone.
 
+Repo Control may maintain one matching workflow sidecar. It is event history,
+not a second closeout, prompt, or authority source.
+
 Do not create separate files such as:
 
 ```text
@@ -2752,6 +2831,11 @@ _closeout.md
 Runtime-generated reports, screenshots, and query exports are allowed.
 
 Reference them from the closeout.
+
+After proportionate validation and final read-only Git inspection, record
+meaningful test evidence with `coder-test` and submit the closeout with
+`coder-closeout`. The resulting `REVIEW` state ends implementation authority.
+The Product Owner separately accepts/closes or requests a bounded correction.
 
 ---
 
@@ -2939,6 +3023,12 @@ Resource controls require an observed need and explicit approval.
 
 A coding-agent session is successful when:
 
+- canonical Repo Control context matches the intended repository and
+  milestone and live authorization permits the work;
+- NEW, HANDOFF, AUTHORITY TRANSITION, and RECOVERY verification is
+  distinguished from warm continuation;
+- material questions, defects, test evidence, and closeout submission use the
+  bounded Repo Control workflows;
 - approved scope is completed;
 - the authoritative Linux repository is used;
 - the correct branch is used;
