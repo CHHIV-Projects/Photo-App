@@ -1,5 +1,7 @@
 # Repo Control Project Overlay
 
+> **Pre-activation candidate:** This canonical-path document is not governing authority until the Product Owner completes the approved Repo Control governing-role remap. Until then, the registered v8 source remains the sole authority.
+
 <!-- repo-control-project-overlay:v1 -->
 
 This additive contract header does not replace the project-specific rules
@@ -12,10 +14,10 @@ superseding Product Owner authority or current Repo Control state.
 
 The project-specific rules follow. Consult the mapped project sources:
 
-- architecture: `docs/context/project_architecture_v8.md`
-- context: `docs/context/project_context_v8.md`
-- parking_lot: `docs/context/canonical_parking_lot_v8.md`
-- workflow: `docs/context/project_workflow_v8.md`
+- architecture: `docs/context/project_architecture.md`
+- context: `docs/context/project_context.md`
+- parking_lot: `docs/context/canonical_parking_lot.md`
+- workflow: `docs/context/project_workflow.md`
 
 ---
 
@@ -27,9 +29,9 @@ The project-specific rules follow. Consult the mapped project sources:
 **Document role:** Standing project-wide rules for coding agents; transient milestone, branch, provider-validation, and runtime status belongs in the current Context, Architecture, active prompt, and closeouts.
 **Operating model:** Product Owner on Windows + authoritative repository/runtime on Linux + Synology NAS durable-storage/backup infrastructure.
 **Authoritative repository:** `/home/chuck/projects/photo-organizer-dev` on `henderson-server1`
-**Current workflow baseline:** `project_workflow_v8.md`
-**Current architecture baseline:** `project_architecture_v8.md`
-**Current context baseline:** `project_context_v8.md`
+**Current workflow baseline:** `project_workflow.md`
+**Current architecture baseline:** `project_architecture.md`
+**Current context baseline:** `project_context.md`
 **Generic Coder procedure:** installed Repo Control bootstrap, `.repo-control/workflow_core.md`, and phase-specific Repo Control Skills
 
 ### v8 Update Scope
@@ -247,8 +249,8 @@ Mounted Source Provider
 Windows Source Helper Provider
 - Windows-native Sources retain Windows-native identity and path semantics
 - Helper-mediated inventory/acquisition must not translate Windows paths into invented Linux paths
-- current supported Source types and validation status are defined by project_context_v8.md
-  and project_architecture_v8.md
+- current supported Source types and validation status are defined by project_context.md
+  and project_architecture.md
 
 Cloud Provider
 - provider-specific remote acquisition such as iCloud
@@ -405,7 +407,7 @@ Implementation should use a moderate, execution-focused reasoning posture:
 Recommended reading order:
 
 ```text
-1. coding_agent_rules_v8.md
+1. coding_agent_rules.md
 2. active implementation prompt
 3. approved reconnaissance closeout
 4. named implementation files
@@ -811,7 +813,7 @@ Do not overbuild merely because the agent can.
 
 - current canonical `coder-context` and the applicable `coder-verify` result;
 - the generated bootstrap/workflow core and applicable Repo Control Skill;
-- `docs/context/coding_agent_rules_v8.md`;
+- `docs/context/coding_agent_rules.md`;
 - the active milestone prompt;
 - applicable approved lock-ins and Architect dispatches;
 - the immediately preceding reconnaissance closeout when implementing from reconnaissance.
@@ -821,11 +823,11 @@ Do not overbuild merely because the agent can.
 Use broader documents only when relevant:
 
 ```text
-docs/context/project_context_v8.md
-docs/context/project_architecture_v8.md
-docs/context/project_workflow_v8.md
+docs/context/project_context.md
+docs/context/project_architecture.md
+docs/context/project_workflow.md
 docs/context/MILESTONE_HISTORY*.md
-docs/context/canonical_parking_lot_v8.md
+docs/context/canonical_parking_lot.md
 v1.0 release roadmap
 prior prompt and closeout files in the same feature area
 docs/server_deployment/ maintained guides
@@ -1942,8 +1944,8 @@ Provenance is a first-class architectural system.
 
 Do not treat it as a report-only concern.
 
-The current provenance contract is documented in `project_architecture_v8.md` and
-`project_context_v8.md`.
+The current provenance contract is documented in `project_architecture.md` and
+`project_context.md`.
 
 These standing rules remain mandatory and must not be weakened by incidental implementation work.
 
@@ -2693,7 +2695,7 @@ to make another provider appear supported.
 
 Do not replace durable identity with arbitrary path trust.
 
-Use `project_context_v8.md` and `project_architecture_v8.md` for current provider
+Use `project_context.md` and `project_architecture.md` for current provider
 coverage and live-validation status.
 
 ---

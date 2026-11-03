@@ -1,4 +1,6 @@
-# PROJECT_WORKFLOW_v8.md
+# PROJECT_WORKFLOW.md
+
+> **Pre-activation candidate:** This canonical-path document is not governing authority until the Product Owner completes the approved Repo Control governing-role remap. Until then, the registered v8 source remains the sole authority.
 
 ## Document Status
 
@@ -38,7 +40,7 @@ Synology NAS
   not current live Development/Test application or database storage
 ```
 
-Current provenance behavior and provider/runtime status are defined by `project_context_v8.md` and `project_architecture_v8.md`; this workflow defines process rather than milestone-state truth.
+Current provenance behavior and provider/runtime status are defined by `project_context.md` and `project_architecture.md`; this workflow defines process rather than milestone-state truth.
 
 ---
 
@@ -236,7 +238,7 @@ The Coder:
   canonical Repo Control Coder interface;
 - follows the generated bootstrap/workflow core and explicitly loads the
   applicable Repo Control Skill;
-- follows `docs/context/coding_agent_rules_v8.md` as the mapped project
+- follows `docs/context/coding_agent_rules.md` as the mapped project
   overlay;
 - performs the required context verification and read-only Git preflight
   before consequential work;
@@ -311,11 +313,11 @@ Read-only Git commands are expected during preflight and validation.
 The current system should remain understandable through:
 
 ```text
-project_context_v8.md
-project_architecture_v8.md
-project_workflow_v8.md
-coding_agent_rules_v8.md
-canonical_parking_lot_v8.md
+project_context.md
+project_architecture.md
+project_workflow.md
+coding_agent_rules.md
+canonical_parking_lot.md
 MILESTONE_HISTORY.md
 v1.0 release roadmap
 milestone prompt files
@@ -414,37 +416,24 @@ not rename, import, close, reopen, or assign inferred lifecycle state to those
 historical records. Any future product-numbering change requires an explicit
 Product Owner decision and a separately approved prompt.
 
-### Deferred canonical governing-document paths
+### Canonical governing-document paths
 
-The five registered v8 paths remain current in this workflow:
+The five canonical governing-document role targets are:
 
 ```text
-docs/context/project_context_v8.md
-docs/context/project_architecture_v8.md
-docs/context/project_workflow_v8.md
-docs/context/coding_agent_rules_v8.md
-docs/context/canonical_parking_lot_v8.md
+docs/context/project_context.md
+docs/context/project_architecture.md
+docs/context/project_workflow.md
+docs/context/coding_agent_rules.md
+docs/context/canonical_parking_lot.md
 ```
 
-Converting them to canonical non-versioned names is a separate Product
-Owner-controlled migration, not part of semantic harmonization. A future
-milestone must:
-
-1. verify clean Git and current Repo Control identity, lifecycle, procedure,
-   overlay, and registered role paths;
-2. define the exact canonical targets and resolve collisions before any move;
-3. preserve v8 content and archival provenance, with an explicit old-to-new
-   path map and history-discoverability check;
-4. update internal links, maintained guides, host references, and Repo Control
-   registry role paths as one bounded transaction;
-5. preview generated-procedure effects without adding permanent `*_v8.md`
-   exceptions to the shared generator;
-6. validate overlay integrity, procedure status, links, prompt discovery, and
-   fresh-session context resolution; and
-7. provide a Product Owner-reviewed rollback plan that restores the complete
-   path/registry mapping rather than partially reverting files.
-
-No canonical-path migration is implied or authorized by this document.
+These paths become current authority only after the Product Owner completes the
+supported Repo Control governing-role remap and the Coder verifies the new live
+authority snapshot. Historical v8 content remains discoverable through Git and
+the unchanged M001 milestone evidence. Any later governing-role path change
+requires another supported, auditable remap transaction; do not edit generated
+procedure artifacts or the central registry by hand.
 
 ---
 
@@ -599,7 +588,7 @@ Milestone prompts should generally use:
 Standing instructions should include:
 
 ```text
-Read and obey docs/context/coding_agent_rules_v8.md.
+Read and obey docs/context/coding_agent_rules.md.
 Create one closeout document only.
 Do not create a separate report file.
 Use the exact closeout filename.
@@ -903,7 +892,7 @@ The implementation prompt should identify the reconnaissance closeout as the pri
 Coder reading order:
 
 ```text
-1. coding_agent_rules_v8.md
+1. coding_agent_rules.md
 2. implementation prompt
 3. approved reconnaissance closeout
 4. targeted implementation files
@@ -934,7 +923,7 @@ Use for low-risk, tightly bounded changes such as:
 
 Even small prompts should:
 
-- reference `coding_agent_rules_v8.md`;
+- reference `coding_agent_rules.md`;
 - state scope and out of scope;
 - require validation;
 - require one closeout;
@@ -1653,11 +1642,11 @@ Potential updates:
 - milestone prompt;
 - milestone closeout;
 - `MILESTONE_HISTORY.md`;
-- `project_context_v8.md`;
-- `project_architecture_v8.md`;
-- `project_workflow_v8.md`;
-- `coding_agent_rules_v8.md`;
-- `canonical_parking_lot_v8.md`;
+- `project_context.md`;
+- `project_architecture.md`;
+- `project_workflow.md`;
+- `coding_agent_rules.md`;
+- `canonical_parking_lot.md`;
 - v1.0 roadmap;
 - new-chat intro;
 - deployment guides;
@@ -1895,7 +1884,7 @@ Coder should raise these issues during reconnaissance or escalation.
 
 ## 48. Core Cost-Control Principles
 
-- Keep durable rules in `coding_agent_rules_v8.md`.
+- Keep durable rules in `coding_agent_rules.md`.
 - Keep prompts focused on the milestone delta.
 - Use reconnaissance closeouts as roadmaps.
 - Avoid rereading all global documents for small work.
@@ -2439,12 +2428,12 @@ A major documentation checkpoint is appropriate:
 Checkpoint documents may include:
 
 ```text
-project_context_v8.md
-project_architecture_v8.md
-project_workflow_v8.md
-coding_agent_rules_v8.md
+project_context.md
+project_architecture.md
+project_workflow.md
+coding_agent_rules.md
 MILESTONE_HISTORY.md
-canonical_parking_lot_v8.md
+canonical_parking_lot.md
 v1.0 roadmap
 new-chat intro
 deployment guides
@@ -2475,12 +2464,12 @@ Do not wait for severe degradation when a natural documentation boundary already
 A continuation chat should begin with current copies of:
 
 ```text
-project_context_v8.md
-project_architecture_v8.md
-project_workflow_v8.md
-coding_agent_rules_v8.md
+project_context.md
+project_architecture.md
+project_workflow.md
+coding_agent_rules.md
 MILESTONE_HISTORY.md
-canonical_parking_lot_v8.md
+canonical_parking_lot.md
 v1.0 release roadmap
 latest relevant application milestone prompt
 latest relevant application milestone closeout

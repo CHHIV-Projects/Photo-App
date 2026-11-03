@@ -1,4 +1,6 @@
-# PROJECT_ARCHITECTURE_v8.md
+# PROJECT_ARCHITECTURE.md
+
+> **Pre-activation candidate:** This canonical-path document is not governing authority until the Product Owner completes the approved Repo Control governing-role remap. Until then, the registered v8 source remains the sole authority.
 
 ## Document Status
 
@@ -2384,8 +2386,8 @@ Provider work must:
 Align at minimum:
 
 ```text
-project_context_v8.md
-project_architecture_v8.md
+project_context.md
+project_architecture.md
 ```
 
 Then reconcile workflow, coding-agent rules, parking lot, and roadmap documents as needed.

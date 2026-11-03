@@ -1,4 +1,6 @@
-# CANONICAL_PARKING_LOT_v8 — Photo Organizer
+# CANONICAL_PARKING_LOT — Photo Organizer
+
+> **Pre-activation candidate:** This canonical-path document is not governing authority until the Product Owner completes the approved Repo Control governing-role remap. Until then, the registered v8 source remains the sole authority.
 
 ## Document Status
 
@@ -61,12 +63,12 @@ Detailed sequencing, commands, authority gates, and implementation requirements 
 The recommended near-term sequence is:
 
 ```text
-A. Decide and, if approved, perform a separate canonical governing-document
-   path migration
-   - keep the five registered `*_v8.md` paths current until then
-   - preserve v8 content, archival provenance, and history discoverability
-   - update internal links and Repo Control registry role paths atomically
-   - validate overlay/procedure integrity and a complete rollback plan
+A. Complete provider-native cold-session delivery acceptance after canonical
+   governing-path state is stable
+   - start a genuinely new Copilot/Codex session after Product Owner cutover
+   - confirm the canonical role paths and active prompt are delivered without
+     relying on retained chat context
+   - record any provider-native hook limitation candidly
 
 B. Make Photo Organizer an always-on server application
    - automatic startup
@@ -113,8 +115,8 @@ Then continue broader product expansion.
 # 3. Updated Working Priority Stack
 
 ```text
-1. REPO-GOV-001
-   Canonical Governing-Document Path Migration (separate approval required).
+1. REPO-GOV-002
+   Provider-Native Cold-Session Delivery Acceptance.
 
 2. OPS-RUNTIME-002
    Always-On Photo Organizer Service.
@@ -1697,26 +1699,6 @@ This work should coordinate with `PERF-GPU-001`, but the two are distinct:
 ---
 
 # 21. Repository and Workspace Housekeeping
-
-## REPO-GOV-001 — Canonical Governing-Document Path Migration
-
-### Status
-
-Deferred, Product Owner-controlled documentation/registry migration.
-
-### Scope boundary
-
-The registered v8 files remain authoritative until a separate approved
-milestone maps them to canonical non-versioned names. That milestone must
-preflight Repo Control identity and procedure state, preserve v8 content and
-archival provenance, resolve path collisions, update internal links and
-registry role paths as one bounded transaction, validate history
-discoverability and fresh-session resolution, and define a complete rollback.
-
-Do not add permanent `*_v8.md` exceptions to the shared generator or treat the
-current semantic harmonization as a completed path migration.
-
----
 
 ## REPO-001 — Repository / Workspace Surface Audit
 

@@ -29,7 +29,7 @@ stated bounded correction. `PLANNING`, `READY`, `WAITING`, `REVIEW`, `CLOSED`,
 unresolved identity, or unclear authorization is a stop.
 
 The repository-specific project overlay is
-`docs/context/coding_agent_rules_v8.md`. It may add project/runtime/data/test constraints;
+`docs/context/coding_agent_rules.md`. It may add project/runtime/data/test constraints;
 it cannot override Product Owner authority, Repo Control lifecycle or
 authorization, approved-dispatch scope, generic stop/escalation rules, or the
 no-Git-mutation boundary.

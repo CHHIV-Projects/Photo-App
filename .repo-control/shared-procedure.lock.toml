@@ -2,7 +2,7 @@ schema_version = 1
 release = "1.4.0"
 bundle_manifest_sha256 = "96d893c69adad187594568e43c66e5b879042a0e51316883ef7c5ec840442091"
 overlay_schema_version = 1
-overlay_path = "docs/context/coding_agent_rules_v8.md"
+overlay_path = "docs/context/coding_agent_rules.md"
 host_entrypoint = ".github/copilot-instructions.md"
 
 [[files]]
@@ -23,7 +23,7 @@ sha256 = "9c2d79af8eb9e5e1da87ddb10b2023cb0af47f3c9c49d48b35e3332fc736b1eb"
 [[files]]
 path = ".github/copilot-instructions.md"
 source = "bootstrap.md"
-sha256 = "ced860a8f4cd326eef0b3541a2cdf78c76debfc8eeb66caaf1da24e785c21004"
+sha256 = "1d76c2bb43127bc1b8e244d9f64f65c11bc5f0991e0f84f54c07aae565892fc3"
 
 [[files]]
 path = ".repo-control/workflow_core.md"
@@ -33,4 +33,4 @@ sha256 = "6518874a0054af3cbbfd8a1adeda066d41812cae00f2bec573bdf5f810bc6ac9"
 [[files]]
 path = "AGENTS.md"
 source = "bootstrap.md"
-sha256 = "ced860a8f4cd326eef0b3541a2cdf78c76debfc8eeb66caaf1da24e785c21004"
+sha256 = "1d76c2bb43127bc1b8e244d9f64f65c11bc5f0991e0f84f54c07aae565892fc3"

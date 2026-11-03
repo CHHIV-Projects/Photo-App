@@ -1,4 +1,6 @@
-# PROJECT_CONTEXT_v8.md
+# PROJECT_CONTEXT.md
+
+> **Pre-activation candidate:** This canonical-path document is not governing authority until the Product Owner completes the approved Repo Control governing-role remap. Until then, the registered v8 source remains the sole authority.
 
 ## Document Status
 
@@ -1571,8 +1573,8 @@ The next work should begin from a fresh branch off current `main` rather than co
 Update:
 
 ```text
-project_context_v8.md
-project_architecture_v8.md
+project_context.md
+project_architecture.md
 ```
 
 Then reconcile workflow/coding-agent/parking-lot documents as needed.
